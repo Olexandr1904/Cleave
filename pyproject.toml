@@ -1,0 +1,34 @@
+[build-system]
+requires = ["setuptools>=70.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "sickle"
+version = "0.1.0"
+description = "Autonomous AI-driven software development pipeline"
+requires-python = ">=3.10"
+dependencies = [
+    "pyyaml==6.0.2",
+    "httpx==0.28.1",
+    "python-telegram-bot==21.10",
+    "anthropic==0.42.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest==8.3.4",
+    "pytest-asyncio==0.24.0",
+    "respx==0.22.0",
+    "ruff>=0.4.0",
+]
+
+[tool.setuptools.packages.find]
+include = ["orchestrator*", "config*", "workspace*", "integrations*"]
+
+[tool.ruff]
+target-version = "py310"
+line-length = 100
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"

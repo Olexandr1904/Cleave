@@ -1,0 +1,74 @@
+# Agent Prompt Files
+
+Sickle agents follow the **BMAD-style** prompt file format. Each agent is a standalone Markdown file with YAML frontmatter metadata and Markdown body instructions.
+
+## File Format
+
+```markdown
+---
+agent:
+  id: "agent-id"          # Unique identifier (matches filename without .md)
+  name: "AgentName"       # Human-readable name / persona
+  title: "Role Title"     # Role title
+  model: ""               # Optional model override (e.g., "claude-sonnet-4-5")
+
+persona:
+  role: "Role description"
+  style: "Communication style"
+  identity: "One-line identity statement"
+
+core_principles:
+  - "Principle 1"
+  - "Principle 2"
+
+dependencies:
+  tasks:
+    - "task-id"           # References files in tasks/ by id
+  checklists:
+    - "checklist-id"      # References files in checklists/ by id
+  data:
+    - "data-id"           # References files in data/ by id
+---
+
+# Agent Title
+
+## Activation
+Persona activation paragraph.
+
+## Input
+What the agent receives.
+
+## Process
+Step-by-step instructions.
+
+## Output
+What the agent produces.
+
+## Constraints
+Hard rules the agent must follow.
+```
+
+## Creating a New Agent
+
+1. Create `agents/{agent-id}.md` following the format above
+2. Ensure the `id` in frontmatter matches the filename (without `.md`)
+3. Reference any tasks, checklists, or data files by their `id` — not file path
+4. The agent is automatically discovered by the resource registry on startup
+5. Add the agent to the workflow YAML if it should be part of the pipeline
+
+## Existing Agents
+
+| Agent | ID | Role |
+|-------|-----|------|
+| Marcus | `pm-agent` | Ticket prioritization and routing |
+| Alice | `ba-agent` | Requirements validation and implementation planning |
+| James | `dev-agent` | Code implementation following plans |
+
+## Dependencies
+
+Agents can declare dependencies on:
+- **Tasks** (`tasks/`): Step-by-step procedures the agent follows
+- **Checklists** (`checklists/`): Validation checklists the agent runs through
+- **Data** (`data/`): Reference data injected into the agent's context
+
+All dependencies are resolved by `id` at startup. Missing dependencies produce warnings in the log.

@@ -1,0 +1,40 @@
+repo:
+  id: "test-repo"
+  name: "Test Repo"
+  enabled: true
+
+github:
+  token: "${TEST_GITHUB_TOKEN}"
+  owner: "test-org"
+  repo: "test-repo"
+  default_branch: "develop"
+  branch_prefix: "feature"
+  merge_method: "squash"
+
+git:
+  clone_url: "git@github.com:test-org/test-repo.git"
+  depth: 1
+
+architecture:
+  rules_file: "../shared/arch-rules.md"
+
+linting:
+  tool: "ruff"
+  run_command: "ruff check ."
+  hard_gate: true
+
+testing:
+  run_command: "pytest"
+  hard_gate: true
+
+build:
+  check_command: "python -m py_compile main.py"
+  hard_gate: true
+
+jira_repo_label: "repo:test-repo"
+
+parallelism:
+  max_concurrent_tickets: 2
+
+defaults:
+  max_fix_iterations: 5

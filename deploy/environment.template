@@ -1,0 +1,24 @@
+# Sickle Environment Variables
+# Copy to /etc/sickle/environment and fill in values.
+
+# --- Anthropic / Claude ---
+# API key for Claude LLM calls
+ANTHROPIC_API_KEY=
+
+# --- Jira ---
+# Jira Cloud instance URL (e.g., https://your-org.atlassian.net)
+JIRA_URL=
+# Jira API token (generate at https://id.atlassian.com/manage/api-tokens)
+JIRA_TOKEN=
+# Email associated with the Jira account
+JIRA_EMAIL=
+
+# --- GitHub ---
+# Personal access token with repo scope
+GITHUB_TOKEN=
+
+# --- Telegram ---
+# Bot token from @BotFather
+TELEGRAM_BOT_TOKEN=
+# Chat ID for escalation messages
+TELEGRAM_CHAT_ID=

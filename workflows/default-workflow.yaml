@@ -1,0 +1,69 @@
+workflow:
+  id: "default"
+  name: "Standard Ticket Pipeline"
+  description: "Full ticket lifecycle: analysis -> dev -> review -> test -> merge"
+
+stages:
+  - id: "pm"
+    agent: "pm-agent"
+    description: "Prioritize and route ticket"
+    next: "ba"
+
+  - id: "ba"
+    agent: "ba-agent"
+    description: "Validate requirements, create implementation plan"
+    next: "dev"
+    on_unclear: "escalate"
+
+  - id: "dev"
+    agent: "dev-agent"
+    description: "Implement code on feature branch"
+    next: "scope_guard"
+
+  - id: "scope_guard"
+    agent: "scope-guard-agent"
+    description: "Validate diff against plan and arch rules"
+    on_pass: "pr_create"
+    on_fail: "dev"
+    max_iterations: 3
+    on_max_iterations: "escalate"
+
+  - id: "pr_create"
+    action: "open_pr"
+    description: "Push branch and open PR"
+    next: "copilot_review"
+
+  - id: "copilot_review"
+    action: "wait_copilot"
+    description: "Wait for Copilot review, validate comments"
+    on_comments: "fix"
+    on_no_comments: "qa"
+
+  - id: "fix"
+    agent: "fix-agent"
+    description: "Address valid review comments"
+    next: "qa"
+    max_iterations: 3
+    on_max_iterations: "escalate"
+
+  - id: "qa"
+    agent: "qa-agent"
+    description: "Write tests, run quality suite"
+    next: "merge"
+    max_iterations: 2
+    on_max_iterations: "escalate"
+
+  - id: "merge"
+    agent: "merge-agent"
+    description: "Final gate check, merge PR"
+    on_success: "completed"
+    on_conflict: "escalate"
+
+  - id: "escalate"
+    action: "notify_human"
+    description: "Send Telegram notification, wait for reply"
+    on_reply: "resume_previous"
+
+  - id: "completed"
+    action: "finalize"
+    description: "Mark workspace completed, transition Jira to Done"

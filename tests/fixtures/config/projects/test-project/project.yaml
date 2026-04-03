@@ -1,0 +1,26 @@
+project:
+  id: "test-project"
+  name: "Test Project"
+  enabled: true
+
+jira:
+  url: "https://test.atlassian.net"
+  token: "${TEST_JIRA_TOKEN}"
+  email: "${TEST_JIRA_EMAIL}"
+  project_key: "TEST"
+  trigger_label: "ai-ready"
+  ignore_labels: ["blocked"]
+  statuses:
+    todo: "To Do"
+    in_progress: "In Progress"
+    in_review: "In Review"
+    done: "Done"
+
+telegram:
+  default_chat_id: "${TEST_TELEGRAM_CHAT_ID}"
+
+parallelism:
+  max_concurrent_tickets: 3
+
+defaults:
+  poll_interval_seconds: 600

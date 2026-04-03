@@ -1,0 +1,39 @@
+telegram:
+  bot_token: "${TELEGRAM_BOT_TOKEN}"
+  default_chat_id: "${TELEGRAM_CHAT_ID}"
+
+claude:
+  api_key: "${CLAUDE_API_KEY}"
+  model: "claude-sonnet-4-5"
+
+workspaces:
+  base_dir: "/workspaces"
+  max_age_days: 7
+  isolation: "directory"
+  min_free_disk_gb: 5
+  max_workspace_size_gb: 2
+
+defaults:
+  poll_interval_seconds: 900
+  max_fix_iterations: 3
+  max_scope_iterations: 3
+  max_qa_iterations: 2
+  max_parallel_tickets: 2
+
+logging:
+  level: "INFO"
+  dir: "/var/log/sickle"
+
+heartbeat:
+  enabled: true
+  interval_hours: 24
+
+operator:
+  role: "Tech Lead"
+  stack:
+    - "Python"
+    - "Kotlin"
+  preferences:
+    code_style: "clean"
+  rules:
+    - "No unused imports"

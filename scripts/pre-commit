@@ -1,0 +1,59 @@
+#!/usr/bin/env bash
+#
+# Pre-commit hook: blocks commits that modify tracked directories
+# without updating a feature doc in docs/features/.
+#
+
+TRACKED_DIRS="agents/ orchestrator/ integrations/ workflows/ tasks/ checklists/"
+TRACKED_FILES="main.py"
+FEATURE_DOCS_DIR="docs/features/"
+
+staged_files=$(git diff --cached --name-only)
+
+# Find staged files in tracked directories or tracked files
+tracked_changes=()
+for file in $staged_files; do
+    for dir in $TRACKED_DIRS; do
+        if [[ "$file" == "$dir"* ]]; then
+            tracked_changes+=("$file")
+            break
+        fi
+    done
+    for tf in $TRACKED_FILES; do
+        if [[ "$file" == "$tf" ]]; then
+            tracked_changes+=("$file")
+            break
+        fi
+    done
+done
+
+# If no tracked files changed, allow the commit
+if [ ${#tracked_changes[@]} -eq 0 ]; then
+    exit 0
+fi
+
+# Check if any feature doc was also staged
+feature_doc_updated=false
+for file in $staged_files; do
+    if [[ "$file" == "$FEATURE_DOCS_DIR"* ]]; then
+        feature_doc_updated=true
+        break
+    fi
+done
+
+if [ "$feature_doc_updated" = false ]; then
+    echo ""
+    echo "Commit blocked: You modified files in tracked directories but no feature"
+    echo "doc in docs/features/ was updated."
+    echo ""
+    echo "Modified tracked files:"
+    for file in "${tracked_changes[@]}"; do
+        echo "  - $file"
+    done
+    echo ""
+    echo "Update the relevant feature doc and docs/features/index.md, then try again."
+    echo ""
+    exit 1
+fi
+
+exit 0

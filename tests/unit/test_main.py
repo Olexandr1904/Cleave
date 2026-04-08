@@ -80,6 +80,13 @@ class TestMain:
         result = main(["--config", FIXTURES_DIR, "--project", "p", "--repo", "r", "--dry-run"])
         assert result == 0
 
+    def test_version_printed_at_startup(self, capsys, monkeypatch):
+        """main() prints the version string on startup."""
+        self._set_all_env(monkeypatch)
+        main(["--config", FIXTURES_DIR, "--project", "nonexistent"])
+        captured = capsys.readouterr()
+        assert "Sickle v" in captured.out
+
 
 PROJECT_DIR = str(Path(__file__).parent.parent.parent)
 

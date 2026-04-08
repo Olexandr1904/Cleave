@@ -16,21 +16,23 @@ VALID_STATES = {
     "NEW", "ANALYSIS", "DEV", "SCOPE_CHECK", "QA",
     "PUSHED", "PR_REVIEW", "DONE",
     "BLOCKED", "FAILED", "ARCHIVED",
+    "AWAITING_APPROVAL",
 }
 
 # Valid state transitions (architecture-v2 §3.3)
 VALID_TRANSITIONS: dict[str, set[str]] = {
-    "NEW":          {"ANALYSIS", "FAILED"},
-    "ANALYSIS":     {"DEV", "BLOCKED", "FAILED"},
-    "DEV":          {"SCOPE_CHECK", "BLOCKED", "FAILED"},
-    "SCOPE_CHECK":  {"QA", "DEV", "BLOCKED", "FAILED"},
-    "QA":           {"PUSHED", "DEV", "BLOCKED", "FAILED"},
-    "PUSHED":       {"PR_REVIEW", "BLOCKED", "FAILED"},
-    "PR_REVIEW":    {"DEV", "DONE", "BLOCKED", "FAILED"},
-    "DONE":         {"ARCHIVED"},
-    "BLOCKED":      {"ANALYSIS", "DEV", "SCOPE_CHECK", "QA", "PUSHED", "PR_REVIEW", "FAILED"},
-    "FAILED":       set(),
-    "ARCHIVED":     set(),
+    "NEW":                {"ANALYSIS", "FAILED"},
+    "ANALYSIS":           {"DEV", "BLOCKED", "FAILED", "AWAITING_APPROVAL"},
+    "DEV":                {"SCOPE_CHECK", "BLOCKED", "FAILED"},
+    "SCOPE_CHECK":        {"QA", "DEV", "BLOCKED", "FAILED"},
+    "QA":                 {"PUSHED", "DEV", "BLOCKED", "FAILED", "AWAITING_APPROVAL"},
+    "PUSHED":             {"PR_REVIEW", "BLOCKED", "FAILED"},
+    "PR_REVIEW":          {"DEV", "DONE", "BLOCKED", "FAILED", "AWAITING_APPROVAL"},
+    "DONE":               {"ARCHIVED"},
+    "BLOCKED":            {"ANALYSIS", "DEV", "SCOPE_CHECK", "QA", "PUSHED", "PR_REVIEW", "FAILED"},
+    "FAILED":             set(),
+    "ARCHIVED":           set(),
+    "AWAITING_APPROVAL":  {"DEV", "PUSHED", "DONE", "FAILED"},
 }
 
 
@@ -145,8 +147,8 @@ class Workspace:
     def transition(self, new_state: str) -> None:
         """Transition workspace to a new pipeline state with validation.
 
-        For BLOCKED: stores previous_state so we can resume later.
-        For resuming from BLOCKED: previous_state is cleared.
+        For BLOCKED/AWAITING_APPROVAL: stores previous_state so we can resume later.
+        For resuming from BLOCKED/AWAITING_APPROVAL: previous_state is cleared.
         """
         current = self.state.current_state
         if new_state not in VALID_STATES:
@@ -158,11 +160,11 @@ class Workspace:
 
         updates: dict[str, Any] = {"current_state": new_state}
 
-        if new_state == "BLOCKED":
+        if new_state in ("BLOCKED", "AWAITING_APPROVAL"):
             updates["previous_state"] = current
             updates["human_input_pending"] = True
-        elif current == "BLOCKED":
-            # Resuming from BLOCKED — clear pending flag
+        elif current in ("BLOCKED", "AWAITING_APPROVAL"):
+            # Resuming from a paused state — clear pending flag
             updates["previous_state"] = None
             updates["human_input_pending"] = False
 

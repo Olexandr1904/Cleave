@@ -22,6 +22,8 @@ Telegram bot adapter behind the NotifierInterface. Sends formatted notifications
 - FR9: Implements abstract `NotifierInterface`
 - FR10: Free-text operator messages classified into intents via `IntentParser` + Claude CLI
 - FR11: Intent classification includes pipeline context (mode, awaiting approvals, workspaces) to resolve ambiguous commands (e.g., "yes" → approve the one pending workspace)
+- FR12: `/status` command returns pipeline summary (mode, uptime, active workspaces) formatted by `StatusHandler`
+- FR13: Drill-down view shows per-workspace detail: stage, branch, Jira URL, PR URL, iteration counts
 
 ## Technical Approach
 
@@ -31,6 +33,7 @@ Telegram bot adapter behind the NotifierInterface. Sends formatted notifications
 - Message-to-workspace routing: each outgoing message tagged with workspace ID, incoming replies matched back
 - Notification templates for each message type (escalation, success, failure)
 - `IntentParser` (`integrations/telegram/intent_parser.py`) classifies free-text operator messages into structured intents (status, analyze, approve, reject, set_mode, unknown) via `ClaudeCodeAdapter.quick_query`; system prompt includes live pipeline context (mode, awaiting approvals, active workspaces) for disambiguation
+- `StatusHandler` (`integrations/telegram/handlers/status.py`) formats pipeline status: `format_summary()` produces an overview of all active workspaces; `format_drill_down()` produces per-workspace detail with Jira and PR URLs
 
 ## Dependencies
 
@@ -54,3 +57,4 @@ Telegram bot adapter behind the NotifierInterface. Sends formatted notifications
 |------|-------------|
 | 2026-04-07 | Initial draft — seeded from PRD and architecture docs |
 | 2026-04-08 | Added IntentParser: classifies Telegram messages into pipeline intents via Claude CLI |
+| 2026-04-08 | Added StatusHandler: formats /status summary and per-workspace drill-down with Jira/PR URLs |

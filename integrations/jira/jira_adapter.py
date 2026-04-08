@@ -130,8 +130,8 @@ class JiraAdapter(TrackerInterface):
         """Fetch tickets matching trigger criteria."""
         jql = self._build_jql()
         data = await self._request(
-            "GET", "/search",
-            params={"jql": jql, "maxResults": 50},
+            "POST", "/search/jql",
+            json={"jql": jql, "maxResults": 50},
         )
         issues = data.get("issues", [])
         tickets = []

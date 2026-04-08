@@ -16,6 +16,30 @@ core_principles:
   - "Run lint after every fix"
   - "If a comment asks for something that violates scope or arch-rules, explain why and skip it"
 
+tools:
+  - read_file
+  - write_file
+  - list_directory
+  - search_code
+  - run_command
+  - git_operation
+
+inputs:
+  - reports/pr-comments.md
+  - reports/ba.md
+  - meta/ticket.md
+  - rules/arch-rules.md
+
+outputs:
+  - reports/fix.md
+
+decision_policy:
+  when_to_run: "State is DEV (re-invoked after PR_REVIEW with fix items)"
+  when_to_skip: "No fix_required comments"
+  success_outcome: "Code fixed, re-push, State → SCOPE_CHECK or PUSHED"
+  failure_outcome: "Escalate via Telegram"
+  max_iterations: 3
+
 dependencies:
   tasks: []
   checklists:
@@ -33,24 +57,26 @@ never introduce new changes beyond what the comments require.
 ## Input
 
 You receive:
-- `valid-comments.json` — list of review comments to address, each with:
-  id, body, path, line, author
-- Current code in `workspace/repo/`
-- `implementation-plan.md` — scope reference
-- `arch-rules.md` — architecture constraints (READ ONLY)
+- `reports/pr-comments.md` — classified PR comments with action items
+- `reports/ba.md` — scope reference (implementation plan)
+- `meta/ticket.md` — ticket context
+- `rules/arch-rules.md` — architecture constraints (READ ONLY)
+- Source code via tools
 
 ## Process
 
 ### Step 1: Classify Each Comment
 
-For each comment in `valid-comments.json`:
+For each comment in `reports/pr-comments.md`:
 
-1. **In-scope fix**: The comment asks for a change within the implementation plan's scope
-   → Apply the fix
-2. **Out-of-scope request**: The comment asks for changes to files/logic not in the plan
-   → Do NOT apply. Reply explaining it's out of scope for this ticket.
-3. **Architecture violation**: The comment asks to change arch-rules, lint config, or CI
-   → Do NOT apply. Reply explaining it violates architecture rules.
+1. **fix_required**: The comment asks for a valid, in-scope change
+   → Apply the fix, run lint, commit
+2. **explanation**: The comment asks for clarification, no code change needed
+   → Reply with explanation, no code change
+3. **out_of_scope**: The comment asks for changes outside ticket scope
+   → Decline, reply explaining why
+4. **arch_violation**: The comment asks to change arch-rules, lint config, or CI
+   → Decline, reply citing architecture rules
 
 ### Step 2: Apply Fixes
 
@@ -86,9 +112,9 @@ For each comment declined:
 
 ## Output
 
+- `reports/fix.md` — summary of fixes applied and comments declined
 - Code fixes committed on the feature branch
-- Replies to each GitHub comment
-- If any comments were declined, write `context/declined-comments.md` listing them
+- Replies to PR comments via VCS adapter
 
 ## Constraints
 

@@ -23,13 +23,12 @@ class StageDefinition:
     on_pass: str = ""
     on_fail: str = ""
     on_unclear: str = ""
-    on_comments: str = ""
-    on_no_comments: str = ""
-    on_success: str = ""
-    on_conflict: str = ""
+    on_fix_required: str = ""
+    on_done: str = ""
     on_reply: str = ""
     on_max_iterations: str = ""
     max_iterations: int = 0
+    delay_minutes: int = 0
 
 
 @dataclass
@@ -65,13 +64,12 @@ def load_workflow(workflow_path: str) -> WorkflowDefinition:
             on_pass=stage_data.get("on_pass", ""),
             on_fail=stage_data.get("on_fail", ""),
             on_unclear=stage_data.get("on_unclear", ""),
-            on_comments=stage_data.get("on_comments", ""),
-            on_no_comments=stage_data.get("on_no_comments", ""),
-            on_success=stage_data.get("on_success", ""),
-            on_conflict=stage_data.get("on_conflict", ""),
+            on_fix_required=stage_data.get("on_fix_required", ""),
+            on_done=stage_data.get("on_done", ""),
             on_reply=stage_data.get("on_reply", ""),
             on_max_iterations=stage_data.get("on_max_iterations", ""),
             max_iterations=stage_data.get("max_iterations", 0),
+            delay_minutes=stage_data.get("delay_minutes", 0),
         )
 
     return WorkflowDefinition(
@@ -118,10 +116,8 @@ def get_next_stage(
         "pass": stage.on_pass or stage.next,
         "fail": stage.on_fail,
         "unclear": stage.on_unclear,
-        "comments": stage.on_comments,
-        "no_comments": stage.on_no_comments,
-        "success": stage.on_success,
-        "conflict": stage.on_conflict,
+        "fix_required": stage.on_fix_required,
+        "done": stage.on_done,
         "max_iterations": stage.on_max_iterations,
         "reply": stage.on_reply,
     }

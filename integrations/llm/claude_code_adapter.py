@@ -1,0 +1,245 @@
+"""Claude Code CLI adapter — uses `claude -p` subprocess instead of API.
+
+Uses the user's existing Claude Code authentication (Max subscription)
+rather than requiring a separate Anthropic API key.
+
+Claude Code handles its own tool execution internally (Read, Write, Bash, etc.),
+so the ToolSandbox is not used with this adapter. Instead, tool access is
+controlled via --allowedTools and --cwd flags.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import json
+import logging
+import shutil
+from typing import Any
+
+from integrations.llm.llm_interface import LLMInterface, LLMResponse
+
+logger = logging.getLogger(__name__)
+
+# Map our tool names to Claude Code's built-in tool names
+TOOL_MAP = {
+    "read_file": "Read",
+    "write_file": "Write,Edit",
+    "list_directory": "LS,Glob",
+    "search_code": "Grep",
+    "run_command": "Bash",
+    "git_operation": "Bash",
+}
+
+DEFAULT_MAX_TURNS = 50
+DEFAULT_TIMEOUT = 600  # 10 minutes
+
+
+class ClaudeCodeAdapter(LLMInterface):
+    """Claude Code CLI adapter using `claude -p` subprocess."""
+
+    def __init__(
+        self,
+        model: str = "",
+        max_turns: int = DEFAULT_MAX_TURNS,
+        timeout: int = DEFAULT_TIMEOUT,
+    ) -> None:
+        self._claude_bin = shutil.which("claude") or "claude"
+        self._model = model
+        self._max_turns = max_turns
+        self._timeout = timeout
+
+    async def send_message(
+        self,
+        prompt: str,
+        model: str = "",
+        max_tokens: int = 4096,
+        tools: list[dict[str, Any]] | None = None,
+        system: str = "",
+    ) -> LLMResponse:
+        """Send a prompt to Claude Code CLI and return the response.
+
+        The `tools` parameter is ignored — tool access is controlled
+        via allowed_tools passed to execute_in_workspace().
+        """
+        return await self._run_cli(
+            prompt=prompt,
+            model=model,
+            system=system,
+        )
+
+    async def send_tool_results(
+        self,
+        messages: list[dict[str, Any]],
+        model: str = "",
+        max_tokens: int = 4096,
+        tools: list[dict[str, Any]] | None = None,
+        system: str = "",
+    ) -> LLMResponse:
+        """Not used with CLI adapter — Claude Code manages its own tool loop."""
+        raise NotImplementedError(
+            "ClaudeCodeAdapter handles tool execution internally. "
+            "Use execute_in_workspace() instead of the multi-turn tool loop."
+        )
+
+    async def execute_in_workspace(
+        self,
+        prompt: str,
+        cwd: str,
+        allowed_tools: list[str] | None = None,
+        model: str = "",
+        system: str = "",
+        max_turns: int | None = None,
+    ) -> LLMResponse:
+        """Execute a prompt with Claude Code in a specific workspace directory.
+
+        This is the primary method for agent execution. Claude Code will:
+        - Set working directory to `cwd` (the workspace source dir)
+        - Use its own built-in tools (Read, Write, Bash, etc.)
+        - Respect --allowedTools restrictions
+        - Handle multi-turn tool execution internally
+
+        Args:
+            prompt: The full agent prompt.
+            cwd: Working directory (workspace source dir).
+            allowed_tools: Our tool names (read_file, write_file, etc.).
+                          Mapped to Claude Code tool names automatically.
+            model: Model override (optional).
+            system: System prompt (prepended to prompt).
+            max_turns: Override max turns for this call.
+
+        Returns:
+            LLMResponse with the final text output and usage stats.
+        """
+        return await self._run_cli(
+            prompt=prompt,
+            model=model,
+            system=system,
+            cwd=cwd,
+            allowed_tools=allowed_tools,
+            max_turns=max_turns,
+        )
+
+    async def _run_cli(
+        self,
+        prompt: str,
+        model: str = "",
+        system: str = "",
+        cwd: str | None = None,
+        allowed_tools: list[str] | None = None,
+        max_turns: int | None = None,
+    ) -> LLMResponse:
+        """Run claude CLI subprocess."""
+        cmd = [self._claude_bin, "-p"]
+
+        # System prompt prepended
+        full_prompt = prompt
+        if system:
+            full_prompt = f"{system}\n\n---\n\n{full_prompt}"
+
+        # Model
+        use_model = model or self._model
+        if use_model:
+            cmd.extend(["--model", use_model])
+
+        # Output format
+        cmd.extend(["--output-format", "json"])
+
+        # Max turns
+        turns = max_turns or self._max_turns
+        cmd.extend(["--max-turns", str(turns)])
+
+        # Allowed tools
+        if allowed_tools is not None:
+            cc_tools = self._map_tools(allowed_tools)
+            cmd.extend(["--allowedTools", ",".join(cc_tools) if cc_tools else ""])
+
+        logger.info(
+            "Claude Code CLI: model=%s, cwd=%s, tools=%s, max_turns=%d",
+            use_model or "default", cwd or ".", allowed_tools, turns,
+        )
+
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                *cmd,
+                stdin=asyncio.subprocess.PIPE,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+                cwd=cwd,
+            )
+            stdout, stderr = await asyncio.wait_for(
+                proc.communicate(input=full_prompt.encode("utf-8")),
+                timeout=self._timeout,
+            )
+        except asyncio.TimeoutError:
+            proc.kill()
+            raise RuntimeError(
+                f"Claude Code CLI timed out after {self._timeout}s"
+            )
+
+        stdout_str = stdout.decode("utf-8", errors="replace").strip()
+        stderr_str = stderr.decode("utf-8", errors="replace").strip()
+
+        if proc.returncode != 0:
+            logger.error("Claude Code CLI failed (rc=%d): %s", proc.returncode, stderr_str)
+            raise RuntimeError(
+                f"Claude Code CLI exited with code {proc.returncode}: {stderr_str}"
+            )
+
+        # Parse JSON output
+        try:
+            data = json.loads(stdout_str)
+        except json.JSONDecodeError:
+            # If JSON parsing fails, treat stdout as plain text
+            logger.warning("Claude Code CLI returned non-JSON output")
+            return LLMResponse(
+                content=stdout_str,
+                input_tokens=0,
+                output_tokens=0,
+                model=use_model,
+            )
+
+        # Extract fields from JSON response
+        content = data.get("result", "")
+        is_error = data.get("is_error", False)
+        usage = data.get("usage", {})
+
+        input_tokens = usage.get("input_tokens", 0)
+        output_tokens = usage.get("output_tokens", 0)
+        cache_read = usage.get("cache_read_input_tokens", 0)
+        cache_create = usage.get("cache_creation_input_tokens", 0)
+
+        total_cost = data.get("total_cost_usd", 0)
+        num_turns = data.get("num_turns", 1)
+        stop_reason = data.get("stop_reason", "")
+
+        if is_error:
+            logger.error("Claude Code CLI error: %s", content[:200])
+            raise RuntimeError(f"Claude Code returned error: {content[:500]}")
+
+        logger.info(
+            "Claude Code CLI done: turns=%d, tokens=%d/%d (cache_r=%d, cache_w=%d), "
+            "cost=$%.4f, stop=%s",
+            num_turns, input_tokens, output_tokens,
+            cache_read, cache_create, total_cost, stop_reason,
+        )
+
+        return LLMResponse(
+            content=content,
+            input_tokens=input_tokens + cache_read + cache_create,
+            output_tokens=output_tokens,
+            model=use_model or data.get("model", ""),
+            stop_reason=stop_reason,
+        )
+
+    def _map_tools(self, our_tools: list[str]) -> list[str]:
+        """Map our tool names to Claude Code tool names."""
+        cc_tools: set[str] = set()
+        for tool in our_tools:
+            mapped = TOOL_MAP.get(tool, "")
+            if mapped:
+                for t in mapped.split(","):
+                    cc_tools.add(t)
+        return sorted(cc_tools)
+
+    def supports_extended_thinking(self) -> bool:
+        return True

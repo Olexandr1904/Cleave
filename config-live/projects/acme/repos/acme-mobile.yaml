@@ -1,0 +1,73 @@
+repo:
+  id: "acme-mobile"
+  name: "Acme Mobile Android"
+  enabled: true
+
+vcs:
+  provider: "github"
+  github:
+    token: "${GITHUB_TOKEN}"
+    owner: "acme-org"
+    repo: "acme-mobile"
+    default_branch: "develop"
+    branch_prefix: "feature"
+    merge_method: "squash"
+
+ci:
+  provider: "github_actions"
+
+git:
+  clone_url: "https://${GITHUB_TOKEN}@github.com/acme-org/acme-mobile.git"
+  commit_author_name: "Sickle Bot"
+  commit_author_email: "sickle@pipeline.local"
+  depth: 1
+
+architecture:
+  rules_file: "docs/arch-rules.md"
+  protected_files:
+    - ".github/"
+    - "build.gradle.kts"
+    - "settings.gradle.kts"
+    - "gradle/"
+    - ".editorconfig"
+    - "detekt.yml"
+
+linting:
+  run_command: "./gradlew detekt"
+  hard_gate: true
+
+testing:
+  run_command: "./gradlew test"
+  hard_gate: true
+
+build:
+  check_command: "./gradlew assembleDebug"
+  hard_gate: true
+
+helpers:
+  fetch_pr_comments: "/opt/sickle-helpers/f/pr_comments/fetch.py"
+  resolve_pr_comments: "/opt/sickle-helpers/f/pr_comments/resolve.py"
+  fetch_ci_failure: "/opt/sickle-helpers/f/ci/fetch_ci_failure.py"
+  fetch_jira_tickets: "/opt/sickle-helpers/f/jira/fetch.py"
+  update_jira_status: "/opt/sickle-helpers/f/jira/update_status.py"
+  code_review: "/opt/sickle-helpers/f/review/review.sh"
+  create_jira_ticket: "/opt/sickle-helpers/f/jira/create.py"
+
+jira_repo_label: "acme-mobile-android"
+
+pr_description_template: |
+  ## {ticket_id}
+
+  Automated PR created by Sickle pipeline.
+
+  **Jira:** https://acme.atlassian.net/browse/{ticket_id}
+
+  ### Checklist
+  - [x] Implementation plan followed
+  - [x] Scope guard passed
+  - [x] QA gates passed (tests, lint, build)
+  - [ ] Code review
+  - [ ] Human merge
+
+parallelism:
+  max_concurrent_tickets: 2

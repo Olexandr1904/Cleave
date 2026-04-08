@@ -59,9 +59,5 @@ class VCSInterface(ABC):
         """Check whether all CI checks are passing."""
 
     @abstractmethod
-    async def merge_pr(self, pr_number: int, merge_method: str = "squash") -> None:
-        """Merge a pull request using the specified method."""
-
-    @abstractmethod
     async def close_pr(self, pr_number: int) -> None:
         """Close a pull request without merging."""

@@ -6,7 +6,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from config.schemas import GitHubConfig, JiraConfig, JiraStatusesConfig, RepoConfig, RepoInfo
+from config.schemas import GitHubConfig, JiraConfig, JiraStatusesConfig, RepoConfig, RepoInfo, VCSConfig
 from orchestrator.pr_creation import PRCreationResult, create_pr
 from workspace.workspace import Workspace, WorkspaceState
 
@@ -15,13 +15,14 @@ from workspace.workspace import Workspace, WorkspaceState
 def workspace(tmp_path):
     ws_root = tmp_path / "test-ws"
     ws_root.mkdir()
-    (ws_root / "context").mkdir()
+    (ws_root / "meta").mkdir()
+    (ws_root / "reports").mkdir()
     (ws_root / "logs").mkdir()
-    (ws_root / "repo").mkdir()
+    (ws_root / "source").mkdir()
 
     state = WorkspaceState(
         ticket_id="TEST-42",
-        project_id="test-project",
+        company_id="test-project",
         repo_id="test-repo",
         workspace_root=str(ws_root),
         branch="feature/TEST-42-login",
@@ -35,7 +36,7 @@ def workspace(tmp_path):
 def repo_config():
     return RepoConfig(
         repo=RepoInfo(id="test-repo"),
-        github=GitHubConfig(default_branch="main"),
+        vcs=VCSConfig(github=GitHubConfig(default_branch="main")),
         jira=JiraConfig(statuses=JiraStatusesConfig(in_review="In Review")),
     )
 
@@ -55,7 +56,7 @@ def mock_tracker():
 class TestCreatePR:
     async def test_successful_pr_creation(self, workspace, mock_vcs, mock_tracker, repo_config):
         # Create scope certificate
-        (workspace.context_dir / "scope-certificate.md").write_text("PASS")
+        (workspace.meta_dir / "scope-certificate.md").write_text("PASS")
 
         result = await create_pr(workspace, mock_vcs, mock_tracker, repo_config)
 
@@ -76,7 +77,7 @@ class TestCreatePR:
         assert workspace.state.pr_url == "https://github.com/org/repo/pull/42"
 
     async def test_jira_transition(self, workspace, mock_vcs, mock_tracker, repo_config):
-        (workspace.context_dir / "scope-certificate.md").write_text("PASS")
+        (workspace.meta_dir / "scope-certificate.md").write_text("PASS")
 
         await create_pr(workspace, mock_vcs, mock_tracker, repo_config)
 
@@ -101,7 +102,7 @@ class TestCreatePR:
         assert "Scope certificate" in result.error
 
     async def test_push_failure(self, workspace, mock_vcs, mock_tracker, repo_config):
-        (workspace.context_dir / "scope-certificate.md").write_text("PASS")
+        (workspace.meta_dir / "scope-certificate.md").write_text("PASS")
         mock_vcs.push.side_effect = Exception("Push rejected")
 
         result = await create_pr(workspace, mock_vcs, mock_tracker, repo_config)
@@ -111,7 +112,7 @@ class TestCreatePR:
 
     async def test_jira_failure_non_blocking(self, workspace, mock_vcs, mock_tracker, repo_config):
         """Jira transition failure should not block PR creation."""
-        (workspace.context_dir / "scope-certificate.md").write_text("PASS")
+        (workspace.meta_dir / "scope-certificate.md").write_text("PASS")
         mock_tracker.transition_ticket.side_effect = Exception("Jira down")
 
         result = await create_pr(workspace, mock_vcs, mock_tracker, repo_config)
@@ -121,7 +122,7 @@ class TestCreatePR:
         assert result.pr_number == 42
 
     async def test_custom_pr_template(self, workspace, mock_vcs, mock_tracker, repo_config):
-        (workspace.context_dir / "scope-certificate.md").write_text("PASS")
+        (workspace.meta_dir / "scope-certificate.md").write_text("PASS")
         repo_config.pr_description_template = "Ticket: {ticket_id}\nURL: {ticket_url}"
 
         await create_pr(workspace, mock_vcs, mock_tracker, repo_config)
@@ -131,8 +132,8 @@ class TestCreatePR:
         assert "TEST-42" in body
 
     async def test_ticket_summary_from_context(self, workspace, mock_vcs, mock_tracker, repo_config):
-        (workspace.context_dir / "scope-certificate.md").write_text("PASS")
-        (workspace.context_dir / "ticket.json").write_text('{"summary": "Add login feature"}')
+        (workspace.meta_dir / "scope-certificate.md").write_text("PASS")
+        (workspace.meta_dir / "ticket.json").write_text('{"summary": "Add login feature"}')
 
         await create_pr(workspace, mock_vcs, mock_tracker, repo_config)
 

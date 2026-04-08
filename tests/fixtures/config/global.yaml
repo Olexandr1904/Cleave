@@ -7,18 +7,20 @@ claude:
   model: "claude-sonnet-4-5"
 
 workspaces:
-  base_dir: "/workspaces"
+  base_dir: "/data"
   max_age_days: 7
-  isolation: "directory"
   min_free_disk_gb: 5
   max_workspace_size_gb: 2
 
 defaults:
-  poll_interval_seconds: 900
-  max_fix_iterations: 3
-  max_scope_iterations: 3
-  max_qa_iterations: 2
-  max_parallel_tickets: 2
+  poll_interval_seconds: 300
+  max_iterations:
+    scope_guard: 3
+    fix: 3
+    qa: 2
+    dev: 2
+  max_parallel_tickets: 5
+  pr_comment_fetch_delay_minutes: 30
 
 logging:
   level: "INFO"

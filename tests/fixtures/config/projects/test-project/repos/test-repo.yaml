@@ -3,23 +3,29 @@ repo:
   name: "Test Repo"
   enabled: true
 
-github:
-  token: "${TEST_GITHUB_TOKEN}"
-  owner: "test-org"
-  repo: "test-repo"
-  default_branch: "develop"
-  branch_prefix: "feature"
-  merge_method: "squash"
+vcs:
+  provider: "github"
+  github:
+    token: "${TEST_GITHUB_TOKEN}"
+    owner: "test-org"
+    repo: "test-repo"
+    default_branch: "develop"
+    branch_prefix: "feature"
+
+ci:
+  provider: "github_actions"
 
 git:
   clone_url: "git@github.com:test-org/test-repo.git"
   depth: 1
 
 architecture:
-  rules_file: "../shared/arch-rules.md"
+  rules_file: "arch-rules.md"
+  protected_files:
+    - "arch-rules.md"
+    - ".github/workflows/*"
 
 linting:
-  tool: "ruff"
   run_command: "ruff check ."
   hard_gate: true
 
@@ -35,6 +41,3 @@ jira_repo_label: "repo:test-repo"
 
 parallelism:
   max_concurrent_tickets: 2
-
-defaults:
-  max_fix_iterations: 5

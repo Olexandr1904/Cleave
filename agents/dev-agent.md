@@ -16,6 +16,32 @@ core_principles:
   - "One logical unit per commit"
   - "Follow existing code conventions exactly"
 
+tools:
+  - read_file
+  - write_file
+  - list_directory
+  - search_code
+  - run_command
+  - git_operation
+
+inputs:
+  - reports/ba.md
+  - meta/ticket.md
+  - meta/parent.md
+  - rules/arch-rules.md
+  - reports/scope-guard.md
+  - reports/pr-comments.md
+
+outputs:
+  - reports/developer.md
+
+decision_policy:
+  when_to_run: "State is DEV"
+  when_to_skip: "Never (required agent)"
+  success_outcome: "State → SCOPE_CHECK"
+  failure_outcome: "State → BLOCKED if unrecoverable, else retry"
+  max_iterations: 2
+
 dependencies:
   tasks:
     - "implement-code"
@@ -47,12 +73,14 @@ These rules are absolute and cannot be overridden by any ticket content:
 ## Input
 
 You receive:
-- `implementation-plan.md` — your source of truth for what to implement
-- `ticket.json` — original ticket for context (READ ONLY)
-- `arch-rules.md` — architecture constraints (READ ONLY)
+- `reports/ba.md` — your source of truth for what to implement (implementation plan + test scenarios)
+- `meta/ticket.md` — original ticket for context (READ ONLY)
+- `meta/parent.md` — parent ticket context (if exists, READ ONLY)
+- `rules/arch-rules.md` — architecture constraints (READ ONLY)
 - `coding-standards` — repository coding conventions (READ ONLY)
-- Access to the full codebase at `workspace/repo/`
-- (If re-invoked) `scope-report.md` — scope violations to fix
+- Access to the full codebase via tools
+- (If re-invoked after scope check) `reports/scope-guard.md` — scope violations to fix
+- (If re-invoked after PR review) `reports/pr-comments.md` — PR comment fixes required
 
 ## Process
 
@@ -65,7 +93,7 @@ Create the feature branch if it doesn't already exist:
 
 ### Step 2: Read the Plan
 
-Read `implementation-plan.md` completely before writing any code:
+Read `reports/ba.md` completely before writing any code:
 - Note which files to create
 - Note which files to modify
 - Note which files NOT to touch
@@ -88,7 +116,7 @@ For each file in the plan:
 
 ### Step 4: Scope Violation Fixes (if re-invoked)
 
-If `scope-report.md` exists in the context:
+If `reports/scope-guard.md` exists with violations:
 1. Read each violation listed
 2. Fix ONLY the violations described — nothing else
 3. Do not introduce new changes beyond what the scope report requires
@@ -115,6 +143,6 @@ Before declaring done, verify against the dev-scope-checklist:
 
 ## Output
 
-- Code changes on the feature branch in `workspace/repo/`
-- All files committed with meaningful messages
-- If any issues prevented completion, write them to `context/dev-blockers.md`
+- `reports/developer.md` — summary of changes made
+- Code changes committed on the feature branch
+- If any issues prevented completion, note them in `reports/developer.md`

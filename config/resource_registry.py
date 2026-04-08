@@ -136,6 +136,10 @@ def _parse_agent_entry(metadata: dict, body: str, file_path: Path) -> AgentEntry
             "agent": agent_meta,
             "persona": persona_meta,
             "core_principles": metadata.get("core_principles", []),
+            "tools": metadata.get("tools", []),
+            "inputs": metadata.get("inputs", []),
+            "outputs": metadata.get("outputs", []),
+            "decision_policy": metadata.get("decision_policy", {}),
         },
         dependencies={
             "tasks": deps.get("tasks", []) or [],

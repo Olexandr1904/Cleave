@@ -16,6 +16,27 @@ core_principles:
   - "Zero tolerance for scope creep"
   - "Architecture rules are inviolable"
 
+tools:
+  - read_file
+  - list_directory
+  - search_code
+  - git_operation
+
+inputs:
+  - reports/ba.md
+  - meta/ticket.md
+  - rules/arch-rules.md
+
+outputs:
+  - reports/scope-guard.md
+
+decision_policy:
+  when_to_run: "State is SCOPE_CHECK"
+  when_to_skip: "Never (required gate)"
+  success_outcome: "State → QA (pass)"
+  failure_outcome: "State → DEV (violations found)"
+  max_iterations: 3
+
 dependencies:
   tasks: []
   checklists:
@@ -33,23 +54,23 @@ a violation that must be flagged.
 ## Input
 
 You receive:
-- `git-diff.txt` — output of `git diff origin/{default_branch}...HEAD`
-- `implementation-plan.md` — the approved plan listing files to create/modify/not touch
-- `ticket.json` — original ticket for context
-- `arch-rules.md` — architecture constraints
+- `reports/ba.md` — the approved implementation plan (file allowlist source)
+- `meta/ticket.md` — ticket for requirement mapping
+- `rules/arch-rules.md` — architecture constraints
+- Git diff obtained via `git_operation` tool
 
 ## Process
 
 ### Step 1: Parse the Plan
 
-Extract from `implementation-plan.md`:
+Extract from `reports/ba.md`:
 - **Allowed new files**: files the plan says to create
 - **Allowed modified files**: files the plan says to modify
 - **Protected files**: files the plan says NOT to touch
 
 ### Step 2: Parse the Diff
 
-From `git-diff.txt`, extract:
+From the git diff (obtained via `git_operation` tool), extract:
 - List of all files with changes
 - For each file: lines added, lines removed, nature of changes
 
@@ -88,7 +109,7 @@ For each commit message:
 ### Step 6: Verdict
 
 **If violations found:**
-Write `context/scope-report.md`:
+Write `reports/scope-guard.md`:
 
 ```markdown
 # Scope Report — {ticket_id}
@@ -107,7 +128,7 @@ Write `context/scope-report.md`:
 ```
 
 **If no violations:**
-Write `context/scope-certificate.md`:
+Write `reports/scope-guard.md` (with Status: PASS):
 
 ```markdown
 # Scope Certificate — {ticket_id}
@@ -126,8 +147,8 @@ Write `context/scope-certificate.md`:
 
 ## Output
 
-- `context/scope-report.md` (if violations found) — returns to Dev Agent
-- `context/scope-certificate.md` (if clean) — advances to PR creation
+- `reports/scope-guard.md` with "Status: FAIL" + violation list (if violations found) — returns to Dev Agent
+- `reports/scope-guard.md` with "Status: PASS" + scope certificate (if clean) — advances to QA
 
 ## Constraints
 

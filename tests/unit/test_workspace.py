@@ -10,6 +10,7 @@ from workspace.workspace import (
     InvalidTransitionError,
     Workspace,
     WorkspaceState,
+    VALID_STATES,
     VALID_TRANSITIONS,
 )
 
@@ -19,9 +20,10 @@ def workspace_dir(tmp_path):
     """Create a temporary workspace directory structure."""
     ws_root = tmp_path / "test-workspace"
     ws_root.mkdir()
-    (ws_root / "context").mkdir()
+    (ws_root / "meta").mkdir()
+    (ws_root / "reports").mkdir()
     (ws_root / "logs").mkdir()
-    (ws_root / "repo").mkdir()
+    (ws_root / "source").mkdir()
     return ws_root
 
 
@@ -30,7 +32,7 @@ def workspace(workspace_dir):
     """Create a Workspace with initial state."""
     state = WorkspaceState(
         ticket_id="TEST-123",
-        project_id="test-project",
+        company_id="test-company",
         repo_id="test-repo",
         workspace_root=str(workspace_dir),
     )
@@ -43,12 +45,12 @@ class TestWorkspaceState:
     def test_defaults(self):
         state = WorkspaceState(
             ticket_id="T-1",
-            project_id="p",
+            company_id="c",
             repo_id="r",
             workspace_root="/tmp/ws",
         )
-        assert state.status == "pending"
-        assert state.current_stage == "pending"
+        assert state.current_state == "NEW"
+        assert state.previous_state is None
         assert state.branch is None
         assert state.pr_number is None
         assert state.human_input_pending is False
@@ -58,42 +60,42 @@ class TestWorkspaceState:
 
     def test_auto_timestamps(self):
         state = WorkspaceState(
-            ticket_id="T-1", project_id="p", repo_id="r", workspace_root="/tmp"
+            ticket_id="T-1", company_id="c", repo_id="r", workspace_root="/tmp"
         )
         assert state.started_at == state.last_updated_at
 
 
 class TestWorkspace:
     def test_directory_properties(self, workspace):
-        assert workspace.repo_dir.name == "repo"
-        assert workspace.context_dir.name == "context"
+        assert workspace.source_dir.name == "source"
+        assert workspace.meta_dir.name == "meta"
+        assert workspace.reports_dir.name == "reports"
         assert workspace.logs_dir.name == "logs"
 
     def test_save_and_load_state(self, workspace):
-        """AC4 (2.2): Atomic write via temp file + rename."""
-        workspace.update_state(current_stage="ba_agent", status="running")
+        """Atomic write via temp file + rename."""
+        workspace.update_state(current_state="ANALYSIS")
 
         # Reload from disk
         ws2 = Workspace(str(workspace.root))
-        assert ws2.state.current_stage == "ba_agent"
-        assert ws2.state.status == "running"
+        assert ws2.state.current_state == "ANALYSIS"
         assert ws2.state.ticket_id == "TEST-123"
 
     def test_state_json_format(self, workspace):
-        """AC1 (2.2): state.json has all required fields."""
+        """state.json has all required fields."""
         data = json.loads(workspace.state_path.read_text())
         required_fields = [
-            "ticket_id", "project_id", "repo_id", "workspace_root",
-            "branch", "pr_number", "current_stage", "stage_iterations",
-            "human_input_pending", "started_at", "last_updated_at", "status",
+            "ticket_id", "company_id", "repo_id", "workspace_root",
+            "branch", "pr_number", "current_state", "previous_state",
+            "stage_iterations", "human_input_pending",
+            "started_at", "last_updated_at",
         ]
         for field in required_fields:
             assert field in data, f"Missing field: {field}"
 
     def test_update_state_updates_timestamp(self, workspace):
         old_ts = workspace.state.last_updated_at
-        workspace.update_state(current_stage="dev_agent")
-        # Timestamp should be updated (or same if very fast)
+        workspace.update_state(current_state="ANALYSIS")
         assert workspace.state.last_updated_at >= old_ts
 
     def test_update_unknown_field_raises(self, workspace):
@@ -102,79 +104,194 @@ class TestWorkspace:
 
 
 class TestStateTransitions:
-    def test_pending_to_running(self, workspace):
-        """AC2 (2.2): pending -> running is valid."""
-        workspace.transition_status("running")
-        assert workspace.state.status == "running"
+    def test_new_to_analysis(self, workspace):
+        workspace.transition("ANALYSIS")
+        assert workspace.state.current_state == "ANALYSIS"
 
-    def test_running_to_waiting(self, workspace):
-        workspace.transition_status("running")
-        workspace.transition_status("waiting_for_human")
-        assert workspace.state.status == "waiting_for_human"
+    def test_analysis_to_dev(self, workspace):
+        workspace.transition("ANALYSIS")
+        workspace.transition("DEV")
+        assert workspace.state.current_state == "DEV"
 
-    def test_waiting_to_running(self, workspace):
-        workspace.transition_status("running")
-        workspace.transition_status("waiting_for_human")
-        workspace.transition_status("running")
-        assert workspace.state.status == "running"
+    def test_dev_to_scope_check(self, workspace):
+        workspace.transition("ANALYSIS")
+        workspace.transition("DEV")
+        workspace.transition("SCOPE_CHECK")
+        assert workspace.state.current_state == "SCOPE_CHECK"
 
-    def test_running_to_completed(self, workspace):
-        workspace.transition_status("running")
-        workspace.transition_status("completed")
-        assert workspace.state.status == "completed"
+    def test_scope_check_pass_to_qa(self, workspace):
+        workspace.transition("ANALYSIS")
+        workspace.transition("DEV")
+        workspace.transition("SCOPE_CHECK")
+        workspace.transition("QA")
+        assert workspace.state.current_state == "QA"
 
-    def test_running_to_failed(self, workspace):
-        workspace.transition_status("running")
-        workspace.transition_status("failed")
-        assert workspace.state.status == "failed"
+    def test_scope_check_fail_to_dev(self, workspace):
+        """Scope violations send back to DEV."""
+        workspace.transition("ANALYSIS")
+        workspace.transition("DEV")
+        workspace.transition("SCOPE_CHECK")
+        workspace.transition("DEV")
+        assert workspace.state.current_state == "DEV"
+
+    def test_qa_pass_to_pushed(self, workspace):
+        workspace.transition("ANALYSIS")
+        workspace.transition("DEV")
+        workspace.transition("SCOPE_CHECK")
+        workspace.transition("QA")
+        workspace.transition("PUSHED")
+        assert workspace.state.current_state == "PUSHED"
+
+    def test_qa_fail_to_dev(self, workspace):
+        """Test failures send back to DEV."""
+        workspace.transition("ANALYSIS")
+        workspace.transition("DEV")
+        workspace.transition("SCOPE_CHECK")
+        workspace.transition("QA")
+        workspace.transition("DEV")
+        assert workspace.state.current_state == "DEV"
+
+    def test_pushed_to_pr_review(self, workspace):
+        workspace.transition("ANALYSIS")
+        workspace.transition("DEV")
+        workspace.transition("SCOPE_CHECK")
+        workspace.transition("QA")
+        workspace.transition("PUSHED")
+        workspace.transition("PR_REVIEW")
+        assert workspace.state.current_state == "PR_REVIEW"
+
+    def test_pr_review_fix_to_dev(self, workspace):
+        """PR comments requiring fixes send back to DEV."""
+        workspace.transition("ANALYSIS")
+        workspace.transition("DEV")
+        workspace.transition("SCOPE_CHECK")
+        workspace.transition("QA")
+        workspace.transition("PUSHED")
+        workspace.transition("PR_REVIEW")
+        workspace.transition("DEV")
+        assert workspace.state.current_state == "DEV"
+
+    def test_pr_review_to_done(self, workspace):
+        """Happy path completion."""
+        workspace.transition("ANALYSIS")
+        workspace.transition("DEV")
+        workspace.transition("SCOPE_CHECK")
+        workspace.transition("QA")
+        workspace.transition("PUSHED")
+        workspace.transition("PR_REVIEW")
+        workspace.transition("DONE")
+        assert workspace.state.current_state == "DONE"
+
+    def test_done_to_archived(self, workspace):
+        workspace.transition("ANALYSIS")
+        workspace.transition("DEV")
+        workspace.transition("SCOPE_CHECK")
+        workspace.transition("QA")
+        workspace.transition("PUSHED")
+        workspace.transition("PR_REVIEW")
+        workspace.transition("DONE")
+        workspace.transition("ARCHIVED")
+        assert workspace.state.current_state == "ARCHIVED"
+
+    def test_any_stage_to_failed(self, workspace):
+        """Every non-terminal state can transition to FAILED."""
+        for state in ["NEW", "ANALYSIS", "DEV", "SCOPE_CHECK", "QA", "PUSHED", "PR_REVIEW", "BLOCKED"]:
+            ws_root = workspace.root
+            s = WorkspaceState(
+                ticket_id="T-1", company_id="c", repo_id="r",
+                workspace_root=str(ws_root), current_state=state,
+            )
+            ws = Workspace(str(ws_root), s)
+            ws.save_state()
+            ws.transition("FAILED")
+            assert ws.state.current_state == "FAILED"
 
     def test_invalid_transition_raises(self, workspace):
-        """AC3 (2.2): Invalid transitions raise error."""
-        workspace.transition_status("running")
-        workspace.transition_status("completed")
+        """Terminal states cannot transition."""
+        workspace.transition("ANALYSIS")
+        workspace.transition("DEV")
+        workspace.transition("SCOPE_CHECK")
+        workspace.transition("QA")
+        workspace.transition("PUSHED")
+        workspace.transition("PR_REVIEW")
+        workspace.transition("DONE")
+        workspace.transition("ARCHIVED")
         with pytest.raises(InvalidTransitionError, match="Cannot transition"):
-            workspace.transition_status("running")
+            workspace.transition("NEW")
 
-    def test_pending_to_completed_invalid(self, workspace):
+    def test_new_to_done_invalid(self, workspace):
         with pytest.raises(InvalidTransitionError):
-            workspace.transition_status("completed")
+            workspace.transition("DONE")
 
-    def test_unknown_status_raises(self, workspace):
-        with pytest.raises(InvalidTransitionError, match="Unknown status"):
-            workspace.transition_status("bogus")
+    def test_unknown_state_raises(self, workspace):
+        with pytest.raises(InvalidTransitionError, match="Unknown state"):
+            workspace.transition("bogus")
 
     def test_all_valid_transitions(self, workspace_dir):
-        """Verify all defined transitions work."""
-        for from_status, to_statuses in VALID_TRANSITIONS.items():
-            for to_status in to_statuses:
+        """Verify every defined transition works."""
+        for from_state, to_states in VALID_TRANSITIONS.items():
+            for to_state in to_states:
                 state = WorkspaceState(
                     ticket_id="T-1",
-                    project_id="p",
+                    company_id="c",
                     repo_id="r",
                     workspace_root=str(workspace_dir),
-                    status=from_status,
+                    current_state=from_state,
                 )
                 ws = Workspace(str(workspace_dir), state)
                 ws.save_state()
-                ws.transition_status(to_status)
-                assert ws.state.status == to_status
+                ws.transition(to_state)
+                assert ws.state.current_state == to_state
+
+
+class TestBlockedResume:
+    def test_blocked_stores_previous_state(self, workspace):
+        workspace.transition("ANALYSIS")
+        workspace.transition("DEV")
+        workspace.transition("BLOCKED")
+        assert workspace.state.current_state == "BLOCKED"
+        assert workspace.state.previous_state == "DEV"
+        assert workspace.state.human_input_pending is True
+
+    def test_resume_from_blocked(self, workspace):
+        workspace.transition("ANALYSIS")
+        workspace.transition("DEV")
+        workspace.transition("BLOCKED")
+        # Human replies, resume to SCOPE_CHECK (next step after DEV)
+        workspace.transition("DEV")
+        assert workspace.state.current_state == "DEV"
+        assert workspace.state.previous_state is None
+        assert workspace.state.human_input_pending is False
+
+    def test_blocked_from_multiple_stages(self, workspace_dir):
+        """BLOCKED can be entered from any non-terminal state (except NEW)."""
+        blockable = ["ANALYSIS", "DEV", "SCOPE_CHECK", "QA", "PUSHED", "PR_REVIEW"]
+        for state in blockable:
+            s = WorkspaceState(
+                ticket_id="T-1", company_id="c", repo_id="r",
+                workspace_root=str(workspace_dir), current_state=state,
+            )
+            ws = Workspace(str(workspace_dir), s)
+            ws.save_state()
+            ws.transition("BLOCKED")
+            assert ws.state.current_state == "BLOCKED"
+            assert ws.state.previous_state == state
 
 
 class TestIterations:
     def test_increment_iteration(self, workspace):
-        """AC5 (2.2): stage_iterations tracks per-agent counts."""
-        count = workspace.increment_iteration("scope_guard")
+        count = workspace.increment_iteration("SCOPE_CHECK")
         assert count == 1
-        count = workspace.increment_iteration("scope_guard")
+        count = workspace.increment_iteration("SCOPE_CHECK")
         assert count == 2
 
         # Persisted to disk
         ws2 = Workspace(str(workspace.root))
-        assert ws2.state.stage_iterations["scope_guard"] == 2
+        assert ws2.state.stage_iterations["SCOPE_CHECK"] == 2
 
     def test_independent_counters(self, workspace):
-        workspace.increment_iteration("scope_guard")
-        workspace.increment_iteration("scope_guard")
-        workspace.increment_iteration("fix_agent")
-        assert workspace.state.stage_iterations["scope_guard"] == 2
-        assert workspace.state.stage_iterations["fix_agent"] == 1
+        workspace.increment_iteration("SCOPE_CHECK")
+        workspace.increment_iteration("SCOPE_CHECK")
+        workspace.increment_iteration("QA")
+        assert workspace.state.stage_iterations["SCOPE_CHECK"] == 2
+        assert workspace.state.stage_iterations["QA"] == 1

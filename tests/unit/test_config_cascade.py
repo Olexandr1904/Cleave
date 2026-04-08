@@ -60,26 +60,23 @@ class TestLoadConfig:
         _, projects = load_config(FIXTURES_DIR)
         repo = projects["test-project"].repos["test-repo"]
         assert repo.repo.id == "test-repo"
-        assert repo.github.owner == "test-org"
-        assert repo.github.default_branch == "develop"
+        assert repo.vcs.provider == "github"
+        assert repo.vcs.github.owner == "test-org"
+        assert repo.vcs.github.default_branch == "develop"
         assert repo.git.clone_url == "git@github.com:test-org/test-repo.git"
         assert repo.git.depth == 1
         assert repo.jira_repo_label == "repo:test-repo"
+        assert repo.ci.provider == "github_actions"
+        assert "arch-rules.md" in repo.architecture.protected_files
 
     def test_cascade_override(self):
-        """AC4: Lower-level values override; unset fields inherit."""
+        """AC4: Lower-level values override; unset fields inherit from project."""
         _, projects = load_config(FIXTURES_DIR)
         repo = projects["test-project"].repos["test-repo"]
 
-        # Repo overrides project defaults
-        assert repo.defaults.max_fix_iterations == 5  # repo override
-
-        # Project overrides global defaults
+        # Repo inherits project defaults (no defaults override in repo yaml)
         assert repo.defaults.poll_interval_seconds == 600  # project override
-
-        # Unset fields inherit from global
-        assert repo.defaults.max_scope_iterations == 3  # global default
-        assert repo.defaults.max_qa_iterations == 2  # global default
+        assert repo.defaults.max_iterations.scope_guard == 3  # global default
 
     def test_jira_inherited_by_repo(self):
         """Repo inherits jira config from project."""

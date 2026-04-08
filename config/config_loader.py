@@ -18,19 +18,22 @@ import yaml
 from config.schemas import (
     ArchitectureConfig,
     BuildConfig,
+    CIConfig,
     ClaudeConfig,
-    CopilotConfig,
     DefaultsConfig,
-    ExistingScriptsConfig,
     GitConfig,
     GitHubConfig,
+    GitLabConfig,
     GlobalConfig,
     HeartbeatConfig,
+    HelpersConfig,
+    JenkinsConfig,
     JiraConfig,
     JiraStatusesConfig,
     LintConfig,
     LoadedProject,
     LoggingConfig,
+    MaxIterationsConfig,
     OperatorProfile,
     ParallelismConfig,
     ProjectConfig,
@@ -39,6 +42,7 @@ from config.schemas import (
     RepoInfo,
     TelegramConfig,
     TestConfig,
+    VCSConfig,
     WorkspacesConfig,
 )
 
@@ -148,7 +152,7 @@ def load_global_config(config_dir: str) -> GlobalConfig:
         telegram=_parse_section(data, "telegram", TelegramConfig, file_str),
         claude=_parse_section(data, "claude", ClaudeConfig, file_str),
         workspaces=_parse_section(data, "workspaces", WorkspacesConfig, file_str),
-        defaults=_parse_section(data, "defaults", DefaultsConfig, file_str),
+        defaults=_parse_defaults_section(data, file_str),
         logging=_parse_section(data, "logging", LoggingConfig, file_str),
         heartbeat=_parse_section(data, "heartbeat", HeartbeatConfig, file_str),
         operator=_parse_section(data, "operator", OperatorProfile, file_str),
@@ -190,6 +194,47 @@ def _parse_jira_section(data: dict, file_path: str) -> JiraConfig:
         raise ConfigError(f"Invalid fields in 'jira': {e}", file_path=file_path, field="jira") from e
 
 
+def _parse_defaults_section(data: dict, file_path: str) -> DefaultsConfig:
+    """Parse defaults section, handling nested max_iterations."""
+    defaults_data = dict(data.get("defaults", {}) or {})
+    max_iter_data = defaults_data.pop("max_iterations", None) or {}
+    max_iterations = MaxIterationsConfig(**max_iter_data) if max_iter_data else MaxIterationsConfig()
+    try:
+        return DefaultsConfig(**defaults_data, max_iterations=max_iterations)
+    except TypeError as e:
+        raise ConfigError(f"Invalid fields in 'defaults': {e}", file_path=file_path, field="defaults") from e
+
+
+def _parse_vcs_section(data: dict, file_path: str) -> VCSConfig:
+    """Parse vcs section with provider-specific sub-config."""
+    vcs_data = dict(data.get("vcs", {}) or {})
+    provider = vcs_data.pop("provider", "github")
+    github_data = vcs_data.pop("github", None) or {}
+    gitlab_data = vcs_data.pop("gitlab", None) or {}
+    try:
+        return VCSConfig(
+            provider=provider,
+            github=GitHubConfig(**github_data) if github_data else GitHubConfig(),
+            gitlab=GitLabConfig(**gitlab_data) if gitlab_data else GitLabConfig(),
+        )
+    except TypeError as e:
+        raise ConfigError(f"Invalid fields in 'vcs': {e}", file_path=file_path, field="vcs") from e
+
+
+def _parse_ci_section(data: dict, file_path: str) -> CIConfig:
+    """Parse ci section with provider-specific sub-config."""
+    ci_data = dict(data.get("ci", {}) or {})
+    provider = ci_data.pop("provider", "github_actions")
+    jenkins_data = ci_data.pop("jenkins", None) or {}
+    try:
+        return CIConfig(
+            provider=provider,
+            jenkins=JenkinsConfig(**jenkins_data) if jenkins_data else JenkinsConfig(),
+        )
+    except TypeError as e:
+        raise ConfigError(f"Invalid fields in 'ci': {e}", file_path=file_path, field="ci") from e
+
+
 def _load_project_config(project_dir: Path, global_defaults: dict) -> ProjectConfig:
     """Load a single project.yaml and merge with global defaults."""
     project_yaml = project_dir / "project.yaml"
@@ -199,15 +244,12 @@ def _load_project_config(project_dir: Path, global_defaults: dict) -> ProjectCon
     data = _load_yaml_file(project_yaml)
     file_str = str(project_yaml)
 
-    # Merge defaults section with global defaults
-    merged_defaults = merge_dicts(global_defaults, data.get("defaults", {}) or {})
-
     return ProjectConfig(
         project=_parse_section(data, "project", ProjectInfo, file_str),
         jira=_parse_jira_section(data, file_str),
         telegram=_parse_section(data, "telegram", TelegramConfig, file_str),
         parallelism=_parse_section(data, "parallelism", ParallelismConfig, file_str),
-        defaults=DefaultsConfig(**merged_defaults),
+        defaults=_parse_defaults_section(data, file_str),
     )
 
 
@@ -216,30 +258,23 @@ def _load_repo_config(repo_path: Path, project_config: ProjectConfig, global_def
     data = _load_yaml_file(repo_path)
     file_str = str(repo_path)
 
-    # Merge defaults: global -> project -> repo
-    project_defaults = {
-        k: v for k, v in project_config.defaults.__dict__.items()
-    }
-    repo_defaults_raw = data.get("defaults", {}) or {}
-    merged_defaults = merge_dicts(project_defaults, repo_defaults_raw)
-
     return RepoConfig(
         repo=_parse_section(data, "repo", RepoInfo, file_str),
-        github=_parse_section(data, "github", GitHubConfig, file_str),
+        vcs=_parse_vcs_section(data, file_str),
+        ci=_parse_ci_section(data, file_str),
         git=_parse_section(data, "git", GitConfig, file_str),
         architecture=_parse_section(data, "architecture", ArchitectureConfig, file_str),
         linting=_parse_section(data, "linting", LintConfig, file_str),
         testing=_parse_section(data, "testing", TestConfig, file_str),
         build=_parse_section(data, "build", BuildConfig, file_str),
-        copilot=_parse_section(data, "copilot", CopilotConfig, file_str),
-        existing_scripts=_parse_section(data, "existing_scripts", ExistingScriptsConfig, file_str),
+        helpers=_parse_section(data, "helpers", HelpersConfig, file_str),
         jira_repo_label=data.get("jira_repo_label", ""),
         pr_description_template=data.get("pr_description_template", ""),
         parallelism=_parse_section(data, "parallelism", ParallelismConfig, file_str),
         # Inherited from project
         jira=project_config.jira,
         telegram=project_config.telegram if project_config.telegram.default_chat_id or project_config.telegram.bot_token else TelegramConfig(),
-        defaults=DefaultsConfig(**merged_defaults),
+        defaults=_parse_defaults_section(data, file_str) if data.get("defaults") else project_config.defaults,
     )
 
 

@@ -1,0 +1,17 @@
+# Sickle — Required Environment Variables
+# Copy this file to .env and fill in the values.
+
+# Claude API
+CLAUDE_API_KEY=sk-ant-...
+
+# Telegram Bot
+TELEGRAM_BOT_TOKEN=123456:ABC-...
+TELEGRAM_CHAT_ID=-100...
+
+# Jira Cloud
+JIRA_URL=https://faria.atlassian.net
+JIRA_TOKEN=...
+JIRA_EMAIL=sickle-bot@faria.com
+
+# GitHub (Personal Access Token with repo scope)
+GITHUB_TOKEN=ghp_...

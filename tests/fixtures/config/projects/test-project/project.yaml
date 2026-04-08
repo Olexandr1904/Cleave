@@ -24,3 +24,10 @@ parallelism:
 
 defaults:
   poll_interval_seconds: 600
+  max_iterations:
+    scope_guard: 3
+    fix: 3
+    qa: 2
+    dev: 2
+  max_parallel_tickets: 5
+  pr_comment_fetch_delay_minutes: 30

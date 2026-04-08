@@ -81,6 +81,9 @@ class TestMain:
         assert result == 0
 
 
+PROJECT_DIR = str(Path(__file__).parent.parent.parent)
+
+
 class TestHelpOutput:
     def test_help_flag(self):
         """AC2: python main.py --help shows usage information."""
@@ -88,7 +91,7 @@ class TestHelpOutput:
             [sys.executable, "main.py", "--help"],
             capture_output=True,
             text=True,
-            cwd="/Users/Oleksandr_Brazhenko/Documents/sickle",
+            cwd=PROJECT_DIR,
         )
         assert result.returncode == 0
         assert "Sickle" in result.stdout
@@ -105,7 +108,7 @@ class TestNoConfigError:
             [sys.executable, "main.py"],
             capture_output=True,
             text=True,
-            cwd="/Users/Oleksandr_Brazhenko/Documents/sickle",
+            cwd=PROJECT_DIR,
         )
         assert result.returncode != 0
         assert "error" in result.stderr.lower() or "required" in result.stderr.lower()

@@ -1,4 +1,4 @@
-"""Configuration schema dataclasses for Sickle."""
+"""Configuration schema dataclasses for Sickle (v2)."""
 
 from __future__ import annotations
 
@@ -19,20 +19,26 @@ class ClaudeConfig:
 
 @dataclass
 class WorkspacesConfig:
-    base_dir: str = "/workspaces"
+    base_dir: str = "/data"
     max_age_days: int = 7
-    isolation: str = "directory"
     min_free_disk_gb: int = 5
     max_workspace_size_gb: int = 2
 
 
 @dataclass
+class MaxIterationsConfig:
+    scope_guard: int = 3
+    fix: int = 3
+    qa: int = 2
+    dev: int = 2
+
+
+@dataclass
 class DefaultsConfig:
-    poll_interval_seconds: int = 900
-    max_fix_iterations: int = 3
-    max_scope_iterations: int = 3
-    max_qa_iterations: int = 2
-    max_parallel_tickets: int = 2
+    poll_interval_seconds: int = 300
+    max_iterations: MaxIterationsConfig = field(default_factory=MaxIterationsConfig)
+    max_parallel_tickets: int = 5
+    pr_comment_fetch_delay_minutes: int = 30
 
 
 @dataclass
@@ -84,17 +90,17 @@ class JiraConfig:
     token: str = ""
     email: str = ""
     project_key: str = ""
-    trigger_label: str = "ai-ready"
+    trigger_label: str = "ai-pipeline"
     ignore_labels: list[str] = field(default_factory=list)
     statuses: JiraStatusesConfig = field(default_factory=JiraStatusesConfig)
 
 
 @dataclass
 class ParallelismConfig:
-    max_concurrent_tickets: int = 2
+    max_concurrent_tickets: int = 5
 
 
-# --- GitHub / Git config (repo-level) ---
+# --- VCS config (repo-level) ---
 
 
 @dataclass
@@ -102,15 +108,50 @@ class GitHubConfig:
     token: str = ""
     owner: str = ""
     repo: str = ""
-    default_branch: str = "main"
+    default_branch: str = "develop"
     branch_prefix: str = "feature"
     merge_method: str = "squash"
 
 
 @dataclass
+class GitLabConfig:
+    token: str = ""
+    project_id: str = ""
+    url: str = "https://gitlab.com"
+    default_branch: str = "develop"
+    branch_prefix: str = "feature"
+
+
+@dataclass
+class VCSConfig:
+    """VCS provider selection. Only one sub-config is used based on provider."""
+    provider: str = "github"  # "github" or "gitlab"
+    github: GitHubConfig = field(default_factory=GitHubConfig)
+    gitlab: GitLabConfig = field(default_factory=GitLabConfig)
+
+
+# --- CI config (repo-level) ---
+
+
+@dataclass
+class JenkinsConfig:
+    url: str = ""
+    job_key: str = ""
+    username: str = ""
+    token: str = ""
+
+
+@dataclass
+class CIConfig:
+    """CI provider selection. Only one sub-config is used based on provider."""
+    provider: str = "github_actions"  # "github_actions" or "jenkins"
+    jenkins: JenkinsConfig = field(default_factory=JenkinsConfig)
+
+
+@dataclass
 class GitConfig:
     clone_url: str = ""
-    commit_author_name: str = "Sickle Pipeline"
+    commit_author_name: str = "Sickle Bot"
     commit_author_email: str = "sickle@pipeline.local"
     depth: int = 0
 
@@ -118,21 +159,18 @@ class GitConfig:
 @dataclass
 class ArchitectureConfig:
     rules_file: str = ""
+    protected_files: list[str] = field(default_factory=list)
 
 
 @dataclass
 class LintConfig:
-    tool: str = ""
-    config_file: str = ""
     run_command: str = ""
-    report_path: str = ""
     hard_gate: bool = True
 
 
 @dataclass
 class TestConfig:
     run_command: str = ""
-    report_path: str = ""
     hard_gate: bool = True
 
 
@@ -143,15 +181,20 @@ class BuildConfig:
 
 
 @dataclass
-class CopilotConfig:
-    enabled: bool = False
-    wait_for_review_minutes: int = 15
-
-
-@dataclass
-class ExistingScriptsConfig:
-    ticket_to_prompt: str = ""
-    copilot_validator: str = ""
+class HelpersConfig:
+    """Paths to existing helper scripts (wrapped as subprocesses)."""
+    fetch_pr_comments: str = ""
+    resolve_pr_comments: str = ""
+    fetch_ci_failure: str = ""
+    fetch_jira_tickets: str = ""
+    update_jira_status: str = ""
+    # GitLab-specific helpers
+    fetch_mr_comments: str = ""
+    resolve_mr_comments: str = ""
+    code_review: str = ""
+    post_review_comments: str = ""
+    fetch_jenkins: str = ""
+    create_jira_ticket: str = ""
 
 
 # --- Project config ---
@@ -186,14 +229,14 @@ class RepoInfo:
 @dataclass
 class RepoConfig:
     repo: RepoInfo = field(default_factory=RepoInfo)
-    github: GitHubConfig = field(default_factory=GitHubConfig)
+    vcs: VCSConfig = field(default_factory=VCSConfig)
+    ci: CIConfig = field(default_factory=CIConfig)
     git: GitConfig = field(default_factory=GitConfig)
     architecture: ArchitectureConfig = field(default_factory=ArchitectureConfig)
     linting: LintConfig = field(default_factory=LintConfig)
     testing: TestConfig = field(default_factory=TestConfig)
     build: BuildConfig = field(default_factory=BuildConfig)
-    copilot: CopilotConfig = field(default_factory=CopilotConfig)
-    existing_scripts: ExistingScriptsConfig = field(default_factory=ExistingScriptsConfig)
+    helpers: HelpersConfig = field(default_factory=HelpersConfig)
     jira_repo_label: str = ""
     pr_description_template: str = ""
     parallelism: ParallelismConfig = field(default_factory=ParallelismConfig)

@@ -17,6 +17,22 @@ core_principles:
   - "Never process tickets without the trigger label"
   - "Never process tickets assigned to humans"
 
+tools: []
+
+inputs:
+  - poll_data/tickets.md
+  - poll_data/project_config.md
+
+outputs:
+  - reports/pm.md
+
+decision_policy:
+  when_to_run: "Each poll cycle, before workspace creation"
+  when_to_skip: "No new tickets in poll"
+  success_outcome: "Ordered ticket list fed to orchestrator for workspace creation"
+  failure_outcome: "Escalate unroutable tickets via Telegram"
+  max_iterations: 1
+
 dependencies:
   tasks: []
   checklists: []
@@ -33,9 +49,9 @@ work first.
 ## Input
 
 You receive:
-- `tickets.json` — list of tickets from the current poll cycle, each with:
+- `poll_data/tickets.md` — list of tickets from the current poll cycle, each with:
   id, summary, labels, priority, sprint, linked_issues, assignee
-- `project-config.json` — project and repo configuration including:
+- `poll_data/project_config.md` — project and repo configuration including:
   - `trigger_label` — label that marks a ticket as pipeline-ready
   - `ignore_labels` — labels that exclude a ticket
   - `repos` — list of repos with their `jira_repo_label`

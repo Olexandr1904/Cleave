@@ -20,7 +20,16 @@ class WorkspaceError(Exception):
 
 
 class WorkspaceManager:
-    """Manages workspace lifecycle: create, discover, cleanup."""
+    """Manages workspace lifecycle: create, discover, cleanup.
+
+    Directory layout (architecture-v2 §3.1):
+        /<base_dir>/<company_id>/<repo_id>/tickets/<ticket_id>/
+            meta/
+            reports/
+            logs/
+            source/    (git clone — deleted after merge)
+            state.json
+    """
 
     def __init__(self, base_dir: str) -> None:
         self._base_dir = Path(base_dir)
@@ -31,20 +40,24 @@ class WorkspaceManager:
 
     def create(
         self,
-        project_id: str,
+        company_id: str,
         repo_id: str,
         ticket_id: str,
         clone_url: str,
         clone_depth: int = 0,
+        default_branch: str = "develop",
+        branch_prefix: str = "feature",
     ) -> Workspace:
         """Create a new isolated workspace with a fresh git clone.
 
         Args:
-            project_id: Project identifier.
-            repo_id: Repository identifier.
-            ticket_id: Ticket identifier (e.g., "ACME-123").
+            company_id: Company identifier (e.g., "acme").
+            repo_id: Repository identifier (e.g., "acme-mobile").
+            ticket_id: Ticket identifier (e.g., "ACME-14567").
             clone_url: Git URL to clone.
             clone_depth: Shallow clone depth (0 = full clone).
+            default_branch: Branch to checkout after clone.
+            branch_prefix: Prefix for feature branch.
 
         Returns:
             A Workspace object pointing to the new workspace.
@@ -52,22 +65,23 @@ class WorkspaceManager:
         Raises:
             WorkspaceError: If clone fails (workspace is cleaned up).
         """
-        timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
-        workspace_name = f"{ticket_id}_{timestamp}"
-        workspace_root = self._base_dir / project_id / repo_id / workspace_name
+        workspace_root = (
+            self._base_dir / company_id / repo_id / "tickets" / ticket_id
+        )
 
         try:
             # Create workspace directories
             workspace_root.mkdir(parents=True, exist_ok=True)
-            (workspace_root / "context").mkdir()
-            (workspace_root / "logs").mkdir()
+            (workspace_root / "meta").mkdir(exist_ok=True)
+            (workspace_root / "reports").mkdir(exist_ok=True)
+            (workspace_root / "logs").mkdir(exist_ok=True)
 
-            # Git clone
-            repo_dir = workspace_root / "repo"
+            # Git clone into source/
+            source_dir = workspace_root / "source"
             clone_cmd = ["git", "clone"]
             if clone_depth > 0:
                 clone_cmd.extend(["--depth", str(clone_depth)])
-            clone_cmd.extend([clone_url, str(repo_dir)])
+            clone_cmd.extend([clone_url, str(source_dir)])
 
             result = subprocess.run(
                 clone_cmd,
@@ -81,12 +95,33 @@ class WorkspaceManager:
                     f"Git clone failed: {result.stderr.strip()}"
                 )
 
+            # Checkout default branch and create feature branch
+            slug = ticket_id.lower().replace(" ", "-")[:50]
+            branch_name = f"{branch_prefix}/{ticket_id}-{slug}"
+
+            subprocess.run(
+                ["git", "checkout", default_branch],
+                cwd=str(source_dir),
+                capture_output=True,
+                text=True,
+                timeout=SUBPROCESS_TIMEOUT,
+            )
+
+            subprocess.run(
+                ["git", "checkout", "-b", branch_name],
+                cwd=str(source_dir),
+                capture_output=True,
+                text=True,
+                timeout=SUBPROCESS_TIMEOUT,
+            )
+
             # Create initial state
             state = WorkspaceState(
                 ticket_id=ticket_id,
-                project_id=project_id,
+                company_id=company_id,
                 repo_id=repo_id,
                 workspace_root=str(workspace_root),
+                branch=branch_name,
             )
 
             workspace = Workspace(str(workspace_root), state)
@@ -94,7 +129,7 @@ class WorkspaceManager:
 
             logger.info(
                 "Workspace created: %s/%s/%s at %s",
-                project_id, repo_id, ticket_id, workspace_root,
+                company_id, repo_id, ticket_id, workspace_root,
             )
             return workspace
 
@@ -103,30 +138,33 @@ class WorkspaceManager:
             if workspace_root.exists():
                 shutil.rmtree(workspace_root, ignore_errors=True)
             if isinstance(e, subprocess.TimeoutExpired):
-                raise WorkspaceError(f"Git clone timed out after {SUBPROCESS_TIMEOUT}s") from e
+                raise WorkspaceError(
+                    f"Git clone timed out after {SUBPROCESS_TIMEOUT}s"
+                ) from e
             raise
 
     def discover_workspaces(self) -> list[Workspace]:
-        """Discover existing workspaces by scanning the base directory.
+        """Discover existing workspaces by scanning for state.json files.
 
-        Returns workspaces with status 'running' or 'waiting_for_human'.
-        Workspaces with 'completed' or 'failed' are skipped.
+        Returns workspaces with active states (not DONE/FAILED/ARCHIVED).
         """
         active_workspaces: list[Workspace] = []
 
         if not self._base_dir.exists():
             return active_workspaces
 
+        terminal_states = {"DONE", "FAILED", "ARCHIVED"}
+
         for state_file in self._base_dir.rglob("state.json"):
             workspace_root = state_file.parent
             try:
                 ws = Workspace(str(workspace_root))
-                status = ws.state.status
-                if status in ("running", "waiting_for_human"):
+                current = ws.state.current_state
+                if current not in terminal_states:
                     active_workspaces.append(ws)
                     logger.info(
-                        "Discovered active workspace: %s (status=%s, stage=%s)",
-                        ws.state.ticket_id, status, ws.state.current_stage,
+                        "Discovered active workspace: %s (state=%s)",
+                        ws.state.ticket_id, current,
                     )
             except Exception as e:
                 logger.warning(
@@ -135,10 +173,23 @@ class WorkspaceManager:
 
         return active_workspaces
 
-    def cleanup_old_workspaces(self, max_age_days: int) -> list[str]:
-        """Delete workspaces with completed/failed status older than max_age_days.
+    def cleanup_source(self, workspace: Workspace) -> None:
+        """Delete only the source/ directory (after merge).
 
-        Running and waiting_for_human workspaces are never deleted.
+        Preserves meta/, reports/, logs/, and state.json for history.
+        """
+        source_dir = workspace.source_dir
+        if source_dir.exists():
+            shutil.rmtree(source_dir, ignore_errors=True)
+            logger.info(
+                "Cleaned up source for workspace: %s", workspace.state.ticket_id
+            )
+
+    def cleanup_old_workspaces(self, max_age_days: int) -> list[str]:
+        """Delete full workspace dirs with ARCHIVED state older than max_age_days.
+
+        Active and DONE/FAILED workspaces are never fully deleted.
+        Only ARCHIVED workspaces (source already cleaned) are removed.
 
         Returns list of deleted workspace paths.
         """
@@ -156,14 +207,10 @@ class WorkspaceManager:
             workspace_root = state_file.parent
             try:
                 ws = Workspace(str(workspace_root))
-                status = ws.state.status
+                current = ws.state.current_state
 
-                # Never delete active workspaces
-                if status in ("running", "waiting_for_human", "pending"):
-                    continue
-
-                # Only delete completed/failed/archived
-                if status not in ("completed", "failed", "archived"):
+                # Only fully delete ARCHIVED workspaces
+                if current != "ARCHIVED":
                     continue
 
                 # Check age

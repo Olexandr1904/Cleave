@@ -51,14 +51,15 @@ class TestLoadGlobalConfig:
 
         # AC4: all fields parsed
         assert config.claude.model == "claude-sonnet-4-5"
-        assert config.workspaces.base_dir == "/workspaces"
+        assert config.workspaces.base_dir == "/data"
         assert config.workspaces.max_age_days == 7
-        assert config.workspaces.isolation == "directory"
-        assert config.defaults.poll_interval_seconds == 900
-        assert config.defaults.max_fix_iterations == 3
-        assert config.defaults.max_scope_iterations == 3
-        assert config.defaults.max_qa_iterations == 2
-        assert config.defaults.max_parallel_tickets == 2
+        assert config.defaults.poll_interval_seconds == 300
+        assert config.defaults.max_iterations.scope_guard == 3
+        assert config.defaults.max_iterations.fix == 3
+        assert config.defaults.max_iterations.qa == 2
+        assert config.defaults.max_iterations.dev == 2
+        assert config.defaults.max_parallel_tickets == 5
+        assert config.defaults.pr_comment_fetch_delay_minutes == 30
         assert config.logging.level == "INFO"
         assert config.logging.dir == "/var/log/sickle"
         assert config.heartbeat.enabled is True
@@ -101,7 +102,7 @@ class TestLoadGlobalConfig:
         config = load_global_config(str(tmp_path))
         assert config.logging.level == "DEBUG"
         # Other sections get defaults
-        assert config.defaults.poll_interval_seconds == 900
+        assert config.defaults.poll_interval_seconds == 300
         assert config.telegram.bot_token == ""
         assert config.operator.role == ""
 

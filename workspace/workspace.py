@@ -11,17 +11,26 @@ from pathlib import Path
 from typing import Any
 
 
-# Valid status values
-VALID_STATUSES = {"pending", "running", "waiting_for_human", "completed", "failed", "archived"}
+# Valid pipeline states (architecture-v2 §3.3)
+VALID_STATES = {
+    "NEW", "ANALYSIS", "DEV", "SCOPE_CHECK", "QA",
+    "PUSHED", "PR_REVIEW", "DONE",
+    "BLOCKED", "FAILED", "ARCHIVED",
+}
 
-# Valid status transitions
+# Valid state transitions (architecture-v2 §3.3)
 VALID_TRANSITIONS: dict[str, set[str]] = {
-    "pending": {"running"},
-    "running": {"running", "waiting_for_human", "completed", "failed"},
-    "waiting_for_human": {"running"},
-    "completed": {"archived"},
-    "failed": {"archived"},
-    "archived": set(),
+    "NEW":          {"ANALYSIS", "FAILED"},
+    "ANALYSIS":     {"DEV", "BLOCKED", "FAILED"},
+    "DEV":          {"SCOPE_CHECK", "BLOCKED", "FAILED"},
+    "SCOPE_CHECK":  {"QA", "DEV", "BLOCKED", "FAILED"},
+    "QA":           {"PUSHED", "DEV", "BLOCKED", "FAILED"},
+    "PUSHED":       {"PR_REVIEW", "BLOCKED", "FAILED"},
+    "PR_REVIEW":    {"DEV", "DONE", "BLOCKED", "FAILED"},
+    "DONE":         {"ARCHIVED"},
+    "BLOCKED":      {"ANALYSIS", "DEV", "SCOPE_CHECK", "QA", "PUSHED", "PR_REVIEW", "FAILED"},
+    "FAILED":       set(),
+    "ARCHIVED":     set(),
 }
 
 
@@ -29,20 +38,20 @@ VALID_TRANSITIONS: dict[str, set[str]] = {
 class WorkspaceState:
     """Tracks the lifecycle of a single ticket through the pipeline."""
     ticket_id: str
-    project_id: str
+    company_id: str
     repo_id: str
     workspace_root: str
     branch: str | None = None
     pr_number: int | None = None
     pr_url: str | None = None
-    current_stage: str = "pending"
+    current_state: str = "NEW"
+    previous_state: str | None = None
     stage_iterations: dict[str, int] = field(default_factory=dict)
     human_input_pending: bool = False
     human_input_question: str | None = None
     human_input_reply: str | None = None
     started_at: str = ""
     last_updated_at: str = ""
-    status: str = "pending"
     error: str | None = None
 
     def __post_init__(self) -> None:
@@ -73,12 +82,16 @@ class Workspace:
         return self._root
 
     @property
-    def repo_dir(self) -> Path:
-        return self._root / "repo"
+    def source_dir(self) -> Path:
+        return self._root / "source"
 
     @property
-    def context_dir(self) -> Path:
-        return self._root / "context"
+    def meta_dir(self) -> Path:
+        return self._root / "meta"
+
+    @property
+    def reports_dir(self) -> Path:
+        return self._root / "reports"
 
     @property
     def logs_dir(self) -> Path:
@@ -129,21 +142,36 @@ class Workspace:
             setattr(state, key, value)
         self.save_state()
 
-    def transition_status(self, new_status: str) -> None:
-        """Transition workspace status with validation."""
-        current = self.state.status
-        if new_status not in VALID_STATUSES:
-            raise InvalidTransitionError(f"Unknown status: {new_status}")
-        if new_status not in VALID_TRANSITIONS.get(current, set()):
-            raise InvalidTransitionError(
-                f"Cannot transition from '{current}' to '{new_status}'"
-            )
-        self.update_state(status=new_status)
+    def transition(self, new_state: str) -> None:
+        """Transition workspace to a new pipeline state with validation.
 
-    def increment_iteration(self, agent_id: str) -> int:
-        """Increment and return iteration count for an agent."""
+        For BLOCKED: stores previous_state so we can resume later.
+        For resuming from BLOCKED: previous_state is cleared.
+        """
+        current = self.state.current_state
+        if new_state not in VALID_STATES:
+            raise InvalidTransitionError(f"Unknown state: {new_state}")
+        if new_state not in VALID_TRANSITIONS.get(current, set()):
+            raise InvalidTransitionError(
+                f"Cannot transition from '{current}' to '{new_state}'"
+            )
+
+        updates: dict[str, Any] = {"current_state": new_state}
+
+        if new_state == "BLOCKED":
+            updates["previous_state"] = current
+            updates["human_input_pending"] = True
+        elif current == "BLOCKED":
+            # Resuming from BLOCKED — clear pending flag
+            updates["previous_state"] = None
+            updates["human_input_pending"] = False
+
+        self.update_state(**updates)
+
+    def increment_iteration(self, stage_id: str) -> int:
+        """Increment and return iteration count for a stage."""
         state = self.state
-        count = state.stage_iterations.get(agent_id, 0) + 1
-        state.stage_iterations[agent_id] = count
+        count = state.stage_iterations.get(stage_id, 0) + 1
+        state.stage_iterations[stage_id] = count
         self.save_state()
         return count

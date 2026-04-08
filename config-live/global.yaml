@@ -7,8 +7,8 @@ claude:
   model: "claude-sonnet-4-5"
 
 workspaces:
-  base_dir: "/data"
-  max_age_days: 7
+  base_dir: "/data/sickle"
+  max_age_days: 14
   min_free_disk_gb: 5
   max_workspace_size_gb: 2
 
@@ -29,13 +29,21 @@ logging:
 heartbeat:
   enabled: true
   interval_hours: 24
+  send_at: "09:00"
 
 operator:
-  role: "Tech Lead"
+  role: "Team Lead / Full-stack Developer"
   stack:
-    - "Python"
-    - "Kotlin"
+    - "Kotlin Multiplatform"
+    - "Android"
+    - "iOS (SwiftUI)"
+    - "Ktor"
+    - "PostgreSQL"
   preferences:
-    code_style: "clean"
+    code_style: "Follow existing project conventions exactly"
+    commit_format: "feat({ticket_id}): {description}"
   rules:
-    - "No unused imports"
+    - "Never auto-merge PRs — human reviews and merges"
+    - "Always include ticket ID in commit messages"
+    - "Follow existing test patterns in the repo"
+    - "Do not refactor outside ticket scope"

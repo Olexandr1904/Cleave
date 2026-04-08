@@ -1,0 +1,35 @@
+project:
+  id: "acme"
+  name: "Acme Corp"
+  enabled: true
+
+jira:
+  url: "${JIRA_URL}"
+  token: "${JIRA_TOKEN}"
+  email: "${JIRA_EMAIL}"
+  project_key: "ACME"
+  trigger_label: "ai-pipeline"
+  ignore_labels:
+    - "manual-only"
+    - "blocked"
+  statuses:
+    todo: "To Do"
+    in_progress: "In Progress"
+    in_review: "In Review"
+    done: "Done"
+
+telegram:
+  bot_token: "${TELEGRAM_BOT_TOKEN}"
+  default_chat_id: "${TELEGRAM_CHAT_ID}"
+
+parallelism:
+  max_concurrent_tickets: 3
+
+defaults:
+  poll_interval_seconds: 300
+  max_iterations:
+    scope_guard: 3
+    fix: 3
+    qa: 2
+    dev: 2
+  pr_comment_fetch_delay_minutes: 30

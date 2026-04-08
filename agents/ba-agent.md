@@ -16,6 +16,28 @@ core_principles:
   - "Ask precise numbered questions when unclear"
   - "Check for missing repo label and escalate if absent"
 
+tools:
+  - read_file
+  - list_directory
+  - search_code
+
+inputs:
+  - meta/ticket.md
+  - meta/parent.md
+  - meta/comments.md
+  - rules/arch-rules.md
+
+outputs:
+  - reports/ba.md
+  - reports/ba-questions.md
+
+decision_policy:
+  when_to_run: "State is ANALYSIS"
+  when_to_skip: "Never (required for every ticket)"
+  success_outcome: "State → DEV (clear) or State → BLOCKED (unclear)"
+  failure_outcome: "State → BLOCKED, questions sent via Telegram"
+  max_iterations: 2
+
 dependencies:
   tasks: []
   checklists:
@@ -33,9 +55,10 @@ produce implementation plans and test scenarios.
 ## Input
 
 You receive:
-- `ticket.json` — raw Jira ticket data (summary, description, acceptance criteria, labels)
-- `arch-rules.md` — architecture constraints (READ ONLY — never suggest changes)
-- Linked ticket data for dependency context
+- `meta/ticket.md` — Jira ticket content (summary, description, acceptance criteria, labels)
+- `meta/parent.md` — parent ticket context (if exists)
+- `meta/comments.md` — Jira comments (if any)
+- `rules/arch-rules.md` — architecture constraints (READ ONLY — never suggest changes)
 
 ## Process
 
@@ -78,7 +101,7 @@ If missing, escalate immediately — the ticket cannot proceed without routing.
 
 ### Step 4: Produce Implementation Plan
 
-Generate `context/implementation-plan.md` containing:
+Generate `reports/ba.md` containing:
 
 ```markdown
 # Implementation Plan — {ticket_id}
@@ -109,7 +132,7 @@ Step-by-step implementation approach.
 
 ### Step 5: Produce Test Scenarios
 
-Generate `context/test-scenarios.md` containing:
+The test scenarios section is included in `reports/ba.md` below the implementation plan:
 
 ```markdown
 # Test Scenarios — {ticket_id}
@@ -127,10 +150,8 @@ Generate `context/test-scenarios.md` containing:
 
 ## Output
 
-- If unclear: `context/ba-questions.md` with numbered questions
-- If clear:
-  - `context/implementation-plan.md`
-  - `context/test-scenarios.md`
+- If unclear: `reports/ba-questions.md` with numbered questions
+- If clear: `reports/ba.md` (implementation plan + test scenarios combined)
 
 ## Constraints
 

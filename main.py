@@ -129,10 +129,18 @@ def main(argv: list[str] | None = None) -> int:
     workflow = load_workflow(workflow_path)
 
     # Initialize LLM adapter
-    llm = ClaudeAdapter(
-        api_key=global_config.claude.api_key,
-        default_model=global_config.claude.model,
-    )
+    if global_config.claude.api_key:
+        llm = ClaudeAdapter(
+            api_key=global_config.claude.api_key,
+            default_model=global_config.claude.model,
+        )
+        print("  LLM: Anthropic API adapter")
+    else:
+        from integrations.llm.claude_code_adapter import ClaudeCodeAdapter
+        llm = ClaudeCodeAdapter(
+            model=global_config.claude.model if global_config.claude.model != "claude-sonnet-4-5" else "",
+        )
+        print("  LLM: Claude Code CLI adapter (using existing auth)")
 
     # Initialize workspace manager
     workspace_manager = WorkspaceManager(base_dir=global_config.workspaces.base_dir)
@@ -150,6 +158,58 @@ def main(argv: list[str] | None = None) -> int:
     # Initialize agent runtime
     agent_runtime = AgentRuntime(registry, llm, operator_profile=operator_profile)
 
+    # Initialize integration adapters
+    tracker = None
+    vcs = None
+    notifier = None
+
+    # Jira adapter — use first project's Jira config
+    first_project = next(iter(projects.values()), None)
+    if first_project and first_project.config.jira.url:
+        from integrations.jira.jira_adapter import JiraAdapter
+
+        jira_cfg = first_project.config.jira
+        tracker = JiraAdapter(
+            url=jira_cfg.url,
+            email=jira_cfg.email,
+            token=jira_cfg.token,
+            project_key=jira_cfg.project_key,
+            trigger_label=jira_cfg.trigger_label,
+            ignore_labels=jira_cfg.ignore_labels,
+            statuses={
+                "todo": jira_cfg.statuses.todo,
+                "in_progress": jira_cfg.statuses.in_progress,
+                "in_review": jira_cfg.statuses.in_review,
+                "done": jira_cfg.statuses.done,
+            },
+        )
+        print("  Jira adapter initialized")
+
+    # VCS adapter — per-repo, default to first GitHub repo
+    github_adapters = {}
+    for proj_id, proj in projects.items():
+        for repo_id, repo_cfg in proj.repos.items():
+            if repo_cfg.vcs.provider == "github" and repo_cfg.vcs.github.token:
+                from integrations.github.github_adapter import GitHubAdapter
+
+                gh = GitHubAdapter(
+                    token=repo_cfg.vcs.github.token,
+                    owner=repo_cfg.vcs.github.owner,
+                    repo=repo_cfg.vcs.github.repo,
+                )
+                github_adapters[repo_id] = (gh, repo_cfg)
+                if vcs is None:
+                    vcs = gh
+                print(f"  GitHub adapter for {repo_id}: {repo_cfg.vcs.github.owner}/{repo_cfg.vcs.github.repo}")
+
+    # Telegram notifier
+    tg_config = global_config.telegram
+    if tg_config.bot_token:
+        from integrations.telegram.telegram_adapter import TelegramAdapter
+
+        notifier = TelegramAdapter(bot_token=tg_config.bot_token)
+        print("  Telegram adapter initialized")
+
     # Initialize orchestrator
     orchestrator = Orchestrator(
         global_config=global_config,
@@ -158,8 +218,15 @@ def main(argv: list[str] | None = None) -> int:
         workflow=workflow,
         workspace_manager=workspace_manager,
         agent_runtime=agent_runtime,
+        tracker=tracker,
+        vcs=vcs,
+        notifier=notifier,
         dry_run=args.dry_run,
     )
+
+    # Register per-repo VCS adapters
+    for repo_id, (gh_adapter, repo_cfg) in github_adapters.items():
+        orchestrator.register_repo_vcs(repo_id, gh_adapter, repo_cfg)
 
     print("  Orchestrator initialized. Starting main loop...")
 

@@ -11,6 +11,19 @@ import argparse
 import sys
 
 
+def get_version() -> str:
+    """Read version from package metadata, falling back to pyproject.toml."""
+    try:
+        from importlib.metadata import version
+        return version("sickle")
+    except Exception:
+        from pathlib import Path
+        import re
+        pyproject = Path(__file__).parent / "pyproject.toml"
+        match = re.search(r'version\s*=\s*"([^"]+)"', pyproject.read_text())
+        return match.group(1) if match else "unknown"
+
+
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     """Parse command-line arguments."""
     parser = argparse.ArgumentParser(
@@ -54,7 +67,8 @@ def main(argv: list[str] | None = None) -> int:
     """Main entry point."""
     args = parse_args(argv)
 
-    print(f"Sickle starting with config: {args.config}")
+    version = get_version()
+    print(f"Sickle v{version} starting with config: {args.config}")
     if args.project:
         print(f"  Project filter: {args.project}")
     if args.repo:

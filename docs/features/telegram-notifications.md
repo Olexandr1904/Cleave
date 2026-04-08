@@ -1,8 +1,8 @@
 # Feature: Telegram Notifications
 
-**Status:** Planned
+**Status:** In Progress
 **Created:** 2026-04-07
-**Updated:** 2026-04-07
+**Updated:** 2026-04-08
 **Author:** Oleksandr Brazhenko
 
 ## Description
@@ -20,6 +20,8 @@ Telegram bot adapter behind the NotifierInterface. Sends formatted notifications
 - FR7: Per-project chat routing via `telegram.chat_id` in project config
 - FR8: Configurable reminder sent if no reply after N hours
 - FR9: Implements abstract `NotifierInterface`
+- FR10: Free-text operator messages classified into intents via `IntentParser` + Claude CLI
+- FR11: Intent classification includes pipeline context (mode, awaiting approvals, workspaces) to resolve ambiguous commands (e.g., "yes" → approve the one pending workspace)
 
 ## Technical Approach
 
@@ -28,6 +30,7 @@ Telegram bot adapter behind the NotifierInterface. Sends formatted notifications
 - Async polling for incoming messages
 - Message-to-workspace routing: each outgoing message tagged with workspace ID, incoming replies matched back
 - Notification templates for each message type (escalation, success, failure)
+- `IntentParser` (`integrations/telegram/intent_parser.py`) classifies free-text operator messages into structured intents (status, analyze, approve, reject, set_mode, unknown) via `ClaudeCodeAdapter.quick_query`; system prompt includes live pipeline context (mode, awaiting approvals, active workspaces) for disambiguation
 
 ## Dependencies
 
@@ -50,3 +53,4 @@ Telegram bot adapter behind the NotifierInterface. Sends formatted notifications
 | Date | Description |
 |------|-------------|
 | 2026-04-07 | Initial draft — seeded from PRD and architecture docs |
+| 2026-04-08 | Added IntentParser: classifies Telegram messages into pipeline intents via Claude CLI |

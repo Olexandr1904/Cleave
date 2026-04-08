@@ -4,21 +4,16 @@ After=network.target
 
 [Service]
 Type=simple
-User=pipeline
-Group=pipeline
-WorkingDirectory=/opt/sickle
-ExecStart=/opt/sickle/.venv/bin/python3 main.py --config /etc/sickle/config
-EnvironmentFile=/etc/sickle/environment
+User=admin0
+Group=admin0
+WorkingDirectory=/home/admin0/sickle-prod
+ExecStart=/home/admin0/sickle-prod/.venv/bin/python3 main.py --config config-live
+EnvironmentFile=/home/admin0/sickle-prod/.env
 Restart=always
 RestartSec=10
 StandardOutput=append:/var/log/sickle/sickle.log
 StandardError=append:/var/log/sickle/sickle-error.log
-
-# Security hardening
 NoNewPrivileges=true
-ProtectSystem=strict
-ReadWritePaths=/var/log/sickle /workspaces /etc/sickle
-ProtectHome=true
 
 [Install]
 WantedBy=multi-user.target

@@ -14,14 +14,18 @@ import sys
 def get_version() -> str:
     """Read version from package metadata, falling back to pyproject.toml."""
     try:
-        from importlib.metadata import version
+        from importlib.metadata import PackageNotFoundError, version
         return version("sickle")
-    except Exception:
+    except PackageNotFoundError:
+        pass
+    try:
         from pathlib import Path
         import re
         pyproject = Path(__file__).parent / "pyproject.toml"
         match = re.search(r'version\s*=\s*"([^"]+)"', pyproject.read_text())
         return match.group(1) if match else "unknown"
+    except Exception:
+        return "unknown"
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:

@@ -34,6 +34,7 @@ Telegram bot adapter behind the NotifierInterface. Sends formatted notifications
 - Notification templates for each message type (escalation, success, failure)
 - `IntentParser` (`integrations/telegram/intent_parser.py`) classifies free-text operator messages into structured intents (status, analyze, approve, reject, set_mode, unknown) via `ClaudeCodeAdapter.quick_query`; system prompt includes live pipeline context (mode, awaiting approvals, active workspaces) for disambiguation
 - `StatusHandler` (`integrations/telegram/handlers/status.py`) formats pipeline status: `format_summary()` produces an overview of all active workspaces; `format_drill_down()` produces per-workspace detail with Jira and PR URLs
+- `ModeHandler` (`integrations/telegram/handlers/mode.py`) manages auto/manual pipeline mode with JSON file persistence; `get_mode()` returns current mode, `set_mode()` validates, switches, and persists including a `mode_changed_at` timestamp; the orchestrator calls `get_mode()` to decide whether to poll Jira and whether to insert approval gates
 
 ## Dependencies
 
@@ -58,3 +59,4 @@ Telegram bot adapter behind the NotifierInterface. Sends formatted notifications
 | 2026-04-07 | Initial draft — seeded from PRD and architecture docs |
 | 2026-04-08 | Added IntentParser: classifies Telegram messages into pipeline intents via Claude CLI |
 | 2026-04-08 | Added StatusHandler: formats /status summary and per-workspace drill-down with Jira/PR URLs |
+| 2026-04-08 | Added ModeHandler: manages auto/manual pipeline mode with JSON file persistence |

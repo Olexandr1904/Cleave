@@ -119,6 +119,69 @@ class ClaudeCodeAdapter(LLMInterface):
             max_turns=max_turns,
         )
 
+    async def quick_query(
+        self,
+        prompt: str,
+        system: str = "",
+        timeout: int = 5,
+    ) -> str:
+        """Lightweight prompt-to-response call. No tools, single turn, short timeout.
+
+        Used for intent parsing and other quick classification tasks.
+
+        Args:
+            prompt: The user message to classify.
+            system: System prompt with context.
+            timeout: Timeout in seconds (default 5).
+
+        Returns:
+            The raw text response from Claude.
+        """
+        cmd = [self._claude_bin, "-p"]
+
+        full_prompt = prompt
+        if system:
+            full_prompt = f"{system}\n\n---\n\n{full_prompt}"
+
+        use_model = self._model
+        if use_model:
+            cmd.extend(["--model", use_model])
+
+        cmd.extend(["--output-format", "json"])
+        cmd.extend(["--max-turns", "1"])
+        cmd.extend(["--allowedTools", ""])
+
+        logger.info("Claude Code quick_query: model=%s", use_model or "default")
+
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                *cmd,
+                stdin=asyncio.subprocess.PIPE,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            stdout, stderr = await asyncio.wait_for(
+                proc.communicate(input=full_prompt.encode("utf-8")),
+                timeout=timeout,
+            )
+        except asyncio.TimeoutError:
+            proc.kill()
+            raise RuntimeError(f"Claude Code quick_query timed out after {timeout}s")
+
+        stdout_str = stdout.decode("utf-8", errors="replace").strip()
+
+        if proc.returncode != 0:
+            stderr_str = stderr.decode("utf-8", errors="replace").strip()
+            raise RuntimeError(
+                f"Claude Code quick_query failed (rc={proc.returncode}): {stderr_str}"
+            )
+
+        try:
+            data = json.loads(stdout_str)
+            return data.get("result", stdout_str)
+        except json.JSONDecodeError:
+            return stdout_str
+
     async def _run_cli(
         self,
         prompt: str,

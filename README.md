@@ -53,6 +53,7 @@ Jira Poll -> ANALYSIS (BA) -> DEV (Developer) -> SCOPE_CHECK (Scope Guard)
 
 ## Docs
 
+- [Setup Guide](docs/setup-guide.md)
 - [Architecture v2](docs/architecture-v2.md)
 - [Agent Contracts](docs/agent-contracts.md)
 - [Implementation Plan](docs/implementation-plan-v2.md)

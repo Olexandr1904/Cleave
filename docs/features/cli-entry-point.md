@@ -20,7 +20,7 @@ The `main.py` entry point parses CLI arguments and starts the Sickle pipeline. I
 
 ## Technical Approach
 
-- `get_version()` tries `importlib.metadata.version("sickle")` first, then parses `pyproject.toml` with a regex fallback
+- `get_version()` tries `importlib.metadata.version("sickle")` first (catching `PackageNotFoundError` specifically), then parses `pyproject.toml` with a regex fallback wrapped in its own `try/except` that returns `"unknown"` on any error
 - Startup line format: `Sickle v{version} starting with config: {path}`
 
 ## Acceptance Criteria
@@ -36,3 +36,4 @@ The `main.py` entry point parses CLI arguments and starts the Sickle pipeline. I
 | Date | Description |
 |------|-------------|
 | 2026-04-08 | Initial doc — added version logging at startup |
+| 2026-04-08 | Fix `get_version()`: catch `PackageNotFoundError` specifically; wrap pyproject.toml fallback in its own try/except |

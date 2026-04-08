@@ -35,6 +35,7 @@ Telegram bot adapter behind the NotifierInterface. Sends formatted notifications
 - `IntentParser` (`integrations/telegram/intent_parser.py`) classifies free-text operator messages into structured intents (status, analyze, approve, reject, set_mode, unknown) via `ClaudeCodeAdapter.quick_query`; system prompt includes live pipeline context (mode, awaiting approvals, active workspaces) for disambiguation
 - `StatusHandler` (`integrations/telegram/handlers/status.py`) formats pipeline status: `format_summary()` produces an overview of all active workspaces; `format_drill_down()` produces per-workspace detail with Jira and PR URLs
 - `ModeHandler` (`integrations/telegram/handlers/mode.py`) manages auto/manual pipeline mode with JSON file persistence; `get_mode()` returns current mode, `set_mode()` validates, switches, and persists including a `mode_changed_at` timestamp; the orchestrator calls `get_mode()` to decide whether to poll Jira and whether to insert approval gates
+- `ApprovalHandler` (`integrations/telegram/handlers/approval.py`) manages approve/reject operations for workspaces in AWAITING_APPROVAL state; `find_awaiting()` locates workspaces waiting for approval (optionally filtered by ticket ID); `resolve_next_state()` maps previous gate to the next pipeline state (ANALYSIS→DEV, QA→PUSHED, PR_REVIEW→DONE)
 
 ## Dependencies
 
@@ -60,3 +61,4 @@ Telegram bot adapter behind the NotifierInterface. Sends formatted notifications
 | 2026-04-08 | Added IntentParser: classifies Telegram messages into pipeline intents via Claude CLI |
 | 2026-04-08 | Added StatusHandler: formats /status summary and per-workspace drill-down with Jira/PR URLs |
 | 2026-04-08 | Added ModeHandler: manages auto/manual pipeline mode with JSON file persistence |
+| 2026-04-08 | Added ApprovalHandler: find_awaiting() and resolve_next_state() for AWAITING_APPROVAL gate management |

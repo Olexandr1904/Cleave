@@ -18,3 +18,4 @@
 | 11 | [PR Comment Responder](pr-comment-responder.md) | Planned | Classify and respond to PR review comments with extreme skepticism |
 | 12 | [GitLab Integration](gitlab-integration.md) | Planned | MR creation, comment fetching/resolving via GitLab API |
 | 13 | [Jenkins Integration](jenkins-integration.md) | Planned | Build status and failure log retrieval from Jenkins |
+| 14 | [CLI Entry Point](cli-entry-point.md) | Implemented | CLI argument parsing, startup diagnostics, and version logging |

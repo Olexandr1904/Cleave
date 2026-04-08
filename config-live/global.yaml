@@ -1,0 +1,49 @@
+telegram:
+  bot_token: "${TELEGRAM_BOT_TOKEN}"
+  default_chat_id: "${TELEGRAM_CHAT_ID}"
+
+claude:
+  api_key: "${CLAUDE_API_KEY}"
+  model: "claude-sonnet-4-5"
+
+workspaces:
+  base_dir: "/data/sickle"
+  max_age_days: 14
+  min_free_disk_gb: 5
+  max_workspace_size_gb: 2
+
+defaults:
+  poll_interval_seconds: 300
+  max_iterations:
+    scope_guard: 3
+    fix: 3
+    qa: 2
+    dev: 2
+  max_parallel_tickets: 5
+  pr_comment_fetch_delay_minutes: 30
+
+logging:
+  level: "INFO"
+  dir: "/var/log/sickle"
+
+heartbeat:
+  enabled: true
+  interval_hours: 24
+  send_at: "09:00"
+
+operator:
+  role: "Team Lead / Full-stack Developer"
+  stack:
+    - "Kotlin Multiplatform"
+    - "Android"
+    - "iOS (SwiftUI)"
+    - "Ktor"
+    - "PostgreSQL"
+  preferences:
+    code_style: "Follow existing project conventions exactly"
+    commit_format: "feat({ticket_id}): {description}"
+  rules:
+    - "Never auto-merge PRs — human reviews and merges"
+    - "Always include ticket ID in commit messages"
+    - "Follow existing test patterns in the repo"
+    - "Do not refactor outside ticket scope"

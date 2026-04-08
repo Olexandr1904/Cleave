@@ -3,16 +3,26 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import signal
+import time
 from typing import Any
 
-from config.config_loader import load_config
-from config.resource_registry import ResourceRegistry, discover_resources, validate_dependencies
-from config.schemas import GlobalConfig, LoadedProject
+from config.schemas import GlobalConfig, LoadedProject, RepoConfig
+from config.resource_registry import ResourceRegistry
+from integrations.base.notifier import NotifierInterface
+from integrations.base.tracker import TicketData, TrackerInterface
+from integrations.base.vcs import VCSInterface
 from orchestrator.agent_runtime import AgentRuntime
-from orchestrator.safeguards import check_protected_files, get_changed_files
-from orchestrator.workflow_router import WorkflowDefinition, load_workflow, get_next_stage, should_escalate
+from orchestrator.pr_creation import create_pr
+from orchestrator.ticket_prioritizer import PrioritizedTicket, prioritize_tickets
+from orchestrator.workflow_router import (
+    WorkflowDefinition,
+    get_next_stage,
+    load_workflow,
+    should_escalate,
+)
 from workspace.workspace import Workspace
 from workspace.workspace_manager import WorkspaceManager
 
@@ -30,6 +40,9 @@ class Orchestrator:
         workflow: WorkflowDefinition,
         workspace_manager: WorkspaceManager,
         agent_runtime: AgentRuntime,
+        tracker: TrackerInterface | None = None,
+        vcs: VCSInterface | None = None,
+        notifier: NotifierInterface | None = None,
         dry_run: bool = False,
     ) -> None:
         self._global_config = global_config
@@ -38,13 +51,46 @@ class Orchestrator:
         self._workflow = workflow
         self._workspace_manager = workspace_manager
         self._agent_runtime = agent_runtime
+        self._tracker = tracker
+        self._vcs = vcs
+        self._notifier = notifier
         self._dry_run = dry_run
         self._active_workspaces: list[Workspace] = []
         self._shutdown_event = asyncio.Event()
+        # Map repo_id -> (VCSInterface, RepoConfig) for per-repo VCS
+        self._repo_vcs: dict[str, tuple[VCSInterface, RepoConfig]] = {}
+
+    def register_repo_vcs(
+        self, repo_id: str, vcs: VCSInterface, repo_config: RepoConfig,
+    ) -> None:
+        """Register a VCS adapter for a specific repo."""
+        self._repo_vcs[repo_id] = (vcs, repo_config)
+
+    def _get_repo_config(self, workspace: Workspace) -> RepoConfig | None:
+        """Find the RepoConfig matching a workspace."""
+        state = workspace.state
+        for proj in self._projects.values():
+            if state.repo_id in proj.repos:
+                return proj.repos[state.repo_id]
+        return None
+
+    def _get_vcs_for_workspace(self, workspace: Workspace) -> tuple[VCSInterface | None, RepoConfig | None]:
+        """Get the VCS adapter and config for a workspace."""
+        repo_id = workspace.state.repo_id
+        if repo_id in self._repo_vcs:
+            return self._repo_vcs[repo_id]
+        repo_config = self._get_repo_config(workspace)
+        return self._vcs, repo_config
+
+    def _get_chat_id(self, workspace: Workspace) -> str:
+        """Get Telegram chat ID for a workspace (project or global)."""
+        repo_config = self._get_repo_config(workspace)
+        if repo_config and repo_config.telegram.default_chat_id:
+            return repo_config.telegram.default_chat_id
+        return self._global_config.telegram.default_chat_id
 
     async def run(self) -> None:
         """Main async loop — poll and advance until shutdown."""
-        # Install signal handlers
         loop = asyncio.get_event_loop()
         for sig in (signal.SIGTERM, signal.SIGINT):
             loop.add_signal_handler(sig, self._handle_shutdown)
@@ -69,19 +115,22 @@ class Orchestrator:
             except Exception as e:
                 logger.error("Poll cycle error: %s", e, exc_info=True)
 
-            # Wait for next cycle or shutdown
             try:
                 await asyncio.wait_for(
                     self._shutdown_event.wait(), timeout=poll_interval,
                 )
             except asyncio.TimeoutError:
-                pass  # Normal — poll interval elapsed
+                pass
 
         logger.info("Orchestrator shutting down gracefully")
 
     async def poll_cycle(self) -> None:
         """Single poll + advance cycle."""
-        # 1. Advance active workspaces
+        # 1. Poll for new tickets and create workspaces
+        if self._tracker:
+            await self._poll_and_create_workspaces()
+
+        # 2. Advance active workspaces
         for ws in list(self._active_workspaces):
             try:
                 await self.advance_workspace(ws)
@@ -90,98 +139,448 @@ class Orchestrator:
                     "Workspace %s error: %s",
                     ws.state.ticket_id, e, exc_info=True,
                 )
-                # Workspace-level failure doesn't crash daemon
-                ws.update_state(status="failed", error=str(e))
+                try:
+                    ws.transition("FAILED")
+                    ws.update_state(error=str(e))
+                except Exception:
+                    pass
 
-        # 2. Cleanup completed/failed workspaces from active list
+        # 3. Cleanup terminal workspaces from active list
+        terminal = {"DONE", "FAILED", "ARCHIVED"}
         self._active_workspaces = [
             ws for ws in self._active_workspaces
-            if ws.state.status in ("pending", "running", "waiting_for_human")
+            if ws.state.current_state not in terminal
         ]
 
-        # 3. Workspace cleanup
+        # 4. Workspace cleanup
         max_age = self._global_config.workspaces.max_age_days
         deleted = self._workspace_manager.cleanup_old_workspaces(max_age)
         if deleted:
             logger.info("Cleaned up %d old workspace(s)", len(deleted))
 
-    async def advance_workspace(self, workspace: Workspace) -> None:
-        """Advance a workspace by invoking its next agent."""
-        state = workspace.state
+    async def _poll_and_create_workspaces(self) -> None:
+        """Poll tracker for new tickets and create workspaces."""
+        for project_id, project in self._projects.items():
+            jira_config = project.config.jira
+            if not jira_config.url:
+                continue
 
-        if state.status == "waiting_for_human":
-            return  # Skip — waiting for reply
+            try:
+                tickets = await self._tracker.poll_tickets()
+            except Exception as e:
+                logger.error("Failed to poll tickets for %s: %s", project_id, e)
+                continue
 
-        if state.status in ("completed", "failed"):
-            return  # Terminal state
+            if not tickets:
+                continue
 
-        current_stage = state.current_stage
+            # Prioritize and route tickets to repos
+            prioritized = prioritize_tickets(tickets, project)
+            max_parallel = project.config.parallelism.max_concurrent_tickets
 
-        # Check if we should escalate
-        stage_def = self._workflow.stages.get(current_stage)
-        if stage_def and stage_def.agent:
-            iterations = state.stage_iterations.get(current_stage, 0)
-            if should_escalate(current_stage, self._workflow, iterations):
-                next_stage = get_next_stage(current_stage, self._workflow, "max_iterations")
-                if next_stage:
-                    workspace.update_state(
-                        current_stage=next_stage,
-                        status="waiting_for_human",
-                        human_input_pending=True,
-                    )
-                    logger.warning(
-                        "Workspace %s: stage '%s' exceeded max iterations, escalating",
-                        state.ticket_id, current_stage,
-                    )
-                return
-
-        # Execute the current stage's agent
-        if stage_def and stage_def.agent:
-            if state.status == "pending":
-                workspace.transition_status("running")
-
-            if self._dry_run:
-                logger.info(
-                    "[DRY RUN] Would execute agent '%s' for %s",
-                    stage_def.agent, state.ticket_id,
-                )
-                # In dry run, advance to next stage
-                next_stage = get_next_stage(current_stage, self._workflow)
-                if next_stage:
-                    workspace.update_state(current_stage=next_stage)
-                return
-
-            workspace.increment_iteration(current_stage)
-            result = await self._agent_runtime.execute(
-                stage_def.agent, workspace,
+            # Count active workspaces for this project
+            active_count = sum(
+                1 for ws in self._active_workspaces
+                if ws.state.company_id == project_id
             )
 
-            if result.success:
-                # AC1 (7.2): Post-execution file write monitor
-                changed = get_changed_files(str(workspace.repo_dir))
-                violations = check_protected_files(str(workspace.repo_dir), changed)
-                if violations:
-                    violation_msg = "; ".join(str(v) for v in violations)
-                    logger.error(
-                        "Workspace %s: PROTECTED FILE VIOLATION by agent '%s': %s",
-                        state.ticket_id, stage_def.agent, violation_msg,
+            for pt in prioritized:
+                if active_count >= max_parallel:
+                    logger.info(
+                        "Project %s at max capacity (%d/%d), skipping remaining",
+                        project_id, active_count, max_parallel,
                     )
-                    workspace.update_state(
-                        status="failed",
-                        error=f"Protected file violation: {violation_msg}",
-                    )
-                    return
+                    break
 
-                next_stage = get_next_stage(current_stage, self._workflow)
-                if next_stage:
-                    workspace.update_state(current_stage=next_stage)
-                else:
-                    workspace.update_state(status="completed")
-            else:
-                workspace.update_state(
-                    status="failed",
-                    error=result.error,
+                # Check if workspace already exists for this ticket
+                already_exists = any(
+                    ws.state.ticket_id == pt.ticket.id
+                    for ws in self._active_workspaces
                 )
+                if already_exists:
+                    continue
+
+                repo_config = project.repos.get(pt.repo_id)
+                if not repo_config:
+                    continue
+
+                if self._dry_run:
+                    logger.info(
+                        "[DRY RUN] Would create workspace for %s -> %s/%s",
+                        pt.ticket.id, project_id, pt.repo_id,
+                    )
+                    continue
+
+                try:
+                    ws = await self._create_workspace_for_ticket(
+                        pt, project_id, repo_config,
+                    )
+                    self._active_workspaces.append(ws)
+                    active_count += 1
+                    logger.info(
+                        "Created workspace for %s (%s/%s)",
+                        pt.ticket.id, project_id, pt.repo_id,
+                    )
+                except Exception as e:
+                    logger.error(
+                        "Failed to create workspace for %s: %s",
+                        pt.ticket.id, e,
+                    )
+
+    async def _create_workspace_for_ticket(
+        self,
+        pt: PrioritizedTicket,
+        project_id: str,
+        repo_config: RepoConfig,
+    ) -> Workspace:
+        """Create workspace, clone repo, write ticket data."""
+        ws = self._workspace_manager.create(
+            company_id=project_id,
+            repo_id=pt.repo_id,
+            ticket_id=pt.ticket.id,
+            clone_url=repo_config.git.clone_url,
+            branch_prefix=repo_config.vcs.github.branch_prefix
+            if repo_config.vcs.provider == "github"
+            else repo_config.vcs.gitlab.branch_prefix,
+            depth=repo_config.git.depth,
+        )
+
+        # Write ticket data as markdown
+        ticket_md = _ticket_to_markdown(pt.ticket)
+        (ws.meta_dir / "ticket.md").write_text(ticket_md, encoding="utf-8")
+
+        # Fetch and write parent ticket if linked
+        if self._tracker and pt.ticket.linked_issues:
+            for link in pt.ticket.linked_issues:
+                parent_key = link.get("key", "")
+                if parent_key and link.get("type", "").lower() in ("is child of", "parent"):
+                    try:
+                        parent = await self._tracker.get_ticket(parent_key)
+                        parent_md = _ticket_to_markdown(parent)
+                        (ws.meta_dir / "parent.md").write_text(parent_md, encoding="utf-8")
+                    except Exception as e:
+                        logger.warning("Failed to fetch parent %s: %s", parent_key, e)
+                    break
+
+        # Transition Jira to In Progress
+        if self._tracker:
+            try:
+                await self._tracker.transition_ticket(
+                    pt.ticket.id, repo_config.jira.statuses.in_progress,
+                )
+            except Exception as e:
+                logger.warning("Failed to transition %s: %s", pt.ticket.id, e)
+
+        # Transition workspace to ANALYSIS
+        ws.transition("ANALYSIS")
+        return ws
+
+    async def advance_workspace(self, workspace: Workspace) -> None:
+        """Advance a workspace through the pipeline."""
+        state = workspace.state
+        current = state.current_state
+
+        if current == "BLOCKED":
+            return  # Waiting for human reply
+
+        if current in ("DONE", "FAILED", "ARCHIVED"):
+            return  # Terminal
+
+        # Map pipeline state to workflow stage
+        stage_id = _state_to_stage(current)
+        if not stage_id:
+            return
+
+        stage_def = self._workflow.stages.get(stage_id)
+        if not stage_def:
+            logger.warning("No stage definition for '%s'", stage_id)
+            return
+
+        # Check iteration cap -> escalate
+        if stage_def.max_iterations > 0:
+            iterations = state.stage_iterations.get(stage_id, 0)
+            if should_escalate(stage_id, self._workflow, iterations):
+                next_stage = get_next_stage(stage_id, self._workflow, "max_iterations")
+                if next_stage == "escalate":
+                    await self._handle_escalate(workspace)
+                return
+
+        # Dispatch: agent stage or action stage
+        if stage_def.agent:
+            await self._handle_agent_stage(workspace, stage_id, stage_def)
+        elif stage_def.action:
+            await self._handle_action_stage(workspace, stage_id, stage_def)
+
+    async def _handle_agent_stage(
+        self, workspace: Workspace, stage_id: str, stage_def: Any,
+    ) -> None:
+        """Execute an agent stage."""
+        state = workspace.state
+
+        if self._dry_run:
+            logger.info(
+                "[DRY RUN] Would execute agent '%s' for %s",
+                stage_def.agent, state.ticket_id,
+            )
+            next_stage = get_next_stage(stage_id, self._workflow)
+            if next_stage:
+                self._advance_to_stage(workspace, next_stage)
+            return
+
+        workspace.increment_iteration(stage_id)
+
+        repo_config = self._get_repo_config(workspace)
+        protected = repo_config.architecture.protected_files if repo_config else []
+
+        result = await self._agent_runtime.execute(
+            stage_def.agent, workspace, protected_files=protected,
+        )
+
+        if not result.success:
+            workspace.transition("FAILED")
+            workspace.update_state(error=result.error)
+            return
+
+        # Determine outcome from agent output
+        outcome = self._parse_agent_outcome(stage_id, result.output, workspace)
+        next_stage = get_next_stage(stage_id, self._workflow, outcome)
+
+        if next_stage:
+            self._advance_to_stage(workspace, next_stage)
+        else:
+            workspace.transition("DONE")
+
+    async def _handle_action_stage(
+        self, workspace: Workspace, stage_id: str, stage_def: Any,
+    ) -> None:
+        """Execute an action stage (non-agent)."""
+        action = stage_def.action
+        state = workspace.state
+
+        if self._dry_run:
+            logger.info(
+                "[DRY RUN] Would execute action '%s' for %s",
+                action, state.ticket_id,
+            )
+            next_stage = get_next_stage(stage_id, self._workflow)
+            if next_stage:
+                self._advance_to_stage(workspace, next_stage)
+            return
+
+        if action == "push_and_open_pr":
+            await self._action_push_and_open_pr(workspace)
+        elif action == "fetch_pr_comments":
+            await self._action_fetch_pr_comments(workspace, stage_def)
+        elif action == "notify_human":
+            await self._handle_escalate(workspace)
+        elif action == "finalize":
+            await self._action_finalize(workspace)
+        else:
+            logger.warning("Unknown action: %s", action)
+
+    async def _action_push_and_open_pr(self, workspace: Workspace) -> None:
+        """Push branch and open PR."""
+        vcs, repo_config = self._get_vcs_for_workspace(workspace)
+        if not vcs or not repo_config:
+            logger.error("No VCS configured for %s", workspace.state.repo_id)
+            workspace.transition("FAILED")
+            workspace.update_state(error="No VCS adapter configured")
+            return
+
+        result = await create_pr(workspace, vcs, self._tracker, repo_config)
+        if result.success:
+            workspace.transition("PR_REVIEW")
+        else:
+            workspace.transition("FAILED")
+            workspace.update_state(error=result.error)
+
+    async def _action_fetch_pr_comments(
+        self, workspace: Workspace, stage_def: Any,
+    ) -> None:
+        """Fetch PR comments and decide if fixes are needed."""
+        state = workspace.state
+        pr_number = state.pr_number
+
+        if not pr_number:
+            workspace.transition("DONE")
+            return
+
+        # Check delay
+        delay_minutes = stage_def.delay_minutes
+        if delay_minutes > 0:
+            last_updated = state.last_updated_at
+            if last_updated:
+                from datetime import datetime, timezone
+                try:
+                    updated_time = datetime.fromisoformat(last_updated)
+                    elapsed = (datetime.now(timezone.utc) - updated_time).total_seconds() / 60
+                    if elapsed < delay_minutes:
+                        logger.debug(
+                            "%s: PR review delay not met (%.0f/%.0f min)",
+                            state.ticket_id, elapsed, delay_minutes,
+                        )
+                        return  # Wait longer
+                except (ValueError, TypeError):
+                    pass
+
+        workspace.increment_iteration("pr_review")
+
+        vcs, repo_config = self._get_vcs_for_workspace(workspace)
+        if not vcs:
+            workspace.transition("DONE")
+            return
+
+        try:
+            comments = await vcs.get_pr_comments(pr_number)
+        except Exception as e:
+            logger.error("Failed to fetch PR comments for %s: %s", state.ticket_id, e)
+            return
+
+        if not comments:
+            # No comments -> done
+            workspace.transition("DONE")
+            return
+
+        # Write comments to reports for PR Comment Responder agent
+        comment_md = "# PR Review Comments\n\n"
+        for c in comments:
+            comment_md += f"## Comment by {c.author}\n"
+            if c.path:
+                comment_md += f"File: `{c.path}`"
+                if c.line:
+                    comment_md += f" (line {c.line})"
+                comment_md += "\n"
+            comment_md += f"\n{c.body}\n\n---\n\n"
+        (workspace.reports_dir / "pr-review-comments.md").write_text(
+            comment_md, encoding="utf-8",
+        )
+
+        # Run PR Comment Responder agent if available
+        pr_agent = self._registry.get_agent("pr-comment-responder-agent")
+        if pr_agent:
+            result = await self._agent_runtime.execute(
+                "pr-comment-responder-agent", workspace,
+            )
+            if result.success and "fix_required" in result.output.lower():
+                self._advance_to_stage(workspace, "dev")
+                return
+
+        # Default: if there are comments, go back to dev
+        self._advance_to_stage(workspace, "dev")
+
+    async def _handle_escalate(self, workspace: Workspace) -> None:
+        """Send escalation notification and block workspace."""
+        state = workspace.state
+
+        if not self._notifier:
+            logger.warning("No notifier configured, cannot escalate %s", state.ticket_id)
+            workspace.transition("FAILED")
+            workspace.update_state(error="No notifier configured for escalation")
+            return
+
+        chat_id = self._get_chat_id(workspace)
+        if not chat_id:
+            logger.warning("No chat_id for escalation of %s", state.ticket_id)
+            workspace.transition("FAILED")
+            workspace.update_state(error="No Telegram chat_id configured")
+            return
+
+        message = (
+            f"[{state.company_id}/{state.repo_id}] {state.ticket_id}\n\n"
+            f"Pipeline needs human input.\n"
+            f"Current state: {state.current_state}\n"
+        )
+
+        # Check for questions from BA
+        questions_file = workspace.reports_dir / "ba-questions.md"
+        if questions_file.exists():
+            message += f"\n{questions_file.read_text(encoding='utf-8')}"
+
+        try:
+            msg_id = await self._notifier.send_message(chat_id, message)
+            workspace.transition("BLOCKED")
+            workspace.update_state(
+                human_input_question=message,
+            )
+            logger.info("Escalated %s via Telegram (msg_id=%d)", state.ticket_id, msg_id)
+        except Exception as e:
+            logger.error("Telegram send failed for %s: %s", state.ticket_id, e)
+            workspace.transition("FAILED")
+            workspace.update_state(error=f"Telegram notification failed: {e}")
+
+    async def _action_finalize(self, workspace: Workspace) -> None:
+        """Finalize a completed ticket."""
+        state = workspace.state
+
+        # Send completion notification
+        if self._notifier:
+            chat_id = self._get_chat_id(workspace)
+            if chat_id:
+                pr_url = state.pr_url or "(no PR)"
+                message = (
+                    f"[{state.company_id}/{state.repo_id}] {state.ticket_id}\n\n"
+                    f"PR ready for human merge: {pr_url}"
+                )
+                try:
+                    await self._notifier.send_message(chat_id, message)
+                except Exception as e:
+                    logger.warning("Finalize notification failed: %s", e)
+
+        # Add Jira comment
+        if self._tracker:
+            try:
+                await self._tracker.add_comment(
+                    state.ticket_id,
+                    f"Pipeline complete. PR ready for merge: {state.pr_url or 'N/A'}",
+                )
+            except Exception as e:
+                logger.warning("Finalize Jira comment failed: %s", e)
+
+        workspace.transition("DONE")
+
+    def _advance_to_stage(self, workspace: Workspace, stage_id: str) -> None:
+        """Transition workspace to the state corresponding to a workflow stage."""
+        state_name = _stage_to_state(stage_id)
+        if state_name:
+            workspace.transition(state_name)
+        else:
+            logger.warning("Cannot map stage '%s' to state", stage_id)
+
+    def _parse_agent_outcome(
+        self, stage_id: str, output: str, workspace: Workspace,
+    ) -> str:
+        """Parse agent output to determine outcome for routing."""
+        output_lower = output.lower()
+
+        if stage_id == "analysis":
+            if "unclear" in output_lower or "questions" in output_lower:
+                return "unclear"
+            return "default"
+
+        if stage_id == "scope_check":
+            # Check for scope guard report
+            report = workspace.reports_dir / "scope-guard-agent-output.md"
+            if report.exists():
+                content = report.read_text().lower()
+                if "status: pass" in content:
+                    return "pass"
+                if "status: fail" in content:
+                    return "fail"
+            if "pass" in output_lower and "fail" not in output_lower:
+                return "pass"
+            return "fail"
+
+        if stage_id == "qa":
+            report = workspace.reports_dir / "qa-agent-output.md"
+            if report.exists():
+                content = report.read_text().lower()
+                if "all gates passed" in content or "status: pass" in content:
+                    return "pass"
+            if "pass" in output_lower and "fail" not in output_lower:
+                return "pass"
+            return "fail"
+
+        return "default"
 
     def shutdown(self) -> None:
         """Trigger graceful shutdown."""
@@ -190,3 +589,56 @@ class Orchestrator:
     def _handle_shutdown(self) -> None:
         logger.info("Shutdown signal received")
         self.shutdown()
+
+
+# --- Mapping helpers ---
+
+_STAGE_TO_STATE = {
+    "analysis": "ANALYSIS",
+    "dev": "DEV",
+    "scope_check": "SCOPE_CHECK",
+    "qa": "QA",
+    "push": "PUSHED",
+    "pr_review": "PR_REVIEW",
+    "done": "DONE",
+    "escalate": "BLOCKED",
+}
+
+_STATE_TO_STAGE = {v: k for k, v in _STAGE_TO_STATE.items()}
+
+
+def _stage_to_state(stage_id: str) -> str | None:
+    return _STAGE_TO_STATE.get(stage_id)
+
+
+def _state_to_stage(state: str) -> str | None:
+    return _STATE_TO_STAGE.get(state)
+
+
+def _ticket_to_markdown(ticket: TicketData) -> str:
+    """Convert TicketData to a markdown document."""
+    lines = [
+        f"# {ticket.id}: {ticket.summary}",
+        "",
+        f"**URL:** {ticket.url}",
+        f"**Priority:** {ticket.priority}",
+        f"**Reporter:** {ticket.reporter}",
+    ]
+    if ticket.assignee:
+        lines.append(f"**Assignee:** {ticket.assignee}")
+    if ticket.sprint:
+        lines.append(f"**Sprint:** {ticket.sprint}")
+    if ticket.labels:
+        lines.append(f"**Labels:** {', '.join(ticket.labels)}")
+
+    lines.extend(["", "## Description", "", ticket.description])
+
+    if ticket.acceptance_criteria:
+        lines.extend(["", "## Acceptance Criteria", "", ticket.acceptance_criteria])
+
+    if ticket.linked_issues:
+        lines.extend(["", "## Linked Issues", ""])
+        for link in ticket.linked_issues:
+            lines.append(f"- {link.get('type', 'related')}: {link.get('key', '')}")
+
+    return "\n".join(lines)

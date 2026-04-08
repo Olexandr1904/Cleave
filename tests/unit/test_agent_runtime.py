@@ -8,7 +8,7 @@ from unittest.mock import AsyncMock
 import pytest
 
 from config.resource_registry import discover_resources
-from integrations.llm.llm_interface import LLMResponse
+from integrations.llm.llm_interface import LLMResponse, ToolUseRequest
 from orchestrator.agent_runtime import AgentRuntime, HARD_SAFETY_RULES
 from workspace.workspace import Workspace, WorkspaceState
 
@@ -36,13 +36,14 @@ def mock_llm():
 def workspace(tmp_path):
     ws_root = tmp_path / "test-ws"
     ws_root.mkdir()
-    (ws_root / "context").mkdir()
+    (ws_root / "meta").mkdir()
+    (ws_root / "reports").mkdir()
     (ws_root / "logs").mkdir()
-    (ws_root / "repo").mkdir()
+    (ws_root / "source").mkdir()
 
     state = WorkspaceState(
         ticket_id="TEST-42",
-        project_id="test-project",
+        company_id="test-project",
         repo_id="test-repo",
         workspace_root=str(ws_root),
     )
@@ -79,7 +80,7 @@ class TestAssemblePrompt:
 
     def test_includes_context_files(self, registry, mock_llm, workspace):
         """AC3 (4.2): Workspace context files are injected."""
-        (workspace.context_dir / "ticket.json").write_text('{"id": "TEST-42"}')
+        (workspace.meta_dir / "ticket.json").write_text('{"id": "TEST-42"}')
 
         runtime = AgentRuntime(registry, mock_llm)
         agent = registry.get_agent("dev-agent")
@@ -110,8 +111,8 @@ class TestExecute:
         assert result.output_tokens == 500
         assert result.duration_seconds > 0
 
-        # Output written to context
-        output_file = workspace.context_dir / "dev-agent-output.md"
+        # Output written to reports
+        output_file = workspace.reports_dir / "dev-agent-output.md"
         assert output_file.exists()
         assert "login feature" in output_file.read_text()
 
@@ -142,3 +143,198 @@ class TestExecute:
 
         assert result.success is False
         assert "API timeout" in result.error
+
+
+class TestToolUseExecution:
+    """Test the tool_use multi-turn loop."""
+
+    async def test_agent_with_tools_creates_sandbox(self, registry, mock_llm, workspace):
+        """Agent with tools in metadata triggers tool_use flow."""
+        # Mock LLM to return a tool_use request, then a final text response
+        tool_response = LLMResponse(
+            content="",
+            input_tokens=500,
+            output_tokens=200,
+            model="claude-sonnet-4-5",
+            tool_use=[
+                ToolUseRequest(id="call_1", name="read_file", input={"path": "main.py"}),
+            ],
+            stop_reason="tool_use",
+        )
+        final_response = LLMResponse(
+            content="I read the file and it contains a print statement.",
+            input_tokens=800,
+            output_tokens=100,
+            model="claude-sonnet-4-5",
+            stop_reason="end_turn",
+        )
+        mock_llm.send_message.return_value = tool_response
+        mock_llm.send_tool_results.return_value = final_response
+
+        # Create a source file for the sandbox to read
+        (workspace.source_dir / "main.py").write_text("print('hello')\n")
+
+        # Create a mock agent with tools in metadata
+        from config.resource_registry import AgentEntry
+        agent = AgentEntry(
+            id="test-tool-agent",
+            name="Test Tool Agent",
+            resource_type="agents",
+            file_path=str(Path(PROJECT_ROOT) / "agents" / "ba-agent.md"),
+            metadata={"tools": ["read_file", "list_directory", "search_code"]},
+        )
+        registry.add("agents", agent)
+
+        runtime = AgentRuntime(registry, mock_llm)
+        result = await runtime.execute("test-tool-agent", workspace)
+
+        assert result.success is True
+        assert result.tool_calls == 1
+        assert result.tool_rounds == 1
+        assert result.input_tokens == 1300  # 500 + 800
+        assert result.output_tokens == 300  # 200 + 100
+
+        # Final output written
+        output_path = workspace.reports_dir / "test-tool-agent-output.md"
+        assert output_path.exists()
+        assert "print statement" in output_path.read_text()
+
+        # Tool log written
+        tool_log = workspace.logs_dir / "test-tool-agent-tools.log"
+        assert tool_log.exists()
+        assert "read_file" in tool_log.read_text()
+
+    async def test_max_tool_rounds_limit(self, registry, mock_llm, workspace):
+        """Agent stops after max_tool_rounds even if LLM keeps requesting tools."""
+        tool_response = LLMResponse(
+            content="",
+            input_tokens=100,
+            output_tokens=50,
+            model="claude-sonnet-4-5",
+            tool_use=[
+                ToolUseRequest(id="call_1", name="read_file", input={"path": "main.py"}),
+            ],
+            stop_reason="tool_use",
+        )
+        mock_llm.send_message.return_value = tool_response
+        mock_llm.send_tool_results.return_value = tool_response  # keeps requesting tools
+
+        (workspace.source_dir / "main.py").write_text("x = 1\n")
+
+        from config.resource_registry import AgentEntry
+        agent = AgentEntry(
+            id="loop-agent",
+            name="Loop Agent",
+            resource_type="agents",
+            file_path=str(Path(PROJECT_ROOT) / "agents" / "ba-agent.md"),
+            metadata={"tools": ["read_file"]},
+        )
+        registry.add("agents", agent)
+
+        runtime = AgentRuntime(registry, mock_llm, max_tool_rounds=3)
+        result = await runtime.execute("loop-agent", workspace)
+
+        assert result.success is True
+        assert result.tool_rounds == 3
+        assert result.tool_calls == 3  # one per round
+
+    async def test_tool_error_sent_back_to_llm(self, registry, mock_llm, workspace):
+        """Tool errors are sent back to LLM as error results."""
+        tool_response = LLMResponse(
+            content="",
+            input_tokens=100,
+            output_tokens=50,
+            model="claude-sonnet-4-5",
+            tool_use=[
+                ToolUseRequest(id="call_1", name="read_file", input={"path": "nonexistent.py"}),
+            ],
+            stop_reason="tool_use",
+        )
+        final_response = LLMResponse(
+            content="The file was not found.",
+            input_tokens=200,
+            output_tokens=30,
+            model="claude-sonnet-4-5",
+            stop_reason="end_turn",
+        )
+        mock_llm.send_message.return_value = tool_response
+        mock_llm.send_tool_results.return_value = final_response
+
+        from config.resource_registry import AgentEntry
+        agent = AgentEntry(
+            id="err-agent",
+            name="Error Agent",
+            resource_type="agents",
+            file_path=str(Path(PROJECT_ROOT) / "agents" / "ba-agent.md"),
+            metadata={"tools": ["read_file"]},
+        )
+        registry.add("agents", agent)
+
+        runtime = AgentRuntime(registry, mock_llm)
+        result = await runtime.execute("err-agent", workspace)
+
+        assert result.success is True  # Agent itself succeeds
+        assert "not found" in result.output
+
+        # Verify the error was sent back to LLM via send_tool_results
+        tool_result_call = mock_llm.send_tool_results.call_args
+        messages = tool_result_call[1]["messages"] if "messages" in tool_result_call[1] else tool_result_call[0][0]
+        # Find the user message with tool results (second-to-last, before final assistant)
+        user_msgs = [m for m in messages if m["role"] == "user"]
+        # The last user message (index -1) contains the tool results
+        tool_result_msg = user_msgs[-1]
+        assert tool_result_msg["content"][0]["is_error"] is True
+
+    async def test_no_tools_uses_simple_path(self, registry, mock_llm, workspace):
+        """Agent without tools uses simple single-call execution."""
+        runtime = AgentRuntime(registry, mock_llm)
+        result = await runtime.execute("dev-agent", workspace)
+
+        assert result.success is True
+        assert result.tool_calls == 0
+        assert result.tool_rounds == 0
+
+    async def test_protected_files_passed_to_sandbox(self, registry, mock_llm, workspace):
+        """Protected files from config are passed through to sandbox."""
+        tool_response = LLMResponse(
+            content="",
+            input_tokens=100,
+            output_tokens=50,
+            model="claude-sonnet-4-5",
+            tool_use=[
+                ToolUseRequest(id="call_1", name="write_file", input={"path": "config.yaml", "content": "bad"}),
+            ],
+            stop_reason="tool_use",
+        )
+        final_response = LLMResponse(
+            content="Could not write protected file.",
+            input_tokens=200,
+            output_tokens=30,
+            model="claude-sonnet-4-5",
+            stop_reason="end_turn",
+        )
+        mock_llm.send_message.return_value = tool_response
+        mock_llm.send_tool_results.return_value = final_response
+
+        from config.resource_registry import AgentEntry
+        agent = AgentEntry(
+            id="protect-agent",
+            name="Protect Agent",
+            resource_type="agents",
+            file_path=str(Path(PROJECT_ROOT) / "agents" / "dev-agent.md"),
+            metadata={"tools": ["write_file", "read_file"]},
+        )
+        registry.add("agents", agent)
+
+        runtime = AgentRuntime(registry, mock_llm)
+        result = await runtime.execute(
+            "protect-agent", workspace, protected_files=["config.yaml"],
+        )
+
+        assert result.success is True
+        # The error from protected file should have been sent back to LLM
+        tool_result_call = mock_llm.send_tool_results.call_args
+        messages = tool_result_call[1]["messages"] if "messages" in tool_result_call[1] else tool_result_call[0][0]
+        user_msgs = [m for m in messages if m["role"] == "user"]
+        tool_result_msg = user_msgs[-1]
+        assert tool_result_msg["content"][0]["is_error"] is True

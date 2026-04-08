@@ -45,7 +45,7 @@ async def create_pr(
         )
 
     # Check scope certificate exists
-    scope_cert = workspace.context_dir / "scope-certificate.md"
+    scope_cert = workspace.meta_dir / "scope-certificate.md"
     if not scope_cert.exists():
         return PRCreationResult(
             success=False,
@@ -54,7 +54,7 @@ async def create_pr(
 
     try:
         # AC1: Push the feature branch
-        await vcs.push(str(workspace.repo_dir), branch)
+        await vcs.push(str(workspace.source_dir), branch)
         logger.info("Pushed branch '%s' for %s", branch, state.ticket_id)
 
         # Build PR title and body
@@ -62,7 +62,7 @@ async def create_pr(
         body = _build_pr_body(workspace, repo_config)
 
         # AC2: Open PR
-        default_branch = repo_config.github.default_branch or "main"
+        default_branch = repo_config.vcs.github.default_branch or "main"
         pr_number, pr_url = await vcs.open_pr(
             title=title,
             body=body,
@@ -103,9 +103,9 @@ async def create_pr(
 
 
 def _get_ticket_summary(workspace: Workspace) -> str:
-    """Extract ticket summary from context/ticket.json if available."""
+    """Extract ticket summary from meta/ticket.json if available."""
     import json
-    ticket_file = workspace.context_dir / "ticket.json"
+    ticket_file = workspace.meta_dir / "ticket.json"
     if ticket_file.exists():
         try:
             data = json.loads(ticket_file.read_text())

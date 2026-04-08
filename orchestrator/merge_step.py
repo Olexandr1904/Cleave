@@ -45,7 +45,7 @@ async def merge_pr(
 
     # AC2: Gate checklist
     # Gate 1: Scope certificate
-    scope_cert = workspace.context_dir / "scope-certificate.md"
+    scope_cert = workspace.meta_dir / "scope-certificate.md"
     if not scope_cert.exists():
         return _gate_failure("scope_certificate", "Scope certificate not found", state.ticket_id)
 
@@ -63,7 +63,7 @@ async def merge_pr(
         return _gate_failure("ci_checks", f"Failed to check PR status: {e}", state.ticket_id)
 
     # AC5: Merge
-    merge_method = repo_config.github.merge_method or "squash"
+    merge_method = repo_config.vcs.github.merge_method or "squash"
     try:
         await vcs.merge_pr(pr_number, merge_method)
         logger.info("Merged PR #%d for %s", pr_number, state.ticket_id)
@@ -106,8 +106,8 @@ async def merge_pr(
         except Exception as e:
             logger.warning("Failed to send merge notification: %s", e)
 
-    # AC7: Set workspace status
-    workspace.update_state(status="completed")
+    # AC7: Transition workspace to DONE
+    workspace.transition("DONE")
 
     return MergeResult(success=True, merged=True)
 

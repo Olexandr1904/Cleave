@@ -16,6 +16,29 @@ core_principles:
   - "Follow existing test conventions in the repo"
   - "All quality gates must pass: tests, lint, build"
 
+tools:
+  - read_file
+  - write_file
+  - list_directory
+  - search_code
+  - run_command
+  - git_operation
+
+inputs:
+  - reports/ba.md
+  - meta/ticket.md
+  - rules/arch-rules.md
+
+outputs:
+  - reports/qa.md
+
+decision_policy:
+  when_to_run: "State is QA"
+  when_to_skip: "Never (required gate)"
+  success_outcome: "State → PUSHED"
+  failure_outcome: "State → DEV (test failures indicate code issue) or escalate"
+  max_iterations: 2
+
 dependencies:
   tasks: []
   checklists:
@@ -33,16 +56,17 @@ to ensure everything passes before merge.
 ## Input
 
 You receive:
-- `test-scenarios.md` — test cases derived from acceptance criteria
-- Current code in `workspace/repo/`
-- `ticket.json` — original ticket for AC reference
+- `reports/ba.md` — test scenarios section (derived from acceptance criteria)
+- `meta/ticket.md` — original ticket for AC reference
+- `rules/arch-rules.md` — architecture constraints
+- Source code and existing tests via tools
 - Repo config with test/lint/build commands
 
 ## Process
 
 ### Step 1: Analyze Test Scenarios
 
-Read `test-scenarios.md` and identify:
+Read the test scenarios section from `reports/ba.md` and identify:
 - AC-derived tests (mandatory — every AC needs coverage)
 - Edge case tests (from BA agent analysis)
 - Integration point tests (if applicable)
@@ -88,6 +112,7 @@ test({ticket_id}): add tests for {feature description}
 
 ## Output
 
+- `reports/qa.md` — test results + quality gate status
 - New test files committed on the feature branch
 - All quality gates passing (tests, lint, build)
 - If any gate fails after max attempts → escalate via Telegram

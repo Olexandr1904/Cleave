@@ -63,6 +63,17 @@ class OperatorProfile:
 
 
 @dataclass
+class PipelineConfig:
+    mode: str = "auto"  # "auto" or "manual"
+
+
+@dataclass
+class IntentParserConfig:
+    max_tokens: int = 200
+    timeout_seconds: int = 5
+
+
+@dataclass
 class GlobalConfig:
     telegram: TelegramConfig = field(default_factory=TelegramConfig)
     claude: ClaudeConfig = field(default_factory=ClaudeConfig)
@@ -71,6 +82,8 @@ class GlobalConfig:
     logging: LoggingConfig = field(default_factory=LoggingConfig)
     heartbeat: HeartbeatConfig = field(default_factory=HeartbeatConfig)
     operator: OperatorProfile = field(default_factory=OperatorProfile)
+    pipeline: PipelineConfig = field(default_factory=PipelineConfig)
+    intent_parser: IntentParserConfig = field(default_factory=IntentParserConfig)
 
 
 # --- Jira config (project-level) ---
@@ -214,6 +227,7 @@ class ProjectConfig:
     telegram: TelegramConfig = field(default_factory=TelegramConfig)
     parallelism: ParallelismConfig = field(default_factory=ParallelismConfig)
     defaults: DefaultsConfig = field(default_factory=DefaultsConfig)
+    pipeline: PipelineConfig = field(default_factory=PipelineConfig)
 
 
 # --- Repo config ---

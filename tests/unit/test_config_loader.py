@@ -120,3 +120,31 @@ class TestLoadGlobalConfig:
         (tmp_path / "global.yaml").write_text("- item1\n- item2\n")
         with pytest.raises(ConfigError, match="mapping"):
             load_global_config(str(tmp_path))
+
+
+class TestNewConfigSchemas:
+    def test_pipeline_config_defaults(self):
+        from config.schemas import PipelineConfig
+        cfg = PipelineConfig()
+        assert cfg.mode == "auto"
+
+    def test_intent_parser_config_defaults(self):
+        from config.schemas import IntentParserConfig
+        cfg = IntentParserConfig()
+        assert cfg.max_tokens == 200
+        assert cfg.timeout_seconds == 5
+
+    def test_global_config_has_pipeline(self):
+        from config.schemas import PipelineConfig, GlobalConfig
+        cfg = GlobalConfig()
+        assert cfg.pipeline.mode == "auto"
+
+    def test_global_config_has_intent_parser(self):
+        from config.schemas import IntentParserConfig, GlobalConfig
+        cfg = GlobalConfig()
+        assert cfg.intent_parser.max_tokens == 200
+
+    def test_project_config_has_pipeline(self):
+        from config.schemas import ProjectConfig
+        cfg = ProjectConfig()
+        assert cfg.pipeline.mode == "auto"

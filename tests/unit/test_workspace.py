@@ -278,6 +278,88 @@ class TestBlockedResume:
             assert ws.state.previous_state == state
 
 
+class TestAwaitingApproval:
+    def test_awaiting_approval_in_valid_states(self):
+        assert "AWAITING_APPROVAL" in VALID_STATES
+
+    def test_analysis_to_awaiting_approval(self, workspace):
+        workspace.transition("ANALYSIS")
+        workspace.transition("AWAITING_APPROVAL")
+        assert workspace.state.current_state == "AWAITING_APPROVAL"
+        assert workspace.state.previous_state == "ANALYSIS"
+
+    def test_qa_to_awaiting_approval(self, workspace):
+        workspace.transition("ANALYSIS")
+        workspace.transition("DEV")
+        workspace.transition("SCOPE_CHECK")
+        workspace.transition("QA")
+        workspace.transition("AWAITING_APPROVAL")
+        assert workspace.state.current_state == "AWAITING_APPROVAL"
+
+    def test_pr_review_to_awaiting_approval(self, workspace):
+        workspace.transition("ANALYSIS")
+        workspace.transition("DEV")
+        workspace.transition("SCOPE_CHECK")
+        workspace.transition("QA")
+        workspace.transition("PUSHED")
+        workspace.transition("PR_REVIEW")
+        workspace.transition("AWAITING_APPROVAL")
+        assert workspace.state.current_state == "AWAITING_APPROVAL"
+
+    def test_awaiting_approval_to_dev(self, workspace):
+        workspace.transition("ANALYSIS")
+        workspace.transition("AWAITING_APPROVAL")
+        workspace.transition("DEV")
+        assert workspace.state.current_state == "DEV"
+        assert workspace.state.previous_state is None
+
+    def test_awaiting_approval_to_pushed(self, workspace):
+        """Post-QA approval resumes to PUSHED."""
+        workspace.transition("ANALYSIS")
+        workspace.transition("DEV")
+        workspace.transition("SCOPE_CHECK")
+        workspace.transition("QA")
+        workspace.transition("AWAITING_APPROVAL")
+        workspace.transition("PUSHED")
+        assert workspace.state.current_state == "PUSHED"
+
+    def test_awaiting_approval_to_done(self, workspace):
+        """Post-PR_REVIEW approval finalizes."""
+        workspace.transition("ANALYSIS")
+        workspace.transition("DEV")
+        workspace.transition("SCOPE_CHECK")
+        workspace.transition("QA")
+        workspace.transition("PUSHED")
+        workspace.transition("PR_REVIEW")
+        workspace.transition("AWAITING_APPROVAL")
+        workspace.transition("DONE")
+        assert workspace.state.current_state == "DONE"
+
+    def test_awaiting_approval_to_failed(self, workspace):
+        """Rejection moves to FAILED."""
+        workspace.transition("ANALYSIS")
+        workspace.transition("AWAITING_APPROVAL")
+        workspace.transition("FAILED")
+        assert workspace.state.current_state == "FAILED"
+
+    def test_awaiting_approval_stores_previous_state(self, workspace):
+        workspace.transition("ANALYSIS")
+        workspace.transition("AWAITING_APPROVAL")
+        assert workspace.state.previous_state == "ANALYSIS"
+        assert workspace.state.human_input_pending is True
+
+    def test_resume_from_awaiting_approval_clears_pending(self, workspace):
+        workspace.transition("ANALYSIS")
+        workspace.transition("AWAITING_APPROVAL")
+        workspace.transition("DEV")
+        assert workspace.state.human_input_pending is False
+        assert workspace.state.previous_state is None
+
+    def test_new_to_awaiting_approval_invalid(self, workspace):
+        with pytest.raises(InvalidTransitionError):
+            workspace.transition("AWAITING_APPROVAL")
+
+
 class TestIterations:
     def test_increment_iteration(self, workspace):
         count = workspace.increment_iteration("SCOPE_CHECK")

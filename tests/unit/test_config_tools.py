@@ -378,3 +378,66 @@ class TestValidateJenkins:
             "https://jenkins.acme.com", "admin", "bad-token", "my-project"
         )
         assert result["success"] is False
+
+
+class TestValidationRequestErrors:
+    """Non-ConnectError RequestError subclasses must return a failure dict."""
+
+    @respx.mock
+    async def test_jira_read_error_returns_dict(self):
+        respx.get("https://acme.atlassian.net/rest/api/3/project/ACM").mock(
+            side_effect=httpx.ReadError("connection reset")
+        )
+        result = await validate_jira(
+            "https://acme.atlassian.net", "token", "bot@acme.com", "ACM"
+        )
+        assert result["success"] is False
+        assert "ReadError" in result["error"]
+
+    @respx.mock
+    async def test_github_read_error_returns_dict(self):
+        respx.get("https://api.github.com/repos/acme/api").mock(
+            side_effect=httpx.ReadError("boom")
+        )
+        result = await validate_github("token", "acme", "api")
+        assert result["success"] is False
+        assert "ReadError" in result["error"]
+
+
+class TestValidationPathEncoding:
+    """Path segments must be URL-encoded so slashes and other specials don't alter the URL.
+
+    We inspect the actual request path via respx.calls rather than matching on the
+    pre-encoded URL (respx normalizes `%2F` back to `/` during URL pattern parsing).
+    """
+
+    @respx.mock
+    async def test_jira_project_key_with_special_chars_is_encoded(self):
+        respx.route(host="acme.atlassian.net").mock(
+            return_value=httpx.Response(200, json={"name": "Acme"})
+        )
+        await validate_jira(
+            "https://acme.atlassian.net", "token", "bot@acme.com", "ACM/../admin"
+        )
+        assert len(respx.calls) == 1
+        raw_path = respx.calls.last.request.url.raw_path.decode()
+        assert "ACM%2F..%2Fadmin" in raw_path
+        assert "/project/ACM/" not in raw_path
+
+    @respx.mock
+    async def test_github_owner_with_slash_is_encoded(self):
+        respx.route(host="api.github.com").mock(
+            return_value=httpx.Response(404)
+        )
+        await validate_github("token", "acme/evil", "api")
+        raw_path = respx.calls.last.request.url.raw_path.decode()
+        assert "acme%2Fevil" in raw_path
+
+    @respx.mock
+    async def test_gitlab_path_id_is_encoded(self):
+        respx.route(host="gitlab.com").mock(
+            return_value=httpx.Response(200, json={"name": "API"})
+        )
+        await validate_gitlab("token", "acme/api", "https://gitlab.com")
+        raw_path = respx.calls.last.request.url.raw_path.decode()
+        assert "acme%2Fapi" in raw_path

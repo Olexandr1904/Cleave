@@ -68,3 +68,4 @@ A BMAD-style agent (`project-setup-agent`, codename Atlas) that onboards new pro
 | 2026-04-09 | Task 3 implemented: `remove_project` with timestamped backup to `.backups/`, OSError guard (no removal if backup fails), and `PROJECT_ID_PATTERN` validation; 8 new tests (52 total) |
 | 2026-04-09 | Task 3 review fix: `rmtree` failure now returns an error dict (preserves return contract); added tests for backup-failure and rmtree-failure guards; microsecond timestamp avoids second-level collisions |
 | 2026-04-09 | Task 4 implemented: four async validation functions (validate_jira/github/gitlab/jenkins) using httpx; 11 new tests (64 total) |
+| 2026-04-09 | Task 4 review fix: broadened `httpx.ConnectError` catches to `httpx.RequestError` (preserves return contract on read/write/protocol errors); URL-encode path segments (project_key, owner, repo, gitlab project_id, jenkins job_key) to prevent path injection; 5 new tests (69 total) |

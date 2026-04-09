@@ -7,7 +7,7 @@ from typing import Any
 
 logger = logging.getLogger(__name__)
 
-_APPROVAL_NEXT_STATE = {
+APPROVAL_NEXT_STATE = {
     "ANALYSIS": "DEV",
     "QA": "PUSHED",
     "PR_REVIEW": "DONE",
@@ -32,4 +32,4 @@ class ApprovalHandler:
     def resolve_next_state(self, workspace: Any) -> str:
         """Determine the next state based on which gate triggered the approval wait."""
         previous = workspace.state.previous_state
-        return _APPROVAL_NEXT_STATE.get(previous, "FAILED")
+        return APPROVAL_NEXT_STATE.get(previous, "FAILED")

@@ -99,17 +99,17 @@ decision_policy:
 
 ## Actionable Tickets
 
-1. MBMOB-14567 → managebac (priority: High, sprint: Sprint 42)
-2. MBMOB-14580 → managebac (priority: Medium, sprint: none)
+1. ACME-14567 → acme-mobile (priority: High, sprint: Sprint 42)
+2. ACME-14580 → acme-mobile (priority: Medium, sprint: none)
 
 ## Skipped
 
-- MBMOB-14590: blocked by MBMOB-14500 (In Progress)
-- MBMOB-14591: no repo label, escalated
+- ACME-14590: blocked by ACME-14500 (In Progress)
+- ACME-14591: no repo label, escalated
 
 ## Unroutable (escalated)
 
-- MBMOB-14591: no matching jira_repo_label
+- ACME-14591: no matching jira_repo_label
 ```
 
 ---
@@ -305,8 +305,8 @@ git checkout -b {prefix}/{ticket_id}-{slug}
 - Modified `src/nav/NavGraph.kt` — added login route
 
 ## Commits
-- feat(MBMOB-14567): implement login screen UI
-- feat(MBMOB-14567): add login route to nav graph
+- feat(ACME-14567): implement login screen UI
+- feat(ACME-14567): add login route to nav graph
 
 ## Notes
 (any issues encountered, decisions made)
@@ -464,7 +464,7 @@ decision_policy:
 - Build: PASS
 
 ## Commits
-- test(MBMOB-14567): add tests for login screen
+- test(ACME-14567): add tests for login screen
 ```
 
 ---
@@ -607,7 +607,7 @@ This agent is NEW (from RFC). It bridges the gap between push and human merge.
 - **Content:** "Why not refactor the entire nav to use type-safe routes?"
 - **Classification:** out_of_scope
 - **Reason:** Ticket scope is login screen only; nav refactor is a separate initiative
-- **Reply:** "This would be a great improvement but is outside the scope of MBMOB-14567. Created a follow-up suggestion."
+- **Reply:** "This would be a great improvement but is outside the scope of ACME-14567. Created a follow-up suggestion."
 
 ## Summary
 - fix_required: 1

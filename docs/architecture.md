@@ -113,7 +113,7 @@ graph TD
 
 **Key Attributes:**
 
-- `ticket_id`: str — Jira ticket identifier (e.g., "FARIA-123")
+- `ticket_id`: str — Jira ticket identifier (e.g., "ACME-123")
 - `project_id`: str — project identifier from config
 - `repo_id`: str — repo identifier from config
 - `workspace_root`: str — absolute path to workspace directory
@@ -212,7 +212,7 @@ stateDiagram-v2
 
 **Key Attributes:**
 
-- `id`: str — ticket key (e.g., "FARIA-123")
+- `id`: str — ticket key (e.g., "ACME-123")
 - `url`: str — Jira ticket URL
 - `summary`: str
 - `description`: str
@@ -519,14 +519,14 @@ sequenceDiagram
     participant TG as Telegram
 
     O->>J: poll_tickets()
-    J-->>O: [FARIA-123]
+    J-->>O: [ACME-123]
     O->>PM: prioritize & route
-    PM-->>O: [(FARIA-123, android-app)]
+    PM-->>O: [(ACME-123, android-app)]
 
-    O->>WM: create_workspace(faria, android-app, FARIA-123)
+    O->>WM: create_workspace(acme, android-app, ACME-123)
     WM-->>O: workspace created + cloned
 
-    O->>J: transition(FARIA-123, In Progress)
+    O->>J: transition(ACME-123, In Progress)
     O->>BA: validate requirements
     BA-->>O: implementation-plan.md + test-scenarios.md
 
@@ -538,7 +538,7 @@ sequenceDiagram
 
     O->>GH: push + open_pr()
     GH-->>O: PR #42
-    O->>J: transition(FARIA-123, In Review)
+    O->>J: transition(ACME-123, In Review)
 
     Note over O: wait copilot.wait_for_review_minutes
     O->>GH: get_pr_comments()
@@ -553,7 +553,7 @@ sequenceDiagram
 
     O->>MG: gate check + merge
     MG->>GH: merge_pr()
-    O->>J: transition(FARIA-123, Done)
+    O->>J: transition(ACME-123, Done)
     O->>TG: send success notification
 ```
 
@@ -1190,7 +1190,7 @@ pytest tests/unit/
 python main.py --config ./config-example --dry-run
 
 # Run against a single project/repo for testing
-python main.py --config ~/.ai-pipeline --project faria --repo android-app --dry-run
+python main.py --config ~/.ai-pipeline --project acme --repo android-app --dry-run
 ```
 
 ### Mock Mode for Integration Development

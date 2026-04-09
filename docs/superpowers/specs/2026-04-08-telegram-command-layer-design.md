@@ -37,16 +37,16 @@ The `reply` field allows the parser to generate a natural confirmation message r
 Pipeline state is injected into the system prompt on every call so the parser can resolve ambiguity:
 - "yes" resolves to `approve` for the only workspace in `AWAITING_APPROVAL`
 - "yes to the search ticket" matches against active workspace titles
-- "how's 123 doing" resolves to `status` with drill-down for MBMOB-123
+- "how's 123 doing" resolves to `status` with drill-down for ACME-123
 
 ### Supported Intents
 
 | Intent | Example Messages | Params |
 |--------|-----------------|--------|
 | `status` | "what's going on", "status", "how are things" | optional: `ticket_id` for drill-down |
-| `analyze` | "start analyzing MBMOB-123", "work on MBMOB-123, MBMOB-456" | `ticket_ids` (required) |
-| `approve` | "yes go ahead", "approved", "move forward with MBMOB-123" | `ticket_id` (optional, inferred from context) |
-| `reject` | "no stop", "don't proceed", "reject MBMOB-123" | `ticket_id` (optional) |
+| `analyze` | "start analyzing ACME-123", "work on ACME-123, ACME-456" | `ticket_ids` (required) |
+| `approve` | "yes go ahead", "approved", "move forward with ACME-123" | `ticket_id` (optional, inferred from context) |
+| `reject` | "no stop", "don't proceed", "reject ACME-123" | `ticket_id` (optional) |
 | `set_mode` | "switch to manual", "go auto", "manual mode" | `mode`: auto or manual |
 | `unknown` | anything unrecognizable | `raw_text` |
 
@@ -78,31 +78,31 @@ Uptime: 3d 14h
 Last Jira poll: 2 min ago
 
 Active (3):
-  MBMOB-123 — DEV (iteration 1/2)
-  MBMOB-456 — QA (iteration 1/2)
-  MBMOB-789 — ANALYSIS, awaiting approval
+  ACME-123 — DEV (iteration 1/2)
+  ACME-456 — QA (iteration 1/2)
+  ACME-789 — ANALYSIS, awaiting approval
 
 Recent (24h):
-  MBMOB-100 — merged
-  MBMOB-101 — failed at QA
+  ACME-100 — merged
+  ACME-101 — failed at QA
 
 Queue: 0 pending
 ```
 
 ### Drill-Down View
 
-Triggered by mentioning a specific ticket ID (e.g., "tell me about MBMOB-123").
+Triggered by mentioning a specific ticket ID (e.g., "tell me about ACME-123").
 
 ```
-MBMOB-123 — Implement user search
+ACME-123 — Implement user search
 
 Stage: DEV (iteration 1/2)
 Agent: dev-agent (James)
 Started: 2h ago
-Branch: feature/MBMOB-123
+Branch: feature/ACME-123
 
-Jira: https://faria.atlassian.net/browse/MBMOB-123
-PR: https://github.com/faria/managebac/pull/42
+Jira: https://acme.atlassian.net/browse/ACME-123
+PR: https://github.com/acme/acme-mobile/pull/42
 
 History:
   ANALYSIS — completed (45min)
@@ -138,9 +138,9 @@ All read from existing state — no new storage:
 
 Three gates at key milestones:
 
-1. **Post-ANALYSIS** — "Here's the plan for MBMOB-123: [summary from ba.md]. Proceed to development?"
-2. **Post-QA** — "Tests pass for MBMOB-123. [test/lint/build summary]. Push and open PR?"
-3. **Post-PR_REVIEW** — "PR review complete for MBMOB-123. [review summary]. Finalize and merge?"
+1. **Post-ANALYSIS** — "Here's the plan for ACME-123: [summary from ba.md]. Proceed to development?"
+2. **Post-QA** — "Tests pass for ACME-123. [test/lint/build summary]. Push and open PR?"
+3. **Post-PR_REVIEW** — "PR review complete for ACME-123. [review summary]. Finalize and merge?"
 
 When a workspace hits a gate, it transitions to `AWAITING_APPROVAL`. The bot sends the summary. The workspace stays blocked until the operator approves or rejects.
 
@@ -238,17 +238,17 @@ On startup: load mode from runtime state if a runtime override exists, otherwise
 ### Message Flow (Manual Mode)
 
 ```
-Operator: "analyze MBMOB-123"
+Operator: "analyze ACME-123"
   -> TelegramAdapter polling picks up message
   -> CommandHandler -> IntentParser (Claude CLI quick_query)
-  -> Intent: { analyze, tickets: [MBMOB-123] }
+  -> Intent: { analyze, tickets: [ACME-123] }
   -> analyze handler: creates workspace, starts ANALYSIS
   -> ANALYSIS completes
   -> Orchestrator sees manual mode + post_analysis gate
   -> Workspace -> AWAITING_APPROVAL
-  -> Bot sends: "Plan ready for MBMOB-123: [summary]. Proceed?"
+  -> Bot sends: "Plan ready for ACME-123: [summary]. Proceed?"
 Operator: "yes"
-  -> IntentParser resolves to { approve, ticket: MBMOB-123 }
+  -> IntentParser resolves to { approve, ticket: ACME-123 }
   -> approval handler: resumes workspace -> DEV
   -> DEV -> SCOPE_CHECK -> QA (all run automatically)
   -> Post-QA gate -> AWAITING_APPROVAL

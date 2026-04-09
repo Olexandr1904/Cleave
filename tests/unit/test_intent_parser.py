@@ -53,8 +53,8 @@ class TestIntentParser:
     async def test_parse_passes_context_in_system_prompt(self, parser, mock_adapter):
         context = {
             "mode": "manual",
-            "awaiting_approval": ["MBMOB-123 (post_analysis)"],
-            "active_workspaces": ["MBMOB-456 — DEV"],
+            "awaiting_approval": ["ACME-123 (post_analysis)"],
+            "active_workspaces": ["ACME-456 — DEV"],
         }
         await parser.parse("yes", pipeline_context=context)
         assert mock_adapter.quick_query.called

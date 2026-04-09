@@ -7,7 +7,7 @@ Consolidated decisions from RFC review session (BA + Architect analysis).
 - **Sickle PRD**: `docs/prd.md`
 - **Sickle Architecture**: `docs/architecture.md`
 - **RFC (AJDS)**: Provided in conversation (not saved as file yet)
-- **Existing helpers**: `/mnt/shared/ubuntu/f/` (GitHub/Faria) and `/mnt/shared/ubuntu/n/` (GitLab/Nayax)
+- **Existing helpers**: production-ready scripts under `/opt/sickle-helpers/` (GitHub side) and a parallel GitLab tree.
 
 ---
 
@@ -64,10 +64,10 @@ PR Comment Responder loop:
 
 ```
 /data/
-  /<Company>/                        # e.g., Faria, BRazole
-    /<Repo>/                         # e.g., Managebac, Gifture
+  /<Company>/                        # e.g., Acme, BetaCo
+    /<Repo>/                         # e.g., Acme Mobile, BetaApp
       /tickets/
-        /<ticket_id>/                # e.g., MBMOB-14567
+        /<ticket_id>/                # e.g., ACME-14567
           /meta/
             ticket.md                # Jira ticket content (markdown)
             parent.md                # Parent ticket context
@@ -90,7 +90,7 @@ PR Comment Responder loop:
 
 ## Existing Helpers Mapping
 
-Production-ready scripts from `/mnt/shared/ubuntu/`:
+Production-ready scripts from `/opt/sickle-helpers/`:
 
 | Tool | File | Maps to |
 |------|------|---------|

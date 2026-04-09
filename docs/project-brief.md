@@ -180,7 +180,7 @@ The key differentiator from tools like Devin or SWE-Agent: Sickle is **self-host
 ### Open Questions
 
 - What's the optimal model selection per agent? (Opus for BA/Dev, Sonnet for Scope Guard/QA?)
-- Should the pipeline support ticket dependencies (wait for FARIA-100 before starting FARIA-101)?
+- Should the pipeline support ticket dependencies (wait for ACME-100 before starting ACME-101)?
 - How to handle flaky tests that aren't caused by the pipeline's changes?
 - Should there be a "dry run" mode that does everything except push/merge?
 
@@ -205,7 +205,7 @@ The key differentiator from tools like Devin or SWE-Agent: Sickle is **self-host
 ~/.ai-pipeline/
 ├── global.yaml            ← credentials, defaults, operator profile, global rules
 └── projects/
-    ├── faria/
+    ├── acme/
     │   ├── project.yaml   ← Jira settings, project rules
     │   ├── shared/
     │   │   └── arch-rules.md

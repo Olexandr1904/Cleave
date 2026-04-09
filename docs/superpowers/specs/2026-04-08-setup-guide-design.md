@@ -108,7 +108,7 @@ source .env && python main.py --config config-live --dry-run
 
 **Single project/repo:**
 ```bash
-source .env && python main.py --config config-live --project faria --repo managebac
+source .env && python main.py --config config-live --project acme --repo acme-mobile
 ```
 
 **Run tests:**
@@ -127,6 +127,6 @@ Add to the existing Docs section:
 
 ## Out of Scope
 
-- Helper scripts at `/mnt/shared/ubuntu/f/` — these are environment-specific and optional; Sickle's built-in integration adapters handle the same functionality
+- Helper scripts at `/opt/sickle-helpers/` — these are environment-specific and optional; Sickle's built-in integration adapters handle the same functionality
 - GitLab and Jenkins adapter setup — not yet implemented, will be documented when added
 - Detailed agent authoring guide — separate concern, not needed for setup

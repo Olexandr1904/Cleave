@@ -108,7 +108,7 @@ ai-pipeline/
 ~/.ai-pipeline/                     ← or any directory passed via --config flag
 ├── global.yaml                     ← global credentials and defaults
 └── projects/
-    ├── faria/
+    ├── acme/
     │   ├── project.yaml            ← Jira settings, project-level defaults
     │   ├── shared/
     │   │   └── arch-rules.md       ← shared architecture rules for this project
@@ -164,12 +164,12 @@ logging:
 
 ```yaml
 project:
-  id: "faria"
-  name: "Faria Education Platform"
+  id: "acme"
+  name: "Acme Corp"
   enabled: true
 
 jira:
-  url: "https://faria.atlassian.net"
+  url: "https://acme.atlassian.net"
   token: "${FARIA_JIRA_TOKEN}"
   email: "${FARIA_JIRA_EMAIL}"
   project_key: "FARIA"
@@ -200,19 +200,19 @@ defaults:
 ```yaml
 repo:
   id: "android-app"
-  name: "Faria Android App"
+  name: "Acme Mobile App"
   enabled: true
 
 github:
   token: "${FARIA_GITHUB_TOKEN}"
-  owner: "faria-edu"
+  owner: "acme-org"
   repo: "android-app"
   default_branch: "develop"
-  branch_prefix: "feature"              # branches: feature/FARIA-123-slug
+  branch_prefix: "feature"              # branches: feature/ACME-123-slug
   merge_method: "squash"                # "merge" | "squash" | "rebase"
 
 git:
-  clone_url: "git@github.com:faria-edu/android-app.git"
+  clone_url: "git@github.com:acme-org/android-app.git"
   commit_author_name: "Claude Code"
   commit_author_email: "claude@anthropic.com"
   depth: 0                              # 0 = full clone; N = shallow clone depth
@@ -309,11 +309,11 @@ Every ticket execution gets a **completely independent directory** containing a 
 
 ```json
 {
-  "ticket_id": "FARIA-123",
-  "project_id": "faria",
+  "ticket_id": "ACME-123",
+  "project_id": "acme",
   "repo_id": "android-app",
-  "workspace_root": "/workspaces/faria/android-app/FARIA-123_20260328_143000",
-  "branch": "feature/FARIA-123-add-login-screen",
+  "workspace_root": "/workspaces/acme/android-app/ACME-123_20260328_143000",
+  "branch": "feature/ACME-123-add-login-screen",
   "pr_number": null,
   "current_stage": "dev_agent",
   "stage_iterations": {
@@ -415,15 +415,15 @@ The pipeline code handles all three through the `WorkspaceManager` abstraction. 
 A single Jira project may have multiple repos. Tickets are routed to repos via **Jira labels**:
 
 ```
-Jira ticket FARIA-123
+Jira ticket ACME-123
   Labels: ["ai-ready", "repo:android-app"]
   → routed to android-app.yaml workspace
 
-Jira ticket FARIA-456
+Jira ticket ACME-456
   Labels: ["ai-ready", "repo:backend-api"]
   → routed to backend-api.yaml workspace
 
-Jira ticket FARIA-789
+Jira ticket ACME-789
   Labels: ["ai-ready"]              ← no repo label
   → BA Agent flags as ambiguous → asks human which repo
 ```
@@ -440,7 +440,7 @@ The following scripts exist and must be integrated as-is. The pipeline calls the
 - **What it does:** Pulls ticket data from Jira, generates a structured implementation prompt
 - **How to call it:**
   ```bash
-  python ticket-to-prompt.py --ticket FARIA-123 --output {workspace}/context/prompt.md
+  python ticket-to-prompt.py --ticket ACME-123 --output {workspace}/context/prompt.md
   ```
 - **Integration point:** Called by BA Agent after requirements validation passes
 
@@ -499,10 +499,10 @@ WantedBy=multi-user.target
 python main.py --config ~/.ai-pipeline
 
 # Run for one project only
-python main.py --config ~/.ai-pipeline --project faria
+python main.py --config ~/.ai-pipeline --project acme
 
 # Run for one repo only
-python main.py --config ~/.ai-pipeline --project faria --repo android-app
+python main.py --config ~/.ai-pipeline --project acme --repo android-app
 
 # Dry run — polls tickets but doesn't execute
 python main.py --config ~/.ai-pipeline --dry-run
@@ -556,15 +556,15 @@ All messages include: `[{PROJECT_ID}/{REPO_ID}]` prefix so the human knows conte
 
 | Situation | Message |
 |---|---|
-| Ticket ambiguous | `🤔 [FARIA/android] FARIA-123: Missing info\n\n{numbered questions}` |
-| No repo label on ticket | `🏷 [FARIA] FARIA-123: Which repo? android-app / backend-api` |
-| Scope fix loop maxed | `🔁 [FARIA/android] FARIA-123: Scope violations after 3 attempts. PR: {link}\n\n{violation_summary}` |
-| Fix loop maxed | `🔁 [FARIA/android] FARIA-123: Review fixes failed after 3 attempts. PR: {link}` |
-| Unresolvable merge conflict | `⚠️ [FARIA/android] FARIA-123: Merge conflict in ticket files. Branch: {branch}` |
-| Tests failing after retries | `❌ [FARIA/android] FARIA-123: Tests failing after 2 attempts. PR: {link}` |
-| Architecture rules violation attempt | `🚨 [FARIA/android] FARIA-123: Agent attempted to modify arch-rules. Aborted.` |
-| Build broken | `🔨 [FARIA/android] FARIA-123: Build broken. Need help. Branch: {branch}` |
-| Successfully merged | `✅ [FARIA/android] FARIA-123: Merged to {branch}. PR: {pr_url}` |
+| Ticket ambiguous | `🤔 [FARIA/android] ACME-123: Missing info\n\n{numbered questions}` |
+| No repo label on ticket | `🏷 [FARIA] ACME-123: Which repo? android-app / backend-api` |
+| Scope fix loop maxed | `🔁 [FARIA/android] ACME-123: Scope violations after 3 attempts. PR: {link}\n\n{violation_summary}` |
+| Fix loop maxed | `🔁 [FARIA/android] ACME-123: Review fixes failed after 3 attempts. PR: {link}` |
+| Unresolvable merge conflict | `⚠️ [FARIA/android] ACME-123: Merge conflict in ticket files. Branch: {branch}` |
+| Tests failing after retries | `❌ [FARIA/android] ACME-123: Tests failing after 2 attempts. PR: {link}` |
+| Architecture rules violation attempt | `🚨 [FARIA/android] ACME-123: Agent attempted to modify arch-rules. Aborted.` |
+| Build broken | `🔨 [FARIA/android] ACME-123: Build broken. Need help. Branch: {branch}` |
+| Successfully merged | `✅ [FARIA/android] ACME-123: Merged to {branch}. PR: {pr_url}` |
 
 ### Reply handling
 

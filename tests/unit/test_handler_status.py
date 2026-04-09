@@ -33,12 +33,12 @@ def _make_workspace(ticket_id, state, started_at=None, pr_url=None, company_id="
 class TestStatusHandler:
     @pytest.fixture
     def handler(self):
-        return StatusHandler(jira_base_url="https://faria.atlassian.net")
+        return StatusHandler(jira_base_url="https://acme.atlassian.net")
 
     def test_summary_with_active_workspaces(self, handler):
         workspaces = [
-            _make_workspace("MBMOB-123", "DEV"),
-            _make_workspace("MBMOB-456", "QA"),
+            _make_workspace("ACME-123", "DEV"),
+            _make_workspace("ACME-456", "QA"),
         ]
         result = handler.format_summary(
             mode="auto",
@@ -47,8 +47,8 @@ class TestStatusHandler:
             active_workspaces=workspaces,
             recent_completions=[],
         )
-        assert "MBMOB-123" in result
-        assert "MBMOB-456" in result
+        assert "ACME-123" in result
+        assert "ACME-456" in result
         assert "auto" in result.lower()
 
     def test_summary_with_no_workspaces(self, handler):
@@ -68,26 +68,26 @@ class TestStatusHandler:
             last_poll_ago_seconds=0,
             active_workspaces=[],
             recent_completions=[
-                ("MBMOB-1", "DONE", 1_700_000_000.0),
-                ("MBMOB-2", "FAILED", 1_700_000_100.0),
+                ("ACME-1", "DONE", 1_700_000_000.0),
+                ("ACME-2", "FAILED", 1_700_000_100.0),
             ],
         )
-        assert "MBMOB-1" in result
+        assert "ACME-1" in result
         assert "merged" in result
-        assert "MBMOB-2" in result
+        assert "ACME-2" in result
         assert "failed" in result
 
     def test_drill_down_includes_jira_url(self, handler):
-        ws = _make_workspace("MBMOB-123", "DEV")
+        ws = _make_workspace("ACME-123", "DEV")
         result = handler.format_drill_down(ws)
-        assert "https://faria.atlassian.net/browse/MBMOB-123" in result
+        assert "https://acme.atlassian.net/browse/ACME-123" in result
 
     def test_drill_down_includes_pr_url_when_present(self, handler):
-        ws = _make_workspace("MBMOB-123", "PR_REVIEW", pr_url="https://github.com/org/repo/pull/42")
+        ws = _make_workspace("ACME-123", "PR_REVIEW", pr_url="https://github.com/org/repo/pull/42")
         result = handler.format_drill_down(ws)
         assert "https://github.com/org/repo/pull/42" in result
 
     def test_drill_down_no_pr_url_when_absent(self, handler):
-        ws = _make_workspace("MBMOB-123", "DEV")
+        ws = _make_workspace("ACME-123", "DEV")
         result = handler.format_drill_down(ws)
         assert "PR:" not in result

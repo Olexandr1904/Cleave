@@ -25,8 +25,8 @@ def manager(base_dir):
 
 def _create_fake_workspace(
     base_dir: Path,
-    company_id: str = "faria",
-    repo_id: str = "managebac",
+    company_id: str = "acme",
+    repo_id: str = "acme-mobile",
     ticket_id: str = "T-1",
     current_state: str = "DEV",
     days_ago: int = 0,
@@ -68,23 +68,23 @@ class TestWorkspaceCreation:
         """Workspace created with correct v2 directory structure."""
         mock_run.return_value = MagicMock(returncode=0, stderr="")
 
-        ws = manager.create("faria", "managebac", "MBMOB-100", "git@github.com:org/repo.git")
+        ws = manager.create("acme", "acme-mobile", "ACME-100", "git@github.com:org/repo.git")
 
         assert ws.root.exists()
         assert ws.meta_dir.exists()
         assert ws.reports_dir.exists()
         assert ws.logs_dir.exists()
         assert ws.state_path.exists()
-        assert ws.state.ticket_id == "MBMOB-100"
-        assert ws.state.company_id == "faria"
-        assert ws.state.repo_id == "managebac"
+        assert ws.state.ticket_id == "ACME-100"
+        assert ws.state.company_id == "acme"
+        assert ws.state.repo_id == "acme-mobile"
         assert ws.state.current_state == "NEW"
 
         # Verify path structure: base/company/repo/tickets/ticket_id
-        assert "faria" in str(ws.root)
-        assert "managebac" in str(ws.root)
+        assert "acme" in str(ws.root)
+        assert "acme-mobile" in str(ws.root)
         assert "tickets" in str(ws.root)
-        assert "MBMOB-100" in str(ws.root)
+        assert "ACME-100" in str(ws.root)
 
     @patch("workspace.workspace_manager.subprocess.run")
     def test_creates_feature_branch(self, mock_run, manager):

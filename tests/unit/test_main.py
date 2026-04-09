@@ -23,12 +23,12 @@ class TestParseArgs:
 
     def test_project_flag(self):
         """AC1: --project flag is accepted."""
-        args = parse_args(["--config", "/tmp/config", "--project", "faria"])
-        assert args.project == "faria"
+        args = parse_args(["--config", "/tmp/config", "--project", "acme"])
+        assert args.project == "acme"
 
     def test_repo_flag(self):
         """AC1: --repo flag is accepted alongside --project."""
-        args = parse_args(["--config", "/tmp/config", "--project", "faria", "--repo", "android"])
+        args = parse_args(["--config", "/tmp/config", "--project", "acme", "--repo", "android"])
         assert args.repo == "android"
 
     def test_repo_without_project_errors(self):

@@ -51,9 +51,9 @@ class WorkspaceManager:
         """Create a new isolated workspace with a fresh git clone.
 
         Args:
-            company_id: Company identifier (e.g., "faria").
-            repo_id: Repository identifier (e.g., "managebac").
-            ticket_id: Ticket identifier (e.g., "MBMOB-14567").
+            company_id: Company identifier (e.g., "acme").
+            repo_id: Repository identifier (e.g., "acme-mobile").
+            ticket_id: Ticket identifier (e.g., "ACME-14567").
             clone_url: Git URL to clone.
             clone_depth: Shallow clone depth (0 = full clone).
             default_branch: Branch to checkout after clone.

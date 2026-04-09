@@ -49,7 +49,7 @@ class TestManualModeFlow:
             notifier=mock_notifier,
             mode_handler=mode_handler,
             active_workspaces_fn=lambda: [],
-            jira_base_url="https://faria.atlassian.net",
+            jira_base_url="https://acme.atlassian.net",
             started_at="2026-04-08T00:00:00Z",
         )
 

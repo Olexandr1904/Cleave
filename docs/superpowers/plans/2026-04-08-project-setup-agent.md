@@ -1484,7 +1484,7 @@ references (`${VAR_NAME}`). Never write raw secrets into config files.
 
 ### Phase 1 — Project Identity
 
-1. Ask for **project ID** (slug, e.g. `faria`) and **display name** (e.g. `Faria Education Group`)
+1. Ask for **project ID** (slug, e.g. `acme`) and **display name** (e.g. `Acme Corp`)
 2. Call `list_projects` to check for duplicates — if the ID already exists:
    - Show the existing project details
    - Ask: overwrite, pick a different ID, or abort?
@@ -1492,7 +1492,7 @@ references (`${VAR_NAME}`). Never write raw secrets into config files.
 ### Phase 2 — Jira Integration
 
 3. Ask for **Jira URL** (e.g. `https://company.atlassian.net`)
-4. Ask for **Jira project key** (e.g. `MBMOB`)
+4. Ask for **Jira project key** (e.g. `ACME`)
 5. Ask for **Jira email** for API auth (e.g. `bot@company.com`)
 6. Ask for **env var name** for the Jira token (default: `JIRA_TOKEN`)
 7. Ask for **trigger label** (default: `ai-pipeline`) and any **ignore labels** (comma-separated, optional)

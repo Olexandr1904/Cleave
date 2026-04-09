@@ -14,7 +14,7 @@
 
 ### Background Context
 
-Oleksandr is a team lead and KMP developer at Faria Education Group managing multiple repositories. The volume of well-defined but time-consuming implementation tickets exceeds what one person can handle while also managing architecture decisions, reviews, and coordination. Existing AI tools assist interactively but still require the human at the keyboard.
+Oleksandr is a team lead and KMP developer at Acme Corp managing multiple repositories. The volume of well-defined but time-consuming implementation tickets exceeds what one person can handle while also managing architecture decisions, reviews, and coordination. Existing AI tools assist interactively but still require the human at the keyboard.
 
 Sickle fills the gap: a fully autonomous pipeline that runs unattended, picks up labeled Jira tickets, and delivers merged PRs. Agents follow the BMAD pattern — each is a standalone prompt file with persona, principles, tasks, and checklists. The orchestrator acts as a decision engine, routing tickets to the right agent at each stage. Two existing scripts (`ticket-to-prompt.py` and `copilot-validator.py`) are integrated as subprocess calls.
 

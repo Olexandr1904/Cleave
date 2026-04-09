@@ -99,11 +99,11 @@ graph TD
 
 ```
 /<base_dir>/                              # Configurable base (e.g., /data/)
-  /<company>/                             # e.g., Faria, BRazole
-    /<repo>/                              # e.g., Managebac, Gifture
+  /<company>/                             # e.g., Acme, BetaCo
+    /<repo>/                              # e.g., Acme Mobile, BetaApp
       /rules/                             # Repo-specific rules (arch-rules.md, etc.)
       /tickets/
-        /<ticket_id>/                     # e.g., MBMOB-14567
+        /<ticket_id>/                     # e.g., ACME-14567
           /meta/
             ticket.md                     # Jira ticket (markdown)
             parent.md                     # Parent ticket context (if exists)
@@ -190,11 +190,11 @@ VALID_TRANSITIONS = {
 
 ```json
 {
-  "ticket_id": "MBMOB-14567",
-  "company_id": "faria",
-  "repo_id": "managebac",
-  "workspace_root": "/data/faria/managebac/tickets/MBMOB-14567",
-  "branch": "feature/MBMOB-14567-add-login-screen",
+  "ticket_id": "ACME-14567",
+  "company_id": "acme",
+  "repo_id": "acme-mobile",
+  "workspace_root": "/data/acme/acme-mobile/tickets/ACME-14567",
+  "branch": "feature/ACME-14567-add-login-screen",
   "pr_number": null,
   "pr_url": null,
   "current_state": "DEV",
@@ -268,15 +268,15 @@ heartbeat:
 
 ```yaml
 project:
-  id: "faria"
-  name: "Faria Education Group"
+  id: "acme"
+  name: "Acme Corp"
   enabled: true
 
 jira:
-  url: "https://faria.atlassian.net"
+  url: "https://acme.atlassian.net"
   token: "${JIRA_TOKEN_FARIA}"
   email: "${JIRA_EMAIL_FARIA}"
-  project_key: "MBMOB"
+  project_key: "ACME"
   trigger_label: "ai-pipeline"
   ignore_labels: ["manual-only", "blocked"]
   statuses:
@@ -296,8 +296,8 @@ parallelism:
 
 ```yaml
 repo:
-  id: "managebac"
-  name: "ManageBac Mobile"
+  id: "acme-mobile"
+  name: "Acme Mobile Mobile"
   enabled: true
 
 vcs:
@@ -305,8 +305,8 @@ vcs:
   # GitHub-specific
   github:
     token: "${GITHUB_TOKEN_FARIA}"
-    owner: "faria-education"
-    repo: "managebac-android"
+    owner: "acme-orgcation"
+    repo: "acme-mobile"
     default_branch: "develop"
     branch_prefix: "feature"
   # GitLab-specific (alternative)
@@ -324,10 +324,10 @@ ci:
   #   job_key: "compose-plugin"
 
 git:
-  clone_url: "git@github.com:faria-education/managebac-android.git"
+  clone_url: "git@github.com:acme-orgcation/acme-mobile.git"
   depth: 1                          # shallow clone (0 = full)
   commit_author_name: "Sickle Bot"
-  commit_author_email: "sickle@faria.com"
+  commit_author_email: "sickle@acme.com"
 
 architecture:
   rules_file: "arch-rules.md"      # relative to /rules/
@@ -362,11 +362,11 @@ pr_description_template: |
 
 # Existing helper scripts (wrapped as subprocesses)
 helpers:
-  fetch_pr_comments: "/mnt/shared/ubuntu/f/pr_comments/fetch_pr_comments.py"
-  resolve_pr_comments: "/mnt/shared/ubuntu/f/pr_comments/resolve_pr_comments.py"
-  fetch_ci_failure: "/mnt/shared/ubuntu/f/ci_failures/fetch_ci_failure.py"
-  fetch_jira_tickets: "/mnt/shared/ubuntu/f/jira_tickets/fetch_jira_tickets.py"
-  update_jira_status: "/mnt/shared/ubuntu/f/jira_tickets/update_jira_status.py"
+  fetch_pr_comments: "/opt/sickle-helpers/pr_comments/fetch_pr_comments.py"
+  resolve_pr_comments: "/opt/sickle-helpers/pr_comments/resolve_pr_comments.py"
+  fetch_ci_failure: "/opt/sickle-helpers/ci_failures/fetch_ci_failure.py"
+  fetch_jira_tickets: "/opt/sickle-helpers/jira_tickets/fetch_jira_tickets.py"
+  update_jira_status: "/opt/sickle-helpers/jira_tickets/update_jira_status.py"
 ```
 
 ---
@@ -800,11 +800,11 @@ sequenceDiagram
     participant TG as Telegram
 
     O->>J: poll_tickets()
-    J-->>O: [MBMOB-14567]
+    J-->>O: [ACME-14567]
 
-    O->>WM: create(faria, managebac, MBMOB-14567)
+    O->>WM: create(acme, acme-mobile, ACME-14567)
     WM-->>O: workspace created + cloned
-    O->>J: transition(MBMOB-14567, In Progress)
+    O->>J: transition(ACME-14567, In Progress)
 
     O->>BA: analyze ticket
     BA-->>O: reports/ba.md (plan + test scenarios)
@@ -820,7 +820,7 @@ sequenceDiagram
 
     O->>VCS: push + open_pr()
     VCS-->>O: PR #42
-    O->>J: transition(MBMOB-14567, In Review) + comment(PR link)
+    O->>J: transition(ACME-14567, In Review) + comment(PR link)
 
     Note over O: wait 30 min for reviews
 
@@ -832,7 +832,7 @@ sequenceDiagram
         PCR->>VCS: reply to comments
     end
 
-    O->>TG: ticket MBMOB-14567 ready for merge
+    O->>TG: ticket ACME-14567 ready for merge
     Note over O: state = DONE, await human merge
 ```
 
@@ -852,7 +852,7 @@ sequenceDiagram
         O->>AG: retry with feedback
     else cap reached
         O->>O: state → BLOCKED
-        O->>TG: [MBMOB-14567] Question...
+        O->>TG: [ACME-14567] Question...
         Note over O,H: workspace blocks, other tickets continue
         H->>TG: reply (threaded)
         TG->>O: human_input_reply
@@ -878,11 +878,11 @@ When a ticket is re-polled and has changes since last processing:
 All messages for one ticket are threaded using `reply_to_message_id`:
 
 ```
-[MBMOB-14567] 🔍 Analyzing ticket...
-  └── [MBMOB-14567] ❓ Unclear acceptance criteria. What does "fast loading" mean?
+[ACME-14567] 🔍 Analyzing ticket...
+  └── [ACME-14567] ❓ Unclear acceptance criteria. What does "fast loading" mean?
        └── User reply: "Under 2 seconds on 4G"
-  └── [MBMOB-14567] 🚀 PR opened: github.com/faria/managebac/pull/42
-  └── [MBMOB-14567] ✅ Ready for merge
+  └── [ACME-14567] 🚀 PR opened: github.com/acme/acme-mobile/pull/42
+  └── [ACME-14567] ✅ Ready for merge
 ```
 
 ### 10.2 Message Format

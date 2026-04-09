@@ -538,8 +538,8 @@ class TestIntentParser:
     async def test_parse_passes_context_in_system_prompt(self, parser, mock_adapter):
         context = {
             "mode": "manual",
-            "awaiting_approval": ["MBMOB-123 (post_analysis)"],
-            "active_workspaces": ["MBMOB-456 — DEV"],
+            "awaiting_approval": ["ACME-123 (post_analysis)"],
+            "active_workspaces": ["ACME-456 — DEV"],
         }
         await parser.parse("yes", pipeline_context=context)
         call_args = mock_adapter.quick_query.call_args
@@ -734,12 +734,12 @@ def _make_workspace(ticket_id, state, started_at=None, pr_url=None, company_id="
 class TestStatusHandler:
     @pytest.fixture
     def handler(self):
-        return StatusHandler(jira_base_url="https://faria.atlassian.net")
+        return StatusHandler(jira_base_url="https://acme.atlassian.net")
 
     def test_summary_with_active_workspaces(self, handler):
         workspaces = [
-            _make_workspace("MBMOB-123", "DEV"),
-            _make_workspace("MBMOB-456", "QA"),
+            _make_workspace("ACME-123", "DEV"),
+            _make_workspace("ACME-456", "QA"),
         ]
         result = handler.format_summary(
             mode="auto",
@@ -749,8 +749,8 @@ class TestStatusHandler:
             recent_done=[],
             recent_failed=[],
         )
-        assert "MBMOB-123" in result
-        assert "MBMOB-456" in result
+        assert "ACME-123" in result
+        assert "ACME-456" in result
         assert "auto" in result.lower()
 
     def test_summary_with_no_workspaces(self, handler):
@@ -765,17 +765,17 @@ class TestStatusHandler:
         assert "no active" in result.lower() or "Active (0)" in result
 
     def test_drill_down_includes_jira_url(self, handler):
-        ws = _make_workspace("MBMOB-123", "DEV")
+        ws = _make_workspace("ACME-123", "DEV")
         result = handler.format_drill_down(ws)
-        assert "https://faria.atlassian.net/browse/MBMOB-123" in result
+        assert "https://acme.atlassian.net/browse/ACME-123" in result
 
     def test_drill_down_includes_pr_url_when_present(self, handler):
-        ws = _make_workspace("MBMOB-123", "PR_REVIEW", pr_url="https://github.com/org/repo/pull/42")
+        ws = _make_workspace("ACME-123", "PR_REVIEW", pr_url="https://github.com/org/repo/pull/42")
         result = handler.format_drill_down(ws)
         assert "https://github.com/org/repo/pull/42" in result
 
     def test_drill_down_no_pr_url_when_absent(self, handler):
-        ws = _make_workspace("MBMOB-123", "DEV")
+        ws = _make_workspace("ACME-123", "DEV")
         result = handler.format_drill_down(ws)
         assert "PR:" not in result
 ```
@@ -1249,9 +1249,9 @@ class TestAnalyzeHandler:
     def mock_tracker(self):
         tracker = AsyncMock()
         ticket = MagicMock()
-        ticket.id = "MBMOB-123"
+        ticket.id = "ACME-123"
         ticket.summary = "Implement user search"
-        ticket.url = "https://faria.atlassian.net/browse/MBMOB-123"
+        ticket.url = "https://acme.atlassian.net/browse/ACME-123"
         tracker.get_ticket = AsyncMock(return_value=ticket)
         return tracker
 
@@ -1260,38 +1260,38 @@ class TestAnalyzeHandler:
         return AnalyzeHandler(tracker=mock_tracker)
 
     async def test_validate_tickets_success(self, handler):
-        result = await handler.validate_tickets(["MBMOB-123"])
+        result = await handler.validate_tickets(["ACME-123"])
         assert len(result.valid) == 1
-        assert result.valid[0].id == "MBMOB-123"
+        assert result.valid[0].id == "ACME-123"
         assert result.invalid == []
 
     async def test_validate_tickets_not_found(self, handler, mock_tracker):
         mock_tracker.get_ticket = AsyncMock(side_effect=Exception("Not found"))
-        result = await handler.validate_tickets(["MBMOB-999"])
+        result = await handler.validate_tickets(["ACME-999"])
         assert result.valid == []
         assert len(result.invalid) == 1
-        assert "MBMOB-999" in result.invalid[0]
+        assert "ACME-999" in result.invalid[0]
 
     async def test_validate_multiple_tickets(self, handler, mock_tracker):
         ticket2 = MagicMock()
-        ticket2.id = "MBMOB-456"
+        ticket2.id = "ACME-456"
         ticket2.summary = "Fix login bug"
         mock_tracker.get_ticket = AsyncMock(side_effect=[
-            MagicMock(id="MBMOB-123", summary="Search"), 
+            MagicMock(id="ACME-123", summary="Search"), 
             Exception("Not found"),
         ])
-        result = await handler.validate_tickets(["MBMOB-123", "MBMOB-456"])
+        result = await handler.validate_tickets(["ACME-123", "ACME-456"])
         assert len(result.valid) == 1
         assert len(result.invalid) == 1
 
     def test_is_already_active(self, handler):
         ws = MagicMock()
         ws_state = MagicMock()
-        ws_state.ticket_id = "MBMOB-123"
+        ws_state.ticket_id = "ACME-123"
         type(ws).state = PropertyMock(return_value=ws_state)
         active = [ws]
-        assert handler.is_already_active("MBMOB-123", active) is True
-        assert handler.is_already_active("MBMOB-999", active) is False
+        assert handler.is_already_active("ACME-123", active) is True
+        assert handler.is_already_active("ACME-999", active) is False
 ```
 
 - [ ] **Step 2: Run test to verify it fails**
@@ -1435,7 +1435,7 @@ class TestCommandHandler:
             notifier=mock_notifier,
             mode_handler=mock_mode_handler,
             active_workspaces_fn=lambda: [],
-            jira_base_url="https://faria.atlassian.net",
+            jira_base_url="https://acme.atlassian.net",
             started_at="2026-04-08T00:00:00Z",
         )
 
@@ -2360,7 +2360,7 @@ class TestManualModeFlow:
             notifier=mock_notifier,
             mode_handler=mode_handler,
             active_workspaces_fn=lambda: [],
-            jira_base_url="https://faria.atlassian.net",
+            jira_base_url="https://acme.atlassian.net",
             started_at="2026-04-08T00:00:00Z",
         )
 

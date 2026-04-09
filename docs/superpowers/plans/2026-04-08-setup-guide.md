@@ -130,8 +130,8 @@ Secrets are referenced as `${ENV_VAR}` in YAML and resolved at load time from `.
 ### Adding your own project
 
 1. Create a project directory: `config-live/projects/{your-project-id}/`
-2. Create `project.yaml` with Jira config (see `config-live/projects/faria/project.yaml` as example)
-3. Create `repos/{your-repo-id}.yaml` with VCS, CI, and quality gate config (see `config-live/projects/faria/repos/managebac.yaml` as example)
+2. Create `project.yaml` with Jira config (see `config-live/projects/acme/project.yaml` as example)
+3. Create `repos/{your-repo-id}.yaml` with VCS, CI, and quality gate config (see `config-live/projects/acme/repos/acme-mobile.yaml` as example)
 
 ### Key fields to customize per repo
 
@@ -175,7 +175,7 @@ source .env && python main.py --config config-live --dry-run
 ### Single project / repo
 
 ```bash
-source .env && python main.py --config config-live --project faria --repo managebac
+source .env && python main.py --config config-live --project acme --repo acme-mobile
 ```
 
 ### Run tests

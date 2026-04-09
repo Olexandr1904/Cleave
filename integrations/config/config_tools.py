@@ -211,13 +211,16 @@ def remove_project(config_dir: str, project_id: str) -> dict[str, Any]:
     if not proj_dir.exists():
         return {"success": False, "error": f"Project '{project_id}' not found at {proj_dir}"}
 
-    timestamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
+    timestamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S-%f")
     backup_dir = Path(config_dir) / ".backups" / f"{project_id}-{timestamp}"
     try:
         shutil.copytree(str(proj_dir), str(backup_dir))
     except OSError as e:
         return {"success": False, "error": f"Backup failed: {e}"}
 
-    shutil.rmtree(str(proj_dir))
+    try:
+        shutil.rmtree(str(proj_dir))
+    except OSError as e:
+        return {"success": False, "error": f"Removal failed (backup preserved at {backup_dir}): {e}"}
 
     return {"success": True, "backup_path": str(backup_dir)}

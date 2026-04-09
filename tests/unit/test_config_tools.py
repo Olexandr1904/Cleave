@@ -7,6 +7,9 @@ import yaml
 
 from pathlib import Path
 
+import httpx
+import respx
+
 from integrations.config.config_tools import (
     resolve_env_var,
     list_projects,
@@ -14,6 +17,10 @@ from integrations.config.config_tools import (
     write_project_config,
     write_repo_config,
     remove_project,
+    validate_jira,
+    validate_github,
+    validate_gitlab,
+    validate_jenkins,
 )
 
 
@@ -269,3 +276,105 @@ class TestRemoveProject:
         assert "Removal failed" in result["error"]
         assert "backup preserved" in result["error"]
         assert proj_dir.exists()
+
+
+class TestValidateJira:
+    @respx.mock
+    async def test_success(self):
+        respx.get("https://acme.atlassian.net/rest/api/3/project/ACM").mock(
+            return_value=httpx.Response(200, json={"key": "ACM", "name": "Acme Project"})
+        )
+        result = await validate_jira("https://acme.atlassian.net", "token123", "bot@acme.com", "ACM")
+        assert result["success"] is True
+        assert result["project_name"] == "Acme Project"
+
+    @respx.mock
+    async def test_auth_failure(self):
+        respx.get("https://acme.atlassian.net/rest/api/3/project/ACM").mock(
+            return_value=httpx.Response(401)
+        )
+        result = await validate_jira("https://acme.atlassian.net", "bad-token", "bot@acme.com", "ACM")
+        assert result["success"] is False
+        assert "401" in result["error"] or "auth" in result["error"].lower()
+
+    @respx.mock
+    async def test_project_not_found(self):
+        respx.get("https://acme.atlassian.net/rest/api/3/project/BAD").mock(
+            return_value=httpx.Response(404)
+        )
+        result = await validate_jira("https://acme.atlassian.net", "token123", "bot@acme.com", "BAD")
+        assert result["success"] is False
+        assert "404" in result["error"] or "not found" in result["error"].lower()
+
+
+class TestValidateGitHub:
+    @respx.mock
+    async def test_success(self):
+        respx.get("https://api.github.com/repos/acme/api").mock(
+            return_value=httpx.Response(200, json={
+                "full_name": "acme/api",
+                "default_branch": "main",
+            })
+        )
+        result = await validate_github("token123", "acme", "api")
+        assert result["success"] is True
+        assert result["full_name"] == "acme/api"
+        assert result["default_branch"] == "main"
+
+    @respx.mock
+    async def test_auth_failure(self):
+        respx.get("https://api.github.com/repos/acme/api").mock(
+            return_value=httpx.Response(401)
+        )
+        result = await validate_github("bad-token", "acme", "api")
+        assert result["success"] is False
+
+    @respx.mock
+    async def test_repo_not_found(self):
+        respx.get("https://api.github.com/repos/acme/nonexistent").mock(
+            return_value=httpx.Response(404)
+        )
+        result = await validate_github("token123", "acme", "nonexistent")
+        assert result["success"] is False
+
+
+class TestValidateGitLab:
+    @respx.mock
+    async def test_success(self):
+        respx.get("https://gitlab.com/api/v4/projects/12345").mock(
+            return_value=httpx.Response(200, json={"name": "My Project", "id": 12345})
+        )
+        result = await validate_gitlab("token123", "12345", "https://gitlab.com")
+        assert result["success"] is True
+        assert result["project_name"] == "My Project"
+
+    @respx.mock
+    async def test_auth_failure(self):
+        respx.get("https://gitlab.com/api/v4/projects/12345").mock(
+            return_value=httpx.Response(401)
+        )
+        result = await validate_gitlab("bad-token", "12345", "https://gitlab.com")
+        assert result["success"] is False
+
+
+class TestValidateJenkins:
+    @respx.mock
+    async def test_success(self):
+        respx.get("https://jenkins.acme.com/job/my-project/api/json").mock(
+            return_value=httpx.Response(200, json={"displayName": "My Project Build"})
+        )
+        result = await validate_jenkins(
+            "https://jenkins.acme.com", "admin", "token123", "my-project"
+        )
+        assert result["success"] is True
+        assert result["job_name"] == "My Project Build"
+
+    @respx.mock
+    async def test_auth_failure(self):
+        respx.get("https://jenkins.acme.com/job/my-project/api/json").mock(
+            return_value=httpx.Response(401)
+        )
+        result = await validate_jenkins(
+            "https://jenkins.acme.com", "admin", "bad-token", "my-project"
+        )
+        assert result["success"] is False

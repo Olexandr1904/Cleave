@@ -11,6 +11,7 @@ import shutil
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+from urllib.parse import quote
 
 import httpx
 import yaml
@@ -239,12 +240,13 @@ async def validate_jira(
         Dict with keys: success (bool), project_name (str), error (str, if failed).
     """
     url = url.rstrip("/")
+    safe_key = quote(project_key, safe="")
     try:
         async with httpx.AsyncClient(
             auth=(email, token),
             timeout=VALIDATE_TIMEOUT,
         ) as client:
-            response = await client.get(f"{url}/rest/api/3/project/{project_key}")
+            response = await client.get(f"{url}/rest/api/3/project/{safe_key}")
             if response.status_code == 200:
                 data = response.json()
                 return {"success": True, "project_name": data.get("name", project_key)}
@@ -252,10 +254,10 @@ async def validate_jira(
                 "success": False,
                 "error": f"Jira returned HTTP {response.status_code} for project '{project_key}'",
             }
-    except httpx.ConnectError as e:
-        return {"success": False, "error": f"Connection failed: {e}"}
     except httpx.TimeoutException:
         return {"success": False, "error": f"Connection to {url} timed out"}
+    except httpx.RequestError as e:
+        return {"success": False, "error": f"Request to {url} failed: {type(e).__name__}"}
 
 
 async def validate_github(token: str, owner: str, repo: str) -> dict[str, Any]:
@@ -267,6 +269,8 @@ async def validate_github(token: str, owner: str, repo: str) -> dict[str, Any]:
         Dict with keys: success (bool), full_name (str), default_branch (str),
         error (str, if failed).
     """
+    safe_owner = quote(owner, safe="")
+    safe_repo = quote(repo, safe="")
     try:
         async with httpx.AsyncClient(
             headers={
@@ -275,7 +279,9 @@ async def validate_github(token: str, owner: str, repo: str) -> dict[str, Any]:
             },
             timeout=VALIDATE_TIMEOUT,
         ) as client:
-            response = await client.get(f"https://api.github.com/repos/{owner}/{repo}")
+            response = await client.get(
+                f"https://api.github.com/repos/{safe_owner}/{safe_repo}"
+            )
             if response.status_code == 200:
                 data = response.json()
                 return {
@@ -287,10 +293,10 @@ async def validate_github(token: str, owner: str, repo: str) -> dict[str, Any]:
                 "success": False,
                 "error": f"GitHub returned HTTP {response.status_code} for {owner}/{repo}",
             }
-    except httpx.ConnectError as e:
-        return {"success": False, "error": f"Connection failed: {e}"}
     except httpx.TimeoutException:
         return {"success": False, "error": "Connection to GitHub timed out"}
+    except httpx.RequestError as e:
+        return {"success": False, "error": f"Request to GitHub failed: {type(e).__name__}"}
 
 
 async def validate_gitlab(
@@ -304,12 +310,15 @@ async def validate_gitlab(
         Dict with keys: success (bool), project_name (str), error (str, if failed).
     """
     url = url.rstrip("/")
+    # GitLab accepts either a numeric project ID or a URL-encoded
+    # "namespace/project" path; both forms must have slashes encoded.
+    safe_project = quote(str(project_id), safe="")
     try:
         async with httpx.AsyncClient(
             headers={"Private-Token": token},
             timeout=VALIDATE_TIMEOUT,
         ) as client:
-            response = await client.get(f"{url}/api/v4/projects/{project_id}")
+            response = await client.get(f"{url}/api/v4/projects/{safe_project}")
             if response.status_code == 200:
                 data = response.json()
                 return {"success": True, "project_name": data.get("name", project_id)}
@@ -317,10 +326,10 @@ async def validate_gitlab(
                 "success": False,
                 "error": f"GitLab returned HTTP {response.status_code} for project {project_id}",
             }
-    except httpx.ConnectError as e:
-        return {"success": False, "error": f"Connection failed: {e}"}
     except httpx.TimeoutException:
         return {"success": False, "error": f"Connection to {url} timed out"}
+    except httpx.RequestError as e:
+        return {"success": False, "error": f"Request to {url} failed: {type(e).__name__}"}
 
 
 async def validate_jenkins(
@@ -334,12 +343,14 @@ async def validate_jenkins(
         Dict with keys: success (bool), job_name (str), error (str, if failed).
     """
     url = url.rstrip("/")
+    # Jenkins job keys can contain "/" for folder paths — encode each segment.
+    safe_job = "/".join(quote(seg, safe="") for seg in job_key.split("/") if seg)
     try:
         async with httpx.AsyncClient(
             auth=(username, token),
             timeout=VALIDATE_TIMEOUT,
         ) as client:
-            response = await client.get(f"{url}/job/{job_key}/api/json")
+            response = await client.get(f"{url}/job/{safe_job}/api/json")
             if response.status_code == 200:
                 data = response.json()
                 return {"success": True, "job_name": data.get("displayName", job_key)}
@@ -347,7 +358,7 @@ async def validate_jenkins(
                 "success": False,
                 "error": f"Jenkins returned HTTP {response.status_code} for job '{job_key}'",
             }
-    except httpx.ConnectError as e:
-        return {"success": False, "error": f"Connection failed: {e}"}
     except httpx.TimeoutException:
         return {"success": False, "error": f"Connection to {url} timed out"}
+    except httpx.RequestError as e:
+        return {"success": False, "error": f"Request to {url} failed: {type(e).__name__}"}

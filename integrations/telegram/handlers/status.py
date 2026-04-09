@@ -34,10 +34,14 @@ class StatusHandler:
         uptime_seconds: float,
         last_poll_ago_seconds: float,
         active_workspaces: list[Any],
-        recent_done: list[Any],
-        recent_failed: list[Any],
+        recent_completions: list[tuple[str, str, float]] | None = None,
     ) -> str:
-        """Format the summary status message."""
+        """Format the summary status message.
+
+        recent_completions is a list of (ticket_id, final_state, epoch_ts)
+        tuples for workspaces that have terminated since startup. The list
+        is truncated upstream (ring buffer in the orchestrator).
+        """
         lines = [
             "Sickle Status",
             "",
@@ -66,15 +70,14 @@ class StatusHandler:
 
         lines.append("")
 
-        recent_all = recent_done + recent_failed
-        if recent_all:
-            lines.append("Recent (24h):")
-            for ws in recent_done:
-                lines.append(f"  {ws.state.ticket_id} — merged")
-            for ws in recent_failed:
-                lines.append(f"  {ws.state.ticket_id} — failed at {ws.state.previous_state or ws.state.current_state}")
+        completions = recent_completions or []
+        if completions:
+            lines.append(f"Recent ({len(completions)}):")
+            for ticket_id, final_state, _ts in completions:
+                label = "merged" if final_state == "DONE" else final_state.lower()
+                lines.append(f"  {ticket_id} — {label}")
         else:
-            lines.append("Recent (24h): none")
+            lines.append("Recent: none")
 
         return "\n".join(lines)
 

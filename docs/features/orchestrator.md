@@ -2,7 +2,7 @@
 
 **Status:** In Progress
 **Created:** 2026-04-07
-**Updated:** 2026-04-07
+**Updated:** 2026-04-09
 **Author:** Oleksandr Brazhenko
 
 ## Description
@@ -21,6 +21,7 @@ Central daemon process that continuously polls for work, manages isolated worksp
 - FR8: `--dry-run` flag polls tickets and logs what would happen without executing
 - FR9: Handles exceptions per-workspace without crashing the daemon
 - FR10: SIGTERM/SIGINT triggers graceful shutdown: finish current agent calls, save state, exit
+- FR11: Mode-aware behavior — in `manual` mode the orchestrator skips Jira polling and pauses workspaces at approval gates (ANALYSIS, QA, PR_REVIEW) by transitioning to `AWAITING_APPROVAL` and sending a Telegram summary; `auto` mode runs end-to-end without gates
 
 ## Technical Approach
 
@@ -47,9 +48,11 @@ Central daemon process that continuously polls for work, manages isolated worksp
 - [ ] Dry-run mode logs actions without executing
 - [ ] Graceful shutdown on SIGTERM/SIGINT
 - [ ] One workspace failure does not crash the daemon
+- [ ] Orchestrator honors `pipeline.mode` (auto/manual): skips polling in manual, pauses at approval gates, and does not advance workspaces in `AWAITING_APPROVAL`
 
 ## Change Log
 
 | Date | Description |
 |------|-------------|
 | 2026-04-07 | Initial draft — seeded from PRD and architecture docs |
+| 2026-04-09 | Added mode-aware behavior: manual-mode skips polling, inserts approval gates after ANALYSIS/QA/PR_REVIEW, skips advancing AWAITING_APPROVAL workspaces. New `set_mode_handler` setter and `_should_approval_gate` check. |

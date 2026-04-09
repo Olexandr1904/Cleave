@@ -28,6 +28,8 @@ class CommandHandler:
         started_at: str = "",
         tracker: Any | None = None,
         analyze_callback: Callable | None = None,
+        recent_completions_fn: Callable[[], list[tuple[str, str, float]]] | None = None,
+        allowed_chat_ids: set[str] | None = None,
     ) -> None:
         self._intent_parser = intent_parser
         self._notifier = notifier
@@ -38,6 +40,11 @@ class CommandHandler:
         self._started_at = started_at
         self._tracker = tracker
         self._analyze_callback = analyze_callback
+        self._recent_completions_fn = recent_completions_fn
+        # None or empty set disables the allowlist — use an empty set to block
+        # nobody only if you explicitly want open access. Normal operation
+        # should pass the operator's chat_id(s).
+        self._allowed_chat_ids = allowed_chat_ids
         self._last_poll_time: float = time.time()
 
     def update_last_poll_time(self) -> None:
@@ -46,6 +53,11 @@ class CommandHandler:
 
     async def handle_message(self, text: str, chat_id: str) -> None:
         """Process an incoming Telegram message."""
+        if self._allowed_chat_ids is not None and chat_id not in self._allowed_chat_ids:
+            logger.warning(
+                "Rejecting command from unauthorized chat_id=%s", chat_id,
+            )
+            return
         workspaces = self._active_workspaces_fn()
         context = self._build_context(workspaces)
         intent = await self._intent_parser.parse(text, context)
@@ -103,15 +115,13 @@ class CommandHandler:
                     pass
             poll_ago = now - self._last_poll_time
             active = [ws for ws in workspaces if ws.state.current_state not in ("DONE", "FAILED", "ARCHIVED")]
-            done = [ws for ws in workspaces if ws.state.current_state == "DONE"]
-            failed = [ws for ws in workspaces if ws.state.current_state == "FAILED"]
+            recent = self._recent_completions_fn() if self._recent_completions_fn else []
             msg = self._status_handler.format_summary(
                 mode=self._mode_handler.get_mode(),
                 uptime_seconds=uptime,
                 last_poll_ago_seconds=poll_ago,
                 active_workspaces=active,
-                recent_done=done,
-                recent_failed=failed,
+                recent_completions=recent,
             )
         await self._notifier.send_message(chat_id, msg)
 

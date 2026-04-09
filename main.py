@@ -275,23 +275,59 @@ def main(argv: list[str] | None = None) -> int:
             if first_project and first_project.config.jira.url:
                 jira_base_url = first_project.config.jira.url
 
+            # Build the chat-id allowlist from global + per-project configs so
+            # the bot ignores commands from other chats. An empty set disables
+            # the bot (fail-safe); None would disable the check entirely.
+            allowed_chat_ids: set[str] = set()
+            if tg_config.default_chat_id:
+                allowed_chat_ids.add(tg_config.default_chat_id)
+            for proj in projects.values():
+                pcid = proj.config.telegram.default_chat_id
+                if pcid:
+                    allowed_chat_ids.add(pcid)
+
             command_handler = CommandHandler(
                 intent_parser=intent_parser,
                 notifier=notifier,
                 mode_handler=mode_handler,
-                active_workspaces_fn=lambda: orchestrator._active_workspaces,
+                active_workspaces_fn=orchestrator.get_active_workspaces,
                 jira_base_url=jira_base_url,
                 started_at=datetime.now(timezone.utc).isoformat(),
                 tracker=tracker,
+                analyze_callback=orchestrator.analyze_ticket_ids,
+                recent_completions_fn=orchestrator.get_recent_completions,
+                allowed_chat_ids=allowed_chat_ids or None,
             )
             notifier.set_command_handler(command_handler)
-            print("  Telegram CommandHandler wired into polling loop")
+            print(
+                f"  Telegram CommandHandler wired (allowlist: {len(allowed_chat_ids)} chat id(s))"
+            )
 
     print("  Orchestrator initialized. Starting main loop...")
 
-    # Run the main loop
+    # Run the main loop. Telegram polling runs via PTB's own background tasks
+    # (start_polling returns after initialization), then the orchestrator loop
+    # blocks until SIGINT/SIGTERM. On exit we stop the Telegram side cleanly.
+    async def _run_all() -> None:
+        from integrations.telegram.telegram_adapter import TelegramAdapter
+
+        tg_active = isinstance(notifier, TelegramAdapter)
+        if tg_active:
+            await notifier.start_polling()
+            print("  Telegram polling started")
+        try:
+            await orchestrator.run()
+        finally:
+            if tg_active:
+                try:
+                    await notifier.stop_polling()
+                except Exception as e:
+                    logging.getLogger(__name__).warning(
+                        "Error stopping Telegram polling: %s", e,
+                    )
+
     try:
-        asyncio.run(orchestrator.run())
+        asyncio.run(_run_all())
     except KeyboardInterrupt:
         print("\nShutdown requested.")
 

@@ -7,6 +7,7 @@ import json
 import logging
 import signal
 import time
+from collections import deque
 from typing import Any
 
 from config.schemas import GlobalConfig, LoadedProject, RepoConfig
@@ -14,6 +15,7 @@ from config.resource_registry import ResourceRegistry
 from integrations.base.notifier import NotifierInterface
 from integrations.base.tracker import TicketData, TrackerInterface
 from integrations.base.vcs import VCSInterface
+from integrations.telegram.handlers.analyze import AnalyzeHandler
 from integrations.telegram.handlers.approval import APPROVAL_NEXT_STATE
 from integrations.telegram.handlers.mode import ModeHandler
 from orchestrator.agent_runtime import AgentRuntime
@@ -74,6 +76,9 @@ class Orchestrator:
         self._repo_vcs: dict[str, tuple[VCSInterface, RepoConfig]] = {}
         # Mode handler — initialized later via set_mode_handler or from config default
         self._mode_handler: ModeHandler | None = None
+        # Ring buffer of recently-terminated workspaces for /status visibility.
+        # Each entry is (ticket_id, final_state, timestamp_epoch).
+        self._recent_completions: deque[tuple[str, str, float]] = deque(maxlen=20)
 
     def register_repo_vcs(
         self, repo_id: str, vcs: VCSInterface, repo_config: RepoConfig,
@@ -84,6 +89,89 @@ class Orchestrator:
     def set_mode_handler(self, handler: ModeHandler) -> None:
         """Register the mode handler for auto/manual switching."""
         self._mode_handler = handler
+
+    def get_active_workspaces(self) -> list[Workspace]:
+        """Return the current active workspace list (for CommandHandler status)."""
+        return list(self._active_workspaces)
+
+    def get_recent_completions(self) -> list[tuple[str, str, float]]:
+        """Return recently-terminated workspaces (ticket_id, final_state, epoch).
+
+        Used by /status to show DONE / FAILED tickets after they've been
+        removed from the active list.
+        """
+        return list(self._recent_completions)
+
+    async def analyze_ticket_ids(self, ticket_ids: list[str]) -> dict[str, list[str]]:
+        """Manually queue tickets for analysis (Telegram /analyze callback).
+
+        Validates each ticket via AnalyzeHandler, skips duplicates, then
+        creates a workspace for each valid one by matching its labels to a
+        configured repo. Returns {"valid": [...], "invalid": [...]} where
+        invalid entries are "TICKET: reason" strings.
+        """
+        result: dict[str, list[str]] = {"valid": [], "invalid": []}
+
+        if not self._tracker:
+            for tid in ticket_ids:
+                result["invalid"].append(f"{tid}: no tracker configured")
+            return result
+
+        handler = AnalyzeHandler(self._tracker)
+        validation = await handler.validate_tickets(ticket_ids)
+        result["invalid"].extend(validation.invalid)
+
+        for ticket in validation.valid:
+            if handler.is_already_active(ticket.id, self._active_workspaces):
+                result["invalid"].append(f"{ticket.id}: already active")
+                continue
+
+            pt = self._route_manual_ticket(ticket)
+            if not pt:
+                result["invalid"].append(
+                    f"{ticket.id}: no matching repo label in any project",
+                )
+                continue
+
+            project = self._projects.get(pt.project_id)
+            if not project:
+                result["invalid"].append(f"{ticket.id}: project {pt.project_id} not loaded")
+                continue
+            repo_config = project.repos.get(pt.repo_id)
+            if not repo_config:
+                result["invalid"].append(f"{ticket.id}: repo {pt.repo_id} not loaded")
+                continue
+
+            if self._dry_run:
+                logger.info("[DRY RUN] Would create manual workspace for %s", ticket.id)
+                result["valid"].append(ticket.id)
+                continue
+
+            try:
+                ws = await self._create_workspace_for_ticket(
+                    pt, pt.project_id, repo_config,
+                )
+                self._active_workspaces.append(ws)
+                result["valid"].append(ticket.id)
+                logger.info(
+                    "Manually queued %s (%s/%s)",
+                    ticket.id, pt.project_id, pt.repo_id,
+                )
+            except Exception as e:
+                logger.error("Manual workspace creation failed for %s: %s", ticket.id, e)
+                result["invalid"].append(f"{ticket.id}: {e}")
+
+        return result
+
+    def _route_manual_ticket(self, ticket: TicketData) -> PrioritizedTicket | None:
+        """Find the project+repo that owns this ticket via jira_repo_label match."""
+        for project_id, project in self._projects.items():
+            for repo_id, repo_config in project.repos.items():
+                if repo_config.jira_repo_label and repo_config.jira_repo_label in ticket.labels:
+                    return PrioritizedTicket(
+                        ticket=ticket, repo_id=repo_id, project_id=project_id,
+                    )
+        return None
 
     def _should_approval_gate(
         self, completed_state: str, next_stage: str | None = None,
@@ -187,12 +275,19 @@ class Orchestrator:
                 except Exception:
                     pass
 
-        # 3. Cleanup terminal workspaces from active list
+        # 3. Cleanup terminal workspaces from active list and record them for
+        # /status to show recent completions even after they leave the list.
         terminal = {"DONE", "FAILED", "ARCHIVED"}
-        self._active_workspaces = [
-            ws for ws in self._active_workspaces
-            if ws.state.current_state not in terminal
-        ]
+        still_active: list[Workspace] = []
+        now = time.time()
+        for ws in self._active_workspaces:
+            if ws.state.current_state in terminal:
+                self._recent_completions.append(
+                    (ws.state.ticket_id, ws.state.current_state, now),
+                )
+            else:
+                still_active.append(ws)
+        self._active_workspaces = still_active
 
         # 4. Workspace cleanup
         max_age = self._global_config.workspaces.max_age_days

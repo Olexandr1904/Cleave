@@ -45,8 +45,7 @@ class TestStatusHandler:
             uptime_seconds=3600,
             last_poll_ago_seconds=120,
             active_workspaces=workspaces,
-            recent_done=[],
-            recent_failed=[],
+            recent_completions=[],
         )
         assert "MBMOB-123" in result
         assert "MBMOB-456" in result
@@ -58,10 +57,25 @@ class TestStatusHandler:
             uptime_seconds=0,
             last_poll_ago_seconds=0,
             active_workspaces=[],
-            recent_done=[],
-            recent_failed=[],
+            recent_completions=[],
         )
         assert "no active" in result.lower() or "Active (0)" in result
+
+    def test_summary_renders_recent_completions(self, handler):
+        result = handler.format_summary(
+            mode="auto",
+            uptime_seconds=0,
+            last_poll_ago_seconds=0,
+            active_workspaces=[],
+            recent_completions=[
+                ("MBMOB-1", "DONE", 1_700_000_000.0),
+                ("MBMOB-2", "FAILED", 1_700_000_100.0),
+            ],
+        )
+        assert "MBMOB-1" in result
+        assert "merged" in result
+        assert "MBMOB-2" in result
+        assert "failed" in result
 
     def test_drill_down_includes_jira_url(self, handler):
         ws = _make_workspace("MBMOB-123", "DEV")

@@ -27,19 +27,29 @@ Sickle is a fully autonomous, 24/7 AI-driven development pipeline that:
 ## Quick Start
 
 ```bash
-# Setup
+# 1. Install
 python3 -m venv .venv && source .venv/bin/activate
 pip install -e ".[dev]"
 
-# Configure (copy and fill in credentials)
+# 2. Secrets — copy the template and fill in your tokens.
 cp environment.template .env
+$EDITOR .env
 
-# Dry run
+# 3. Config — copy the example tree and edit it for your project.
+cp -r config-live.example config-live
+$EDITOR config-live/global.yaml
+$EDITOR config-live/projects/example-project/project.yaml
+$EDITOR config-live/projects/example-project/repos/example-repo.yaml
+# (rename example-project / example-repo.yaml to match your own IDs)
+
+# 4. Dry run (no side effects — polls Jira, logs what it would do).
 source .env && python main.py --config config-live --dry-run
 
-# Run
-source .env && python main.py --config config-live --project faria --repo managebac
+# 5. Real run for a single project/repo.
+source .env && python main.py --config config-live --project <your-project-id> --repo <your-repo-id>
 ```
+
+`config-live/` is gitignored — it holds your real deployment data. `config-live.example/` is the tracked template. See [docs/setup-guide.md](docs/setup-guide.md) for the full walkthrough.
 
 ## Pipeline Flow
 

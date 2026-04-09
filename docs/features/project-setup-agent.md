@@ -19,7 +19,11 @@ A BMAD-style agent (`project-setup-agent`, codename Atlas) that onboards new pro
 - FR5b: `write_repo_config` creates `{config_dir}/projects/{project_id}/repos/{repo_id}.yaml` with the same ID validation for both project_id and repo_id
 - FR5c: `remove_project` backs up `{config_dir}/projects/{project_id}/` to `{config_dir}/.backups/{project_id}-{YYYYMMDD-HHMMSS}/` via `shutil.copytree` then removes the project dir; backup failure leaves the project intact
 - FR6-future: write/remove/validation tools for project and repo configs (remove, credential validation)
-- FR6: Future: validate credentials against live APIs (Jira, GitHub, GitLab, Jenkins) before writing config
+- FR6: validate credentials against live APIs (Jira, GitHub, GitLab, Jenkins) before writing config
+  - [x] `validate_jira`: hits `/rest/api/3/project/{key}` with Basic auth; returns project name or specific error
+  - [x] `validate_github`: hits `https://api.github.com/repos/{owner}/{repo}` with Bearer token; returns full_name and default_branch
+  - [x] `validate_gitlab`: hits `{url}/api/v4/projects/{project_id}` with Private-Token header; returns project name
+  - [x] `validate_jenkins`: hits `{url}/job/{job_key}/api/json` with Basic auth; returns job displayName
 - FR7: Future: Atlas agent prompt file (`agents/project-setup-agent.md`) with persona, tools, and interactive flow
 - FR8: Future: add/list/remove operations invoked from CLI or orchestrator
 
@@ -49,7 +53,7 @@ A BMAD-style agent (`project-setup-agent`, codename Atlas) that onboards new pro
 - [x] `write_repo_config` writes `repos/{repo_id}.yaml`; rejects invalid project_id and repo_id; validates YAML in memory before writing; returns success/error dict
 - [x] `remove_project` backs up project to `.backups/` before removal; backup failure leaves project intact; rejects invalid project_id via `PROJECT_ID_PATTERN`
 - [ ] Remove project with user confirmation (CLI/agent flow — not yet wired)
-- [ ] Credential validation against live APIs for Jira, GitHub, GitLab, Jenkins
+- [x] Credential validation against live APIs for Jira, GitHub, GitLab, Jenkins
 - [ ] Atlas agent prompt file with add/list/remove flows
 - [ ] CLI / orchestrator entry point to launch the agent
 
@@ -63,3 +67,4 @@ A BMAD-style agent (`project-setup-agent`, codename Atlas) that onboards new pro
 | 2026-04-09 | Task 2 review fix: changed write-then-validate to validate-then-write so invalid YAML leaves no corrupt files or orphan directories on disk; strengthened tests to assert no side-effects on bad YAML |
 | 2026-04-09 | Task 3 implemented: `remove_project` with timestamped backup to `.backups/`, OSError guard (no removal if backup fails), and `PROJECT_ID_PATTERN` validation; 8 new tests (52 total) |
 | 2026-04-09 | Task 3 review fix: `rmtree` failure now returns an error dict (preserves return contract); added tests for backup-failure and rmtree-failure guards; microsecond timestamp avoids second-level collisions |
+| 2026-04-09 | Task 4 implemented: four async validation functions (validate_jira/github/gitlab/jenkins) using httpx; 11 new tests (64 total) |

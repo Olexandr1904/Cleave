@@ -177,3 +177,104 @@ class Workspace:
         state.stage_iterations[stage_id] = count
         self.save_state()
         return count
+
+
+@dataclass
+class AdminWorkspaceState:
+    """State for admin (non-ticket) workspaces."""
+    operation: str  # "add", "list", "remove"
+    workspace_root: str
+    status: str = "pending"  # "pending", "in_progress", "completed", "failed"
+    started_at: str = ""
+    last_updated_at: str = ""
+    error: str | None = None
+
+    def __post_init__(self) -> None:
+        now = _now_iso()
+        if not self.started_at:
+            self.started_at = now
+        if not self.last_updated_at:
+            self.last_updated_at = now
+
+
+class AdminWorkspace:
+    """Lightweight workspace for admin operations (no ticket context, no source dir)."""
+
+    def __init__(self, root: str, state: AdminWorkspaceState | None = None) -> None:
+        self._root = Path(root)
+        self._state = state
+
+    @classmethod
+    def create(cls, root: str, operation: str) -> AdminWorkspace:
+        """Create a new admin workspace with directory structure."""
+        root_path = Path(root)
+        (root_path / "meta").mkdir(parents=True, exist_ok=True)
+        (root_path / "reports").mkdir(parents=True, exist_ok=True)
+        (root_path / "logs").mkdir(parents=True, exist_ok=True)
+
+        state = AdminWorkspaceState(operation=operation, workspace_root=root)
+        ws = cls(root, state)
+        ws.save_state()
+        return ws
+
+    @property
+    def root(self) -> Path:
+        return self._root
+
+    @property
+    def source_dir(self) -> None:
+        return None
+
+    @property
+    def meta_dir(self) -> Path:
+        return self._root / "meta"
+
+    @property
+    def reports_dir(self) -> Path:
+        return self._root / "reports"
+
+    @property
+    def logs_dir(self) -> Path:
+        return self._root / "logs"
+
+    @property
+    def state_path(self) -> Path:
+        return self._root / "state.json"
+
+    @property
+    def state(self) -> AdminWorkspaceState:
+        if self._state is None:
+            self._state = self._load_state()
+        return self._state
+
+    def _load_state(self) -> AdminWorkspaceState:
+        with open(self.state_path) as f:
+            data = json.load(f)
+        return AdminWorkspaceState(**data)
+
+    def save_state(self) -> None:
+        """Atomically write state.json (temp file + rename)."""
+        data = asdict(self._state)
+        self._state.last_updated_at = _now_iso()
+        data["last_updated_at"] = self._state.last_updated_at
+
+        fd, tmp_path = tempfile.mkstemp(
+            dir=str(self._root), suffix=".tmp", prefix="state_"
+        )
+        try:
+            with os.fdopen(fd, "w") as f:
+                json.dump(data, f, indent=2)
+            os.replace(tmp_path, str(self.state_path))
+        except Exception:
+            if os.path.exists(tmp_path):
+                os.unlink(tmp_path)
+            raise
+
+    def update_state(self, **kwargs: Any) -> None:
+        """Update state fields and save atomically."""
+        state = self.state
+        for key, value in kwargs.items():
+            if not hasattr(state, key):
+                raise ValueError(f"Unknown state field: {key}")
+            setattr(state, key, value)
+        self.save_state()

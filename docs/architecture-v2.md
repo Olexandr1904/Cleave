@@ -99,8 +99,8 @@ graph TD
 
 ```
 /<base_dir>/                              # Configurable base (e.g., /data/)
-  /<company>/                             # e.g., Acme, BRazole
-    /<repo>/                              # e.g., Managebac, BetaApp
+  /<company>/                             # e.g., Acme, BetaCo
+    /<repo>/                              # e.g., Acme Mobile, BetaApp
       /rules/                             # Repo-specific rules (arch-rules.md, etc.)
       /tickets/
         /<ticket_id>/                     # e.g., ACME-14567
@@ -305,8 +305,8 @@ vcs:
   # GitHub-specific
   github:
     token: "${GITHUB_TOKEN_ACME}"
-    owner: "acme-education"
-    repo: "acme-mobile-android"
+    owner: "acme-orgcation"
+    repo: "acme-mobile"
     default_branch: "develop"
     branch_prefix: "feature"
   # GitLab-specific (alternative)
@@ -324,10 +324,10 @@ ci:
   #   job_key: "compose-plugin"
 
 git:
-  clone_url: "git@github.com:acme-education/acme-mobile-android.git"
+  clone_url: "git@github.com:acme-orgcation/acme-mobile.git"
   depth: 1                          # shallow clone (0 = full)
   commit_author_name: "Sickle Bot"
-  commit_author_email: "sickle@example.com"
+  commit_author_email: "sickle@acme.com"
 
 architecture:
   rules_file: "arch-rules.md"      # relative to /rules/
@@ -362,11 +362,11 @@ pr_description_template: |
 
 # Existing helper scripts (wrapped as subprocesses)
 helpers:
-  fetch_pr_comments: "/opt/sickle-helpers/f/pr_comments/fetch_pr_comments.py"
-  resolve_pr_comments: "/opt/sickle-helpers/f/pr_comments/resolve_pr_comments.py"
-  fetch_ci_failure: "/opt/sickle-helpers/f/ci_failures/fetch_ci_failure.py"
-  fetch_jira_tickets: "/opt/sickle-helpers/f/jira_tickets/fetch_jira_tickets.py"
-  update_jira_status: "/opt/sickle-helpers/f/jira_tickets/update_jira_status.py"
+  fetch_pr_comments: "/opt/sickle-helpers/pr_comments/fetch_pr_comments.py"
+  resolve_pr_comments: "/opt/sickle-helpers/pr_comments/resolve_pr_comments.py"
+  fetch_ci_failure: "/opt/sickle-helpers/ci_failures/fetch_ci_failure.py"
+  fetch_jira_tickets: "/opt/sickle-helpers/jira_tickets/fetch_jira_tickets.py"
+  update_jira_status: "/opt/sickle-helpers/jira_tickets/update_jira_status.py"
 ```
 
 ---

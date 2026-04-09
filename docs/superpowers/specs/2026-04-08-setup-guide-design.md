@@ -127,6 +127,6 @@ Add to the existing Docs section:
 
 ## Out of Scope
 
-- Helper scripts at `/opt/sickle-helpers/f/` — these are environment-specific and optional; Sickle's built-in integration adapters handle the same functionality
+- Helper scripts at `/opt/sickle-helpers/` — these are environment-specific and optional; Sickle's built-in integration adapters handle the same functionality
 - GitLab and Jenkins adapter setup — not yet implemented, will be documented when added
 - Detailed agent authoring guide — separate concern, not needed for setup

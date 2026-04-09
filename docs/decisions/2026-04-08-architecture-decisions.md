@@ -7,7 +7,7 @@ Consolidated decisions from RFC review session (BA + Architect analysis).
 - **Sickle PRD**: `docs/prd.md`
 - **Sickle Architecture**: `docs/architecture.md`
 - **RFC (AJDS)**: Provided in conversation (not saved as file yet)
-- **Existing helpers**: `/opt/sickle-helpers/f/` (GitHub/Acme) and `/opt/sickle-helpers/n/` (GitLab/BetaCo)
+- **Existing helpers**: production-ready scripts under `/opt/sickle-helpers/` (GitHub side) and a parallel GitLab tree.
 
 ---
 
@@ -64,8 +64,8 @@ PR Comment Responder loop:
 
 ```
 /data/
-  /<Company>/                        # e.g., Acme, BRazole
-    /<Repo>/                         # e.g., Managebac, BetaApp
+  /<Company>/                        # e.g., Acme, BetaCo
+    /<Repo>/                         # e.g., Acme Mobile, BetaApp
       /tickets/
         /<ticket_id>/                # e.g., ACME-14567
           /meta/

@@ -8,7 +8,7 @@
 
 ## Executive Summary
 
-18 of 23 required files already exist and are functional. The pipeline is ~60% built but 0% wired. The path to a working end-to-end is: update foundations → add tool execution → wire integrations → test with one real repo (Acme/Managebac on GitHub). GitLab/Jenkins support comes after the core loop works.
+18 of 23 required files already exist and are functional. The pipeline is ~60% built but 0% wired. The path to a working end-to-end is: update foundations → add tool execution → wire integrations → test with one real repo (Acme/Acme Mobile on GitHub). GitLab/Jenkins support comes after the core loop works.
 
 ---
 
@@ -248,7 +248,7 @@ class ToolSandbox:
 
 ## Phase 3: Integration Wiring
 
-> Connect the orchestrator to external systems. First target: GitHub (Acme/Managebac).
+> Connect the orchestrator to external systems. First target: GitHub (Acme/Acme Mobile).
 
 ### Story 3.1: Wire Jira Polling into Orchestrator
 
@@ -396,7 +396,7 @@ class ToolSandbox:
 - Output format: `reports/pr-comments.md`
 - Read-only tools only (no write_file, no run_command)
 
-**Reference:** Port workflow rules from `/opt/sickle-helpers/f/pr_comments/400-pr-review-workflow.mdc`
+**Reference:** Port workflow rules from `/opt/sickle-helpers/pr_comments/400-pr-review-workflow.mdc`
 
 **Acceptance Criteria:**
 - [ ] Agent file created with full BMAD metadata
@@ -405,7 +405,7 @@ class ToolSandbox:
 - [ ] Output format matches contract spec
 - [ ] Resource registry discovers the new agent
 
-### Story 4.3: Create Real Config for Acme/Managebac
+### Story 4.3: Create Real Config for Acme/Acme Mobile
 
 **New files:**
 - `config/global.yaml` (real config, not test fixture)
@@ -416,8 +416,8 @@ class ToolSandbox:
 - Real Jira connection config (env vars for secrets)
 - Real GitHub connection config
 - Real Telegram bot config
-- Helper script paths pointing to `/opt/sickle-helpers/f/`
-- Architecture rules and protected files for Managebac repo
+- Helper script paths pointing to `/opt/sickle-helpers/`
+- Architecture rules and protected files for Acme Mobile repo
 
 **Also create:**
 - `environment.template` updated with all required env vars
@@ -497,12 +497,12 @@ class ToolSandbox:
 ### Story 5.4: Multi-Company Config & Second Repo Test
 
 **New files:**
-- `config/projects/betaapp/project.yaml`
-- `config/projects/betaapp/repos/betaapp.yaml` (or similar GitLab repo)
+- `config/projects/betaco/project.yaml`
+- `config/projects/betaco/repos/betaapp.yaml` (or similar GitLab repo)
 
 **What to build:**
 - Real config for a GitLab-based repo
-- Verify adapter selection works per-repo (GitHub for Acme, GitLab for BRazole)
+- Verify adapter selection works per-repo (GitHub for Acme, GitLab for BetaCo)
 
 **Acceptance Criteria:**
 - [ ] Two companies configured simultaneously

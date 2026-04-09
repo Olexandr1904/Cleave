@@ -9,6 +9,8 @@ from integrations.config.config_tools import (
     resolve_env_var,
     list_projects,
     read_project_config,
+    write_project_config,
+    write_repo_config,
 )
 
 
@@ -121,3 +123,67 @@ class TestReadProjectConfig:
         (tmp_path / "projects").mkdir()
         with pytest.raises(ValueError, match="Invalid project_id"):
             read_project_config(str(tmp_path), bad_id)
+
+
+class TestWriteProjectConfig:
+    def test_writes_project_yaml(self, tmp_path):
+        yaml_content = yaml.dump({
+            "project": {"id": "acme", "name": "Acme Corp", "enabled": True},
+            "jira": {"url": "https://acme.atlassian.net", "project_key": "ACM"},
+        })
+        result = write_project_config(str(tmp_path), "acme", yaml_content)
+        assert result["success"] is True
+
+        written = yaml.safe_load(
+            (tmp_path / "projects" / "acme" / "project.yaml").read_text()
+        )
+        assert written["project"]["id"] == "acme"
+
+    def test_creates_directories(self, tmp_path):
+        yaml_content = yaml.dump({"project": {"id": "new"}})
+        write_project_config(str(tmp_path), "new", yaml_content)
+        assert (tmp_path / "projects" / "new" / "project.yaml").exists()
+
+    def test_invalid_yaml_returns_error(self, tmp_path):
+        result = write_project_config(str(tmp_path), "bad", "{{invalid yaml: [")
+        assert result["success"] is False
+        assert "error" in result
+
+    @pytest.mark.parametrize("bad_id", ["../etc", "foo/bar", "with space", "", "..", ".hidden"])
+    def test_invalid_project_id_rejected(self, tmp_path, bad_id):
+        with pytest.raises(ValueError, match="Invalid project_id"):
+            write_project_config(str(tmp_path), bad_id, "project: {}\n")
+
+
+class TestWriteRepoConfig:
+    def test_writes_repo_yaml(self, tmp_path):
+        yaml_content = yaml.dump({
+            "repo": {"id": "api", "name": "API Service"},
+            "vcs": {"provider": "github"},
+        })
+        result = write_repo_config(str(tmp_path), "acme", "api", yaml_content)
+        assert result["success"] is True
+
+        written = yaml.safe_load(
+            (tmp_path / "projects" / "acme" / "repos" / "api.yaml").read_text()
+        )
+        assert written["repo"]["id"] == "api"
+
+    def test_creates_directories(self, tmp_path):
+        yaml_content = yaml.dump({"repo": {"id": "web"}})
+        write_repo_config(str(tmp_path), "acme", "web", yaml_content)
+        assert (tmp_path / "projects" / "acme" / "repos" / "web.yaml").exists()
+
+    def test_invalid_yaml_returns_error(self, tmp_path):
+        result = write_repo_config(str(tmp_path), "acme", "bad", "{{not yaml")
+        assert result["success"] is False
+
+    @pytest.mark.parametrize("bad_id", ["../etc", "foo/bar", "with space", "", ".."])
+    def test_invalid_project_id_rejected(self, tmp_path, bad_id):
+        with pytest.raises(ValueError, match="Invalid project_id"):
+            write_repo_config(str(tmp_path), bad_id, "api", "repo: {}\n")
+
+    @pytest.mark.parametrize("bad_id", ["../etc", "foo/bar", "with space", ""])
+    def test_invalid_repo_id_rejected(self, tmp_path, bad_id):
+        with pytest.raises(ValueError, match="Invalid repo_id"):
+            write_repo_config(str(tmp_path), "acme", bad_id, "repo: {}\n")

@@ -2,7 +2,7 @@
 
 **Status:** In Progress
 **Created:** 2026-04-08
-**Updated:** 2026-04-08
+**Updated:** 2026-04-09
 **Author:** Oleksandr Brazhenko
 
 ## Description
@@ -15,7 +15,9 @@ A BMAD-style agent (`project-setup-agent`, codename Atlas) that onboards new pro
 - FR2: `resolve_env_var` parses `${VAR_NAME}` references and resolves them from `os.environ`, raising a clear error if unset
 - FR3: `list_projects` scans `{config_dir}/projects/` for subdirectories containing `project.yaml` and returns id/name/repo_count/enabled for each
 - FR4: `read_project_config` returns the parsed `project.yaml` plus all repo YAMLs keyed by repo id
-- FR5: Future: write/remove/validation tools for project and repo configs
+- FR5: `write_project_config` creates `{config_dir}/projects/{project_id}/project.yaml`, validates ID with `PROJECT_ID_PATTERN`, writes YAML, and returns `{success, path}` (or `{success: False, error}` on bad YAML)
+- FR5b: `write_repo_config` creates `{config_dir}/projects/{project_id}/repos/{repo_id}.yaml` with the same ID validation for both project_id and repo_id
+- FR6-future: write/remove/validation tools for project and repo configs (remove, credential validation)
 - FR6: Future: validate credentials against live APIs (Jira, GitHub, GitLab, Jenkins) before writing config
 - FR7: Future: Atlas agent prompt file (`agents/project-setup-agent.md`) with persona, tools, and interactive flow
 - FR8: Future: add/list/remove operations invoked from CLI or orchestrator
@@ -42,7 +44,9 @@ A BMAD-style agent (`project-setup-agent`, codename Atlas) that onboards new pro
 - [x] `read_project_config` returns project + repos dict; raises `FileNotFoundError` on unknown project
 - [x] `read_project_config` rejects `project_id` values outside `[a-zA-Z0-9_-]+` to prevent path traversal from LLM-supplied input
 - [x] `resolve_env_var` delegates to `config.config_loader.resolve_env_vars` so embedded references (e.g. `"Bearer ${TOKEN}"`) resolve consistently with the rest of the codebase
-- [ ] Write functions for project.yaml and repo YAMLs with env var preservation
+- [x] `write_project_config` writes `project.yaml`; rejects invalid project_id; returns success/error dict
+- [x] `write_repo_config` writes `repos/{repo_id}.yaml`; rejects invalid project_id and repo_id; returns success/error dict
+- [ ] Remove project with confirmation (write functions landed without env-var preservation — plain YAML written as-is)
 - [ ] Remove project with confirmation
 - [ ] Credential validation against live APIs for Jira, GitHub, GitLab, Jenkins
 - [ ] Atlas agent prompt file with add/list/remove flows
@@ -54,3 +58,4 @@ A BMAD-style agent (`project-setup-agent`, codename Atlas) that onboards new pro
 |------|-------------|
 | 2026-04-08 | Initial draft — seeded from design spec `2026-04-08-project-setup-agent-design.md`. Task 1 implemented: config tools module with `resolve_env_var`, `list_projects`, `read_project_config` |
 | 2026-04-08 | Task 1 review fixes: path traversal validation in `read_project_config`, `resolve_env_var` now delegates to `config.config_loader.resolve_env_vars` (supports embedded refs), removed unused imports |
+| 2026-04-09 | Task 2 implemented: `write_project_config` and `write_repo_config` with path-traversal validation (PROJECT_ID_PATTERN) for all ID inputs; 21 new tests (42 total) |

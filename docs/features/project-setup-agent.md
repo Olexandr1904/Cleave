@@ -40,6 +40,8 @@ A BMAD-style agent (`project-setup-agent`, codename Atlas) that onboards new pro
 - [x] `resolve_env_var` resolves `${VAR}` from environment; raises on missing var; passes plain strings through
 - [x] `list_projects` returns all projects with id/name/repo_count/enabled; handles missing/empty projects dir
 - [x] `read_project_config` returns project + repos dict; raises `FileNotFoundError` on unknown project
+- [x] `read_project_config` rejects `project_id` values outside `[a-zA-Z0-9_-]+` to prevent path traversal from LLM-supplied input
+- [x] `resolve_env_var` delegates to `config.config_loader.resolve_env_vars` so embedded references (e.g. `"Bearer ${TOKEN}"`) resolve consistently with the rest of the codebase
 - [ ] Write functions for project.yaml and repo YAMLs with env var preservation
 - [ ] Remove project with confirmation
 - [ ] Credential validation against live APIs for Jira, GitHub, GitLab, Jenkins
@@ -51,3 +53,4 @@ A BMAD-style agent (`project-setup-agent`, codename Atlas) that onboards new pro
 | Date | Description |
 |------|-------------|
 | 2026-04-08 | Initial draft — seeded from design spec `2026-04-08-project-setup-agent-design.md`. Task 1 implemented: config tools module with `resolve_env_var`, `list_projects`, `read_project_config` |
+| 2026-04-08 | Task 1 review fixes: path traversal validation in `read_project_config`, `resolve_env_var` now delegates to `config.config_loader.resolve_env_vars` (supports embedded refs), removed unused imports |

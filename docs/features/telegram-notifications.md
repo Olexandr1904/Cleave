@@ -24,6 +24,7 @@ Telegram bot adapter behind the NotifierInterface. Sends formatted notifications
 - FR11: Intent classification includes pipeline context (mode, awaiting approvals, workspaces) to resolve ambiguous commands (e.g., "yes" → approve the one pending workspace)
 - FR12: `/status` command returns pipeline summary (mode, uptime, active workspaces) formatted by `StatusHandler`
 - FR13: Drill-down view shows per-workspace detail: stage, branch, Jira URL, PR URL, iteration counts
+- FR14: TelegramAdapter polling loop routes non-reply text messages to the `CommandHandler` while continuing to match replies back to `wait_for_reply` futures
 
 ## Technical Approach
 
@@ -66,3 +67,4 @@ Telegram bot adapter behind the NotifierInterface. Sends formatted notifications
 | 2026-04-08 | Added ApprovalHandler: find_awaiting() and resolve_next_state() for AWAITING_APPROVAL gate management |
 | 2026-04-08 | Added AnalyzeHandler: validate_tickets() and is_already_active() for manual mode ticket validation |
 | 2026-04-08 | Added CommandHandler: central dispatcher routing parsed intents to StatusHandler, ModeHandler, ApprovalHandler, and AnalyzeHandler |
+| 2026-04-08 | Hooked CommandHandler into TelegramAdapter polling: `_handle_incoming` routes replies to pending futures and all other text to the CommandHandler via `set_command_handler` |

@@ -60,3 +60,8 @@ class TestAdminWorkspace:
 
         loaded = AdminWorkspace(str(admin_dir))
         assert loaded.state.status == "completed"
+
+    def test_update_unknown_field_raises(self, admin_dir):
+        ws = AdminWorkspace.create(str(admin_dir), operation="add")
+        with pytest.raises(ValueError, match="Unknown state field"):
+            ws.update_state(nonexistent_field="value")

@@ -305,7 +305,7 @@ vcs:
   # GitHub-specific
   github:
     token: "${GITHUB_TOKEN_ACME}"
-    owner: "acme-org"
+    owner: "acme-orgcation"
     repo: "acme-mobile"
     default_branch: "develop"
     branch_prefix: "feature"
@@ -324,7 +324,7 @@ ci:
   #   job_key: "compose-plugin"
 
 git:
-  clone_url: "git@github.com:acme-org/acme-mobile.git"
+  clone_url: "git@github.com:acme-orgcation/acme-mobile.git"
   depth: 1                          # shallow clone (0 = full)
   commit_author_name: "Sickle Bot"
   commit_author_email: "sickle@acme.com"
@@ -362,11 +362,11 @@ pr_description_template: |
 
 # Existing helper scripts (wrapped as subprocesses)
 helpers:
-  fetch_pr_comments: "/mnt/shared/ubuntu/f/pr_comments/fetch_pr_comments.py"
-  resolve_pr_comments: "/mnt/shared/ubuntu/f/pr_comments/resolve_pr_comments.py"
-  fetch_ci_failure: "/mnt/shared/ubuntu/f/ci_failures/fetch_ci_failure.py"
-  fetch_jira_tickets: "/mnt/shared/ubuntu/f/jira_tickets/fetch_jira_tickets.py"
-  update_jira_status: "/mnt/shared/ubuntu/f/jira_tickets/update_jira_status.py"
+  fetch_pr_comments: "/opt/sickle-helpers/pr_comments/fetch_pr_comments.py"
+  resolve_pr_comments: "/opt/sickle-helpers/pr_comments/resolve_pr_comments.py"
+  fetch_ci_failure: "/opt/sickle-helpers/ci_failures/fetch_ci_failure.py"
+  fetch_jira_tickets: "/opt/sickle-helpers/jira_tickets/fetch_jira_tickets.py"
+  update_jira_status: "/opt/sickle-helpers/jira_tickets/update_jira_status.py"
 ```
 
 ---

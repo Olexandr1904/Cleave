@@ -396,7 +396,7 @@ class ToolSandbox:
 - Output format: `reports/pr-comments.md`
 - Read-only tools only (no write_file, no run_command)
 
-**Reference:** Port workflow rules from `/mnt/shared/ubuntu/f/pr_comments/400-pr-review-workflow.mdc`
+**Reference:** Port workflow rules from `/opt/sickle-helpers/pr_comments/400-pr-review-workflow.mdc`
 
 **Acceptance Criteria:**
 - [ ] Agent file created with full BMAD metadata
@@ -416,7 +416,7 @@ class ToolSandbox:
 - Real Jira connection config (env vars for secrets)
 - Real GitHub connection config
 - Real Telegram bot config
-- Helper script paths pointing to `/mnt/shared/ubuntu/f/`
+- Helper script paths pointing to `/opt/sickle-helpers/`
 - Architecture rules and protected files for Acme Mobile repo
 
 **Also create:**

@@ -7,7 +7,7 @@ Consolidated decisions from RFC review session (BA + Architect analysis).
 - **Sickle PRD**: `docs/prd.md`
 - **Sickle Architecture**: `docs/architecture.md`
 - **RFC (AJDS)**: Provided in conversation (not saved as file yet)
-- **Existing helpers**: `/mnt/shared/ubuntu/f/` (GitHub/Acme) and `/mnt/shared/ubuntu/n/` (GitLab/BetaCo)
+- **Existing helpers**: production-ready scripts under `/opt/sickle-helpers/` (GitHub side) and a parallel GitLab tree.
 
 ---
 
@@ -90,7 +90,7 @@ PR Comment Responder loop:
 
 ## Existing Helpers Mapping
 
-Production-ready scripts from `/mnt/shared/ubuntu/`:
+Production-ready scripts from `/opt/sickle-helpers/`:
 
 | Tool | File | Maps to |
 |------|------|---------|

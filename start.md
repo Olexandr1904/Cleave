@@ -165,7 +165,7 @@ logging:
 ```yaml
 project:
   id: "acme"
-  name: "Acme Education Platform"
+  name: "Acme Corp"
   enabled: true
 
 jira:
@@ -200,19 +200,19 @@ defaults:
 ```yaml
 repo:
   id: "android-app"
-  name: "Acme Android App"
+  name: "Acme Mobile App"
   enabled: true
 
 github:
   token: "${ACME_GITHUB_TOKEN}"
-  owner: "acme-edu"
+  owner: "acme-org"
   repo: "android-app"
   default_branch: "develop"
   branch_prefix: "feature"              # branches: feature/ACME-123-slug
   merge_method: "squash"                # "merge" | "squash" | "rebase"
 
 git:
-  clone_url: "git@github.com:acme-edu/android-app.git"
+  clone_url: "git@github.com:acme-org/android-app.git"
   commit_author_name: "Claude Code"
   commit_author_email: "claude@anthropic.com"
   depth: 0                              # 0 = full clone; N = shallow clone depth

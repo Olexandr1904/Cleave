@@ -82,3 +82,4 @@ A BMAD-style agent (`project-setup-agent`, codename Atlas) that onboards new pro
 | 2026-04-09 | Task 7 implemented: Atlas agent definition in `agents/project-setup-agent.md` (BMAD-style frontmatter + conversational add/list/remove flows); verified discoverable via `config.resource_registry` |
 | 2026-04-09 | Task 8 implemented: Three Claude Code slash commands (`add-project`, `list-projects`, `remove-project`) in `.claude/commands/` — entry points that delegate to the Atlas agent prompt |
 | 2026-04-09 | Task 9 verification: full unit suite 425/425 passing; agent registry discovers `project-setup-agent` with 9 tools; tool definitions complete (9/9); feature complete |
+| 2026-04-09 | Example-update: replaced real deployment identifiers in the Atlas prompt's example project ID and display name with generic placeholders (part of repo public-release scrub) |

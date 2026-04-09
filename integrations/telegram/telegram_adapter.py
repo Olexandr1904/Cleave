@@ -28,11 +28,16 @@ class TelegramAdapter(NotifierInterface):
         self._command_handler = handler
 
     async def send_message(self, chat_id: str, message: str) -> int:
-        """Send a message and return the message ID."""
+        """Send a message and return the message ID.
+
+        Sends as plain text (no parse_mode) so that user-facing content like
+        branch names, BA/QA report excerpts, and LLM-generated replies can
+        contain characters such as _, *, and backticks without triggering
+        Telegram's Markdown parser and returning 400 Bad Request.
+        """
         msg = await self._bot.send_message(
             chat_id=chat_id,
             text=message,
-            parse_mode="Markdown",
         )
         logger.info("Sent Telegram message %d to chat %s", msg.message_id, chat_id)
         return msg.message_id

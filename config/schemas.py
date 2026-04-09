@@ -69,7 +69,6 @@ class PipelineConfig:
 
 @dataclass
 class IntentParserConfig:
-    max_tokens: int = 200
     timeout_seconds: int = 5
 
 

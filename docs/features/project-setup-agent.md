@@ -24,8 +24,13 @@ A BMAD-style agent (`project-setup-agent`, codename Atlas) that onboards new pro
   - [x] `validate_github`: hits `https://api.github.com/repos/{owner}/{repo}` with Bearer token; returns full_name and default_branch
   - [x] `validate_gitlab`: hits `{url}/api/v4/projects/{project_id}` with Private-Token header; returns project name
   - [x] `validate_jenkins`: hits `{url}/job/{job_key}/api/json` with Basic auth; returns job displayName
-- FR7: Future: Atlas agent prompt file (`agents/project-setup-agent.md`) with persona, tools, and interactive flow
-- FR8: Future: add/list/remove operations invoked from CLI or orchestrator
+- FR7: Config tools registered as sandboxed tools in `orchestrator/tool_sandbox.py` with handlers, allowlist entries, and Claude API tool definitions
+  - [x] All 9 config tools added to `ALL_TOOLS` allowlist
+  - [x] Handler methods `_tool_*` implemented for all 9 tools
+  - [x] Tool definitions with `input_schema` / `required` added to `get_tool_definitions`
+  - [x] Config tools bypass workspace path confinement (operate on `config_dir` directly — by design)
+- FR8: Future: Atlas agent prompt file (`agents/project-setup-agent.md`) with persona, tools, and interactive flow
+- FR9: Future: add/list/remove operations invoked from CLI or orchestrator
 
 ## Technical Approach
 
@@ -54,6 +59,7 @@ A BMAD-style agent (`project-setup-agent`, codename Atlas) that onboards new pro
 - [x] `remove_project` backs up project to `.backups/` before removal; backup failure leaves project intact; rejects invalid project_id via `PROJECT_ID_PATTERN`
 - [ ] Remove project with user confirmation (CLI/agent flow — not yet wired)
 - [x] Credential validation against live APIs for Jira, GitHub, GitLab, Jenkins
+- [x] Config tools registered in tool sandbox (FR7)
 - [ ] Atlas agent prompt file with add/list/remove flows
 - [ ] CLI / orchestrator entry point to launch the agent
 
@@ -69,3 +75,4 @@ A BMAD-style agent (`project-setup-agent`, codename Atlas) that onboards new pro
 | 2026-04-09 | Task 3 review fix: `rmtree` failure now returns an error dict (preserves return contract); added tests for backup-failure and rmtree-failure guards; microsecond timestamp avoids second-level collisions |
 | 2026-04-09 | Task 4 implemented: four async validation functions (validate_jira/github/gitlab/jenkins) using httpx; 11 new tests (64 total) |
 | 2026-04-09 | Task 4 review fix: broadened `httpx.ConnectError` catches to `httpx.RequestError` (preserves return contract on read/write/protocol errors); URL-encode path segments (project_key, owner, repo, gitlab project_id, jenkins job_key) to prevent path injection; 5 new tests (69 total) |
+| 2026-04-09 | Task 5 implemented: registered 9 config tools in orchestrator/tool_sandbox.py with handlers, tool definitions, and allowlist entries; new test file tests/unit/test_tool_sandbox_config.py |

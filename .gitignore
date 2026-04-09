@@ -35,4 +35,5 @@ package-lock.json
 Thumbs.db
 
 # Claude Code
-.claude/
+.claude/*
+!.claude/commands/

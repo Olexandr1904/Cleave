@@ -109,3 +109,78 @@ def read_project_config(config_dir: str, project_id: str) -> dict[str, Any]:
                 repos[repo_id] = repo_data
 
     return {"project": project_data, "repos": repos}
+
+
+def write_project_config(
+    config_dir: str, project_id: str, yaml_content: str
+) -> dict[str, Any]:
+    """Write project.yaml for a project.
+
+    Creates the project directory if needed. Validates the YAML by reading it
+    back after writing.
+
+    Raises:
+        ValueError: If project_id contains characters other than alphanumerics,
+            hyphens, or underscores.
+
+    Returns:
+        Dict with keys: success (bool), path (str), error (str, if failed).
+    """
+    if not project_id or not PROJECT_ID_PATTERN.match(project_id):
+        raise ValueError(
+            f"Invalid project_id '{project_id}': must contain only alphanumerics, "
+            f"hyphens, and underscores."
+        )
+
+    proj_dir = Path(config_dir) / "projects" / project_id
+    proj_dir.mkdir(parents=True, exist_ok=True)
+    project_file = proj_dir / "project.yaml"
+
+    project_file.write_text(yaml_content, encoding="utf-8")
+
+    try:
+        yaml.safe_load(project_file.read_text(encoding="utf-8"))
+    except yaml.YAMLError as e:
+        return {"success": False, "path": str(project_file), "error": str(e)}
+
+    return {"success": True, "path": str(project_file)}
+
+
+def write_repo_config(
+    config_dir: str, project_id: str, repo_id: str, yaml_content: str
+) -> dict[str, Any]:
+    """Write a repo config file for a project.
+
+    Creates the repos directory if needed. Validates the YAML by reading it
+    back after writing.
+
+    Raises:
+        ValueError: If project_id or repo_id contains characters other than
+            alphanumerics, hyphens, or underscores.
+
+    Returns:
+        Dict with keys: success (bool), path (str), error (str, if failed).
+    """
+    if not project_id or not PROJECT_ID_PATTERN.match(project_id):
+        raise ValueError(
+            f"Invalid project_id '{project_id}': must contain only alphanumerics, "
+            f"hyphens, and underscores."
+        )
+    if not repo_id or not PROJECT_ID_PATTERN.match(repo_id):
+        raise ValueError(
+            f"Invalid repo_id '{repo_id}': must contain only alphanumerics, "
+            f"hyphens, and underscores."
+        )
+
+    repos_dir = Path(config_dir) / "projects" / project_id / "repos"
+    repos_dir.mkdir(parents=True, exist_ok=True)
+    repo_file = repos_dir / f"{repo_id}.yaml"
+
+    repo_file.write_text(yaml_content, encoding="utf-8")
+
+    try:
+        yaml.safe_load(repo_file.read_text(encoding="utf-8"))
+    except yaml.YAMLError as e:
+        return {"success": False, "path": str(repo_file), "error": str(e)}
+
+    return {"success": True, "path": str(repo_file)}

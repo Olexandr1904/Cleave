@@ -119,6 +119,49 @@ class ClaudeAdapter(LLMInterface):
         )
         return result
 
+    async def quick_query(
+        self,
+        prompt: str,
+        system: str = "",
+        timeout: int = 5,
+    ) -> str:
+        """Lightweight prompt-to-response call. No tools, single turn, short timeout.
+
+        Used for intent parsing and other quick classification tasks. Matches
+        the signature of ClaudeCodeAdapter.quick_query so IntentParser can use
+        either adapter interchangeably.
+
+        Args:
+            prompt: The user message to classify.
+            system: System prompt with context.
+            timeout: Timeout in seconds (default 5).
+
+        Returns:
+            The raw text response from Claude.
+        """
+        kwargs: dict[str, Any] = {
+            "model": self._default_model,
+            "max_tokens": 200,
+            "messages": [{"role": "user", "content": prompt}],
+        }
+        if system:
+            kwargs["system"] = system
+
+        logger.info("Claude API quick_query: model=%s", self._default_model)
+        try:
+            response = await asyncio.wait_for(
+                self._client.messages.create(**kwargs),
+                timeout=timeout,
+            )
+        except asyncio.TimeoutError:
+            raise RuntimeError(f"Claude API quick_query timed out after {timeout}s")
+
+        text = ""
+        for block in response.content:
+            if block.type == "text":
+                text += block.text
+        return text.strip()
+
     def supports_extended_thinking(self) -> bool:
         """Claude supports extended thinking."""
         return True

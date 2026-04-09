@@ -120,7 +120,7 @@ class TestWriteProjectConfigTool:
             "project_id": "test",
             "yaml_content": yaml_content,
         }))
-        assert "written" in result.lower() or "success" in result.lower()
+        assert "Successfully written to" in result
         assert (cfg / "projects" / "test" / "project.yaml").exists()
 
 
@@ -136,7 +136,7 @@ class TestWriteRepoConfigTool:
             "repo_id": "api",
             "yaml_content": yaml_content,
         }))
-        assert "written" in result.lower() or "success" in result.lower()
+        assert "Successfully written to" in result
         assert (cfg / "projects" / "acme" / "repos" / "api.yaml").exists()
 
 
@@ -147,7 +147,8 @@ class TestRemoveProjectTool:
             "config_dir": str(config_dir),
             "project_id": "acme",
         }))
-        assert "removed" in result.lower() or "backup" in result.lower()
+        assert "Removed project 'acme'" in result
+        assert "Backup at:" in result
         assert not (config_dir / "projects" / "acme").exists()
 
 
@@ -164,7 +165,7 @@ class TestValidateJiraTool:
             "email": "bot@acme.com",
             "project_key": "ACM",
         }))
-        assert "OK" in result
+        assert result.startswith("OK: Jira project 'Acme'")
 
     @respx.mock
     def test_validate_jira_auth_failure_via_sandbox(self, workspace):
@@ -178,7 +179,8 @@ class TestValidateJiraTool:
             "email": "bot@acme.com",
             "project_key": "ACM",
         }))
-        assert "FAILED" in result or "401" in result
+        assert result.startswith("FAILED:")
+        assert "401" in result
 
 
 class TestMissingRequiredParam:
@@ -186,3 +188,54 @@ class TestMissingRequiredParam:
         sandbox = ToolSandbox(str(workspace), ["list_projects"])
         with pytest.raises(ToolError, match="config_dir"):
             run(sandbox.execute_tool("list_projects", {}))
+
+    def test_validate_jira_missing_url_raises(self, workspace):
+        sandbox = ToolSandbox(str(workspace), ["validate_jira"])
+        with pytest.raises(ToolError, match="validate_jira requires"):
+            run(sandbox.execute_tool("validate_jira", {
+                "token": "t", "email": "e@x.com", "project_key": "K",
+            }))
+
+    def test_validate_github_missing_owner_raises(self, workspace):
+        sandbox = ToolSandbox(str(workspace), ["validate_github"])
+        with pytest.raises(ToolError, match="validate_github requires"):
+            run(sandbox.execute_tool("validate_github", {
+                "token": "t", "repo": "r",
+            }))
+
+    def test_validate_gitlab_missing_project_id_raises(self, workspace):
+        sandbox = ToolSandbox(str(workspace), ["validate_gitlab"])
+        with pytest.raises(ToolError, match="validate_gitlab requires"):
+            run(sandbox.execute_tool("validate_gitlab", {"token": "t"}))
+
+    def test_validate_jenkins_missing_job_key_raises(self, workspace):
+        sandbox = ToolSandbox(str(workspace), ["validate_jenkins"])
+        with pytest.raises(ToolError, match="validate_jenkins requires"):
+            run(sandbox.execute_tool("validate_jenkins", {
+                "url": "https://jenkins.x", "username": "u", "token": "t",
+            }))
+
+
+class TestInvalidIdRaisesToolError:
+    def test_write_project_config_invalid_id_raises(self, workspace, tmp_path):
+        cfg = tmp_path / "cfg"
+        cfg.mkdir()
+        sandbox = ToolSandbox(str(workspace), ["write_project_config"])
+        with pytest.raises(ToolError, match="Invalid project_id"):
+            run(sandbox.execute_tool("write_project_config", {
+                "config_dir": str(cfg),
+                "project_id": "../etc/passwd",
+                "yaml_content": "project: {id: x}",
+            }))
+
+    def test_write_repo_config_invalid_repo_id_raises(self, workspace, tmp_path):
+        cfg = tmp_path / "cfg"
+        cfg.mkdir()
+        sandbox = ToolSandbox(str(workspace), ["write_repo_config"])
+        with pytest.raises(ToolError, match="Invalid repo_id"):
+            run(sandbox.execute_tool("write_repo_config", {
+                "config_dir": str(cfg),
+                "project_id": "acme",
+                "repo_id": "../evil",
+                "yaml_content": "repo: {id: x}",
+            }))

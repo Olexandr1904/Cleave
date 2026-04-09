@@ -6,38 +6,35 @@ in the config-live/ directory.
 
 from __future__ import annotations
 
-import logging
-import os
 import re
 from pathlib import Path
 from typing import Any
 
 import yaml
 
-logger = logging.getLogger(__name__)
+from config.config_loader import ConfigError, resolve_env_vars
 
-ENV_VAR_PATTERN = re.compile(r"^\$\{([A-Za-z_][A-Za-z0-9_]*)\}$")
+PROJECT_ID_PATTERN = re.compile(r"^[a-zA-Z0-9_-]+$")
 
 
 def resolve_env_var(value: str) -> str:
-    """Resolve a ${VAR_NAME} reference from the environment.
+    """Resolve ${VAR_NAME} references in a string value.
 
-    If the value matches the pattern ${VAR_NAME}, look it up in os.environ.
-    Plain strings are returned as-is.
+    Delegates to config.config_loader.resolve_env_vars so that behavior
+    stays consistent with the rest of the codebase (including support for
+    embedded references like "Bearer ${TOKEN}"). The underlying ConfigError
+    is re-raised as ValueError because tool sandbox callers expect a stdlib
+    exception type.
 
     Raises:
-        ValueError: If the env var is not set.
+        ValueError: If a referenced environment variable is not set.
     """
     if not value:
         return value
-    match = ENV_VAR_PATTERN.match(value)
-    if not match:
-        return value
-    var_name = match.group(1)
-    val = os.environ.get(var_name)
-    if val is None:
-        raise ValueError(f"Environment variable `{var_name}` is not set.")
-    return val
+    try:
+        return resolve_env_vars(value)
+    except ConfigError as e:
+        raise ValueError(str(e)) from e
 
 
 def list_projects(config_dir: str) -> list[dict[str, Any]]:
@@ -85,8 +82,16 @@ def read_project_config(config_dir: str, project_id: str) -> dict[str, Any]:
         Dict with keys: project (parsed project.yaml), repos (dict of repo_id -> parsed yaml).
 
     Raises:
+        ValueError: If project_id contains characters other than alphanumerics,
+            hyphens, or underscores (prevents path traversal from LLM-supplied input).
         FileNotFoundError: If the project directory or project.yaml doesn't exist.
     """
+    if not project_id or not PROJECT_ID_PATTERN.match(project_id):
+        raise ValueError(
+            f"Invalid project_id '{project_id}': must contain only alphanumerics, "
+            f"hyphens, and underscores."
+        )
+
     proj_dir = Path(config_dir) / "projects" / project_id
     project_file = proj_dir / "project.yaml"
     if not project_file.exists():

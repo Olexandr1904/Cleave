@@ -62,3 +62,4 @@ A BMAD-style agent (`project-setup-agent`, codename Atlas) that onboards new pro
 | 2026-04-09 | Task 2 implemented: `write_project_config` and `write_repo_config` with path-traversal validation (PROJECT_ID_PATTERN) for all ID inputs; 21 new tests (42 total) |
 | 2026-04-09 | Task 2 review fix: changed write-then-validate to validate-then-write so invalid YAML leaves no corrupt files or orphan directories on disk; strengthened tests to assert no side-effects on bad YAML |
 | 2026-04-09 | Task 3 implemented: `remove_project` with timestamped backup to `.backups/`, OSError guard (no removal if backup fails), and `PROJECT_ID_PATTERN` validation; 8 new tests (52 total) |
+| 2026-04-09 | Task 3 review fix: `rmtree` failure now returns an error dict (preserves return contract); added tests for backup-failure and rmtree-failure guards; microsecond timestamp avoids second-level collisions |

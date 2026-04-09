@@ -92,7 +92,7 @@ Edit `.env` and fill in all values. The file is in `.gitignore` — it is never 
 Sickle uses a 3-level YAML config cascade. Lower levels override higher levels; unset fields inherit from the parent.
 
 ```
-config-live/
+config-live/                     # Your deployment (gitignored)
   global.yaml                    # Telegram, Claude, workspaces, logging, operator profile
   projects/
     {project-id}/
@@ -101,13 +101,19 @@ config-live/
         {repo-id}.yaml           # VCS, CI, git, architecture, linting, testing, build
 ```
 
+A clean, documented template is tracked at `config-live.example/`. Copy it to get started:
+
+```bash
+cp -r config-live.example config-live
+```
+
 Secrets are referenced as `${ENV_VAR}` in YAML and resolved at load time from `.env`.
 
 ### Adding your own project
 
-1. Create a project directory: `config-live/projects/{your-project-id}/`
-2. Create `project.yaml` with Jira config (see `config-live/projects/acme/project.yaml` as example)
-3. Create `repos/{your-repo-id}.yaml` with VCS, CI, and quality gate config (see `config-live/projects/acme/repos/acme-mobile.yaml` as example)
+1. Rename (or create) `config-live/projects/{your-project-id}/`
+2. Edit `project.yaml` with your Jira config — see `config-live.example/projects/example-project/project.yaml` as a reference
+3. Edit `repos/{your-repo-id}.yaml` with VCS, CI, and quality gate config — see `config-live.example/projects/example-project/repos/example-repo.yaml` as a reference
 
 ### Key fields to customize per repo
 
@@ -151,7 +157,7 @@ source .env && python main.py --config config-live --dry-run
 ### Single project / repo
 
 ```bash
-source .env && python main.py --config config-live --project acme --repo acme-mobile
+source .env && python main.py --config config-live --project <your-project-id> --repo <your-repo-id>
 ```
 
 ### Run tests

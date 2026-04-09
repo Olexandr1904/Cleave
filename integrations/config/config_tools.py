@@ -133,15 +133,15 @@ def write_project_config(
         )
 
     proj_dir = Path(config_dir) / "projects" / project_id
-    proj_dir.mkdir(parents=True, exist_ok=True)
     project_file = proj_dir / "project.yaml"
 
-    project_file.write_text(yaml_content, encoding="utf-8")
-
     try:
-        yaml.safe_load(project_file.read_text(encoding="utf-8"))
+        yaml.safe_load(yaml_content)
     except yaml.YAMLError as e:
         return {"success": False, "path": str(project_file), "error": str(e)}
+
+    proj_dir.mkdir(parents=True, exist_ok=True)
+    project_file.write_text(yaml_content, encoding="utf-8")
 
     return {"success": True, "path": str(project_file)}
 
@@ -173,14 +173,14 @@ def write_repo_config(
         )
 
     repos_dir = Path(config_dir) / "projects" / project_id / "repos"
-    repos_dir.mkdir(parents=True, exist_ok=True)
     repo_file = repos_dir / f"{repo_id}.yaml"
 
-    repo_file.write_text(yaml_content, encoding="utf-8")
-
     try:
-        yaml.safe_load(repo_file.read_text(encoding="utf-8"))
+        yaml.safe_load(yaml_content)
     except yaml.YAMLError as e:
         return {"success": False, "path": str(repo_file), "error": str(e)}
+
+    repos_dir.mkdir(parents=True, exist_ok=True)
+    repo_file.write_text(yaml_content, encoding="utf-8")
 
     return {"success": True, "path": str(repo_file)}

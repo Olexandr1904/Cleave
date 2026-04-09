@@ -44,8 +44,8 @@ A BMAD-style agent (`project-setup-agent`, codename Atlas) that onboards new pro
 - [x] `read_project_config` returns project + repos dict; raises `FileNotFoundError` on unknown project
 - [x] `read_project_config` rejects `project_id` values outside `[a-zA-Z0-9_-]+` to prevent path traversal from LLM-supplied input
 - [x] `resolve_env_var` delegates to `config.config_loader.resolve_env_vars` so embedded references (e.g. `"Bearer ${TOKEN}"`) resolve consistently with the rest of the codebase
-- [x] `write_project_config` writes `project.yaml`; rejects invalid project_id; returns success/error dict
-- [x] `write_repo_config` writes `repos/{repo_id}.yaml`; rejects invalid project_id and repo_id; returns success/error dict
+- [x] `write_project_config` writes `project.yaml`; rejects invalid project_id; validates YAML in memory before writing (no corrupt files left on disk); returns success/error dict
+- [x] `write_repo_config` writes `repos/{repo_id}.yaml`; rejects invalid project_id and repo_id; validates YAML in memory before writing; returns success/error dict
 - [ ] Remove project with confirmation (write functions landed without env-var preservation — plain YAML written as-is)
 - [ ] Remove project with confirmation
 - [ ] Credential validation against live APIs for Jira, GitHub, GitLab, Jenkins
@@ -59,3 +59,4 @@ A BMAD-style agent (`project-setup-agent`, codename Atlas) that onboards new pro
 | 2026-04-08 | Initial draft — seeded from design spec `2026-04-08-project-setup-agent-design.md`. Task 1 implemented: config tools module with `resolve_env_var`, `list_projects`, `read_project_config` |
 | 2026-04-08 | Task 1 review fixes: path traversal validation in `read_project_config`, `resolve_env_var` now delegates to `config.config_loader.resolve_env_vars` (supports embedded refs), removed unused imports |
 | 2026-04-09 | Task 2 implemented: `write_project_config` and `write_repo_config` with path-traversal validation (PROJECT_ID_PATTERN) for all ID inputs; 21 new tests (42 total) |
+| 2026-04-09 | Task 2 review fix: changed write-then-validate to validate-then-write so invalid YAML leaves no corrupt files or orphan directories on disk; strengthened tests to assert no side-effects on bad YAML |

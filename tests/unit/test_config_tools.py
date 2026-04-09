@@ -148,6 +148,8 @@ class TestWriteProjectConfig:
         result = write_project_config(str(tmp_path), "bad", "{{invalid yaml: [")
         assert result["success"] is False
         assert "error" in result
+        assert not (tmp_path / "projects" / "bad" / "project.yaml").exists()
+        assert not (tmp_path / "projects" / "bad").exists()
 
     @pytest.mark.parametrize("bad_id", ["../etc", "foo/bar", "with space", "", "..", ".hidden"])
     def test_invalid_project_id_rejected(self, tmp_path, bad_id):
@@ -177,13 +179,15 @@ class TestWriteRepoConfig:
     def test_invalid_yaml_returns_error(self, tmp_path):
         result = write_repo_config(str(tmp_path), "acme", "bad", "{{not yaml")
         assert result["success"] is False
+        assert not (tmp_path / "projects" / "acme" / "repos" / "bad.yaml").exists()
+        assert not (tmp_path / "projects" / "acme").exists()
 
     @pytest.mark.parametrize("bad_id", ["../etc", "foo/bar", "with space", "", ".."])
     def test_invalid_project_id_rejected(self, tmp_path, bad_id):
         with pytest.raises(ValueError, match="Invalid project_id"):
             write_repo_config(str(tmp_path), bad_id, "api", "repo: {}\n")
 
-    @pytest.mark.parametrize("bad_id", ["../etc", "foo/bar", "with space", ""])
+    @pytest.mark.parametrize("bad_id", ["../etc", "foo/bar", "with space", "", ".."])
     def test_invalid_repo_id_rejected(self, tmp_path, bad_id):
         with pytest.raises(ValueError, match="Invalid repo_id"):
             write_repo_config(str(tmp_path), "acme", bad_id, "repo: {}\n")

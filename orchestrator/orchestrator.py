@@ -14,6 +14,7 @@ from config.resource_registry import ResourceRegistry
 from integrations.base.notifier import NotifierInterface
 from integrations.base.tracker import TicketData, TrackerInterface
 from integrations.base.vcs import VCSInterface
+from integrations.telegram.handlers.mode import ModeHandler
 from orchestrator.agent_runtime import AgentRuntime
 from orchestrator.pr_creation import create_pr
 from orchestrator.ticket_prioritizer import PrioritizedTicket, prioritize_tickets
@@ -31,6 +32,9 @@ logger = logging.getLogger(__name__)
 
 class Orchestrator:
     """Main daemon loop — poll for tickets, manage slots, advance workspaces."""
+
+    # Approval gate stages in manual mode
+    _APPROVAL_GATE_STATES = {"ANALYSIS", "QA", "PR_REVIEW"}
 
     def __init__(
         self,
@@ -59,12 +63,24 @@ class Orchestrator:
         self._shutdown_event = asyncio.Event()
         # Map repo_id -> (VCSInterface, RepoConfig) for per-repo VCS
         self._repo_vcs: dict[str, tuple[VCSInterface, RepoConfig]] = {}
+        # Mode handler — initialized later via set_mode_handler or from config default
+        self._mode_handler: ModeHandler | None = None
 
     def register_repo_vcs(
         self, repo_id: str, vcs: VCSInterface, repo_config: RepoConfig,
     ) -> None:
         """Register a VCS adapter for a specific repo."""
         self._repo_vcs[repo_id] = (vcs, repo_config)
+
+    def set_mode_handler(self, handler: ModeHandler) -> None:
+        """Register the mode handler for auto/manual switching."""
+        self._mode_handler = handler
+
+    def _should_approval_gate(self, completed_state: str) -> bool:
+        """Check if the workspace should pause for approval after this state."""
+        if not self._mode_handler or self._mode_handler.get_mode() != "manual":
+            return False
+        return completed_state in self._APPROVAL_GATE_STATES
 
     def _get_repo_config(self, workspace: Workspace) -> RepoConfig | None:
         """Find the RepoConfig matching a workspace."""
@@ -126,8 +142,11 @@ class Orchestrator:
 
     async def poll_cycle(self) -> None:
         """Single poll + advance cycle."""
-        # 1. Poll for new tickets and create workspaces
-        if self._tracker:
+        # 1. Poll for new tickets and create workspaces (skip in manual mode)
+        is_manual = bool(
+            self._mode_handler and self._mode_handler.get_mode() == "manual"
+        )
+        if self._tracker and not is_manual:
             await self._poll_and_create_workspaces()
 
         # 2. Advance active workspaces
@@ -283,6 +302,9 @@ class Orchestrator:
         if current == "BLOCKED":
             return  # Waiting for human reply
 
+        if current == "AWAITING_APPROVAL":
+            return  # Waiting for operator approval
+
         if current in ("DONE", "FAILED", "ARCHIVED"):
             return  # Terminal
 
@@ -346,7 +368,16 @@ class Orchestrator:
         next_stage = get_next_stage(stage_id, self._workflow, outcome)
 
         if next_stage:
-            self._advance_to_stage(workspace, next_stage)
+            # Check for approval gate in manual mode
+            current_state = workspace.state.current_state
+            if self._should_approval_gate(current_state):
+                workspace.transition("AWAITING_APPROVAL")
+                if self._notifier:
+                    chat_id = self._get_chat_id(workspace)
+                    summary = self._build_gate_summary(workspace, current_state)
+                    await self._notifier.send_message(chat_id, summary)
+            else:
+                self._advance_to_stage(workspace, next_stage)
         else:
             workspace.transition("DONE")
 
@@ -437,8 +468,15 @@ class Orchestrator:
             return
 
         if not comments:
-            # No comments -> done
-            workspace.transition("DONE")
+            # No comments -> done (or gate for approval in manual mode)
+            if self._should_approval_gate("PR_REVIEW"):
+                workspace.transition("AWAITING_APPROVAL")
+                if self._notifier:
+                    chat_id = self._get_chat_id(workspace)
+                    summary = self._build_gate_summary(workspace, "PR_REVIEW")
+                    await self._notifier.send_message(chat_id, summary)
+            else:
+                workspace.transition("DONE")
             return
 
         # Write comments to reports for PR Comment Responder agent
@@ -545,6 +583,44 @@ class Orchestrator:
             workspace.transition(state_name)
         else:
             logger.warning("Cannot map stage '%s' to state", stage_id)
+
+    def _build_gate_summary(self, workspace: Workspace, gate_state: str) -> str:
+        """Build a summary message for an approval gate notification."""
+        state = workspace.state
+        ticket_id = state.ticket_id
+
+        if gate_state == "ANALYSIS":
+            ba_report = workspace.reports_dir / "ba-agent-output.md"
+            summary = ""
+            if ba_report.exists():
+                content = ba_report.read_text(encoding="utf-8")
+                summary = content[:500]
+            return (
+                f"[{state.company_id}/{state.repo_id}] {ticket_id}\n\n"
+                f"Analysis complete. Here's the plan:\n{summary}\n\n"
+                f"Proceed to development?"
+            )
+
+        if gate_state == "QA":
+            qa_report = workspace.reports_dir / "qa-agent-output.md"
+            summary = ""
+            if qa_report.exists():
+                content = qa_report.read_text(encoding="utf-8")
+                summary = content[:500]
+            return (
+                f"[{state.company_id}/{state.repo_id}] {ticket_id}\n\n"
+                f"Tests pass.\n{summary}\n\n"
+                f"Push and open PR?"
+            )
+
+        if gate_state == "PR_REVIEW":
+            return (
+                f"[{state.company_id}/{state.repo_id}] {ticket_id}\n\n"
+                f"PR review complete. PR: {state.pr_url or 'N/A'}\n\n"
+                f"Finalize and merge?"
+            )
+
+        return f"{ticket_id}: Awaiting approval at {gate_state}."
 
     def _parse_agent_outcome(
         self, stage_id: str, output: str, workspace: Workspace,

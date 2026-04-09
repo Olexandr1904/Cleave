@@ -1,6 +1,6 @@
 # Feature: Project Setup Agent (Atlas)
 
-**Status:** In Progress
+**Status:** Complete
 **Created:** 2026-04-08
 **Updated:** 2026-04-09
 **Author:** Oleksandr Brazhenko
@@ -57,11 +57,12 @@ A BMAD-style agent (`project-setup-agent`, codename Atlas) that onboards new pro
 - [x] `write_project_config` writes `project.yaml`; rejects invalid project_id; validates YAML in memory before writing (no corrupt files left on disk); returns success/error dict
 - [x] `write_repo_config` writes `repos/{repo_id}.yaml`; rejects invalid project_id and repo_id; validates YAML in memory before writing; returns success/error dict
 - [x] `remove_project` backs up project to `.backups/` before removal; backup failure leaves project intact; rejects invalid project_id via `PROJECT_ID_PATTERN`
-- [ ] Remove project with user confirmation (CLI/agent flow — not yet wired)
+- [x] Remove project with user confirmation (wired via Atlas Operation: Remove and `/remove-project` slash command)
 - [x] Credential validation against live APIs for Jira, GitHub, GitLab, Jenkins
 - [x] Config tools registered in tool sandbox (FR7)
-- [ ] Atlas agent prompt file with add/list/remove flows
-- [ ] CLI / orchestrator entry point to launch the agent
+- [x] Atlas agent prompt file with add/list/remove flows
+- [x] CLI / orchestrator entry point to launch the agent (Claude Code slash commands: `/add-project`, `/list-projects`, `/remove-project`)
+- [x] `AdminWorkspace` type for non-ticket agent operations
 
 ## Change Log
 
@@ -80,3 +81,4 @@ A BMAD-style agent (`project-setup-agent`, codename Atlas) that onboards new pro
 | 2026-04-09 | Task 6 implemented: `AdminWorkspace` and `AdminWorkspaceState` in `workspace/workspace.py` for non-ticket agent operations (no source/ dir, simple pending/in_progress/completed/failed lifecycle); 8 new tests |
 | 2026-04-09 | Task 7 implemented: Atlas agent definition in `agents/project-setup-agent.md` (BMAD-style frontmatter + conversational add/list/remove flows); verified discoverable via `config.resource_registry` |
 | 2026-04-09 | Task 8 implemented: Three Claude Code slash commands (`add-project`, `list-projects`, `remove-project`) in `.claude/commands/` — entry points that delegate to the Atlas agent prompt |
+| 2026-04-09 | Task 9 verification: full unit suite 425/425 passing; agent registry discovers `project-setup-agent` with 9 tools; tool definitions complete (9/9); feature complete |

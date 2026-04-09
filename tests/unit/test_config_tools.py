@@ -237,3 +237,35 @@ class TestRemoveProject:
     def test_invalid_project_id_rejected(self, tmp_path, bad_id):
         with pytest.raises(ValueError, match="Invalid project_id"):
             remove_project(str(tmp_path), bad_id)
+
+    def test_backup_failure_leaves_project_intact(self, tmp_path, monkeypatch):
+        import shutil as _shutil
+        proj_dir = tmp_path / "projects" / "alpha"
+        proj_dir.mkdir(parents=True)
+        (proj_dir / "project.yaml").write_text("project:\n  id: alpha\n")
+
+        def boom(*args, **kwargs):
+            raise OSError("disk full")
+
+        monkeypatch.setattr(_shutil, "copytree", boom)
+        result = remove_project(str(tmp_path), "alpha")
+        assert result["success"] is False
+        assert "Backup failed" in result["error"]
+        assert proj_dir.exists()
+        assert (proj_dir / "project.yaml").exists()
+
+    def test_rmtree_failure_returns_error_dict(self, tmp_path, monkeypatch):
+        import shutil as _shutil
+        proj_dir = tmp_path / "projects" / "beta"
+        proj_dir.mkdir(parents=True)
+        (proj_dir / "project.yaml").write_text("project:\n  id: beta\n")
+
+        def boom(*args, **kwargs):
+            raise OSError("permission denied")
+
+        monkeypatch.setattr(_shutil, "rmtree", boom)
+        result = remove_project(str(tmp_path), "beta")
+        assert result["success"] is False
+        assert "Removal failed" in result["error"]
+        assert "backup preserved" in result["error"]
+        assert proj_dir.exists()

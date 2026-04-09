@@ -17,6 +17,7 @@ A BMAD-style agent (`project-setup-agent`, codename Atlas) that onboards new pro
 - FR4: `read_project_config` returns the parsed `project.yaml` plus all repo YAMLs keyed by repo id
 - FR5: `write_project_config` creates `{config_dir}/projects/{project_id}/project.yaml`, validates ID with `PROJECT_ID_PATTERN`, writes YAML, and returns `{success, path}` (or `{success: False, error}` on bad YAML)
 - FR5b: `write_repo_config` creates `{config_dir}/projects/{project_id}/repos/{repo_id}.yaml` with the same ID validation for both project_id and repo_id
+- FR5c: `remove_project` backs up `{config_dir}/projects/{project_id}/` to `{config_dir}/.backups/{project_id}-{YYYYMMDD-HHMMSS}/` via `shutil.copytree` then removes the project dir; backup failure leaves the project intact
 - FR6-future: write/remove/validation tools for project and repo configs (remove, credential validation)
 - FR6: Future: validate credentials against live APIs (Jira, GitHub, GitLab, Jenkins) before writing config
 - FR7: Future: Atlas agent prompt file (`agents/project-setup-agent.md`) with persona, tools, and interactive flow
@@ -46,8 +47,8 @@ A BMAD-style agent (`project-setup-agent`, codename Atlas) that onboards new pro
 - [x] `resolve_env_var` delegates to `config.config_loader.resolve_env_vars` so embedded references (e.g. `"Bearer ${TOKEN}"`) resolve consistently with the rest of the codebase
 - [x] `write_project_config` writes `project.yaml`; rejects invalid project_id; validates YAML in memory before writing (no corrupt files left on disk); returns success/error dict
 - [x] `write_repo_config` writes `repos/{repo_id}.yaml`; rejects invalid project_id and repo_id; validates YAML in memory before writing; returns success/error dict
-- [ ] Remove project with confirmation (write functions landed without env-var preservation — plain YAML written as-is)
-- [ ] Remove project with confirmation
+- [x] `remove_project` backs up project to `.backups/` before removal; backup failure leaves project intact; rejects invalid project_id via `PROJECT_ID_PATTERN`
+- [ ] Remove project with user confirmation (CLI/agent flow — not yet wired)
 - [ ] Credential validation against live APIs for Jira, GitHub, GitLab, Jenkins
 - [ ] Atlas agent prompt file with add/list/remove flows
 - [ ] CLI / orchestrator entry point to launch the agent
@@ -60,3 +61,4 @@ A BMAD-style agent (`project-setup-agent`, codename Atlas) that onboards new pro
 | 2026-04-08 | Task 1 review fixes: path traversal validation in `read_project_config`, `resolve_env_var` now delegates to `config.config_loader.resolve_env_vars` (supports embedded refs), removed unused imports |
 | 2026-04-09 | Task 2 implemented: `write_project_config` and `write_repo_config` with path-traversal validation (PROJECT_ID_PATTERN) for all ID inputs; 21 new tests (42 total) |
 | 2026-04-09 | Task 2 review fix: changed write-then-validate to validate-then-write so invalid YAML leaves no corrupt files or orphan directories on disk; strengthened tests to assert no side-effects on bad YAML |
+| 2026-04-09 | Task 3 implemented: `remove_project` with timestamped backup to `.backups/`, OSError guard (no removal if backup fails), and `PROJECT_ID_PATTERN` validation; 8 new tests (52 total) |

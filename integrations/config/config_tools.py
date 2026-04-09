@@ -7,6 +7,8 @@ in the config-live/ directory.
 from __future__ import annotations
 
 import re
+import shutil
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -184,3 +186,38 @@ def write_repo_config(
     repo_file.write_text(yaml_content, encoding="utf-8")
 
     return {"success": True, "path": str(repo_file)}
+
+
+def remove_project(config_dir: str, project_id: str) -> dict[str, Any]:
+    """Remove a project, backing it up first.
+
+    Backs up to {config_dir}/.backups/{project_id}-{YYYYMMDD-HHMMSS}/.
+    Fails if the backup cannot be created — the project is left intact.
+
+    Raises:
+        ValueError: If project_id contains characters other than alphanumerics,
+            hyphens, or underscores.
+
+    Returns:
+        Dict with keys: success (bool), backup_path (str), error (str, if failed).
+    """
+    if not project_id or not PROJECT_ID_PATTERN.match(project_id):
+        raise ValueError(
+            f"Invalid project_id '{project_id}': must contain only alphanumerics, "
+            f"hyphens, and underscores."
+        )
+
+    proj_dir = Path(config_dir) / "projects" / project_id
+    if not proj_dir.exists():
+        return {"success": False, "error": f"Project '{project_id}' not found at {proj_dir}"}
+
+    timestamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
+    backup_dir = Path(config_dir) / ".backups" / f"{project_id}-{timestamp}"
+    try:
+        shutil.copytree(str(proj_dir), str(backup_dir))
+    except OSError as e:
+        return {"success": False, "error": f"Backup failed: {e}"}
+
+    shutil.rmtree(str(proj_dir))
+
+    return {"success": True, "backup_path": str(backup_dir)}

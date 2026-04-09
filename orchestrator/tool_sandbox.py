@@ -391,22 +391,28 @@ class ToolSandbox:
     # --- Config management tools (project-setup-agent) ---
 
     async def _tool_validate_jira(self, params: dict[str, Any]) -> str:
+        url = params.get("url", "")
+        token = params.get("token", "")
+        email = params.get("email", "")
+        project_key = params.get("project_key", "")
+        if not url or not token or not email or not project_key:
+            raise ToolError(
+                "validate_jira requires 'url', 'token', 'email', and 'project_key'"
+            )
         result = await config_tools.validate_jira(
-            url=params.get("url", ""),
-            token=params.get("token", ""),
-            email=params.get("email", ""),
-            project_key=params.get("project_key", ""),
+            url=url, token=token, email=email, project_key=project_key
         )
         if result["success"]:
             return f"OK: Jira project '{result['project_name']}' is accessible."
         return f"FAILED: {result['error']}"
 
     async def _tool_validate_github(self, params: dict[str, Any]) -> str:
-        result = await config_tools.validate_github(
-            token=params.get("token", ""),
-            owner=params.get("owner", ""),
-            repo=params.get("repo", ""),
-        )
+        token = params.get("token", "")
+        owner = params.get("owner", "")
+        repo = params.get("repo", "")
+        if not token or not owner or not repo:
+            raise ToolError("validate_github requires 'token', 'owner', and 'repo'")
+        result = await config_tools.validate_github(token=token, owner=owner, repo=repo)
         if result["success"]:
             return (
                 f"OK: GitHub repo '{result['full_name']}' is accessible "
@@ -415,9 +421,13 @@ class ToolSandbox:
         return f"FAILED: {result['error']}"
 
     async def _tool_validate_gitlab(self, params: dict[str, Any]) -> str:
+        token = params.get("token", "")
+        project_id = params.get("project_id", "")
+        if not token or not project_id:
+            raise ToolError("validate_gitlab requires 'token' and 'project_id'")
         result = await config_tools.validate_gitlab(
-            token=params.get("token", ""),
-            project_id=params.get("project_id", ""),
+            token=token,
+            project_id=project_id,
             url=params.get("url", "https://gitlab.com"),
         )
         if result["success"]:
@@ -425,11 +435,16 @@ class ToolSandbox:
         return f"FAILED: {result['error']}"
 
     async def _tool_validate_jenkins(self, params: dict[str, Any]) -> str:
+        url = params.get("url", "")
+        username = params.get("username", "")
+        token = params.get("token", "")
+        job_key = params.get("job_key", "")
+        if not url or not username or not token or not job_key:
+            raise ToolError(
+                "validate_jenkins requires 'url', 'username', 'token', and 'job_key'"
+            )
         result = await config_tools.validate_jenkins(
-            url=params.get("url", ""),
-            username=params.get("username", ""),
-            token=params.get("token", ""),
-            job_key=params.get("job_key", ""),
+            url=url, username=username, token=token, job_key=job_key
         )
         if result["success"]:
             return f"OK: Jenkins job '{result['job_name']}' is accessible."
@@ -507,7 +522,7 @@ class ToolSandbox:
             raise ToolError(str(e)) from e
         if result["success"]:
             return f"Removed project '{project_id}'. Backup at: {result['backup_path']}"
-        return f"Failed: {result['error']}"
+        return f"Failed: {result.get('error', 'unknown error')}"
 
 
 def get_tool_definitions(allowed_tools: list[str]) -> list[dict[str, Any]]:

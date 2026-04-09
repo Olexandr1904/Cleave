@@ -1,0 +1,53 @@
+# Feature: Project Setup Agent (Atlas)
+
+**Status:** In Progress
+**Created:** 2026-04-08
+**Updated:** 2026-04-08
+**Author:** Oleksandr Brazhenko
+
+## Description
+
+A BMAD-style agent (`project-setup-agent`, codename Atlas) that onboards new projects into the Sickle pipeline through guided conversational setup. Atlas collects project details (Jira, VCS, CI/CD, quality gates, Telegram), validates credentials against live APIs, and writes the YAML config files to `config-live/`. The agent supports three operations: **add**, **list**, and **remove**.
+
+## Requirements
+
+- FR1: Config tools module (`integrations/config/config_tools.py`) providing CRUD operations against `config-live/projects/`
+- FR2: `resolve_env_var` parses `${VAR_NAME}` references and resolves them from `os.environ`, raising a clear error if unset
+- FR3: `list_projects` scans `{config_dir}/projects/` for subdirectories containing `project.yaml` and returns id/name/repo_count/enabled for each
+- FR4: `read_project_config` returns the parsed `project.yaml` plus all repo YAMLs keyed by repo id
+- FR5: Future: write/remove/validation tools for project and repo configs
+- FR6: Future: validate credentials against live APIs (Jira, GitHub, GitLab, Jenkins) before writing config
+- FR7: Future: Atlas agent prompt file (`agents/project-setup-agent.md`) with persona, tools, and interactive flow
+- FR8: Future: add/list/remove operations invoked from CLI or orchestrator
+
+## Technical Approach
+
+- New `integrations/config/` subpackage with `config_tools.py` exposing pure functions over the config directory
+- Env var resolution via regex `^\$\{([A-Za-z_][A-Za-z0-9_]*)\}$`; plain strings pass through unchanged
+- YAML I/O via PyYAML `safe_load`/`safe_dump`
+- Config tools are stateless, take `config_dir` as a parameter, and raise `ValueError`/`FileNotFoundError` on invalid input
+- Agent built on the existing BMAD-style agent system; tools are registered with the Claude adapter and dispatched via `tool_use`
+
+## Dependencies
+
+- PyYAML for YAML parsing
+- Environment variables for secrets
+- Existing agent system (persona/tools/constraints loader)
+- Live API clients (Jira, GitHub, GitLab, Jenkins) for credential validation
+
+## Acceptance Criteria
+
+- [x] `resolve_env_var` resolves `${VAR}` from environment; raises on missing var; passes plain strings through
+- [x] `list_projects` returns all projects with id/name/repo_count/enabled; handles missing/empty projects dir
+- [x] `read_project_config` returns project + repos dict; raises `FileNotFoundError` on unknown project
+- [ ] Write functions for project.yaml and repo YAMLs with env var preservation
+- [ ] Remove project with confirmation
+- [ ] Credential validation against live APIs for Jira, GitHub, GitLab, Jenkins
+- [ ] Atlas agent prompt file with add/list/remove flows
+- [ ] CLI / orchestrator entry point to launch the agent
+
+## Change Log
+
+| Date | Description |
+|------|-------------|
+| 2026-04-08 | Initial draft — seeded from design spec `2026-04-08-project-setup-agent-design.md`. Task 1 implemented: config tools module with `resolve_env_var`, `list_projects`, `read_project_config` |

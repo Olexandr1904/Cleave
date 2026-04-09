@@ -14,6 +14,7 @@ from config.resource_registry import ResourceRegistry
 from integrations.base.notifier import NotifierInterface
 from integrations.base.tracker import TicketData, TrackerInterface
 from integrations.base.vcs import VCSInterface
+from integrations.telegram.handlers.approval import APPROVAL_NEXT_STATE
 from integrations.telegram.handlers.mode import ModeHandler
 from orchestrator.agent_runtime import AgentRuntime
 from orchestrator.pr_creation import create_pr
@@ -325,7 +326,28 @@ class Orchestrator:
             return  # Waiting for human reply
 
         if current == "AWAITING_APPROVAL":
-            return  # Waiting for operator approval
+            # Manual→Auto mid-flight: if the operator switched to auto while
+            # this workspace was parked at a gate, auto-approve and resume.
+            # Otherwise keep waiting for an explicit approve/reject.
+            if not (self._mode_handler and self._mode_handler.get_mode() == "auto"):
+                return  # Waiting for operator approval
+            previous = state.previous_state
+            next_state = APPROVAL_NEXT_STATE.get(previous)
+            if not next_state:
+                logger.warning(
+                    "Cannot auto-resume %s: unknown previous gate %s",
+                    state.ticket_id, previous,
+                )
+                return
+            workspace.transition(next_state)
+            logger.info(
+                "Auto-resumed %s from AWAITING_APPROVAL (gate=%s) to %s "
+                "after mode switch to auto",
+                state.ticket_id, previous, next_state,
+            )
+            # Re-advance so the resumed workspace doesn't wait a full poll cycle.
+            await self.advance_workspace(workspace)
+            return
 
         if current in ("DONE", "FAILED", "ARCHIVED"):
             return  # Terminal

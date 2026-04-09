@@ -129,3 +129,65 @@ class TestApprovalGates:
     def test_gate_pr_review_to_dev_bypasses(self):
         """PR review fix-required goes back to dev — gate must NOT fire."""
         assert self._manual()._should_approval_gate("PR_REVIEW", "dev") is False
+
+
+class TestAutoResumeAwaitingApproval:
+    """When mode switches manual→auto mid-flight, parked workspaces resume."""
+
+    def _auto_orch(self):
+        orch = _make_orchestrator()
+        orch._mode_handler = MagicMock()
+        orch._mode_handler.get_mode.return_value = "auto"
+        return orch
+
+    def _manual_orch(self):
+        orch = _make_orchestrator()
+        orch._mode_handler = MagicMock()
+        orch._mode_handler.get_mode.return_value = "manual"
+        return orch
+
+    async def test_auto_mode_resumes_analysis_gate_to_dev(self):
+        orch = self._auto_orch()
+        ws = _make_workspace("T-1", "AWAITING_APPROVAL", previous_state="ANALYSIS")
+        # Stop recursion — after the first transition, flip state to terminal
+        # so the re-entrant advance returns immediately.
+        def _transition(new_state):
+            ws.state.current_state = new_state
+            if new_state == "DEV":
+                ws.state.current_state = "DONE"  # short-circuit recursion
+        ws.transition.side_effect = _transition
+
+        await orch.advance_workspace(ws)
+        ws.transition.assert_any_call("DEV")
+
+    async def test_auto_mode_resumes_qa_gate_to_pushed(self):
+        orch = self._auto_orch()
+        ws = _make_workspace("T-2", "AWAITING_APPROVAL", previous_state="QA")
+        def _transition(new_state):
+            ws.state.current_state = "DONE"
+        ws.transition.side_effect = _transition
+
+        await orch.advance_workspace(ws)
+        ws.transition.assert_any_call("PUSHED")
+
+    async def test_auto_mode_resumes_pr_review_gate_to_done(self):
+        orch = self._auto_orch()
+        ws = _make_workspace("T-3", "AWAITING_APPROVAL", previous_state="PR_REVIEW")
+        def _transition(new_state):
+            ws.state.current_state = "DONE"
+        ws.transition.side_effect = _transition
+
+        await orch.advance_workspace(ws)
+        ws.transition.assert_any_call("DONE")
+
+    async def test_manual_mode_does_not_auto_resume(self):
+        orch = self._manual_orch()
+        ws = _make_workspace("T-4", "AWAITING_APPROVAL", previous_state="ANALYSIS")
+        await orch.advance_workspace(ws)
+        ws.transition.assert_not_called()
+
+    async def test_auto_mode_unknown_previous_state_logs_and_holds(self):
+        orch = self._auto_orch()
+        ws = _make_workspace("T-5", "AWAITING_APPROVAL", previous_state="DEV")
+        await orch.advance_workspace(ws)
+        ws.transition.assert_not_called()

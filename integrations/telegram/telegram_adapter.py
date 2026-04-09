@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from typing import Any
 
 from telegram import Bot, Update
 from telegram.ext import Application, MessageHandler, filters
@@ -20,6 +21,11 @@ class TelegramAdapter(NotifierInterface):
         self._bot = Bot(token=bot_token)
         self._pending_replies: dict[int, asyncio.Future[str]] = {}
         self._app: Application | None = None
+        self._command_handler: Any | None = None
+
+    def set_command_handler(self, handler: Any) -> None:
+        """Register the CommandHandler for processing incoming messages."""
+        self._command_handler = handler
 
     async def send_message(self, chat_id: str, message: str) -> int:
         """Send a message and return the message ID."""
@@ -34,11 +40,7 @@ class TelegramAdapter(NotifierInterface):
     async def wait_for_reply(
         self, chat_id: str, message_id: int, timeout_seconds: int = 0
     ) -> str | None:
-        """Wait for a reply to a specific message.
-
-        Uses a Future that gets resolved when a reply matching the
-        message_id is received via the polling handler.
-        """
+        """Wait for a reply to a specific message."""
         future: asyncio.Future[str] = asyncio.get_event_loop().create_future()
         self._pending_replies[message_id] = future
 
@@ -56,26 +58,37 @@ class TelegramAdapter(NotifierInterface):
         finally:
             self._pending_replies.pop(message_id, None)
 
-    async def _handle_reply(self, update: Update, context: object) -> None:
-        """Handle incoming replies and route to waiting futures."""
+    async def _handle_incoming(self, update: Update, context: object) -> None:
+        """Handle all incoming messages. Routes replies to futures, others to CommandHandler."""
         message = update.message
-        if not message or not message.reply_to_message:
+        if not message or not message.text:
             return
 
-        original_id = message.reply_to_message.message_id
-        future = self._pending_replies.get(original_id)
-        if future and not future.done():
-            future.set_result(message.text or "")
-            logger.info(
-                "Received reply to message %d: %s",
-                original_id, (message.text or "")[:50],
-            )
+        # If it's a reply to a tracked message, route to the reply future
+        if message.reply_to_message:
+            original_id = message.reply_to_message.message_id
+            future = self._pending_replies.get(original_id)
+            if future and not future.done():
+                future.set_result(message.text)
+                logger.info(
+                    "Received reply to message %d: %s",
+                    original_id, message.text[:50],
+                )
+                return
+
+        # Otherwise, route to command handler
+        if self._command_handler:
+            chat_id = str(message.chat.id)
+            try:
+                await self._command_handler.handle_message(message.text, chat_id)
+            except Exception as e:
+                logger.error("Command handler error: %s", e, exc_info=True)
 
     async def start_polling(self) -> None:
-        """Start the bot's polling loop for receiving replies."""
+        """Start the bot's polling loop for receiving messages."""
         self._app = Application.builder().token(self._bot.token).build()
         self._app.add_handler(
-            MessageHandler(filters.REPLY & filters.TEXT, self._handle_reply)
+            MessageHandler(filters.TEXT, self._handle_incoming)
         )
         await self._app.initialize()
         await self._app.start()

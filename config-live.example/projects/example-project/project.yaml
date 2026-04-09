@@ -1,14 +1,17 @@
+# Example project configuration — rename the directory to match `project.id`
+# when you copy this template to your own `config-live/projects/<id>/`.
+
 project:
-  id: "faria"
-  name: "Faria Education Group"
+  id: "example-project"
+  name: "Example Project"
   enabled: true
 
 jira:
   url: "${JIRA_URL}"
   token: "${JIRA_TOKEN}"
   email: "${JIRA_EMAIL}"
-  project_key: "MBMOB"
-  trigger_label: "ai-pipeline"
+  project_key: "EXPROJ"             # Your Jira project key (uppercase)
+  trigger_label: "ai-pipeline"      # Tickets must carry this label to run
   ignore_labels:
     - "manual-only"
     - "blocked"

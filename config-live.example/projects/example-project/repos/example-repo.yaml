@@ -1,36 +1,38 @@
+# Example repo configuration — rename this file to `<repo.id>.yaml` when you
+# copy this template.
+
 repo:
-  id: "managebac"
-  name: "ManageBac Android"
+  id: "example-repo"
+  name: "Example Repository"
   enabled: true
 
 vcs:
-  provider: "github"
+  provider: "github"                # or "gitlab"
   github:
     token: "${GITHUB_TOKEN}"
-    owner: "eduvo"
-    repo: "managebac-mobile-android"
-    default_branch: "develop"
+    owner: "your-org"
+    repo: "your-repo"
+    default_branch: "main"
     branch_prefix: "feature"
     merge_method: "squash"
 
 ci:
-  provider: "github_actions"
+  provider: "github_actions"        # or "jenkins"
 
 git:
-  clone_url: "https://${GITHUB_TOKEN}@github.com/eduvo/managebac-mobile-android.git"
+  clone_url: "https://${GITHUB_TOKEN}@github.com/your-org/your-repo.git"
   commit_author_name: "Sickle Bot"
   commit_author_email: "sickle@pipeline.local"
   depth: 1
 
 architecture:
+  # Optional path to an architecture rules file agents must follow.
   rules_file: "docs/arch-rules.md"
+  # Files/dirs agents must never modify.
   protected_files:
     - ".github/"
     - "build.gradle.kts"
     - "settings.gradle.kts"
-    - "gradle/"
-    - ".editorconfig"
-    - "detekt.yml"
 
 linting:
   run_command: "./gradlew detekt"
@@ -44,23 +46,24 @@ build:
   check_command: "./gradlew assembleDebug"
   hard_gate: true
 
+# Optional: paths to your existing helper scripts. Leave empty to skip.
 helpers:
-  fetch_pr_comments: "/mnt/shared/ubuntu/f/pr_comments/fetch.py"
-  resolve_pr_comments: "/mnt/shared/ubuntu/f/pr_comments/resolve.py"
-  fetch_ci_failure: "/mnt/shared/ubuntu/f/ci/fetch_ci_failure.py"
-  fetch_jira_tickets: "/mnt/shared/ubuntu/f/jira/fetch.py"
-  update_jira_status: "/mnt/shared/ubuntu/f/jira/update_status.py"
-  code_review: "/mnt/shared/ubuntu/f/review/review.sh"
-  create_jira_ticket: "/mnt/shared/ubuntu/f/jira/create.py"
+  fetch_pr_comments: ""
+  resolve_pr_comments: ""
+  fetch_ci_failure: ""
+  fetch_jira_tickets: ""
+  update_jira_status: ""
+  code_review: ""
+  create_jira_ticket: ""
 
-jira_repo_label: "managebac-android"
+jira_repo_label: "example-repo"
 
 pr_description_template: |
   ## {ticket_id}
 
   Automated PR created by Sickle pipeline.
 
-  **Jira:** https://faria.atlassian.net/browse/{ticket_id}
+  **Jira:** ${JIRA_URL}/browse/{ticket_id}
 
   ### Checklist
   - [x] Implementation plan followed

@@ -91,3 +91,101 @@ class TestCommandHandler:
         mock_notifier.send_message.assert_called_once()
         call_text = mock_notifier.send_message.call_args[0][1]
         assert "trouble" in call_text.lower()
+
+    async def test_unauthorized_chat_id_is_dropped(
+        self, mock_intent_parser, mock_notifier, mock_mode_handler,
+    ):
+        handler = CommandHandler(
+            intent_parser=mock_intent_parser,
+            notifier=mock_notifier,
+            mode_handler=mock_mode_handler,
+            active_workspaces_fn=lambda: [],
+            allowed_chat_ids={"99999"},
+        )
+        await handler.handle_message("status", "12345")
+        mock_intent_parser.parse.assert_not_called()
+        mock_notifier.send_message.assert_not_called()
+
+    async def test_authorized_chat_id_is_accepted(
+        self, mock_intent_parser, mock_notifier, mock_mode_handler,
+    ):
+        handler = CommandHandler(
+            intent_parser=mock_intent_parser,
+            notifier=mock_notifier,
+            mode_handler=mock_mode_handler,
+            active_workspaces_fn=lambda: [],
+            allowed_chat_ids={"12345"},
+        )
+        await handler.handle_message("status", "12345")
+        mock_intent_parser.parse.assert_called_once()
+
+    async def test_reject_disambiguates_multiple_awaiting(
+        self, mock_intent_parser, mock_notifier, mock_mode_handler,
+    ):
+        ws_a = _make_workspace("T-1", "AWAITING_APPROVAL", previous_state="ANALYSIS")
+        ws_b = _make_workspace("T-2", "AWAITING_APPROVAL", previous_state="ANALYSIS")
+        mock_intent_parser.parse = AsyncMock(return_value=ParsedIntent(
+            intent="reject", params={}, reply="",
+        ))
+        handler = CommandHandler(
+            intent_parser=mock_intent_parser,
+            notifier=mock_notifier,
+            mode_handler=mock_mode_handler,
+            active_workspaces_fn=lambda: [ws_a, ws_b],
+        )
+        await handler.handle_message("reject it", "12345")
+        # Should ask operator to disambiguate, not mark any as FAILED
+        ws_a.transition.assert_not_called()
+        ws_b.transition.assert_not_called()
+        msg = mock_notifier.send_message.call_args[0][1]
+        assert "T-1" in msg and "T-2" in msg
+
+    async def test_analyze_dispatches_callback_and_reports(
+        self, mock_intent_parser, mock_notifier, mock_mode_handler,
+    ):
+        mock_intent_parser.parse = AsyncMock(return_value=ParsedIntent(
+            intent="analyze", params={"ticket_ids": ["T-1", "T-2"]}, reply="",
+        ))
+        callback = AsyncMock(return_value={"valid": ["T-1"], "invalid": ["T-2: not found"]})
+        handler = CommandHandler(
+            intent_parser=mock_intent_parser,
+            notifier=mock_notifier,
+            mode_handler=mock_mode_handler,
+            active_workspaces_fn=lambda: [],
+            analyze_callback=callback,
+        )
+        await handler.handle_message("analyze T-1 and T-2", "12345")
+        callback.assert_awaited_once_with(["T-1", "T-2"])
+        msg = mock_notifier.send_message.call_args[0][1]
+        assert "T-1" in msg
+        assert "T-2: not found" in msg
+
+    async def test_analyze_without_callback_sends_error(
+        self, mock_intent_parser, mock_notifier, mock_mode_handler,
+    ):
+        mock_intent_parser.parse = AsyncMock(return_value=ParsedIntent(
+            intent="analyze", params={"ticket_ids": ["T-1"]}, reply="",
+        ))
+        handler = CommandHandler(
+            intent_parser=mock_intent_parser,
+            notifier=mock_notifier,
+            mode_handler=mock_mode_handler,
+            active_workspaces_fn=lambda: [],
+        )
+        await handler.handle_message("analyze T-1", "12345")
+        msg = mock_notifier.send_message.call_args[0][1]
+        assert "not available" in msg.lower()
+
+    async def test_status_includes_recent_completions(
+        self, mock_intent_parser, mock_notifier, mock_mode_handler,
+    ):
+        handler = CommandHandler(
+            intent_parser=mock_intent_parser,
+            notifier=mock_notifier,
+            mode_handler=mock_mode_handler,
+            active_workspaces_fn=lambda: [],
+            recent_completions_fn=lambda: [("T-DONE", "DONE", 1_700_000_000.0)],
+        )
+        await handler.handle_message("status", "12345")
+        msg = mock_notifier.send_message.call_args[0][1]
+        assert "T-DONE" in msg

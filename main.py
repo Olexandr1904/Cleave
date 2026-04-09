@@ -246,6 +246,47 @@ def main(argv: list[str] | None = None) -> int:
     for repo_id, (gh_adapter, repo_cfg) in github_adapters.items():
         orchestrator.register_repo_vcs(repo_id, gh_adapter, repo_cfg)
 
+    # Initialize mode handler (auto/manual pipeline mode)
+    from integrations.telegram.handlers.mode import ModeHandler
+
+    daemon_state_path = str(Path(args.config) / "daemon_state.json")
+    mode_handler = ModeHandler(
+        state_file_path=daemon_state_path,
+        default_mode=global_config.pipeline.mode,
+    )
+    orchestrator.set_mode_handler(mode_handler)
+    print(f"  Mode handler initialized (mode: {mode_handler.get_mode()})")
+
+    # Initialize command handler for Telegram free-text control
+    if notifier is not None:
+        from datetime import datetime, timezone
+
+        from integrations.telegram.command_handler import CommandHandler
+        from integrations.telegram.intent_parser import IntentParser
+        from integrations.telegram.telegram_adapter import TelegramAdapter
+
+        if isinstance(notifier, TelegramAdapter):
+            intent_parser = IntentParser(
+                llm_adapter=llm,
+                intent_parser_config=global_config.intent_parser,
+            )
+
+            jira_base_url = ""
+            if first_project and first_project.config.jira.url:
+                jira_base_url = first_project.config.jira.url
+
+            command_handler = CommandHandler(
+                intent_parser=intent_parser,
+                notifier=notifier,
+                mode_handler=mode_handler,
+                active_workspaces_fn=lambda: orchestrator._active_workspaces,
+                jira_base_url=jira_base_url,
+                started_at=datetime.now(timezone.utc).isoformat(),
+                tracker=tracker,
+            )
+            notifier.set_command_handler(command_handler)
+            print("  Telegram CommandHandler wired into polling loop")
+
     print("  Orchestrator initialized. Starting main loop...")
 
     # Run the main loop

@@ -68,3 +68,4 @@ Telegram bot adapter behind the NotifierInterface. Sends formatted notifications
 | 2026-04-08 | Added AnalyzeHandler: validate_tickets() and is_already_active() for manual mode ticket validation |
 | 2026-04-08 | Added CommandHandler: central dispatcher routing parsed intents to StatusHandler, ModeHandler, ApprovalHandler, and AnalyzeHandler |
 | 2026-04-08 | Hooked CommandHandler into TelegramAdapter polling: `_handle_incoming` routes replies to pending futures and all other text to the CommandHandler via `set_command_handler` |
+| 2026-04-09 | Wired ModeHandler, IntentParser, and CommandHandler into `main.py` startup flow: ModeHandler loaded from `<config>/daemon_state.json` with `pipeline.mode` default; when TelegramAdapter is active, IntentParser and CommandHandler are constructed and attached via `notifier.set_command_handler()` so free-text operator messages reach the dispatcher |

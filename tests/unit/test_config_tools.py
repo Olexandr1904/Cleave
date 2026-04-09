@@ -5,12 +5,15 @@ from __future__ import annotations
 import pytest
 import yaml
 
+from pathlib import Path
+
 from integrations.config.config_tools import (
     resolve_env_var,
     list_projects,
     read_project_config,
     write_project_config,
     write_repo_config,
+    remove_project,
 )
 
 
@@ -191,3 +194,46 @@ class TestWriteRepoConfig:
     def test_invalid_repo_id_rejected(self, tmp_path, bad_id):
         with pytest.raises(ValueError, match="Invalid repo_id"):
             write_repo_config(str(tmp_path), "acme", bad_id, "repo: {}\n")
+
+
+class TestRemoveProject:
+    def test_removes_project_with_backup(self, tmp_path):
+        proj_dir = tmp_path / "projects" / "old"
+        proj_dir.mkdir(parents=True)
+        (proj_dir / "project.yaml").write_text("project:\n  id: old\n")
+        repos_dir = proj_dir / "repos"
+        repos_dir.mkdir()
+        (repos_dir / "api.yaml").write_text("repo:\n  id: api\n")
+
+        result = remove_project(str(tmp_path), "old")
+        assert result["success"] is True
+        assert "backup_path" in result
+        assert not proj_dir.exists()
+
+        backup_path = Path(result["backup_path"])
+        assert backup_path.exists()
+        assert (backup_path / "project.yaml").exists()
+        assert (backup_path / "repos" / "api.yaml").exists()
+
+    def test_project_not_found(self, tmp_path):
+        (tmp_path / "projects").mkdir()
+        result = remove_project(str(tmp_path), "nonexistent")
+        assert result["success"] is False
+        assert "not found" in result["error"]
+
+    def test_backup_directory_created(self, tmp_path):
+        proj_dir = tmp_path / "projects" / "test"
+        proj_dir.mkdir(parents=True)
+        (proj_dir / "project.yaml").write_text("project:\n  id: test\n")
+
+        remove_project(str(tmp_path), "test")
+        backups = tmp_path / ".backups"
+        assert backups.exists()
+        backup_dirs = list(backups.iterdir())
+        assert len(backup_dirs) == 1
+        assert backup_dirs[0].name.startswith("test-")
+
+    @pytest.mark.parametrize("bad_id", ["../etc", "foo/bar", "with space", "", "..", ".hidden"])
+    def test_invalid_project_id_rejected(self, tmp_path, bad_id):
+        with pytest.raises(ValueError, match="Invalid project_id"):
+            remove_project(str(tmp_path), bad_id)

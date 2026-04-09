@@ -7,6 +7,10 @@ import subprocess
 from pathlib import Path
 from typing import Any
 
+import yaml
+
+from integrations.config import config_tools
+
 logger = logging.getLogger(__name__)
 
 # All available tools
@@ -17,6 +21,16 @@ ALL_TOOLS = {
     "search_code",
     "run_command",
     "git_operation",
+    # Config management tools (project-setup-agent)
+    "validate_jira",
+    "validate_github",
+    "validate_gitlab",
+    "validate_jenkins",
+    "list_projects",
+    "read_project_config",
+    "write_project_config",
+    "write_repo_config",
+    "remove_project",
 }
 
 
@@ -370,9 +384,130 @@ class ToolSandbox:
 
         max_size = 50_000
         if len(output) > max_size:
-            output = output[:max_size] + f"\n... (truncated)"
+            output = output[:max_size] + "\n... (truncated)"
 
         return output
+
+    # --- Config management tools (project-setup-agent) ---
+
+    async def _tool_validate_jira(self, params: dict[str, Any]) -> str:
+        result = await config_tools.validate_jira(
+            url=params.get("url", ""),
+            token=params.get("token", ""),
+            email=params.get("email", ""),
+            project_key=params.get("project_key", ""),
+        )
+        if result["success"]:
+            return f"OK: Jira project '{result['project_name']}' is accessible."
+        return f"FAILED: {result['error']}"
+
+    async def _tool_validate_github(self, params: dict[str, Any]) -> str:
+        result = await config_tools.validate_github(
+            token=params.get("token", ""),
+            owner=params.get("owner", ""),
+            repo=params.get("repo", ""),
+        )
+        if result["success"]:
+            return (
+                f"OK: GitHub repo '{result['full_name']}' is accessible "
+                f"(default branch: {result['default_branch']})."
+            )
+        return f"FAILED: {result['error']}"
+
+    async def _tool_validate_gitlab(self, params: dict[str, Any]) -> str:
+        result = await config_tools.validate_gitlab(
+            token=params.get("token", ""),
+            project_id=params.get("project_id", ""),
+            url=params.get("url", "https://gitlab.com"),
+        )
+        if result["success"]:
+            return f"OK: GitLab project '{result['project_name']}' is accessible."
+        return f"FAILED: {result['error']}"
+
+    async def _tool_validate_jenkins(self, params: dict[str, Any]) -> str:
+        result = await config_tools.validate_jenkins(
+            url=params.get("url", ""),
+            username=params.get("username", ""),
+            token=params.get("token", ""),
+            job_key=params.get("job_key", ""),
+        )
+        if result["success"]:
+            return f"OK: Jenkins job '{result['job_name']}' is accessible."
+        return f"FAILED: {result['error']}"
+
+    async def _tool_list_projects(self, params: dict[str, Any]) -> str:
+        config_dir = params.get("config_dir", "")
+        if not config_dir:
+            raise ToolError("list_projects requires 'config_dir' parameter")
+        projects = config_tools.list_projects(config_dir)
+        if not projects:
+            return "No projects found."
+        lines = []
+        for p in projects:
+            status = "enabled" if p["enabled"] else "disabled"
+            lines.append(f"- {p['id']}: {p['name']} ({p['repo_count']} repos, {status})")
+        return "\n".join(lines)
+
+    async def _tool_read_project_config(self, params: dict[str, Any]) -> str:
+        config_dir = params.get("config_dir", "")
+        project_id = params.get("project_id", "")
+        if not config_dir or not project_id:
+            raise ToolError("read_project_config requires 'config_dir' and 'project_id'")
+        try:
+            data = config_tools.read_project_config(config_dir, project_id)
+        except FileNotFoundError as e:
+            raise ToolError(str(e)) from e
+        except ValueError as e:
+            raise ToolError(str(e)) from e
+        return yaml.safe_dump(data, default_flow_style=False)
+
+    async def _tool_write_project_config(self, params: dict[str, Any]) -> str:
+        config_dir = params.get("config_dir", "")
+        project_id = params.get("project_id", "")
+        yaml_content = params.get("yaml_content", "")
+        if not config_dir or not project_id or not yaml_content:
+            raise ToolError(
+                "write_project_config requires 'config_dir', 'project_id', 'yaml_content'"
+            )
+        try:
+            result = config_tools.write_project_config(config_dir, project_id, yaml_content)
+        except ValueError as e:
+            raise ToolError(str(e)) from e
+        if result["success"]:
+            return f"Successfully written to {result['path']}"
+        return f"Failed: {result.get('error', 'unknown error')}"
+
+    async def _tool_write_repo_config(self, params: dict[str, Any]) -> str:
+        config_dir = params.get("config_dir", "")
+        project_id = params.get("project_id", "")
+        repo_id = params.get("repo_id", "")
+        yaml_content = params.get("yaml_content", "")
+        if not config_dir or not project_id or not repo_id or not yaml_content:
+            raise ToolError(
+                "write_repo_config requires 'config_dir', 'project_id', 'repo_id', 'yaml_content'"
+            )
+        try:
+            result = config_tools.write_repo_config(
+                config_dir, project_id, repo_id, yaml_content
+            )
+        except ValueError as e:
+            raise ToolError(str(e)) from e
+        if result["success"]:
+            return f"Successfully written to {result['path']}"
+        return f"Failed: {result.get('error', 'unknown error')}"
+
+    async def _tool_remove_project(self, params: dict[str, Any]) -> str:
+        config_dir = params.get("config_dir", "")
+        project_id = params.get("project_id", "")
+        if not config_dir or not project_id:
+            raise ToolError("remove_project requires 'config_dir' and 'project_id'")
+        try:
+            result = config_tools.remove_project(config_dir, project_id)
+        except ValueError as e:
+            raise ToolError(str(e)) from e
+        if result["success"]:
+            return f"Removed project '{project_id}'. Backup at: {result['backup_path']}"
+        return f"Failed: {result['error']}"
 
 
 def get_tool_definitions(allowed_tools: list[str]) -> list[dict[str, Any]]:
@@ -476,6 +611,122 @@ def get_tool_definitions(allowed_tools: list[str]) -> list[dict[str, Any]]:
                     }
                 },
                 "required": ["command"],
+            },
+        },
+        "validate_jira": {
+            "name": "validate_jira",
+            "description": "Validate Jira credentials and project key by hitting the Jira REST API.",
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "url": {"type": "string", "description": "Jira instance URL (e.g. https://company.atlassian.net)"},
+                    "token": {"type": "string", "description": "Jira API token (resolved from env var)"},
+                    "email": {"type": "string", "description": "Jira account email"},
+                    "project_key": {"type": "string", "description": "Jira project key (e.g. PROJ)"},
+                },
+                "required": ["url", "token", "email", "project_key"],
+            },
+        },
+        "validate_github": {
+            "name": "validate_github",
+            "description": "Validate GitHub token and repo access.",
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "token": {"type": "string", "description": "GitHub personal access token"},
+                    "owner": {"type": "string", "description": "GitHub org or user"},
+                    "repo": {"type": "string", "description": "Repository name"},
+                },
+                "required": ["token", "owner", "repo"],
+            },
+        },
+        "validate_gitlab": {
+            "name": "validate_gitlab",
+            "description": "Validate GitLab token and project access.",
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "token": {"type": "string", "description": "GitLab personal access token"},
+                    "project_id": {"type": "string", "description": "GitLab numeric project ID or namespaced path"},
+                    "url": {"type": "string", "description": "GitLab instance URL (default: https://gitlab.com)"},
+                },
+                "required": ["token", "project_id"],
+            },
+        },
+        "validate_jenkins": {
+            "name": "validate_jenkins",
+            "description": "Validate Jenkins credentials and job access.",
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "url": {"type": "string", "description": "Jenkins URL (e.g. https://jenkins.company.com)"},
+                    "username": {"type": "string", "description": "Jenkins username"},
+                    "token": {"type": "string", "description": "Jenkins API token"},
+                    "job_key": {"type": "string", "description": "Jenkins job path (e.g. my-project/main)"},
+                },
+                "required": ["url", "username", "token", "job_key"],
+            },
+        },
+        "list_projects": {
+            "name": "list_projects",
+            "description": "List all projects in a Sickle config directory.",
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "config_dir": {"type": "string", "description": "Path to config directory containing projects/"},
+                },
+                "required": ["config_dir"],
+            },
+        },
+        "read_project_config": {
+            "name": "read_project_config",
+            "description": "Read a project's full configuration (project.yaml + all repo configs).",
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "config_dir": {"type": "string", "description": "Path to config directory"},
+                    "project_id": {"type": "string", "description": "Project ID to read"},
+                },
+                "required": ["config_dir", "project_id"],
+            },
+        },
+        "write_project_config": {
+            "name": "write_project_config",
+            "description": "Write project.yaml for a project. Creates directories if needed.",
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "config_dir": {"type": "string", "description": "Path to config directory"},
+                    "project_id": {"type": "string", "description": "Project ID (directory name)"},
+                    "yaml_content": {"type": "string", "description": "Full YAML content for project.yaml"},
+                },
+                "required": ["config_dir", "project_id", "yaml_content"],
+            },
+        },
+        "write_repo_config": {
+            "name": "write_repo_config",
+            "description": "Write a repo config file for a project. Creates directories if needed.",
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "config_dir": {"type": "string", "description": "Path to config directory"},
+                    "project_id": {"type": "string", "description": "Project ID"},
+                    "repo_id": {"type": "string", "description": "Repo ID (file name without .yaml)"},
+                    "yaml_content": {"type": "string", "description": "Full YAML content for the repo config"},
+                },
+                "required": ["config_dir", "project_id", "repo_id", "yaml_content"],
+            },
+        },
+        "remove_project": {
+            "name": "remove_project",
+            "description": "Remove a project from config (backs up first to .backups/).",
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "config_dir": {"type": "string", "description": "Path to config directory"},
+                    "project_id": {"type": "string", "description": "Project ID to remove"},
+                },
+                "required": ["config_dir", "project_id"],
             },
         },
     }

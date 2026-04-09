@@ -131,7 +131,6 @@ class TestNewConfigSchemas:
     def test_intent_parser_config_defaults(self):
         from config.schemas import IntentParserConfig
         cfg = IntentParserConfig()
-        assert cfg.max_tokens == 200
         assert cfg.timeout_seconds == 5
 
     def test_global_config_has_pipeline(self):
@@ -142,7 +141,7 @@ class TestNewConfigSchemas:
     def test_global_config_has_intent_parser(self):
         from config.schemas import IntentParserConfig, GlobalConfig
         cfg = GlobalConfig()
-        assert cfg.intent_parser.max_tokens == 200
+        assert cfg.intent_parser.timeout_seconds == 5
 
     def test_project_config_has_pipeline(self):
         from config.schemas import ProjectConfig

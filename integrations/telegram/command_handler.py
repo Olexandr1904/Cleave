@@ -144,6 +144,13 @@ class CommandHandler:
         if not awaiting:
             await self._notifier.send_message(chat_id, "No workspaces awaiting approval.")
             return
+        if len(awaiting) > 1 and not ticket_id:
+            tickets = ", ".join(ws.state.ticket_id for ws in awaiting)
+            await self._notifier.send_message(
+                chat_id,
+                f"Multiple workspaces awaiting approval: {tickets}. Please specify which one to reject.",
+            )
+            return
         ws = awaiting[0]
         ws.transition("FAILED")
         ws.update_state(error="Rejected by operator via Telegram")
@@ -154,10 +161,29 @@ class CommandHandler:
         if not ticket_ids:
             await self._notifier.send_message(chat_id, "Please specify ticket IDs to analyze.")
             return
-        if self._mode_handler.get_mode() != "manual":
-            await self._notifier.send_message(chat_id, "The analyze command is only available in manual mode. Switch to manual first.")
+        if not self._analyze_callback:
+            await self._notifier.send_message(
+                chat_id,
+                "Analyze is not available — no orchestrator callback configured.",
+            )
             return
-        if self._analyze_callback:
-            await self._analyze_callback(ticket_ids, chat_id)
-        else:
-            await self._notifier.send_message(chat_id, intent.reply or f"Queued {len(ticket_ids)} ticket(s) for analysis.")
+        try:
+            result = await self._analyze_callback(ticket_ids)
+        except Exception as e:
+            logger.error("analyze_callback failed: %s", e, exc_info=True)
+            await self._notifier.send_message(chat_id, f"Analyze failed: {e}")
+            return
+        # result is expected to be dict with keys: valid (list of ticket IDs),
+        # invalid (list of "TICKET: reason" strings). Missing keys default to [].
+        valid = list(result.get("valid", [])) if isinstance(result, dict) else []
+        invalid = list(result.get("invalid", [])) if isinstance(result, dict) else []
+        lines: list[str] = []
+        if valid:
+            lines.append(f"Queued {len(valid)} ticket(s) for analysis: {', '.join(valid)}")
+        if invalid:
+            lines.append("Could not queue:")
+            for entry in invalid:
+                lines.append(f"  - {entry}")
+        if not lines:
+            lines.append(intent.reply or "No tickets were queued.")
+        await self._notifier.send_message(chat_id, "\n".join(lines))

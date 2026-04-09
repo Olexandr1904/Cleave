@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import os
-
 import pytest
 import yaml
 
@@ -31,6 +29,10 @@ class TestResolveEnvVar:
 
     def test_partial_env_var_not_resolved(self):
         assert resolve_env_var("prefix-${") == "prefix-${"
+
+    def test_embedded_env_var_resolved(self, monkeypatch):
+        monkeypatch.setenv("MY_TOKEN", "secret123")
+        assert resolve_env_var("Bearer ${MY_TOKEN}") == "Bearer secret123"
 
 
 class TestListProjects:
@@ -100,3 +102,22 @@ class TestReadProjectConfig:
         (tmp_path / "projects").mkdir()
         with pytest.raises(FileNotFoundError, match="not found"):
             read_project_config(str(tmp_path), "nonexistent")
+
+    @pytest.mark.parametrize(
+        "bad_id",
+        [
+            "../../etc",
+            "../etc",
+            "foo/bar",
+            "foo bar",
+            "foo.bar",
+            "",
+            ".",
+            "..",
+            "foo\\bar",
+        ],
+    )
+    def test_invalid_project_id_rejected(self, tmp_path, bad_id):
+        (tmp_path / "projects").mkdir()
+        with pytest.raises(ValueError, match="Invalid project_id"):
+            read_project_config(str(tmp_path), bad_id)

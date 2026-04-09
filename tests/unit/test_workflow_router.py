@@ -117,3 +117,13 @@ class TestShouldEscalate:
 
     def test_unknown_stage(self, workflow):
         assert should_escalate("nonexistent", workflow, 100) is False
+
+
+class TestAwaitingApprovalState:
+    """AWAITING_APPROVAL is an orchestrator-level state with no workflow stage."""
+
+    def test_no_workflow_stage_for_awaiting_approval(self, workflow):
+        assert "awaiting_approval" not in workflow.stages
+
+    def test_get_next_stage_returns_none_for_awaiting_approval(self, workflow):
+        assert get_next_stage("awaiting_approval", workflow) is None

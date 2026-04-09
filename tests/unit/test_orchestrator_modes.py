@@ -80,32 +80,52 @@ class TestModeAwarePollCycle:
 
 
 class TestApprovalGates:
-    def test_should_gate_returns_true_for_analysis_in_manual(self):
+    def _manual(self):
         orch = _make_orchestrator()
         orch._mode_handler = MagicMock()
         orch._mode_handler.get_mode.return_value = "manual"
-        assert orch._should_approval_gate("ANALYSIS") is True
+        return orch
 
-    def test_should_gate_returns_true_for_qa_in_manual(self):
-        orch = _make_orchestrator()
-        orch._mode_handler = MagicMock()
-        orch._mode_handler.get_mode.return_value = "manual"
-        assert orch._should_approval_gate("QA") is True
-
-    def test_should_gate_returns_true_for_pr_review_in_manual(self):
-        orch = _make_orchestrator()
-        orch._mode_handler = MagicMock()
-        orch._mode_handler.get_mode.return_value = "manual"
-        assert orch._should_approval_gate("PR_REVIEW") is True
-
-    def test_should_gate_returns_false_in_auto(self):
+    def _auto(self):
         orch = _make_orchestrator()
         orch._mode_handler = MagicMock()
         orch._mode_handler.get_mode.return_value = "auto"
-        assert orch._should_approval_gate("ANALYSIS") is False
+        return orch
+
+    # Legacy single-arg form: gate fires for every gate state in manual mode.
+    def test_should_gate_returns_true_for_analysis_in_manual(self):
+        assert self._manual()._should_approval_gate("ANALYSIS") is True
+
+    def test_should_gate_returns_true_for_qa_in_manual(self):
+        assert self._manual()._should_approval_gate("QA") is True
+
+    def test_should_gate_returns_true_for_pr_review_in_manual(self):
+        assert self._manual()._should_approval_gate("PR_REVIEW") is True
+
+    def test_should_gate_returns_false_in_auto(self):
+        assert self._auto()._should_approval_gate("ANALYSIS") is False
 
     def test_should_gate_returns_false_for_dev(self):
-        orch = _make_orchestrator()
-        orch._mode_handler = MagicMock()
-        orch._mode_handler.get_mode.return_value = "manual"
-        assert orch._should_approval_gate("DEV") is False
+        assert self._manual()._should_approval_gate("DEV") is False
+
+    # Two-arg form: gate only fires on happy-path transitions.
+    def test_gate_analysis_to_dev_happy_path_fires(self):
+        assert self._manual()._should_approval_gate("ANALYSIS", "dev") is True
+
+    def test_gate_analysis_to_escalate_bypasses(self):
+        """Unclear analysis escalates — gate must NOT fire."""
+        assert self._manual()._should_approval_gate("ANALYSIS", "escalate") is False
+
+    def test_gate_qa_to_push_happy_path_fires(self):
+        assert self._manual()._should_approval_gate("QA", "push") is True
+
+    def test_gate_qa_to_dev_failure_loop_bypasses(self):
+        """QA fail loops back to dev — gate must NOT fire."""
+        assert self._manual()._should_approval_gate("QA", "dev") is False
+
+    def test_gate_pr_review_to_done_happy_path_fires(self):
+        assert self._manual()._should_approval_gate("PR_REVIEW", "done") is True
+
+    def test_gate_pr_review_to_dev_bypasses(self):
+        """PR review fix-required goes back to dev — gate must NOT fire."""
+        assert self._manual()._should_approval_gate("PR_REVIEW", "dev") is False

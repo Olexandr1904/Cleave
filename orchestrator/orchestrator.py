@@ -33,8 +33,16 @@ logger = logging.getLogger(__name__)
 class Orchestrator:
     """Main daemon loop — poll for tickets, manage slots, advance workspaces."""
 
-    # Approval gate stages in manual mode
+    # Approval gate stages in manual mode, mapped to the next stage that
+    # represents the "happy path" past the gate. Gating should ONLY fire when
+    # the workflow would move forward past the gate — not on failure loops
+    # (QA fail → dev) or escalation (analysis unclear → escalate).
     _APPROVAL_GATE_STATES = {"ANALYSIS", "QA", "PR_REVIEW"}
+    _GATE_HAPPY_PATH_NEXT_STAGE = {
+        "ANALYSIS": "dev",
+        "QA": "push",
+        "PR_REVIEW": "done",
+    }
 
     def __init__(
         self,
@@ -76,11 +84,25 @@ class Orchestrator:
         """Register the mode handler for auto/manual switching."""
         self._mode_handler = handler
 
-    def _should_approval_gate(self, completed_state: str) -> bool:
-        """Check if the workspace should pause for approval after this state."""
+    def _should_approval_gate(
+        self, completed_state: str, next_stage: str | None = None,
+    ) -> bool:
+        """Check if the workspace should pause for approval after this state.
+
+        When next_stage is provided, the gate only fires on happy-path
+        transitions (ANALYSIS→dev, QA→push, PR_REVIEW→done). Failure loops
+        and escalations bypass the gate. When next_stage is None, the gate
+        fires if the completed_state is in the gate set — used by callers
+        (e.g., the PR_REVIEW "no comments" branch) that have already
+        established they are on the happy path.
+        """
         if not self._mode_handler or self._mode_handler.get_mode() != "manual":
             return False
-        return completed_state in self._APPROVAL_GATE_STATES
+        if completed_state not in self._APPROVAL_GATE_STATES:
+            return False
+        if next_stage is None:
+            return True
+        return next_stage == self._GATE_HAPPY_PATH_NEXT_STAGE.get(completed_state)
 
     def _get_repo_config(self, workspace: Workspace) -> RepoConfig | None:
         """Find the RepoConfig matching a workspace."""
@@ -368,9 +390,10 @@ class Orchestrator:
         next_stage = get_next_stage(stage_id, self._workflow, outcome)
 
         if next_stage:
-            # Check for approval gate in manual mode
+            # Check for approval gate in manual mode. Only gate on happy-path
+            # transitions — failure loops and escalations bypass the gate.
             current_state = workspace.state.current_state
-            if self._should_approval_gate(current_state):
+            if self._should_approval_gate(current_state, next_stage):
                 workspace.transition("AWAITING_APPROVAL")
                 if self._notifier:
                     chat_id = self._get_chat_id(workspace)

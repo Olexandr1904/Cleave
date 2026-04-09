@@ -37,3 +37,4 @@ The `main.py` entry point parses CLI arguments and starts the Sickle pipeline. I
 |------|-------------|
 | 2026-04-08 | Initial doc — added version logging at startup |
 | 2026-04-08 | Fix `get_version()`: catch `PackageNotFoundError` specifically; wrap pyproject.toml fallback in its own try/except |
+| 2026-04-09 | Wire Telegram command layer into startup: initialize `ModeHandler` (with `daemon_state.json` persistence) and, when a `TelegramAdapter` notifier is configured, construct `IntentParser` + `CommandHandler` and attach via `notifier.set_command_handler()` |

@@ -1,3 +1,6 @@
+# Global configuration — inherited by every project and repo.
+# Copy this directory to `config-live/` and fill in values for your deployment.
+
 telegram:
   bot_token: "${TELEGRAM_BOT_TOKEN}"
   default_chat_id: "${TELEGRAM_CHAT_ID}"
@@ -7,9 +10,9 @@ claude:
   model: "claude-sonnet-4-5"
 
 workspaces:
-  base_dir: "/data/sickle"
-  max_age_days: 14
-  min_free_disk_gb: 5
+  base_dir: "/data/sickle"         # Where ticket workspaces are created
+  max_age_days: 14                 # Workspace TTL before cleanup
+  min_free_disk_gb: 5              # Skip new tickets if disk is low
   max_workspace_size_gb: 2
 
 defaults:
@@ -31,14 +34,13 @@ heartbeat:
   interval_hours: 24
   send_at: "09:00"
 
+# Operator profile — describes the human running Sickle. Agents use this to
+# tailor code style, commit format, and scope rules. Fill in your own.
 operator:
-  role: "Team Lead / Full-stack Developer"
+  role: "Your role (e.g. Team Lead, Solo Developer)"
   stack:
-    - "Kotlin Multiplatform"
-    - "Android"
-    - "iOS (SwiftUI)"
-    - "Ktor"
-    - "PostgreSQL"
+    - "Your primary language / framework"
+    - "Your secondary stack"
   preferences:
     code_style: "Follow existing project conventions exactly"
     commit_format: "feat({ticket_id}): {description}"

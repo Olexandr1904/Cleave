@@ -59,6 +59,7 @@ class Orchestrator:
         vcs: VCSInterface | None = None,
         notifier: NotifierInterface | None = None,
         dry_run: bool = False,
+        event_bus: Any | None = None,
     ) -> None:
         self._global_config = global_config
         self._projects = projects
@@ -70,6 +71,7 @@ class Orchestrator:
         self._vcs = vcs
         self._notifier = notifier
         self._dry_run = dry_run
+        self._events = event_bus
         self._active_workspaces: list[Workspace] = []
         self._shutdown_event = asyncio.Event()
         # Map repo_id -> (VCSInterface, RepoConfig) for per-repo VCS
@@ -235,6 +237,7 @@ class Orchestrator:
             "Orchestrator started (poll_interval=%ds, dry_run=%s)",
             poll_interval, self._dry_run,
         )
+        self._emit("daemon_started", f"Orchestrator started (mode={self._mode_handler.get_mode() if self._mode_handler else 'auto'}, dry_run={self._dry_run})")
 
         while not self._shutdown_event.is_set():
             try:
@@ -253,6 +256,7 @@ class Orchestrator:
 
     async def poll_cycle(self) -> None:
         """Single poll + advance cycle."""
+        self._emit("poll_cycle", "Poll cycle started")
         # 1. Poll for new tickets and create workspaces (skip in manual mode)
         is_manual = bool(
             self._mode_handler and self._mode_handler.get_mode() == "manual"
@@ -358,6 +362,7 @@ class Orchestrator:
                         "Created workspace for %s (%s/%s)",
                         pt.ticket.id, project_id, pt.repo_id,
                     )
+                    self._emit("workspace_created", f"Created workspace for {pt.ticket.id}", project_id=project_id, ticket_id=pt.ticket.id, data={"repo_id": pt.repo_id})
                 except Exception as e:
                     logger.error(
                         "Failed to create workspace for %s: %s",
@@ -376,10 +381,13 @@ class Orchestrator:
             repo_id=pt.repo_id,
             ticket_id=pt.ticket.id,
             clone_url=repo_config.git.clone_url,
+            clone_depth=repo_config.git.depth,
+            default_branch=repo_config.vcs.github.default_branch
+            if repo_config.vcs.provider == "github"
+            else repo_config.vcs.gitlab.default_branch,
             branch_prefix=repo_config.vcs.github.branch_prefix
             if repo_config.vcs.provider == "github"
             else repo_config.vcs.gitlab.branch_prefix,
-            depth=repo_config.git.depth,
         )
 
         # Write ticket data as markdown
@@ -493,15 +501,18 @@ class Orchestrator:
         repo_config = self._get_repo_config(workspace)
         protected = repo_config.architecture.protected_files if repo_config else []
 
+        self._emit("agent_dispatched", f"Dispatching {stage_def.agent} for {state.ticket_id}", project_id=state.company_id, ticket_id=state.ticket_id, agent_id=stage_def.agent, data={"stage": stage_id})
         result = await self._agent_runtime.execute(
             stage_def.agent, workspace, protected_files=protected,
         )
 
         if not result.success:
+            self._emit("agent_failed", f"{stage_def.agent} failed for {state.ticket_id}: {result.error}", project_id=state.company_id, ticket_id=state.ticket_id, agent_id=stage_def.agent, data={"stage": stage_id, "error": result.error})
             workspace.transition("FAILED")
             workspace.update_state(error=result.error)
             return
 
+        self._emit("agent_completed", f"{stage_def.agent} completed for {state.ticket_id}", project_id=state.company_id, ticket_id=state.ticket_id, agent_id=stage_def.agent, data={"stage": stage_id, "duration": result.duration_seconds, "input_tokens": result.input_tokens, "output_tokens": result.output_tokens})
         # Determine outcome from agent output
         outcome = self._parse_agent_outcome(stage_id, result.output, workspace)
         next_stage = get_next_stage(stage_id, self._workflow, outcome)
@@ -512,6 +523,7 @@ class Orchestrator:
             current_state = workspace.state.current_state
             if self._should_approval_gate(current_state, next_stage):
                 workspace.transition("AWAITING_APPROVAL")
+                self._emit("approval_requested", f"Awaiting approval for {state.ticket_id} after {current_state}", project_id=state.company_id, ticket_id=state.ticket_id, data={"gate": current_state})
                 if self._notifier:
                     chat_id = self._get_chat_id(workspace)
                     summary = self._build_gate_summary(workspace, current_state)
@@ -561,6 +573,7 @@ class Orchestrator:
         result = await create_pr(workspace, vcs, self._tracker, repo_config)
         if result.success:
             workspace.transition("PR_REVIEW")
+            self._emit("pr_created", f"PR created for {workspace.state.ticket_id}: {result.pr_url}", project_id=workspace.state.company_id, ticket_id=workspace.state.ticket_id, data={"pr_url": result.pr_url, "pr_number": result.pr_number})
         else:
             workspace.transition("FAILED")
             workspace.update_state(error=result.error)
@@ -681,6 +694,7 @@ class Orchestrator:
                 human_input_question=message,
             )
             logger.info("Escalated %s via Telegram (msg_id=%d)", state.ticket_id, msg_id)
+            self._emit("escalation_sent", f"Escalated {workspace.state.ticket_id} to human", project_id=workspace.state.company_id, ticket_id=workspace.state.ticket_id, data={"reason": workspace.state.human_input_question or "unknown"})
         except Exception as e:
             logger.error("Telegram send failed for %s: %s", state.ticket_id, e)
             workspace.transition("FAILED")
@@ -720,6 +734,7 @@ class Orchestrator:
         """Transition workspace to the state corresponding to a workflow stage."""
         state_name = _stage_to_state(stage_id)
         if state_name:
+            self._emit("stage_transition", f"{workspace.state.ticket_id}: {workspace.state.current_state} -> {state_name}", project_id=workspace.state.company_id, ticket_id=workspace.state.ticket_id, data={"from_state": workspace.state.current_state, "to_state": state_name})
             workspace.transition(state_name)
         else:
             logger.warning("Cannot map stage '%s' to state", stage_id)
@@ -805,6 +820,11 @@ class Orchestrator:
     def _handle_shutdown(self) -> None:
         logger.info("Shutdown signal received")
         self.shutdown()
+
+    def _emit(self, event_type: str, message: str, **kwargs: Any) -> None:
+        """Emit an event if the event bus is available."""
+        if self._events:
+            self._events.emit(event_type, message, **kwargs)
 
 
 # --- Mapping helpers ---

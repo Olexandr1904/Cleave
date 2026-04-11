@@ -17,11 +17,12 @@ logger = logging.getLogger(__name__)
 class TelegramAdapter(NotifierInterface):
     """Telegram Bot API adapter using python-telegram-bot."""
 
-    def __init__(self, bot_token: str) -> None:
+    def __init__(self, bot_token: str, event_bus: Any | None = None) -> None:
         self._bot = Bot(token=bot_token)
         self._pending_replies: dict[int, asyncio.Future[str]] = {}
         self._app: Application | None = None
         self._command_handler: Any | None = None
+        self._events = event_bus
 
     def set_command_handler(self, handler: Any) -> None:
         """Register the CommandHandler for processing incoming messages."""
@@ -40,6 +41,8 @@ class TelegramAdapter(NotifierInterface):
             text=message,
         )
         logger.info("Sent Telegram message %d to chat %s", msg.message_id, chat_id)
+        if self._events:
+            self._events.emit("tg_message_sent", f"Sent message to chat {chat_id}: {message[:80]}", data={"chat_id": chat_id, "text_preview": message[:200]})
         return msg.message_id
 
     async def wait_for_reply(
@@ -84,6 +87,8 @@ class TelegramAdapter(NotifierInterface):
         # Otherwise, route to command handler
         if self._command_handler:
             chat_id = str(message.chat.id)
+            if self._events:
+                self._events.emit("tg_message_received", f"Received from chat {chat_id}: {message.text[:80]}", data={"chat_id": chat_id, "text_preview": message.text[:200]})
             try:
                 await self._command_handler.handle_message(message.text, chat_id)
             except Exception as e:

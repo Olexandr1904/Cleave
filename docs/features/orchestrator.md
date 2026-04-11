@@ -56,3 +56,4 @@ Central daemon process that continuously polls for work, manages isolated worksp
 |------|-------------|
 | 2026-04-07 | Initial draft — seeded from PRD and architecture docs |
 | 2026-04-09 | Added mode-aware behavior: manual-mode skips polling, inserts approval gates after ANALYSIS/QA/PR_REVIEW, skips advancing AWAITING_APPROVAL workspaces. New `set_mode_handler` setter and `_should_approval_gate` check. |
+| 2026-04-09 | Instrumented with optional event_bus: emits daemon_started, poll_cycle, workspace_created, agent_dispatched, agent_completed, agent_failed, approval_requested, stage_transition, escalation_sent, and pr_created events. |

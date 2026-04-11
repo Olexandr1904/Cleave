@@ -30,6 +30,7 @@ class CommandHandler:
         analyze_callback: Callable | None = None,
         recent_completions_fn: Callable[[], list[tuple[str, str, float]]] | None = None,
         allowed_chat_ids: set[str] | None = None,
+        event_bus: Any | None = None,
     ) -> None:
         self._intent_parser = intent_parser
         self._notifier = notifier
@@ -45,6 +46,7 @@ class CommandHandler:
         # nobody only if you explicitly want open access. Normal operation
         # should pass the operator's chat_id(s).
         self._allowed_chat_ids = allowed_chat_ids
+        self._events = event_bus
         self._last_poll_time: float = time.time()
 
     def update_last_poll_time(self) -> None:
@@ -62,6 +64,8 @@ class CommandHandler:
         context = self._build_context(workspaces)
         intent = await self._intent_parser.parse(text, context)
         logger.info("Parsed intent: %s (params=%s)", intent.intent, intent.params)
+        if self._events:
+            self._events.emit("intent_parsed", f"Intent: {intent.intent} (params={intent.params})", data={"intent": intent.intent, "params": intent.params, "raw_text": text[:200]})
 
         if intent.intent == "status":
             await self._handle_status(intent, chat_id, workspaces)

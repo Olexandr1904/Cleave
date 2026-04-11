@@ -69,7 +69,15 @@ class PipelineConfig:
 
 @dataclass
 class IntentParserConfig:
-    timeout_seconds: int = 5
+    timeout_seconds: int = 30
+
+
+@dataclass
+class DashboardConfig:
+    enabled: bool = True
+    host: str = "0.0.0.0"
+    port: int = 8080
+    db_path: str = "data/events.db"
 
 
 @dataclass
@@ -83,6 +91,7 @@ class GlobalConfig:
     operator: OperatorProfile = field(default_factory=OperatorProfile)
     pipeline: PipelineConfig = field(default_factory=PipelineConfig)
     intent_parser: IntentParserConfig = field(default_factory=IntentParserConfig)
+    dashboard: DashboardConfig = field(default_factory=DashboardConfig)
 
 
 # --- Jira config (project-level) ---

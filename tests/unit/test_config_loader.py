@@ -126,24 +126,24 @@ class TestNewConfigSchemas:
     def test_pipeline_config_defaults(self):
         from config.schemas import PipelineConfig
         cfg = PipelineConfig()
-        assert cfg.mode == "auto"
+        assert cfg.mode == "manual"
 
     def test_intent_parser_config_defaults(self):
         from config.schemas import IntentParserConfig
         cfg = IntentParserConfig()
-        assert cfg.timeout_seconds == 5
+        assert cfg.timeout_seconds == 30
 
     def test_global_config_has_pipeline(self):
         from config.schemas import PipelineConfig, GlobalConfig
         cfg = GlobalConfig()
-        assert cfg.pipeline.mode == "auto"
+        assert cfg.pipeline.mode == "manual"
 
     def test_global_config_has_intent_parser(self):
         from config.schemas import IntentParserConfig, GlobalConfig
         cfg = GlobalConfig()
-        assert cfg.intent_parser.timeout_seconds == 5
+        assert cfg.intent_parser.timeout_seconds == 30
 
     def test_project_config_has_pipeline(self):
         from config.schemas import ProjectConfig
         cfg = ProjectConfig()
-        assert cfg.pipeline.mode == "auto"
+        assert cfg.pipeline.mode == "manual"

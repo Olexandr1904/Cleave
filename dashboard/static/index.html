@@ -1,4 +1,482 @@
 <!DOCTYPE html>
-<html><head><title>Sickle Dashboard</title></head>
-<body><h1>Sickle Dashboard</h1><p>Loading...</p></body>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Sickle Dashboard</title>
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    background: #0d1117;
+    color: #c9d1d9;
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', monospace;
+    font-size: 13px;
+    display: flex;
+    height: 100vh;
+    overflow: hidden;
+  }
+
+  /* ── Sidebar ── */
+  #sidebar {
+    width: 240px;
+    min-width: 240px;
+    background: #161b22;
+    border-right: 1px solid #30363d;
+    display: flex;
+    flex-direction: column;
+    overflow-y: auto;
+  }
+
+  #sidebar h2 {
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: .08em;
+    text-transform: uppercase;
+    color: #8b949e;
+    padding: 16px 16px 8px;
+  }
+
+  .nav-link {
+    display: block;
+    padding: 7px 16px;
+    color: #c9d1d9;
+    text-decoration: none;
+    border-radius: 6px;
+    margin: 1px 8px;
+    cursor: pointer;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    transition: background .12s;
+  }
+  .nav-link:hover { background: #21262d; }
+  .nav-link.active { background: #1f6feb33; color: #58a6ff; }
+
+  .sidebar-section { margin-top: 8px; }
+  .sidebar-section h2 { padding-top: 12px; }
+
+  /* ── Main ── */
+  #main {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+
+  /* ── Toolbar ── */
+  #toolbar {
+    background: #161b22;
+    border-bottom: 1px solid #30363d;
+    padding: 8px 16px;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    flex-wrap: wrap;
+  }
+
+  #toolbar h1 {
+    font-size: 14px;
+    font-weight: 600;
+    color: #e6edf3;
+    flex: 1;
+    min-width: 0;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  select, button {
+    background: #21262d;
+    color: #c9d1d9;
+    border: 1px solid #30363d;
+    border-radius: 6px;
+    padding: 4px 10px;
+    font-size: 12px;
+    cursor: pointer;
+    outline: none;
+    transition: border-color .12s;
+  }
+  select:hover, button:hover { border-color: #58a6ff; }
+
+  label.auto-refresh {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    font-size: 12px;
+    color: #8b949e;
+    cursor: pointer;
+    user-select: none;
+  }
+  label.auto-refresh input { cursor: pointer; }
+
+  /* ── Ticket badges ── */
+  #ticket-bar {
+    padding: 8px 16px;
+    background: #0d1117;
+    border-bottom: 1px solid #30363d;
+    display: flex;
+    gap: 6px;
+    flex-wrap: wrap;
+    min-height: 38px;
+    align-items: center;
+  }
+  #ticket-bar.hidden { display: none; }
+
+  .ticket-badge {
+    background: #21262d;
+    border: 1px solid #30363d;
+    border-radius: 12px;
+    padding: 2px 10px;
+    font-size: 11px;
+    color: #79c0ff;
+    cursor: pointer;
+    transition: background .12s, border-color .12s;
+  }
+  .ticket-badge:hover { background: #1f6feb33; border-color: #58a6ff; }
+
+  /* ── Event list ── */
+  #event-list {
+    flex: 1;
+    overflow-y: auto;
+    padding: 8px 0;
+  }
+
+  .event-row {
+    display: flex;
+    gap: 10px;
+    padding: 6px 16px;
+    border-bottom: 1px solid #21262d;
+    align-items: flex-start;
+    transition: background .08s;
+  }
+  .event-row:hover { background: #161b22; }
+
+  .event-ts {
+    color: #8b949e;
+    font-family: monospace;
+    font-size: 11px;
+    white-space: nowrap;
+    padding-top: 2px;
+    min-width: 110px;
+  }
+
+  .event-badge {
+    border-radius: 4px;
+    padding: 1px 7px;
+    font-size: 11px;
+    font-weight: 600;
+    white-space: nowrap;
+    min-width: 120px;
+    text-align: center;
+  }
+
+  /* Color coding */
+  .badge-green  { background: #1a3d1a; color: #56d364; border: 1px solid #2ea043; }
+  .badge-red    { background: #3d1a1a; color: #f85149; border: 1px solid #da3633; }
+  .badge-blue   { background: #1a2d3d; color: #79c0ff; border: 1px solid #1f6feb; }
+  .badge-yellow { background: #3d3318; color: #e3b341; border: 1px solid #9e6a03; }
+  .badge-purple { background: #2d1a3d; color: #d2a8ff; border: 1px solid #8957e5; }
+  .badge-gray   { background: #21262d; color: #8b949e; border: 1px solid #30363d; }
+
+  .event-body { flex: 1; min-width: 0; }
+  .event-msg {
+    color: #e6edf3;
+    word-break: break-word;
+    line-height: 1.45;
+  }
+  .event-meta {
+    color: #6e7681;
+    font-size: 11px;
+    margin-top: 2px;
+    display: flex;
+    gap: 12px;
+    flex-wrap: wrap;
+  }
+  .event-meta span { white-space: nowrap; }
+
+  /* ── Empty / loading states ── */
+  .state-msg {
+    padding: 32px 16px;
+    color: #6e7681;
+    text-align: center;
+    font-size: 13px;
+  }
+
+  /* ── Scrollbar styling ── */
+  ::-webkit-scrollbar { width: 6px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb { background: #30363d; border-radius: 3px; }
+</style>
+</head>
+<body>
+
+<nav id="sidebar">
+  <div class="sidebar-section">
+    <a class="nav-link active" id="nav-global" onclick="showGlobalLog()">Global Log</a>
+  </div>
+  <div class="sidebar-section">
+    <h2>Projects</h2>
+    <div id="project-list">
+      <div class="state-msg" style="padding:8px 16px;text-align:left;font-size:12px;">Loading…</div>
+    </div>
+  </div>
+</nav>
+
+<div id="main">
+  <div id="toolbar">
+    <h1 id="view-title">Global Log</h1>
+    <select id="filter-type" onchange="applyFilter()">
+      <option value="">All event types</option>
+      <option value="agent_dispatched">agent_dispatched</option>
+      <option value="agent_completed">agent_completed</option>
+      <option value="agent_failed">agent_failed</option>
+      <option value="stage_transition">stage_transition</option>
+      <option value="workspace_created">workspace_created</option>
+      <option value="pr_created">pr_created</option>
+      <option value="escalation_sent">escalation_sent</option>
+      <option value="approval_requested">approval_requested</option>
+      <option value="tg_message_received">tg_message_received</option>
+      <option value="tg_message_sent">tg_message_sent</option>
+      <option value="intent_parsed">intent_parsed</option>
+      <option value="poll_cycle">poll_cycle</option>
+      <option value="daemon_started">daemon_started</option>
+    </select>
+    <button onclick="refresh()">Refresh</button>
+    <label class="auto-refresh">
+      <input type="checkbox" id="auto-refresh-cb" checked>
+      Auto (5s)
+    </label>
+  </div>
+
+  <div id="ticket-bar" class="hidden"></div>
+
+  <div id="event-list">
+    <div class="state-msg">Loading…</div>
+  </div>
+</div>
+
+<script>
+// ── State ──────────────────────────────────────────────────────────────────
+const state = {
+  view: 'global',      // 'global' | 'project' | 'ticket'
+  projectId: null,
+  ticketId: null,
+  filterType: '',
+  timer: null,
+};
+
+// ── Event type → badge class ───────────────────────────────────────────────
+const BADGE_CLASS = {
+  agent_dispatched:   'badge-green',
+  agent_completed:    'badge-green',
+  workspace_created:  'badge-green',
+  pr_created:         'badge-green',
+  agent_failed:       'badge-red',
+  escalation_sent:    'badge-red',
+  stage_transition:   'badge-blue',
+  tg_message_received:'badge-yellow',
+  tg_message_sent:    'badge-yellow',
+  intent_parsed:      'badge-yellow',
+  approval_requested: 'badge-purple',
+  poll_cycle:         'badge-gray',
+  daemon_started:     'badge-gray',
+};
+
+function badgeClass(type) {
+  return BADGE_CLASS[type] || 'badge-gray';
+}
+
+// ── Helpers ────────────────────────────────────────────────────────────────
+function esc(s) {
+  if (s == null) return '';
+  return String(s)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+}
+
+function fmtTs(ts) {
+  if (!ts) return '';
+  const d = new Date(ts);
+  if (isNaN(d)) return esc(ts);
+  return d.toLocaleString('en-GB', {
+    day: '2-digit', month: '2-digit',
+    hour: '2-digit', minute: '2-digit', second: '2-digit',
+    hour12: false,
+  }).replace(',', '');
+}
+
+function metaParts(ev) {
+  const parts = [];
+  if (ev.project_id) parts.push(`project: ${esc(ev.project_id)}`);
+  if (ev.ticket_id)  parts.push(`ticket: ${esc(ev.ticket_id)}`);
+  if (ev.agent_id)   parts.push(`agent: ${esc(ev.agent_id)}`);
+  if (ev.duration_ms != null) parts.push(`${ev.duration_ms}ms`);
+  if (ev.tokens != null)      parts.push(`${ev.tokens} tok`);
+  return parts;
+}
+
+function renderEvents(events) {
+  const list = document.getElementById('event-list');
+  if (!events || events.length === 0) {
+    list.innerHTML = '<div class="state-msg">No events found.</div>';
+    return;
+  }
+
+  const typeFilter = state.filterType;
+  const filtered = typeFilter ? events.filter(e => e.event_type === typeFilter) : events;
+
+  if (filtered.length === 0) {
+    list.innerHTML = '<div class="state-msg">No events match the current filter.</div>';
+    return;
+  }
+
+  const html = filtered.map(ev => {
+    const cls = badgeClass(ev.event_type);
+    const meta = metaParts(ev);
+    return `<div class="event-row">
+      <span class="event-ts">${fmtTs(ev.created_at)}</span>
+      <span class="event-badge ${cls}">${esc(ev.event_type)}</span>
+      <div class="event-body">
+        <div class="event-msg">${esc(ev.message)}</div>
+        ${meta.length ? `<div class="event-meta">${meta.map(p => `<span>${p}</span>`).join('')}</div>` : ''}
+      </div>
+    </div>`;
+  }).join('');
+
+  list.innerHTML = html;
+}
+
+// ── API calls ──────────────────────────────────────────────────────────────
+async function fetchJSON(url) {
+  const resp = await fetch(url);
+  if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+  return resp.json();
+}
+
+async function loadGlobalEvents() {
+  let url = '/api/events?limit=200';
+  if (state.projectId) url += `&project_id=${encodeURIComponent(state.projectId)}`;
+  const data = await fetchJSON(url);
+  renderEvents(data.events || []);
+}
+
+async function loadTicketEvents() {
+  const data = await fetchJSON(`/api/tickets/${encodeURIComponent(state.ticketId)}/events?limit=200`);
+  renderEvents(data.events || []);
+}
+
+async function loadTicketBar(projectId) {
+  const bar = document.getElementById('ticket-bar');
+  bar.innerHTML = '';
+  try {
+    const data = await fetchJSON(`/api/projects/${encodeURIComponent(projectId)}/tickets`);
+    const tickets = data.tickets || [];
+    if (tickets.length === 0) {
+      bar.classList.add('hidden');
+      return;
+    }
+    bar.classList.remove('hidden');
+    tickets.forEach(tid => {
+      const badge = document.createElement('span');
+      badge.className = 'ticket-badge';
+      badge.textContent = tid;
+      badge.onclick = () => showTicket(tid);
+      bar.appendChild(badge);
+    });
+  } catch (e) {
+    bar.classList.add('hidden');
+  }
+}
+
+async function loadProjects() {
+  const pl = document.getElementById('project-list');
+  try {
+    const data = await fetchJSON('/api/projects');
+    const projects = data.projects || [];
+    if (projects.length === 0) {
+      pl.innerHTML = '<div style="padding:6px 16px;color:#6e7681;font-size:12px;">No projects yet.</div>';
+      return;
+    }
+    pl.innerHTML = projects.map(p =>
+      `<a class="nav-link" id="nav-proj-${esc(p)}" onclick="showProject(${JSON.stringify(p)})">${esc(p)}</a>`
+    ).join('');
+  } catch (e) {
+    pl.innerHTML = '<div style="padding:6px 16px;color:#f85149;font-size:12px;">Failed to load.</div>';
+  }
+}
+
+// ── View transitions ───────────────────────────────────────────────────────
+function setActiveNav(id) {
+  document.querySelectorAll('.nav-link').forEach(el => el.classList.remove('active'));
+  const el = document.getElementById(id);
+  if (el) el.classList.add('active');
+}
+
+function showGlobalLog() {
+  state.view = 'global';
+  state.projectId = null;
+  state.ticketId = null;
+  document.getElementById('view-title').textContent = 'Global Log';
+  document.getElementById('ticket-bar').classList.add('hidden');
+  setActiveNav('nav-global');
+  refresh();
+}
+
+function showProject(projectId) {
+  state.view = 'project';
+  state.projectId = projectId;
+  state.ticketId = null;
+  document.getElementById('view-title').textContent = `Project: ${projectId}`;
+  setActiveNav(`nav-proj-${projectId}`);
+  loadTicketBar(projectId);
+  refresh();
+}
+
+function showTicket(ticketId) {
+  state.view = 'ticket';
+  state.ticketId = ticketId;
+  document.getElementById('view-title').textContent = `Ticket: ${ticketId}`;
+  refresh();
+}
+
+function applyFilter() {
+  state.filterType = document.getElementById('filter-type').value;
+  refresh();
+}
+
+// ── Refresh logic ──────────────────────────────────────────────────────────
+async function refresh() {
+  const list = document.getElementById('event-list');
+  try {
+    if (state.view === 'ticket') {
+      await loadTicketEvents();
+    } else {
+      await loadGlobalEvents();
+    }
+  } catch (e) {
+    list.innerHTML = `<div class="state-msg" style="color:#f85149;">Error loading events: ${esc(String(e))}</div>`;
+  }
+}
+
+function scheduleAutoRefresh() {
+  if (state.timer) clearInterval(state.timer);
+  const cb = document.getElementById('auto-refresh-cb');
+  if (cb && cb.checked) {
+    state.timer = setInterval(refresh, 5000);
+  }
+}
+
+document.getElementById('auto-refresh-cb').addEventListener('change', scheduleAutoRefresh);
+
+// ── Init ───────────────────────────────────────────────────────────────────
+(async function init() {
+  await loadProjects();
+  await refresh();
+  scheduleAutoRefresh();
+})();
+</script>
+</body>
 </html>

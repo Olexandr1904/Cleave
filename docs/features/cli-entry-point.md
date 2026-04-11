@@ -2,7 +2,7 @@
 
 **Status:** Implemented
 **Created:** 2026-04-08
-**Updated:** 2026-04-08
+**Updated:** 2026-04-09
 **Author:** Oleksandr Brazhenko
 
 ## Description
@@ -17,6 +17,9 @@ The `main.py` entry point parses CLI arguments and starts the Sickle pipeline. I
 - FR4: Read version from `importlib.metadata` when package is installed, falling back to `pyproject.toml`
 - FR5: Print project/repo filter and dry-run mode when active
 - FR6: Return exit code 0 on success, 1 on configuration error
+- FR7: Initialize `EventBus` and `EventStore` and pass them to all components (AgentRuntime, TelegramAdapter, CommandHandler, Orchestrator)
+- FR8: When `dashboard.enabled` is true, start a uvicorn server hosting the dashboard web app
+- FR9: Persist all events emitted by the bus to the SQLite event store via an async listener
 
 ## Technical Approach
 
@@ -38,3 +41,4 @@ The `main.py` entry point parses CLI arguments and starts the Sickle pipeline. I
 | 2026-04-08 | Initial doc — added version logging at startup |
 | 2026-04-08 | Fix `get_version()`: catch `PackageNotFoundError` specifically; wrap pyproject.toml fallback in its own try/except |
 | 2026-04-09 | Wire Telegram command layer into startup: initialize `ModeHandler` (with `daemon_state.json` persistence) and, when a `TelegramAdapter` notifier is configured, construct `IntentParser` + `CommandHandler` and attach via `notifier.set_command_handler()` |
+| 2026-04-09 | Wire dashboard event system: initialize `EventBus` + `EventStore` after logging setup, inject into all components, start uvicorn dashboard when `dashboard.enabled=true`, persist events to SQLite |

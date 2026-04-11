@@ -142,6 +142,17 @@ def main(argv: list[str] | None = None) -> int:
         format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
     )
 
+    # Initialize event system
+    from dashboard.events import EventBus
+    from dashboard.event_store import EventStore
+
+    event_bus = EventBus()
+    db_path = global_config.dashboard.db_path
+    if not Path(db_path).is_absolute():
+        db_path = str(Path(__file__).parent / db_path)
+    Path(db_path).parent.mkdir(parents=True, exist_ok=True)
+    event_store = EventStore(db_path)
+
     # Load workflow
     workflow_path = str(Path(__file__).parent / "workflows" / "default-workflow.yaml")
     workflow = load_workflow(workflow_path)
@@ -174,7 +185,7 @@ def main(argv: list[str] | None = None) -> int:
             operator_profile += "Rules:\n" + "\n".join(f"- {r}" for r in op.rules) + "\n"
 
     # Initialize agent runtime
-    agent_runtime = AgentRuntime(registry, llm, operator_profile=operator_profile)
+    agent_runtime = AgentRuntime(registry, llm, operator_profile=operator_profile, event_bus=event_bus)
 
     # Initialize integration adapters
     tracker = None
@@ -225,7 +236,7 @@ def main(argv: list[str] | None = None) -> int:
     if tg_config.bot_token:
         from integrations.telegram.telegram_adapter import TelegramAdapter
 
-        notifier = TelegramAdapter(bot_token=tg_config.bot_token)
+        notifier = TelegramAdapter(bot_token=tg_config.bot_token, event_bus=event_bus)
         print("  Telegram adapter initialized")
 
     # Initialize orchestrator
@@ -240,6 +251,7 @@ def main(argv: list[str] | None = None) -> int:
         vcs=vcs,
         notifier=notifier,
         dry_run=args.dry_run,
+        event_bus=event_bus,
     )
 
     # Register per-repo VCS adapters
@@ -297,6 +309,7 @@ def main(argv: list[str] | None = None) -> int:
                 analyze_callback=orchestrator.analyze_ticket_ids,
                 recent_completions_fn=orchestrator.get_recent_completions,
                 allowed_chat_ids=allowed_chat_ids or None,
+                event_bus=event_bus,
             )
             notifier.set_command_handler(command_handler)
             print(
@@ -310,6 +323,28 @@ def main(argv: list[str] | None = None) -> int:
     # blocks until SIGINT/SIGTERM. On exit we stop the Telegram side cleanly.
     async def _run_all() -> None:
         from integrations.telegram.telegram_adapter import TelegramAdapter
+
+        # Initialize persistent event store
+        await event_store.initialize()
+        event_bus.add_listener(lambda e: asyncio.ensure_future(event_store.insert(e)))
+
+        # Start dashboard web server
+        dash_config = global_config.dashboard
+        web_server = None
+        if dash_config.enabled:
+            from dashboard.web import create_app
+            import uvicorn
+
+            app = create_app(event_bus, event_store)
+            config = uvicorn.Config(
+                app, host=dash_config.host, port=dash_config.port,
+                log_level="warning",
+            )
+            web_server = uvicorn.Server(config)
+            asyncio.create_task(web_server.serve())
+            print(f"  Dashboard: http://{dash_config.host}:{dash_config.port}")
+
+        event_bus.emit("daemon_started", f"Sickle v{version} started")
 
         tg_active = isinstance(notifier, TelegramAdapter)
         if tg_active:
@@ -325,6 +360,9 @@ def main(argv: list[str] | None = None) -> int:
                     logging.getLogger(__name__).warning(
                         "Error stopping Telegram polling: %s", e,
                     )
+            if web_server:
+                web_server.should_exit = True
+            await event_store.close()
 
     try:
         asyncio.run(_run_all())

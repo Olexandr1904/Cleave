@@ -75,3 +75,4 @@ Telegram bot adapter behind the NotifierInterface. Sends formatted notifications
 | 2026-04-09 | Orchestrator exposes `analyze_ticket_ids(ticket_ids)` — validates via Jira, routes each to a repo by `jira_repo_label`, and creates workspaces; wired into CommandHandler as `analyze_callback`. |
 | 2026-04-09 | CommandHandler now accepts `allowed_chat_ids` (empty/missing → open) and rejects messages from chats outside the allowlist. |
 | 2026-04-09 | Orchestrator maintains a 20-entry ring buffer of recently-terminated workspaces exposed via `get_recent_completions()`; StatusHandler.format_summary now renders them in /status. |
+| 2026-04-09 | Instrumented TelegramAdapter and CommandHandler with optional event_bus: emits tg_message_sent, tg_message_received, and intent_parsed events. |

@@ -47,11 +47,13 @@ class AgentRuntime:
         llm: LLMInterface,
         operator_profile: str = "",
         max_tool_rounds: int = DEFAULT_MAX_TOOL_ROUNDS,
+        event_bus: Any | None = None,
     ) -> None:
         self._registry = registry
         self._llm = llm
         self._operator_profile = operator_profile
         self._max_tool_rounds = max_tool_rounds
+        self._events = event_bus
 
     def _get_agent_tools(self, agent: AgentEntry) -> list[str]:
         """Extract tool allowlist from agent metadata."""
@@ -180,6 +182,8 @@ class AgentRuntime:
                 agent_id, model, result.input_tokens, result.output_tokens,
                 result.tool_calls, result.tool_rounds, result.duration_seconds,
             )
+            if self._events:
+                self._events.emit("agent_execution_detail", f"Agent {agent_id}: model={model}, tokens={result.input_tokens}/{result.output_tokens}, duration={result.duration_seconds:.1f}s", agent_id=agent_id, data={"model": model, "input_tokens": result.input_tokens, "output_tokens": result.output_tokens, "tool_calls": result.tool_calls, "tool_rounds": result.tool_rounds, "duration": result.duration_seconds})
 
             return result
 

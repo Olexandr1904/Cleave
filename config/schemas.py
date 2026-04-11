@@ -64,7 +64,7 @@ class OperatorProfile:
 
 @dataclass
 class PipelineConfig:
-    mode: str = "auto"  # "auto" or "manual"
+    mode: str = "manual"  # "auto" or "manual"
 
 
 @dataclass

@@ -20,3 +20,4 @@
 | 13 | [Jenkins Integration](jenkins-integration.md) | Planned | Build status and failure log retrieval from Jenkins |
 | 14 | [CLI Entry Point](cli-entry-point.md) | Implemented | CLI argument parsing, startup diagnostics, and version logging |
 | 15 | [Project Setup Agent (Atlas)](project-setup-agent.md) | In Progress | BMAD-style agent that onboards new projects with guided Q&A, credential validation, and YAML config generation |
+| 16 | [Dashboard & Event Log](dashboard.md) | Implemented | Local web dashboard with structured event log, per-project ticket history, and real-time auto-refresh |

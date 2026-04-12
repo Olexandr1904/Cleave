@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import time
 from datetime import datetime, timezone
@@ -60,9 +61,25 @@ class CommandHandler:
                 "Rejecting command from unauthorized chat_id=%s", chat_id,
             )
             return
+        # Show typing continuously while LLM parses intent (expires after 5s)
+        typing_task = None
+        if hasattr(self._notifier, "send_typing"):
+            async def _keep_typing() -> None:
+                try:
+                    while True:
+                        await self._notifier.send_typing(chat_id)
+                        await asyncio.sleep(4)
+                except asyncio.CancelledError:
+                    pass
+            typing_task = asyncio.create_task(_keep_typing())
+
         workspaces = self._active_workspaces_fn()
         context = self._build_context(workspaces)
-        intent = await self._intent_parser.parse(text, context)
+        try:
+            intent = await self._intent_parser.parse(text, context)
+        finally:
+            if typing_task:
+                typing_task.cancel()
         logger.info("Parsed intent: %s (params=%s)", intent.intent, intent.params)
         if self._events:
             self._events.emit("intent_parsed", f"Intent: {intent.intent} (params={intent.params})", data={"intent": intent.intent, "params": intent.params, "raw_text": text[:200]})
@@ -77,11 +94,13 @@ class CommandHandler:
             await self._handle_reject(intent, chat_id, workspaces)
         elif intent.intent == "analyze":
             await self._handle_analyze(intent, chat_id, workspaces)
+        elif intent.intent == "retry":
+            await self._handle_retry(intent, chat_id, workspaces)
         elif intent.intent == "error":
             await self._notifier.send_message(chat_id, intent.reply)
         else:
             await self._notifier.send_message(chat_id, intent.reply or
-                "I didn't understand that. I can do: status checks, analyze tickets, approve/reject steps, switch modes.")
+                "I didn't understand that. I can do: status, analyze, approve, reject, retry, set_mode.")
 
     def _build_context(self, workspaces: list[Any]) -> dict[str, Any]:
         awaiting = [
@@ -181,6 +200,7 @@ class CommandHandler:
                 "Analyze is not available — no orchestrator callback configured.",
             )
             return
+
         try:
             result = await self._analyze_callback(ticket_ids)
         except Exception as e:
@@ -201,3 +221,77 @@ class CommandHandler:
         if not lines:
             lines.append(intent.reply or "No tickets were queued.")
         await self._notifier.send_message(chat_id, "\n".join(lines))
+
+    _VALID_RETRY_STATES = {
+        "analysis": "ANALYSIS",
+        "dev": "DEV",
+        "scope_check": "SCOPE_CHECK",
+        "qa": "QA",
+        "push": "PUSHED",
+    }
+
+    async def _handle_retry(self, intent: ParsedIntent, chat_id: str, workspaces: list[Any]) -> None:
+        ticket_id = intent.params.get("ticket_id")
+        if not ticket_id:
+            await self._notifier.send_message(chat_id, "Please specify a ticket ID to retry.")
+            return
+
+        matches = [ws for ws in workspaces if ws.state.ticket_id == ticket_id]
+        if not matches:
+            await self._notifier.send_message(chat_id, f"No active workspace found for {ticket_id}.")
+            return
+
+        ws = matches[0]
+        from_stage = intent.params.get("from_stage")
+
+        if from_stage:
+            target_state = self._VALID_RETRY_STATES.get(from_stage)
+            if not target_state:
+                valid = ", ".join(self._VALID_RETRY_STATES.keys())
+                await self._notifier.send_message(
+                    chat_id, f"Unknown stage '{from_stage}'. Valid stages: {valid}",
+                )
+                return
+        else:
+            # Default: re-run from the stage where it got stuck
+            prev = ws.state.previous_state or ws.state.current_state
+            target_state = self._VALID_RETRY_STATES.get(prev.lower(), prev)
+            # If blocked/failed, use previous_state
+            if ws.state.current_state in ("BLOCKED", "FAILED"):
+                target_state = ws.state.previous_state or "ANALYSIS"
+
+        ws.state.human_input_pending = False
+        ws.state.error = None
+        ws.transition(target_state)
+        ws.save_state()
+
+        await self._notifier.send_message(
+            chat_id,
+            f"Retrying {ticket_id} from {target_state}.",
+        )
+        logger.info("Retry %s -> %s", ticket_id, target_state)
+
+    async def handle_reply(self, reply_to_msg_id: int, text: str, chat_id: str) -> bool:
+        """Handle a reply to an escalation message. Returns True if matched."""
+        if self._allowed_chat_ids is not None and chat_id not in self._allowed_chat_ids:
+            return False
+        workspaces = self._active_workspaces_fn()
+        for ws in workspaces:
+            if (
+                ws.state.current_state == "BLOCKED"
+                and ws.state.escalation_msg_id == reply_to_msg_id
+            ):
+                ws.state.human_input_reply = text
+                ws.state.human_input_pending = False
+                ws.transition("ANALYSIS")
+                ws.save_state()
+                await self._notifier.send_message(
+                    chat_id,
+                    f"Got it. Resuming {ws.state.ticket_id} with your input.",
+                )
+                logger.info(
+                    "Unblocked %s via reply to msg %d",
+                    ws.state.ticket_id, reply_to_msg_id,
+                )
+                return True
+        return False

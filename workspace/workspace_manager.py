@@ -33,6 +33,15 @@ class WorkspaceManager:
 
     def __init__(self, base_dir: str) -> None:
         self._base_dir = Path(base_dir)
+        try:
+            self._base_dir.mkdir(parents=True, exist_ok=True)
+        except PermissionError:
+            raise WorkspaceError(
+                f"Cannot create workspace directory '{base_dir}'. "
+                f"Please create it and set ownership:\n"
+                f"  sudo mkdir -p {base_dir}\n"
+                f"  sudo chown $USER {base_dir}"
+            )
 
     @property
     def base_dir(self) -> Path:

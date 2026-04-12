@@ -148,34 +148,54 @@ class JiraAdapter(TrackerInterface):
         data = await self._request("GET", f"/issue/{ticket_id}")
         return self._parse_ticket(data)
 
-    async def transition_ticket(self, ticket_id: str, status: str) -> None:
-        """Transition a ticket to a new status."""
-        # First get available transitions
-        trans_data = await self._request("GET", f"/issue/{ticket_id}/transitions")
-        transitions = trans_data.get("transitions", [])
+    async def transition_ticket(self, ticket_id: str, status: str, max_hops: int = 3) -> None:
+        """Transition a ticket to a new status, stepping through intermediates if needed."""
+        for hop in range(max_hops):
+            trans_data = await self._request("GET", f"/issue/{ticket_id}/transitions")
+            transitions = trans_data.get("transitions", [])
 
-        target_transition = None
-        for t in transitions:
-            if t.get("name", "").lower() == status.lower():
-                target_transition = t
-                break
-            if t.get("to", {}).get("name", "").lower() == status.lower():
-                target_transition = t
-                break
+            # Look for direct match to target status
+            target_transition = None
+            for t in transitions:
+                if t.get("name", "").lower() == status.lower():
+                    target_transition = t
+                    break
+                if t.get("to", {}).get("name", "").lower() == status.lower():
+                    target_transition = t
+                    break
 
-        if not target_transition:
-            available = [t.get("name", "") for t in transitions]
-            raise ValueError(
-                f"Cannot transition {ticket_id} to '{status}'. "
-                f"Available transitions: {available}"
+            if target_transition:
+                await self._request(
+                    "POST",
+                    f"/issue/{ticket_id}/transitions",
+                    json={"transition": {"id": target_transition["id"]}},
+                )
+                logger.info("Transitioned %s to '%s'", ticket_id, status)
+                return
+
+            # No direct path — try the first available forward transition
+            if not transitions:
+                break
+            # Pick the first transition that isn't going backwards
+            step = transitions[0]
+            await self._request(
+                "POST",
+                f"/issue/{ticket_id}/transitions",
+                json={"transition": {"id": step["id"]}},
+            )
+            step_name = step.get("to", {}).get("name", step.get("name", "?"))
+            logger.info(
+                "Intermediate transition %s -> '%s' (hop %d toward '%s')",
+                ticket_id, step_name, hop + 1, status,
             )
 
-        await self._request(
-            "POST",
-            f"/issue/{ticket_id}/transitions",
-            json={"transition": {"id": target_transition["id"]}},
+        # Exhausted hops
+        trans_data = await self._request("GET", f"/issue/{ticket_id}/transitions")
+        available = [t.get("name", "") for t in trans_data.get("transitions", [])]
+        raise ValueError(
+            f"Cannot transition {ticket_id} to '{status}' after {max_hops} hops. "
+            f"Available transitions: {available}"
         )
-        logger.info("Transitioned %s to '%s'", ticket_id, status)
 
     async def add_comment(self, ticket_id: str, comment: str) -> None:
         """Post a comment to a ticket."""

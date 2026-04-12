@@ -52,6 +52,8 @@ class WorkspaceState:
     human_input_pending: bool = False
     human_input_question: str | None = None
     human_input_reply: str | None = None
+    escalation_msg_id: int | None = None
+    escalation_chat_id: str | None = None
     started_at: str = ""
     last_updated_at: str = ""
     error: str | None = None

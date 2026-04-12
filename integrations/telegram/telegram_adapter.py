@@ -45,6 +45,18 @@ class TelegramAdapter(NotifierInterface):
             self._events.emit("tg_message_sent", f"Sent message to chat {chat_id}: {message[:80]}", data={"chat_id": chat_id, "text_preview": message[:200]})
         return msg.message_id
 
+    async def edit_message(self, chat_id: str, message_id: int, text: str) -> None:
+        """Edit an existing message."""
+        await self._bot.edit_message_text(
+            chat_id=chat_id,
+            message_id=message_id,
+            text=text,
+        )
+
+    async def send_typing(self, chat_id: str) -> None:
+        """Send 'typing...' chat action (visible for ~5 seconds)."""
+        await self._bot.send_chat_action(chat_id=chat_id, action="typing")
+
     async def wait_for_reply(
         self, chat_id: str, message_id: int, timeout_seconds: int = 0
     ) -> str | None:
@@ -83,6 +95,15 @@ class TelegramAdapter(NotifierInterface):
                     original_id, message.text[:50],
                 )
                 return
+
+            # Check if it's a reply to an escalation message
+            if self._command_handler and hasattr(self._command_handler, "handle_reply"):
+                chat_id = str(message.chat.id)
+                handled = await self._command_handler.handle_reply(
+                    original_id, message.text, chat_id,
+                )
+                if handled:
+                    return
 
         # Otherwise, route to command handler
         if self._command_handler:

@@ -99,6 +99,16 @@ do_init() {
     sudo mkdir -p /var/log/sickle
     sudo chown "$USER:$USER" /var/log/sickle
 
+    # 6. Workspace directory (from config or default)
+    local ws_dir
+    ws_dir=$(grep -A1 'workspaces:' "$PROD_DIR/config-live/global.yaml" 2>/dev/null \
+        | grep 'base_dir' | sed 's/.*base_dir.*"\(.*\)".*/\1/' || echo "/data/sickle")
+    if [ -n "$ws_dir" ]; then
+        sudo mkdir -p "$ws_dir"
+        sudo chown "$USER:$USER" "$ws_dir"
+        info "Workspace directory ready: $ws_dir"
+    fi
+
     echo ""
     info "Init complete! Next steps:"
     echo "  1. Edit $PROD_DIR/.env with your API keys"

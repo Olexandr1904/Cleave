@@ -360,6 +360,47 @@ class TestAwaitingApproval:
             workspace.transition("AWAITING_APPROVAL")
 
 
+class TestManualControlState:
+    def test_manual_control_in_valid_states(self):
+        from workspace.workspace import VALID_STATES
+        assert "MANUAL_CONTROL" in VALID_STATES
+
+    def test_transition_dev_to_manual_control(self, workspace):
+        workspace.transition("ANALYSIS")
+        workspace.transition("DEV")
+        workspace.transition("MANUAL_CONTROL")
+        assert workspace.state.current_state == "MANUAL_CONTROL"
+        assert workspace.state.previous_state == "DEV"
+
+    def test_transition_manual_control_to_analysis(self, workspace):
+        workspace.transition("ANALYSIS")
+        workspace.transition("DEV")
+        workspace.transition("MANUAL_CONTROL")
+        workspace.transition("ANALYSIS")
+        assert workspace.state.current_state == "ANALYSIS"
+
+    def test_manual_control_cannot_go_to_done(self, workspace):
+        from workspace.workspace import InvalidTransitionError
+        workspace.transition("ANALYSIS")
+        workspace.transition("DEV")
+        workspace.transition("MANUAL_CONTROL")
+        with pytest.raises(InvalidTransitionError):
+            workspace.transition("DONE")
+
+    def test_manual_control_fields_default_none(self, workspace):
+        assert workspace.state.manual_control_started_at is None
+        assert workspace.state.manual_control_comment is None
+
+    def test_all_active_states_can_reach_manual_control(self):
+        from workspace.workspace import VALID_TRANSITIONS
+        active_states = {"ANALYSIS", "DEV", "SCOPE_CHECK", "QA", "PUSHED",
+                         "PR_REVIEW", "BLOCKED", "AWAITING_APPROVAL"}
+        for state in active_states:
+            assert "MANUAL_CONTROL" in VALID_TRANSITIONS[state], (
+                f"{state} cannot transition to MANUAL_CONTROL"
+            )
+
+
 class TestIterations:
     def test_increment_iteration(self, workspace):
         count = workspace.increment_iteration("SCOPE_CHECK")

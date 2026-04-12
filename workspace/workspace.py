@@ -16,23 +16,24 @@ VALID_STATES = {
     "NEW", "ANALYSIS", "DEV", "SCOPE_CHECK", "QA",
     "PUSHED", "PR_REVIEW", "DONE",
     "BLOCKED", "FAILED", "ARCHIVED",
-    "AWAITING_APPROVAL",
+    "AWAITING_APPROVAL", "MANUAL_CONTROL",
 }
 
 # Valid state transitions (architecture-v2 §3.3)
 VALID_TRANSITIONS: dict[str, set[str]] = {
     "NEW":                {"ANALYSIS", "FAILED"},
-    "ANALYSIS":           {"DEV", "BLOCKED", "FAILED", "AWAITING_APPROVAL"},
-    "DEV":                {"SCOPE_CHECK", "BLOCKED", "FAILED"},
-    "SCOPE_CHECK":        {"QA", "DEV", "BLOCKED", "FAILED"},
-    "QA":                 {"PUSHED", "DEV", "BLOCKED", "FAILED", "AWAITING_APPROVAL"},
-    "PUSHED":             {"PR_REVIEW", "BLOCKED", "FAILED"},
-    "PR_REVIEW":          {"DEV", "DONE", "BLOCKED", "FAILED", "AWAITING_APPROVAL"},
+    "ANALYSIS":           {"DEV", "BLOCKED", "FAILED", "AWAITING_APPROVAL", "MANUAL_CONTROL"},
+    "DEV":                {"SCOPE_CHECK", "BLOCKED", "FAILED", "MANUAL_CONTROL"},
+    "SCOPE_CHECK":        {"QA", "DEV", "BLOCKED", "FAILED", "MANUAL_CONTROL"},
+    "QA":                 {"PUSHED", "DEV", "BLOCKED", "FAILED", "AWAITING_APPROVAL", "MANUAL_CONTROL"},
+    "PUSHED":             {"PR_REVIEW", "BLOCKED", "FAILED", "MANUAL_CONTROL"},
+    "PR_REVIEW":          {"DEV", "DONE", "BLOCKED", "FAILED", "AWAITING_APPROVAL", "MANUAL_CONTROL"},
     "DONE":               {"ARCHIVED"},
-    "BLOCKED":            {"ANALYSIS", "DEV", "SCOPE_CHECK", "QA", "PUSHED", "PR_REVIEW", "FAILED"},
+    "BLOCKED":            {"ANALYSIS", "DEV", "SCOPE_CHECK", "QA", "PUSHED", "PR_REVIEW", "FAILED", "MANUAL_CONTROL"},
     "FAILED":             set(),
     "ARCHIVED":           set(),
-    "AWAITING_APPROVAL":  {"DEV", "PUSHED", "DONE", "FAILED"},
+    "AWAITING_APPROVAL":  {"DEV", "PUSHED", "DONE", "FAILED", "MANUAL_CONTROL"},
+    "MANUAL_CONTROL":     {"ANALYSIS"},
 }
 
 
@@ -57,6 +58,8 @@ class WorkspaceState:
     started_at: str = ""
     last_updated_at: str = ""
     error: str | None = None
+    manual_control_started_at: str | None = None
+    manual_control_comment: str | None = None
 
     def __post_init__(self) -> None:
         now = _now_iso()
@@ -162,10 +165,10 @@ class Workspace:
 
         updates: dict[str, Any] = {"current_state": new_state}
 
-        if new_state in ("BLOCKED", "AWAITING_APPROVAL"):
+        if new_state in ("BLOCKED", "AWAITING_APPROVAL", "MANUAL_CONTROL"):
             updates["previous_state"] = current
             updates["human_input_pending"] = True
-        elif current in ("BLOCKED", "AWAITING_APPROVAL"):
+        elif current in ("BLOCKED", "AWAITING_APPROVAL", "MANUAL_CONTROL"):
             # Resuming from a paused state — clear pending flag
             updates["previous_state"] = None
             updates["human_input_pending"] = False

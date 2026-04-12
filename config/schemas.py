@@ -78,6 +78,7 @@ class DashboardConfig:
     host: str = "0.0.0.0"
     port: int = 8080
     db_path: str = "data/events.db"
+    terminal_command: str = "gnome-terminal -- bash -c"
 
 
 @dataclass

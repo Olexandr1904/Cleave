@@ -54,6 +54,7 @@ class AgentRuntime:
         self._operator_profile = operator_profile
         self._max_tool_rounds = max_tool_rounds
         self._events = event_bus
+        self._running: dict[str, dict[str, Any]] = {}  # ticket_id -> {agent_id, pid, started_at}
 
     def _get_agent_tools(self, agent: AgentEntry) -> list[str]:
         """Extract tool allowlist from agent metadata."""
@@ -61,6 +62,40 @@ class AgentRuntime:
         if isinstance(tools, list):
             return [str(t) for t in tools]
         return []
+
+    def register_running(self, ticket_id: str, agent_id: str, pid: int = 0) -> None:
+        """Register an agent as running for a workspace."""
+        self._running[ticket_id] = {
+            "agent_id": agent_id,
+            "pid": pid,
+            "started_at": time.time(),
+        }
+
+    def unregister_running(self, ticket_id: str) -> None:
+        """Remove a workspace from the running tracker."""
+        self._running.pop(ticket_id, None)
+
+    def get_running(self, ticket_id: str) -> dict[str, Any] | None:
+        """Get info about a running agent for a workspace, or None."""
+        return self._running.get(ticket_id)
+
+    def cancel(self, ticket_id: str) -> bool:
+        """Kill a running agent for a workspace. Returns True if was running."""
+        info = self._running.pop(ticket_id, None)
+        if info is None:
+            return False
+        pid = info.get("pid", 0)
+        if pid > 0:
+            try:
+                import os
+                import signal
+                os.kill(pid, signal.SIGTERM)
+                logger.info("Killed agent %s (pid %d) for %s", info["agent_id"], pid, ticket_id)
+            except ProcessLookupError:
+                logger.warning("Agent process %d already gone for %s", pid, ticket_id)
+        else:
+            logger.info("Cancelled agent %s for %s (no PID, will stop on next check)", info["agent_id"], ticket_id)
+        return True
 
     def assemble_prompt(
         self,
@@ -236,12 +271,17 @@ class AgentRuntime:
         """
         adapter: ClaudeCodeAdapter = self._llm  # type: ignore[assignment]
 
-        response = await adapter.execute_in_workspace(
-            prompt=prompt,
-            cwd=str(workspace.source_dir),
-            allowed_tools=allowed_tools if allowed_tools else None,
-            model=model,
-        )
+        ticket_id = workspace.state.ticket_id
+        self.register_running(ticket_id, agent_id, pid=0)
+        try:
+            response = await adapter.execute_in_workspace(
+                prompt=prompt,
+                cwd=str(workspace.source_dir),
+                allowed_tools=allowed_tools if allowed_tools else None,
+                model=model,
+            )
+        finally:
+            self.unregister_running(ticket_id)
 
         # Write output
         output_path = workspace.reports_dir / f"{agent_id}-output.md"

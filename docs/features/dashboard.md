@@ -19,6 +19,8 @@ Local web dashboard providing real-time visibility into the Sickle pipeline. Sho
 - FR6: Workspace board view showing tickets grouped by project with state badges
 - FR7: Ticket detail view with pipeline progress, workspace info, and agent report viewer
 - FR8: Workspace API serving state.json data and report/meta/log files from disk
+- FR9: Action endpoints for workspace control (approve, reject, retry, take-control, release-control)
+- FR10: Daemon mode and status endpoints
 
 ## Technical Approach
 
@@ -26,6 +28,7 @@ Local web dashboard providing real-time visibility into the Sickle pipeline. Sho
 - Starlette embedded web server sharing the daemon's asyncio loop
 - Single HTML file with inline CSS/JS, no build step
 - REST API: /api/events, /api/projects, /api/projects/{id}/tickets, /api/tickets/{id}/events, /api/workspaces, /api/workspaces/{id}/report/{file}
+- Action API: /api/workspaces/{id}/approve|reject|retry|take-control|release-control, /api/daemon/mode, /api/daemon/status
 - Three UI views: Board (ticket cards by project), Ticket Detail (progress + reports), Event Log
 
 ## Dependencies
@@ -48,6 +51,9 @@ Local web dashboard providing real-time visibility into the Sickle pipeline. Sho
 - [x] Ticket detail shows pipeline progress bar and workspace info
 - [x] Agent reports viewable from ticket detail page
 - [x] Workspace API scans state.json files from disk
+- [x] Action endpoints: approve, reject, retry, take-control, release-control
+- [x] Daemon mode switch and status endpoints
+- [x] Action routes wired via orchestrator/mode_handler passed to create_app
 
 ## Change Log
 
@@ -55,3 +61,4 @@ Local web dashboard providing real-time visibility into the Sickle pipeline. Sho
 |------|-------------|
 | 2026-04-11 | Initial implementation |
 | 2026-04-12 | Add operations dashboard: workspace board, ticket detail, report viewer |
+| 2026-04-12 | Add action endpoints: approve, reject, retry, take-control, release, mode, status |

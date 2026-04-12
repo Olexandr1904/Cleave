@@ -335,7 +335,13 @@ def main(argv: list[str] | None = None) -> int:
             from dashboard.web import create_app
             import uvicorn
 
-            app = create_app(event_bus, event_store, workspace_base_dir=global_config.workspaces.base_dir)
+            app = create_app(
+                event_bus, event_store,
+                workspace_base_dir=global_config.workspaces.base_dir,
+                orchestrator=orchestrator,
+                mode_handler=mode_handler,
+                global_config=global_config,
+            )
             config = uvicorn.Config(
                 app, host=dash_config.host, port=dash_config.port,
                 log_level="warning",

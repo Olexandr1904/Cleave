@@ -2,7 +2,7 @@
 
 **Status:** In Progress
 **Created:** 2026-04-07
-**Updated:** 2026-04-09
+**Updated:** 2026-04-12
 **Author:** Oleksandr Brazhenko
 
 ## Description
@@ -49,6 +49,7 @@ Central daemon process that continuously polls for work, manages isolated worksp
 - [ ] Graceful shutdown on SIGTERM/SIGINT
 - [ ] One workspace failure does not crash the daemon
 - [ ] Orchestrator honors `pipeline.mode` (auto/manual): skips polling in manual, pauses at approval gates, and does not advance workspaces in `AWAITING_APPROVAL`
+- [ ] Orchestrator skips workspaces in `MANUAL_CONTROL` state entirely (operator has taken direct control)
 
 ## Change Log
 
@@ -57,3 +58,4 @@ Central daemon process that continuously polls for work, manages isolated worksp
 | 2026-04-07 | Initial draft — seeded from PRD and architecture docs |
 | 2026-04-09 | Added mode-aware behavior: manual-mode skips polling, inserts approval gates after ANALYSIS/QA/PR_REVIEW, skips advancing AWAITING_APPROVAL workspaces. New `set_mode_handler` setter and `_should_approval_gate` check. |
 | 2026-04-09 | Instrumented with optional event_bus: emits daemon_started, poll_cycle, workspace_created, agent_dispatched, agent_completed, agent_failed, approval_requested, stage_transition, escalation_sent, and pr_created events. |
+| 2026-04-12 | Added explicit MANUAL_CONTROL skip in advance_workspace: orchestrator no longer advances workspaces under operator direct control. |

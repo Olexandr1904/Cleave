@@ -428,6 +428,9 @@ class Orchestrator:
         if current == "BLOCKED":
             return  # Waiting for human reply
 
+        if current == "MANUAL_CONTROL":
+            return  # Under human control — skip entirely
+
         if current == "AWAITING_APPROVAL":
             # Manual→Auto mid-flight: if the operator switched to auto while
             # this workspace was parked at a gate, auto-approve and resume.

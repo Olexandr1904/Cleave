@@ -28,13 +28,23 @@
     overflow-y: auto;
   }
 
+  #sidebar-logo {
+    padding: 16px 16px 12px;
+    font-size: 16px;
+    font-weight: 700;
+    color: #58a6ff;
+    letter-spacing: .04em;
+    border-bottom: 1px solid #30363d;
+    flex-shrink: 0;
+  }
+
   #sidebar h2 {
     font-size: 11px;
     font-weight: 600;
     letter-spacing: .08em;
     text-transform: uppercase;
     color: #8b949e;
-    padding: 16px 16px 8px;
+    padding: 14px 16px 6px;
   }
 
   .nav-link {
@@ -53,8 +63,7 @@
   .nav-link:hover { background: #21262d; }
   .nav-link.active { background: #1f6feb33; color: #58a6ff; }
 
-  .sidebar-section { margin-top: 8px; }
-  .sidebar-section h2 { padding-top: 12px; }
+  .sidebar-section { margin-top: 4px; }
 
   /* ── Main ── */
   #main {
@@ -73,6 +82,7 @@
     align-items: center;
     gap: 10px;
     flex-wrap: wrap;
+    flex-shrink: 0;
   }
 
   #toolbar h1 {
@@ -110,35 +120,342 @@
   }
   label.auto-refresh input { cursor: pointer; }
 
-  /* ── Ticket badges ── */
-  #ticket-bar {
-    padding: 8px 16px;
+  /* ── Content area ── */
+  #content {
+    flex: 1;
+    overflow-y: auto;
+    padding: 0;
+  }
+
+  /* ── Board view ── */
+  .project-group {
+    padding: 16px 16px 4px;
+  }
+
+  .project-group-title {
+    font-size: 12px;
+    font-weight: 600;
+    letter-spacing: .06em;
+    text-transform: uppercase;
+    color: #8b949e;
+    margin-bottom: 10px;
+    padding-bottom: 6px;
+    border-bottom: 1px solid #21262d;
+  }
+
+  .cards-grid {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px;
+    margin-bottom: 8px;
+  }
+
+  .card {
+    background: #161b22;
+    border: 1px solid #30363d;
+    border-radius: 8px;
+    padding: 12px 14px;
+    width: 230px;
+    cursor: pointer;
+    transition: border-color .15s, box-shadow .15s;
+    position: relative;
+  }
+  .card:hover { border-color: #58a6ff; box-shadow: 0 0 0 1px #1f6feb33; }
+
+  .card-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 6px;
+  }
+
+  .card-ticket {
+    font-weight: 700;
+    font-size: 13px;
+    color: #e6edf3;
+  }
+
+  .card-repo {
+    font-size: 11px;
+    color: #8b949e;
+    margin-bottom: 6px;
+  }
+
+  .card-footer {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-top: 8px;
+    gap: 6px;
+  }
+
+  .card-time {
+    font-size: 11px;
+    color: #6e7681;
+  }
+
+  .card-pr-link {
+    font-size: 11px;
+    color: #58a6ff;
+    text-decoration: none;
+  }
+  .card-pr-link:hover { text-decoration: underline; }
+
+  .card-error {
+    font-size: 11px;
+    color: #f85149;
+    margin-top: 4px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    max-width: 100%;
+  }
+
+  /* ── State badges ── */
+  .state-badge {
+    display: inline-block;
+    border-radius: 4px;
+    padding: 1px 7px;
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: .03em;
+    white-space: nowrap;
+  }
+
+  .state-NEW        { background: #21262d; color: #8b949e; border: 1px solid #30363d; }
+  .state-ANALYSIS   { background: #1a2d3d; color: #79c0ff; border: 1px solid #1f6feb; }
+  .state-DEV        { background: #2d1a3d; color: #d2a8ff; border: 1px solid #8957e5; }
+  .state-SCOPE_CHECK{ background: #3d3318; color: #e3b341; border: 1px solid #9e6a03; }
+  .state-QA         { background: #3d2518; color: #f0883e; border: 1px solid #bd561d; }
+  .state-PUSHED     { background: #1a3d3a; color: #56d4c2; border: 1px solid #2ea08a; }
+  .state-PR_REVIEW  { background: #1a3d35; color: #56d4a0; border: 1px solid #2ea068; }
+  .state-DONE       { background: #1a3d1a; color: #56d364; border: 1px solid #2ea043; }
+  .state-FAILED     { background: #3d1a1a; color: #f85149; border: 1px solid #da3633; }
+  .state-BLOCKED    { background: #3d1a1a; color: #f85149; border: 1px solid #da3633; }
+  .state-AWAITING_APPROVAL { background: #3d3318; color: #e3b341; border: 1px solid #9e6a03; }
+
+  @keyframes pulse-border {
+    0%, 100% { box-shadow: 0 0 0 0 rgba(248, 81, 73, 0.4); }
+    50% { box-shadow: 0 0 0 3px rgba(248, 81, 73, 0.1); }
+  }
+  .card-blocked { animation: pulse-border 2s ease-in-out infinite; }
+
+  @keyframes pulse-yellow {
+    0%, 100% { box-shadow: 0 0 0 0 rgba(227, 179, 65, 0.4); }
+    50% { box-shadow: 0 0 0 3px rgba(227, 179, 65, 0.1); }
+  }
+  .card-awaiting { animation: pulse-yellow 2s ease-in-out infinite; }
+
+  @keyframes badge-pulse-red {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.6; }
+  }
+  .badge-pulse-red { animation: badge-pulse-red 1.5s ease-in-out infinite; }
+
+  @keyframes badge-pulse-yellow {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.6; }
+  }
+  .badge-pulse-yellow { animation: badge-pulse-yellow 1.5s ease-in-out infinite; }
+
+  /* ── Detail view ── */
+  #detail-view {
+    padding: 20px;
+  }
+
+  .detail-header {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin-bottom: 16px;
+    flex-wrap: wrap;
+  }
+
+  .detail-ticket-id {
+    font-size: 20px;
+    font-weight: 700;
+    color: #e6edf3;
+  }
+
+  .detail-time-info {
+    font-size: 12px;
+    color: #8b949e;
+    margin-left: auto;
+  }
+
+  .back-btn {
+    background: #21262d;
+    border: 1px solid #30363d;
+    border-radius: 6px;
+    padding: 4px 10px;
+    color: #8b949e;
+    cursor: pointer;
+    font-size: 12px;
+  }
+  .back-btn:hover { border-color: #58a6ff; color: #58a6ff; }
+
+  /* ── Pipeline progress ── */
+  .pipeline-bar {
+    background: #161b22;
+    border: 1px solid #30363d;
+    border-radius: 8px;
+    padding: 14px 16px;
+    margin-bottom: 16px;
+  }
+
+  .pipeline-bar-title {
+    font-size: 11px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: .06em;
+    color: #8b949e;
+    margin-bottom: 10px;
+  }
+
+  .pipeline-stages {
+    display: flex;
+    align-items: center;
+    gap: 0;
+    overflow-x: auto;
+  }
+
+  .pipeline-stage {
+    display: flex;
+    align-items: center;
+    flex-shrink: 0;
+  }
+
+  .stage-node {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 4px;
+  }
+
+  .stage-dot {
+    width: 28px;
+    height: 28px;
+    border-radius: 50%;
+    border: 2px solid #30363d;
     background: #0d1117;
-    border-bottom: 1px solid #30363d;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 9px;
+    font-weight: 700;
+    color: #6e7681;
+    transition: all .2s;
+  }
+
+  .stage-dot.done {
+    background: #1a3d1a;
+    border-color: #2ea043;
+    color: #56d364;
+  }
+
+  .stage-dot.current {
+    background: #1a2d3d;
+    border-color: #58a6ff;
+    color: #79c0ff;
+    box-shadow: 0 0 6px #1f6feb66;
+  }
+
+  .stage-dot.failed {
+    background: #3d1a1a;
+    border-color: #da3633;
+    color: #f85149;
+  }
+
+  .stage-label {
+    font-size: 9px;
+    color: #6e7681;
+    text-align: center;
+    max-width: 60px;
+    white-space: nowrap;
+  }
+  .stage-label.done { color: #56d364; }
+  .stage-label.current { color: #79c0ff; }
+  .stage-label.failed { color: #f85149; }
+
+  .stage-connector {
+    height: 2px;
+    width: 24px;
+    background: #30363d;
+    flex-shrink: 0;
+    margin-bottom: 16px;
+  }
+  .stage-connector.done { background: #2ea043; }
+
+  /* ── Info section ── */
+  .detail-section {
+    background: #161b22;
+    border: 1px solid #30363d;
+    border-radius: 8px;
+    padding: 14px 16px;
+    margin-bottom: 14px;
+  }
+
+  .detail-section-title {
+    font-size: 11px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: .06em;
+    color: #8b949e;
+    margin-bottom: 10px;
+  }
+
+  .info-grid {
+    display: grid;
+    grid-template-columns: 130px 1fr;
+    gap: 6px 12px;
+    font-size: 12px;
+  }
+
+  .info-label { color: #6e7681; }
+  .info-value { color: #e6edf3; word-break: break-all; }
+  .info-value a { color: #58a6ff; text-decoration: none; }
+  .info-value a:hover { text-decoration: underline; }
+  .info-value.error { color: #f85149; }
+
+  /* ── Report tabs ── */
+  .tab-bar {
     display: flex;
     gap: 6px;
     flex-wrap: wrap;
-    min-height: 38px;
-    align-items: center;
+    margin-bottom: 10px;
   }
-  #ticket-bar.hidden { display: none; }
 
-  .ticket-badge {
+  .tab-btn {
     background: #21262d;
     border: 1px solid #30363d;
-    border-radius: 12px;
-    padding: 2px 10px;
-    font-size: 11px;
-    color: #79c0ff;
+    border-radius: 6px;
+    padding: 4px 12px;
+    font-size: 12px;
+    color: #8b949e;
     cursor: pointer;
-    transition: background .12s, border-color .12s;
+    transition: all .12s;
   }
-  .ticket-badge:hover { background: #1f6feb33; border-color: #58a6ff; }
+  .tab-btn:hover { border-color: #58a6ff; color: #c9d1d9; }
+  .tab-btn.active { background: #1f6feb33; border-color: #58a6ff; color: #58a6ff; }
 
-  /* ── Event list ── */
-  #event-list {
-    flex: 1;
+  .report-content {
+    background: #0d1117;
+    border: 1px solid #30363d;
+    border-radius: 6px;
+    padding: 12px;
+    font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
+    font-size: 12px;
+    color: #c9d1d9;
+    overflow-x: auto;
+    white-space: pre-wrap;
+    word-break: break-word;
+    max-height: 400px;
     overflow-y: auto;
+    line-height: 1.5;
+  }
+
+  /* ── Event log ── */
+  .event-list {
     padding: 8px 0;
   }
 
@@ -212,46 +529,50 @@
 <body>
 
 <nav id="sidebar">
+  <div id="sidebar-logo">Sickle</div>
   <div class="sidebar-section">
-    <a class="nav-link active" id="nav-global" onclick="showGlobalLog()">Global Log</a>
+    <a class="nav-link" id="nav-board" onclick="showBoard(null)">Board</a>
+    <a class="nav-link" id="nav-eventlog" onclick="showEventLog()">Event Log</a>
   </div>
   <div class="sidebar-section">
     <h2>Projects</h2>
     <div id="project-list">
-      <div class="state-msg" style="padding:8px 16px;text-align:left;font-size:12px;">Loading…</div>
+      <div class="state-msg" style="padding:6px 16px;text-align:left;font-size:12px;">Loading…</div>
     </div>
   </div>
 </nav>
 
 <div id="main">
   <div id="toolbar">
-    <h1 id="view-title">Global Log</h1>
-    <select id="filter-type" onchange="applyFilter()">
-      <option value="">All event types</option>
-      <option value="agent_dispatched">agent_dispatched</option>
-      <option value="agent_completed">agent_completed</option>
-      <option value="agent_failed">agent_failed</option>
-      <option value="stage_transition">stage_transition</option>
-      <option value="workspace_created">workspace_created</option>
-      <option value="pr_created">pr_created</option>
-      <option value="escalation_sent">escalation_sent</option>
-      <option value="approval_requested">approval_requested</option>
-      <option value="tg_message_received">tg_message_received</option>
-      <option value="tg_message_sent">tg_message_sent</option>
-      <option value="intent_parsed">intent_parsed</option>
-      <option value="poll_cycle">poll_cycle</option>
-      <option value="daemon_started">daemon_started</option>
-    </select>
-    <button onclick="refresh()">Refresh</button>
+    <h1 id="view-title">Board</h1>
+    <span id="toolbar-eventlog-controls" style="display:none; align-items:center; gap:10px;">
+      <select id="filter-type" onchange="applyEventFilter()">
+        <option value="">All event types</option>
+        <option value="agent_dispatched">agent_dispatched</option>
+        <option value="agent_completed">agent_completed</option>
+        <option value="agent_failed">agent_failed</option>
+        <option value="stage_transition">stage_transition</option>
+        <option value="workspace_created">workspace_created</option>
+        <option value="pr_created">pr_created</option>
+        <option value="project_loaded">project_loaded</option>
+        <option value="workspace_resumed">workspace_resumed</option>
+        <option value="escalation_sent">escalation_sent</option>
+        <option value="approval_requested">approval_requested</option>
+        <option value="tg_message_received">tg_message_received</option>
+        <option value="tg_message_sent">tg_message_sent</option>
+        <option value="intent_parsed">intent_parsed</option>
+        <option value="poll_cycle">poll_cycle</option>
+        <option value="daemon_started">daemon_started</option>
+      </select>
+    </span>
+    <button id="toolbar-refresh-btn" onclick="refreshCurrentView()">Refresh</button>
     <label class="auto-refresh">
       <input type="checkbox" id="auto-refresh-cb" checked>
       Auto (5s)
     </label>
   </div>
 
-  <div id="ticket-bar" class="hidden"></div>
-
-  <div id="event-list">
+  <div id="content">
     <div class="state-msg">Loading…</div>
   </div>
 </div>
@@ -259,33 +580,36 @@
 <script>
 // ── State ──────────────────────────────────────────────────────────────────
 const state = {
-  view: 'global',      // 'global' | 'project' | 'ticket'
-  projectId: null,
-  ticketId: null,
-  filterType: '',
+  view: 'board',         // 'board' | 'eventlog' | 'detail'
+  projectId: null,       // for board filter and eventlog filter
+  ticketId: null,        // for detail view
+  filterType: '',        // event type filter
   timer: null,
+  detailTab: null,       // currently selected report tab
 };
 
-// ── Event type → badge class ───────────────────────────────────────────────
+// ── Constants ──────────────────────────────────────────────────────────────
+const PIPELINE_STAGES = ['NEW', 'ANALYSIS', 'DEV', 'SCOPE_CHECK', 'QA', 'PUSHED', 'PR_REVIEW', 'DONE'];
+const STAGE_ORDER = {};
+PIPELINE_STAGES.forEach((s, i) => { STAGE_ORDER[s] = i; });
+
 const BADGE_CLASS = {
-  agent_dispatched:   'badge-green',
-  agent_completed:    'badge-green',
-  workspace_created:  'badge-green',
-  pr_created:         'badge-green',
-  agent_failed:       'badge-red',
-  escalation_sent:    'badge-red',
-  stage_transition:   'badge-blue',
-  tg_message_received:'badge-yellow',
-  tg_message_sent:    'badge-yellow',
-  intent_parsed:      'badge-yellow',
-  approval_requested: 'badge-purple',
-  poll_cycle:         'badge-gray',
-  daemon_started:     'badge-gray',
+  agent_dispatched:    'badge-green',
+  agent_completed:     'badge-green',
+  workspace_created:   'badge-green',
+  pr_created:          'badge-green',
+  project_loaded:      'badge-green',
+  workspace_resumed:   'badge-green',
+  agent_failed:        'badge-red',
+  escalation_sent:     'badge-red',
+  stage_transition:    'badge-blue',
+  tg_message_received: 'badge-yellow',
+  tg_message_sent:     'badge-yellow',
+  intent_parsed:       'badge-yellow',
+  approval_requested:  'badge-purple',
+  poll_cycle:          'badge-gray',
+  daemon_started:      'badge-gray',
 };
-
-function badgeClass(type) {
-  return BADGE_CLASS[type] || 'badge-gray';
-}
 
 // ── Helpers ────────────────────────────────────────────────────────────────
 function esc(s) {
@@ -299,7 +623,7 @@ function esc(s) {
 
 function fmtTs(ts) {
   if (!ts) return '';
-  const d = new Date(ts);
+  const d = new Date(ts * 1000);
   if (isNaN(d)) return esc(ts);
   return d.toLocaleString('en-GB', {
     day: '2-digit', month: '2-digit',
@@ -308,45 +632,42 @@ function fmtTs(ts) {
   }).replace(',', '');
 }
 
-function metaParts(ev) {
-  const parts = [];
-  if (ev.project_id) parts.push(`project: ${esc(ev.project_id)}`);
-  if (ev.ticket_id)  parts.push(`ticket: ${esc(ev.ticket_id)}`);
-  if (ev.agent_id)   parts.push(`agent: ${esc(ev.agent_id)}`);
-  if (ev.duration_ms != null) parts.push(`${ev.duration_ms}ms`);
-  if (ev.tokens != null)      parts.push(`${ev.tokens} tok`);
-  return parts;
+function timeAgo(isoStr) {
+  if (!isoStr) return '';
+  const d = new Date(isoStr);
+  if (isNaN(d)) return '';
+  const diffMs = Date.now() - d.getTime();
+  const diffSec = Math.floor(diffMs / 1000);
+  if (diffSec < 60) return `${diffSec}s ago`;
+  const diffMin = Math.floor(diffSec / 60);
+  if (diffMin < 60) return `${diffMin}m ago`;
+  const diffHr = Math.floor(diffMin / 60);
+  if (diffHr < 24) return `${diffHr}h ago`;
+  const diffDay = Math.floor(diffHr / 24);
+  return `${diffDay}d ago`;
 }
 
-function renderEvents(events) {
-  const list = document.getElementById('event-list');
-  if (!events || events.length === 0) {
-    list.innerHTML = '<div class="state-msg">No events found.</div>';
-    return;
-  }
+function fmtIso(isoStr) {
+  if (!isoStr) return '';
+  const d = new Date(isoStr);
+  if (isNaN(d)) return esc(isoStr);
+  return d.toLocaleString('en-GB', {
+    day: '2-digit', month: '2-digit', year: 'numeric',
+    hour: '2-digit', minute: '2-digit', second: '2-digit',
+    hour12: false,
+  }).replace(',', '');
+}
 
-  const typeFilter = state.filterType;
-  const filtered = typeFilter ? events.filter(e => e.event_type === typeFilter) : events;
+function badgeClass(type) {
+  return BADGE_CLASS[type] || 'badge-gray';
+}
 
-  if (filtered.length === 0) {
-    list.innerHTML = '<div class="state-msg">No events match the current filter.</div>';
-    return;
-  }
-
-  const html = filtered.map(ev => {
-    const cls = badgeClass(ev.event_type);
-    const meta = metaParts(ev);
-    return `<div class="event-row">
-      <span class="event-ts">${fmtTs(ev.created_at)}</span>
-      <span class="event-badge ${cls}">${esc(ev.event_type)}</span>
-      <div class="event-body">
-        <div class="event-msg">${esc(ev.message)}</div>
-        ${meta.length ? `<div class="event-meta">${meta.map(p => `<span>${p}</span>`).join('')}</div>` : ''}
-      </div>
-    </div>`;
-  }).join('');
-
-  list.innerHTML = html;
+function stateBadgeHtml(state_val) {
+  const cls = 'state-' + (state_val || 'NEW').replace(/[^A-Z_]/g, '');
+  let pulseClass = '';
+  if (state_val === 'BLOCKED') pulseClass = ' badge-pulse-red';
+  if (state_val === 'AWAITING_APPROVAL') pulseClass = ' badge-pulse-yellow';
+  return `<span class="state-badge ${cls}${pulseClass}">${esc(state_val || 'NEW')}</span>`;
 }
 
 // ── API calls ──────────────────────────────────────────────────────────────
@@ -356,39 +677,10 @@ async function fetchJSON(url) {
   return resp.json();
 }
 
-async function loadGlobalEvents() {
-  let url = '/api/events?limit=200';
-  if (state.projectId) url += `&project_id=${encodeURIComponent(state.projectId)}`;
-  const data = await fetchJSON(url);
-  renderEvents(data.events || []);
-}
-
-async function loadTicketEvents() {
-  const data = await fetchJSON(`/api/tickets/${encodeURIComponent(state.ticketId)}/events?limit=200`);
-  renderEvents(data.events || []);
-}
-
-async function loadTicketBar(projectId) {
-  const bar = document.getElementById('ticket-bar');
-  bar.innerHTML = '';
-  try {
-    const data = await fetchJSON(`/api/projects/${encodeURIComponent(projectId)}/tickets`);
-    const tickets = data.tickets || [];
-    if (tickets.length === 0) {
-      bar.classList.add('hidden');
-      return;
-    }
-    bar.classList.remove('hidden');
-    tickets.forEach(tid => {
-      const badge = document.createElement('span');
-      badge.className = 'ticket-badge';
-      badge.textContent = tid;
-      badge.onclick = () => showTicket(tid);
-      bar.appendChild(badge);
-    });
-  } catch (e) {
-    bar.classList.add('hidden');
-  }
+async function fetchText(url) {
+  const resp = await fetch(url);
+  if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+  return resp.text();
 }
 
 async function loadProjects() {
@@ -401,80 +693,373 @@ async function loadProjects() {
       return;
     }
     pl.innerHTML = projects.map(p =>
-      `<a class="nav-link" id="nav-proj-${esc(p)}" onclick="showProject(${JSON.stringify(p)})">${esc(p)}</a>`
+      `<a class="nav-link" id="nav-proj-${esc(p)}" onclick="showBoard(${JSON.stringify(p)})">${esc(p)}</a>`
     ).join('');
   } catch (e) {
     pl.innerHTML = '<div style="padding:6px 16px;color:#f85149;font-size:12px;">Failed to load.</div>';
   }
 }
 
-// ── View transitions ───────────────────────────────────────────────────────
+// ── Navigation ─────────────────────────────────────────────────────────────
 function setActiveNav(id) {
   document.querySelectorAll('.nav-link').forEach(el => el.classList.remove('active'));
   const el = document.getElementById(id);
   if (el) el.classList.add('active');
 }
 
-function showGlobalLog() {
-  state.view = 'global';
-  state.projectId = null;
-  state.ticketId = null;
-  document.getElementById('view-title').textContent = 'Global Log';
-  document.getElementById('ticket-bar').classList.add('hidden');
-  setActiveNav('nav-global');
-  refresh();
+function showEventLogControls(show) {
+  const el = document.getElementById('toolbar-eventlog-controls');
+  el.style.display = show ? 'flex' : 'none';
 }
 
-function showProject(projectId) {
-  state.view = 'project';
+function showBoard(projectId) {
+  state.view = 'board';
   state.projectId = projectId;
   state.ticketId = null;
-  document.getElementById('view-title').textContent = `Project: ${projectId}`;
-  setActiveNav(`nav-proj-${projectId}`);
-  loadTicketBar(projectId);
-  refresh();
-}
-
-function showTicket(ticketId) {
-  state.view = 'ticket';
-  state.ticketId = ticketId;
-  document.getElementById('view-title').textContent = `Ticket: ${ticketId}`;
-  refresh();
-}
-
-function applyFilter() {
-  state.filterType = document.getElementById('filter-type').value;
-  refresh();
-}
-
-// ── Refresh logic ──────────────────────────────────────────────────────────
-async function refresh() {
-  const list = document.getElementById('event-list');
-  try {
-    if (state.view === 'ticket') {
-      await loadTicketEvents();
-    } else {
-      await loadGlobalEvents();
-    }
-  } catch (e) {
-    list.innerHTML = `<div class="state-msg" style="color:#f85149;">Error loading events: ${esc(String(e))}</div>`;
+  document.getElementById('view-title').textContent = projectId ? `Board: ${projectId}` : 'Board';
+  showEventLogControls(false);
+  if (projectId) {
+    setActiveNav(`nav-proj-${projectId}`);
+  } else {
+    setActiveNav('nav-board');
   }
+  scheduleAutoRefresh();
+  renderBoard();
+}
+
+function showEventLog() {
+  state.view = 'eventlog';
+  state.projectId = null;
+  state.ticketId = null;
+  document.getElementById('view-title').textContent = 'Event Log';
+  showEventLogControls(true);
+  setActiveNav('nav-eventlog');
+  scheduleAutoRefresh();
+  renderEventLog();
+}
+
+function showDetail(ticketId) {
+  state.view = 'detail';
+  state.ticketId = ticketId;
+  state.detailTab = null;
+  showEventLogControls(false);
+  document.getElementById('view-title').textContent = `Ticket: ${ticketId}`;
+  stopAutoRefresh();
+  renderDetail(ticketId);
+}
+
+function applyEventFilter() {
+  state.filterType = document.getElementById('filter-type').value;
+  renderEventLog();
+}
+
+function refreshCurrentView() {
+  if (state.view === 'board') {
+    renderBoard();
+  } else if (state.view === 'eventlog') {
+    renderEventLog();
+  } else if (state.view === 'detail') {
+    renderDetail(state.ticketId);
+  }
+}
+
+// ── Board rendering ────────────────────────────────────────────────────────
+async function renderBoard() {
+  const content = document.getElementById('content');
+  try {
+    let url = '/api/workspaces';
+    if (state.projectId) url += `?project_id=${encodeURIComponent(state.projectId)}`;
+    const data = await fetchJSON(url);
+    const workspaces = data.workspaces || [];
+
+    if (workspaces.length === 0) {
+      content.innerHTML = '<div class="state-msg">No workspaces found.</div>';
+      return;
+    }
+
+    // Group by project
+    const byProject = {};
+    workspaces.forEach(ws => {
+      const proj = ws.company_id || 'unknown';
+      if (!byProject[proj]) byProject[proj] = [];
+      byProject[proj].push(ws);
+    });
+
+    let html = '';
+    for (const [proj, wsList] of Object.entries(byProject)) {
+      html += `<div class="project-group">
+        <div class="project-group-title">${esc(proj)}</div>
+        <div class="cards-grid">`;
+      for (const ws of wsList) {
+        html += renderCard(ws);
+      }
+      html += `</div></div>`;
+    }
+
+    content.innerHTML = html;
+  } catch (e) {
+    content.innerHTML = `<div class="state-msg" style="color:#f85149;">Error loading workspaces: ${esc(String(e))}</div>`;
+  }
+}
+
+function renderCard(ws) {
+  const stateVal = ws.current_state || 'NEW';
+  let cardClass = 'card';
+  if (stateVal === 'BLOCKED') cardClass += ' card-blocked';
+  if (stateVal === 'AWAITING_APPROVAL') cardClass += ' card-awaiting';
+
+  const prLink = ws.pr_url
+    ? `<a class="card-pr-link" href="${esc(ws.pr_url)}" target="_blank" onclick="event.stopPropagation()">PR #${esc(String(ws.pr_number || ''))}</a>`
+    : '';
+
+  const errorHtml = ws.error
+    ? `<div class="card-error" title="${esc(ws.error)}">${esc(ws.error)}</div>`
+    : '';
+
+  const started = timeAgo(ws.started_at);
+
+  return `<div class="${cardClass}" onclick="showDetail(${JSON.stringify(ws.ticket_id)})">
+    <div class="card-header">
+      <span class="card-ticket">${esc(ws.ticket_id)}</span>
+      ${stateBadgeHtml(stateVal)}
+    </div>
+    <div class="card-repo">${esc(ws.repo_id || '')}</div>
+    ${errorHtml}
+    <div class="card-footer">
+      <span class="card-time">${esc(started)}</span>
+      ${prLink}
+    </div>
+  </div>`;
+}
+
+// ── Detail rendering ───────────────────────────────────────────────────────
+async function renderDetail(ticketId) {
+  const content = document.getElementById('content');
+  content.innerHTML = '<div class="state-msg">Loading…</div>';
+
+  try {
+    // Load workspace info
+    const data = await fetchJSON('/api/workspaces');
+    const workspaces = data.workspaces || [];
+    const ws = workspaces.find(w => w.ticket_id === ticketId);
+
+    if (!ws) {
+      content.innerHTML = `<div class="state-msg" style="color:#f85149;">Workspace not found: ${esc(ticketId)}</div>`;
+      return;
+    }
+
+    // Load events for this ticket
+    let events = [];
+    try {
+      const evData = await fetchJSON(`/api/events?ticket_id=${encodeURIComponent(ticketId)}&limit=200`);
+      events = evData.events || [];
+    } catch (e) { /* ignore */ }
+
+    const stateVal = ws.current_state || 'NEW';
+    const stageIdx = STAGE_ORDER[stateVal] != null ? STAGE_ORDER[stateVal] : -1;
+
+    // Pipeline bar
+    let pipelineHtml = '<div class="pipeline-stages">';
+    PIPELINE_STAGES.forEach((stage, idx) => {
+      let dotClass = 'stage-dot';
+      let labelClass = 'stage-label';
+      let symbol = (idx + 1).toString();
+
+      if (stateVal === 'FAILED' && idx === stageIdx) {
+        dotClass += ' failed';
+        labelClass += ' failed';
+        symbol = '!';
+      } else if (idx < stageIdx) {
+        dotClass += ' done';
+        labelClass += ' done';
+        symbol = '✓';
+      } else if (idx === stageIdx) {
+        dotClass += ' current';
+        labelClass += ' current';
+      }
+
+      pipelineHtml += `<div class="pipeline-stage">
+        <div class="stage-node">
+          <div class="${dotClass}">${symbol}</div>
+          <div class="${labelClass}">${esc(stage)}</div>
+        </div>`;
+      if (idx < PIPELINE_STAGES.length - 1) {
+        const connClass = idx < stageIdx ? ' done' : '';
+        pipelineHtml += `</div><div class="stage-connector${connClass}"></div>`;
+      } else {
+        pipelineHtml += '</div>';
+      }
+    });
+    pipelineHtml += '</div>';
+
+    // Info grid
+    const iterations = ws.stage_iterations ? Object.entries(ws.stage_iterations).map(([k, v]) => `${esc(k)}: ${esc(String(v))}`).join(', ') : '';
+    let infoHtml = `<div class="info-grid">
+      <span class="info-label">Branch</span>
+      <span class="info-value">${esc(ws.branch || '—')}</span>
+      <span class="info-label">Repo</span>
+      <span class="info-value">${esc(ws.repo_id || '—')}</span>
+      <span class="info-label">Started</span>
+      <span class="info-value">${esc(fmtIso(ws.started_at))}</span>
+      <span class="info-label">Last updated</span>
+      <span class="info-value">${esc(fmtIso(ws.last_updated_at))}</span>`;
+    if (ws.pr_url) {
+      infoHtml += `<span class="info-label">PR</span>
+      <span class="info-value"><a href="${esc(ws.pr_url)}" target="_blank">#${esc(String(ws.pr_number || ''))} ${esc(ws.pr_url)}</a></span>`;
+    }
+    if (ws.error) {
+      infoHtml += `<span class="info-label">Error</span>
+      <span class="info-value error">${esc(ws.error)}</span>`;
+    }
+    if (iterations) {
+      infoHtml += `<span class="info-label">Iterations</span>
+      <span class="info-value">${iterations}</span>`;
+    }
+    if (ws.human_input_pending) {
+      infoHtml += `<span class="info-label">Human input</span>
+      <span class="info-value" style="color:#e3b341;">Pending</span>`;
+    }
+    infoHtml += '</div>';
+
+    // Reports + meta tabs
+    const allReports = [];
+    (ws.reports || []).forEach(f => allReports.push({ name: f, folder: 'reports' }));
+    (ws.meta || []).forEach(f => allReports.push({ name: f, folder: 'meta' }));
+
+    let reportsHtml = '';
+    if (allReports.length > 0) {
+      const tabBar = allReports.map(r =>
+        `<button class="tab-btn" id="tab-btn-${esc(r.folder)}-${esc(r.name)}"
+          onclick="loadReport(${JSON.stringify(ws.ticket_id)}, ${JSON.stringify(r.name)}, ${JSON.stringify(r.folder)})"
+          >${esc(r.name)}</button>`
+      ).join('');
+      reportsHtml = `<div class="detail-section">
+        <div class="detail-section-title">Reports &amp; Files</div>
+        <div class="tab-bar">${tabBar}</div>
+        <div id="report-content-area"><div style="color:#6e7681;font-size:12px;">Select a file to view.</div></div>
+      </div>`;
+    }
+
+    // Events
+    const eventsHtml = renderEventsHtml(events, true);
+
+    content.innerHTML = `<div id="detail-view">
+      <div class="detail-header">
+        <button class="back-btn" onclick="showBoard(${JSON.stringify(ws.company_id)})">← Back</button>
+        <span class="detail-ticket-id">${esc(ws.ticket_id)}</span>
+        ${stateBadgeHtml(stateVal)}
+        <span class="detail-time-info">Started ${esc(timeAgo(ws.started_at))} &middot; Updated ${esc(timeAgo(ws.last_updated_at))}</span>
+      </div>
+
+      <div class="pipeline-bar">
+        <div class="pipeline-bar-title">Pipeline</div>
+        ${pipelineHtml}
+      </div>
+
+      <div class="detail-section">
+        <div class="detail-section-title">Info</div>
+        ${infoHtml}
+      </div>
+
+      ${reportsHtml}
+
+      <div class="detail-section">
+        <div class="detail-section-title">Event Timeline</div>
+        <div class="event-list">${eventsHtml}</div>
+      </div>
+    </div>`;
+
+  } catch (e) {
+    content.innerHTML = `<div class="state-msg" style="color:#f85149;">Error loading detail: ${esc(String(e))}</div>`;
+  }
+}
+
+async function loadReport(ticketId, filename, folder) {
+  // Update tab active state
+  document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+  const btn = document.getElementById(`tab-btn-${folder}-${filename}`);
+  if (btn) btn.classList.add('active');
+
+  const area = document.getElementById('report-content-area');
+  if (!area) return;
+  area.innerHTML = '<div style="color:#6e7681;font-size:12px;padding:8px 0;">Loading…</div>';
+
+  try {
+    const text = await fetchText(`/api/workspaces/${encodeURIComponent(ticketId)}/report/${encodeURIComponent(filename)}?folder=${encodeURIComponent(folder)}`);
+    area.innerHTML = `<div class="report-content">${esc(text)}</div>`;
+  } catch (e) {
+    area.innerHTML = `<div style="color:#f85149;font-size:12px;">Error loading file: ${esc(String(e))}</div>`;
+  }
+}
+
+// ── Event log rendering ────────────────────────────────────────────────────
+async function renderEventLog() {
+  const content = document.getElementById('content');
+  try {
+    let url = '/api/events?limit=200';
+    if (state.projectId) url += `&project_id=${encodeURIComponent(state.projectId)}`;
+    const data = await fetchJSON(url);
+    let events = data.events || [];
+
+    if (state.filterType) {
+      events = events.filter(e => e.event_type === state.filterType);
+    }
+
+    const html = renderEventsHtml(events, false);
+    content.innerHTML = `<div class="event-list">${html}</div>`;
+  } catch (e) {
+    content.innerHTML = `<div class="state-msg" style="color:#f85149;">Error loading events: ${esc(String(e))}</div>`;
+  }
+}
+
+function renderEventsHtml(events, compact) {
+  if (!events || events.length === 0) {
+    return '<div class="state-msg">No events found.</div>';
+  }
+
+  return events.map(ev => {
+    const cls = badgeClass(ev.event_type);
+    const parts = [];
+    if (!compact && ev.project_id) parts.push(`project: ${esc(ev.project_id)}`);
+    if (!compact && ev.ticket_id)  parts.push(`ticket: ${esc(ev.ticket_id)}`);
+    if (ev.agent_id)   parts.push(`agent: ${esc(ev.agent_id)}`);
+    if (ev.data && ev.data.duration != null) parts.push(`${ev.data.duration.toFixed(1)}s`);
+    if (ev.data && ev.data.input_tokens != null) parts.push(`${ev.data.input_tokens}/${ev.data.output_tokens} tok`);
+
+    return `<div class="event-row">
+      <span class="event-ts">${fmtTs(ev.timestamp)}</span>
+      <span class="event-badge ${cls}">${esc(ev.event_type)}</span>
+      <div class="event-body">
+        <div class="event-msg">${esc(ev.message)}</div>
+        ${parts.length ? `<div class="event-meta">${parts.map(p => `<span>${p}</span>`).join('')}</div>` : ''}
+      </div>
+    </div>`;
+  }).join('');
+}
+
+// ── Auto-refresh ───────────────────────────────────────────────────────────
+function stopAutoRefresh() {
+  if (state.timer) { clearInterval(state.timer); state.timer = null; }
 }
 
 function scheduleAutoRefresh() {
-  if (state.timer) clearInterval(state.timer);
+  stopAutoRefresh();
   const cb = document.getElementById('auto-refresh-cb');
   if (cb && cb.checked) {
-    state.timer = setInterval(refresh, 5000);
+    state.timer = setInterval(refreshCurrentView, 5000);
   }
 }
 
-document.getElementById('auto-refresh-cb').addEventListener('change', scheduleAutoRefresh);
+document.getElementById('auto-refresh-cb').addEventListener('change', () => {
+  if (state.view === 'detail') return;
+  scheduleAutoRefresh();
+});
 
 // ── Init ───────────────────────────────────────────────────────────────────
 (async function init() {
   await loadProjects();
-  await refresh();
+  setActiveNav('nav-board');
+  await renderBoard();
   scheduleAutoRefresh();
 })();
 </script>

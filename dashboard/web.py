@@ -61,6 +61,9 @@ def create_app(
     bus: EventBus,
     store: EventStore,
     workspace_base_dir: str = "",
+    orchestrator: Any | None = None,
+    mode_handler: Any | None = None,
+    global_config: Any | None = None,
 ) -> Starlette:
     """Create the Starlette dashboard application."""
 
@@ -141,5 +144,16 @@ def create_app(
         Route("/api/workspaces", get_workspaces),
         Route("/api/workspaces/{ticket_id}/report/{filename:path}", get_workspace_report),
     ]
+
+    # Action routes (only if orchestrator is available)
+    if orchestrator is not None:
+        from dashboard.actions import build_action_routes
+        action_routes = build_action_routes(
+            orchestrator=orchestrator,
+            mode_handler=mode_handler,
+            event_bus=bus,
+            global_config=global_config,
+        )
+        routes.extend(action_routes)
 
     return Starlette(routes=routes)

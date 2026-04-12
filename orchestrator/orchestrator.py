@@ -528,6 +528,8 @@ class Orchestrator:
                     chat_id = self._get_chat_id(workspace)
                     summary = self._build_gate_summary(workspace, current_state)
                     await self._notifier.send_message(chat_id, summary)
+            elif next_stage == "escalate":
+                await self._handle_escalate(workspace)
             else:
                 self._advance_to_stage(workspace, next_stage)
         else:
@@ -676,16 +678,28 @@ class Orchestrator:
             workspace.update_state(error="No Telegram chat_id configured")
             return
 
-        message = (
-            f"[{state.company_id}/{state.repo_id}] {state.ticket_id}\n\n"
-            f"Pipeline needs human input.\n"
-            f"Current state: {state.current_state}\n"
-        )
+        # Build a human-readable escalation message from the latest agent output
+        stage = state.previous_state or state.current_state
+        message = f"{state.ticket_id} — needs your input after {stage}\n\n"
 
-        # Check for questions from BA
-        questions_file = workspace.reports_dir / "ba-questions.md"
-        if questions_file.exists():
-            message += f"\n{questions_file.read_text(encoding='utf-8')}"
+        # Find the most recent agent output report
+        report_content = None
+        if workspace.reports_dir.exists():
+            outputs = sorted(
+                workspace.reports_dir.glob("*-output.md"),
+                key=lambda p: p.stat().st_mtime,
+                reverse=True,
+            )
+            if outputs:
+                report_content = outputs[0].read_text(encoding="utf-8").strip()
+
+        if report_content:
+            # Telegram has a 4096 char limit
+            if len(message) + len(report_content) > 4000:
+                report_content = report_content[:4000 - len(message)] + "\n..."
+            message += report_content
+        else:
+            message += "The pipeline could not proceed automatically. Please check the workspace for details."
 
         try:
             msg_id = await self._notifier.send_message(chat_id, message)
@@ -693,6 +707,9 @@ class Orchestrator:
             workspace.update_state(
                 human_input_question=message,
             )
+            workspace.state.escalation_msg_id = msg_id
+            workspace.state.escalation_chat_id = chat_id
+            workspace.save_state()
             logger.info("Escalated %s via Telegram (msg_id=%d)", state.ticket_id, msg_id)
             self._emit("escalation_sent", f"Escalated {workspace.state.ticket_id} to human", project_id=workspace.state.company_id, ticket_id=workspace.state.ticket_id, data={"reason": workspace.state.human_input_question or "unknown"})
         except Exception as e:

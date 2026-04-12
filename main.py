@@ -335,7 +335,7 @@ def main(argv: list[str] | None = None) -> int:
             from dashboard.web import create_app
             import uvicorn
 
-            app = create_app(event_bus, event_store)
+            app = create_app(event_bus, event_store, workspace_base_dir=global_config.workspaces.base_dir)
             config = uvicorn.Config(
                 app, host=dash_config.host, port=dash_config.port,
                 log_level="warning",
@@ -345,6 +345,26 @@ def main(argv: list[str] | None = None) -> int:
             print(f"  Dashboard: http://{dash_config.host}:{dash_config.port}")
 
         event_bus.emit("daemon_started", f"Sickle v{version} started")
+
+        # Emit events for configured projects so they appear in the dashboard
+        for pid, proj in projects.items():
+            for rid, repo in proj.repos.items():
+                event_bus.emit(
+                    "project_loaded",
+                    f"Project {pid}/{rid}: {repo.repo.name}",
+                    project_id=pid,
+                    data={"repo_id": rid, "repo_name": repo.repo.name},
+                )
+
+        # Emit events for existing workspaces discovered on disk
+        for ws in orchestrator.get_active_workspaces():
+            event_bus.emit(
+                "workspace_resumed",
+                f"Resumed {ws.state.ticket_id} in state {ws.state.current_state}",
+                project_id=ws.state.company_id,
+                ticket_id=ws.state.ticket_id,
+                data={"state": ws.state.current_state, "repo_id": ws.state.repo_id},
+            )
 
         tg_active = isinstance(notifier, TelegramAdapter)
         if tg_active:

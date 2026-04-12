@@ -17,7 +17,7 @@ Current state:
 - Active workspaces: {active_workspaces}
 
 Classify the user message into one of these intents:
-  status, analyze, approve, reject, set_mode, unknown
+  status, analyze, approve, reject, set_mode, retry, unknown
 
 Return ONLY valid JSON (no markdown, no code fences):
 {{"intent": "...", "params": {{...}}, "reply": "..."}}
@@ -28,6 +28,7 @@ Intent param schemas:
 - approve: params.ticket_id (optional string, infer from context if one workspace awaiting)
 - reject: params.ticket_id (optional string)
 - set_mode: params.mode (required, "auto" or "manual")
+- retry: params.ticket_id (required string), params.from_stage (optional: "analysis", "dev", "qa", "push" — defaults to current stage)
 - unknown: params.raw_text (the original message)
 
 The "reply" field is a natural language confirmation message for the user.\

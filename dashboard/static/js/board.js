@@ -19,6 +19,14 @@ export async function renderBoard(projectId, showDone = true) {
       filtered = workspaces.filter(ws => !['DONE', 'FAILED', 'ARCHIVED'].includes(ws.current_state));
     }
 
+    // Sort: BLOCKED first, AWAITING second, active by stage, DONE/ARCHIVED last
+    const stateOrder = {
+      BLOCKED: 0, AWAITING_APPROVAL: 1, MANUAL_CONTROL: 2,
+      DEV: 3, ANALYSIS: 4, SCOPE_CHECK: 5, QA: 6, PR_REVIEW: 7, PUSHED: 8,
+      NEW: 9, DONE: 10, FAILED: 11, ARCHIVED: 12,
+    };
+    filtered.sort((a, b) => (stateOrder[a.current_state] ?? 99) - (stateOrder[b.current_state] ?? 99));
+
     // Group by project
     const byProject = {};
     filtered.forEach(ws => {

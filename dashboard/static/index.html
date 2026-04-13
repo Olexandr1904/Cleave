@@ -11,8 +11,8 @@
 <nav id="sidebar">
   <div id="sidebar-logo">Sickle</div>
   <div class="sidebar-section">
-    <a class="nav-link" id="nav-board" onclick="showBoard(null)">Board</a>
-    <a class="nav-link" id="nav-eventlog" onclick="showEventLog()">Event Log</a>
+    <a class="nav-link" id="nav-board">Board</a>
+    <a class="nav-link" id="nav-eventlog">Event Log</a>
   </div>
   <div class="sidebar-section">
     <h2>Projects</h2>
@@ -20,13 +20,20 @@
       <div class="state-msg" style="padding:6px 16px;text-align:left;font-size:12px;">Loading…</div>
     </div>
   </div>
+  <div class="sidebar-section">
+    <h2>Daemon</h2>
+    <div id="daemon-status">
+      <div class="daemon-status" style="color:#6e7681;">Loading…</div>
+    </div>
+  </div>
 </nav>
 
 <div id="main">
   <div id="toolbar">
     <h1 id="view-title">Board</h1>
+    <span id="toolbar-stats" class="toolbar-stats"></span>
     <span id="toolbar-eventlog-controls" style="display:none; align-items:center; gap:10px;">
-      <select id="filter-type" onchange="applyEventFilter()">
+      <select id="filter-type">
         <option value="">All event types</option>
         <option value="agent_dispatched">agent_dispatched</option>
         <option value="agent_completed">agent_completed</option>
@@ -34,18 +41,21 @@
         <option value="stage_transition">stage_transition</option>
         <option value="workspace_created">workspace_created</option>
         <option value="pr_created">pr_created</option>
-        <option value="project_loaded">project_loaded</option>
-        <option value="workspace_resumed">workspace_resumed</option>
-        <option value="escalation_sent">escalation_sent</option>
-        <option value="approval_requested">approval_requested</option>
+        <option value="dashboard_approve">dashboard_approve</option>
+        <option value="dashboard_reject">dashboard_reject</option>
+        <option value="dashboard_retry">dashboard_retry</option>
+        <option value="manual_control_started">manual_control_started</option>
+        <option value="manual_control_released">manual_control_released</option>
         <option value="tg_message_received">tg_message_received</option>
         <option value="tg_message_sent">tg_message_sent</option>
-        <option value="intent_parsed">intent_parsed</option>
         <option value="poll_cycle">poll_cycle</option>
         <option value="daemon_started">daemon_started</option>
       </select>
     </span>
-    <button id="toolbar-refresh-btn" onclick="refreshCurrentView()">Refresh</button>
+    <label class="toggle-done">
+      <input type="checkbox" id="toggle-done"> Hide done
+    </label>
+    <button id="toolbar-refresh-btn">Refresh</button>
     <label class="auto-refresh">
       <input type="checkbox" id="auto-refresh-cb" checked>
       Auto (5s)
@@ -57,491 +67,6 @@
   </div>
 </div>
 
-<script>
-// ── State ──────────────────────────────────────────────────────────────────
-const state = {
-  view: 'board',         // 'board' | 'eventlog' | 'detail'
-  projectId: null,       // for board filter and eventlog filter
-  ticketId: null,        // for detail view
-  filterType: '',        // event type filter
-  timer: null,
-  detailTab: null,       // currently selected report tab
-};
-
-// ── Constants ──────────────────────────────────────────────────────────────
-const PIPELINE_STAGES = ['NEW', 'ANALYSIS', 'DEV', 'SCOPE_CHECK', 'QA', 'PUSHED', 'PR_REVIEW', 'DONE'];
-const STAGE_ORDER = {};
-PIPELINE_STAGES.forEach((s, i) => { STAGE_ORDER[s] = i; });
-
-const BADGE_CLASS = {
-  agent_dispatched:    'badge-green',
-  agent_completed:     'badge-green',
-  workspace_created:   'badge-green',
-  pr_created:          'badge-green',
-  project_loaded:      'badge-green',
-  workspace_resumed:   'badge-green',
-  agent_failed:        'badge-red',
-  escalation_sent:     'badge-red',
-  stage_transition:    'badge-blue',
-  tg_message_received: 'badge-yellow',
-  tg_message_sent:     'badge-yellow',
-  intent_parsed:       'badge-yellow',
-  approval_requested:  'badge-purple',
-  poll_cycle:          'badge-gray',
-  daemon_started:      'badge-gray',
-};
-
-// ── Helpers ────────────────────────────────────────────────────────────────
-function esc(s) {
-  if (s == null) return '';
-  return String(s)
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;');
-}
-
-function fmtTs(ts) {
-  if (!ts) return '';
-  const d = new Date(ts * 1000);
-  if (isNaN(d)) return esc(ts);
-  return d.toLocaleString('en-GB', {
-    day: '2-digit', month: '2-digit',
-    hour: '2-digit', minute: '2-digit', second: '2-digit',
-    hour12: false,
-  }).replace(',', '');
-}
-
-function timeAgo(isoStr) {
-  if (!isoStr) return '';
-  const d = new Date(isoStr);
-  if (isNaN(d)) return '';
-  const diffMs = Date.now() - d.getTime();
-  const diffSec = Math.floor(diffMs / 1000);
-  if (diffSec < 60) return `${diffSec}s ago`;
-  const diffMin = Math.floor(diffSec / 60);
-  if (diffMin < 60) return `${diffMin}m ago`;
-  const diffHr = Math.floor(diffMin / 60);
-  if (diffHr < 24) return `${diffHr}h ago`;
-  const diffDay = Math.floor(diffHr / 24);
-  return `${diffDay}d ago`;
-}
-
-function fmtIso(isoStr) {
-  if (!isoStr) return '';
-  const d = new Date(isoStr);
-  if (isNaN(d)) return esc(isoStr);
-  return d.toLocaleString('en-GB', {
-    day: '2-digit', month: '2-digit', year: 'numeric',
-    hour: '2-digit', minute: '2-digit', second: '2-digit',
-    hour12: false,
-  }).replace(',', '');
-}
-
-function badgeClass(type) {
-  return BADGE_CLASS[type] || 'badge-gray';
-}
-
-function stateBadgeHtml(state_val) {
-  const cls = 'state-' + (state_val || 'NEW').replace(/[^A-Z_]/g, '');
-  let pulseClass = '';
-  if (state_val === 'BLOCKED') pulseClass = ' badge-pulse-red';
-  if (state_val === 'AWAITING_APPROVAL') pulseClass = ' badge-pulse-yellow';
-  return `<span class="state-badge ${cls}${pulseClass}">${esc(state_val || 'NEW')}</span>`;
-}
-
-// ── API calls ──────────────────────────────────────────────────────────────
-async function fetchJSON(url) {
-  const resp = await fetch(url);
-  if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
-  return resp.json();
-}
-
-async function fetchText(url) {
-  const resp = await fetch(url);
-  if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
-  return resp.text();
-}
-
-async function loadProjects() {
-  const pl = document.getElementById('project-list');
-  try {
-    const data = await fetchJSON('/api/projects');
-    const projects = data.projects || [];
-    if (projects.length === 0) {
-      pl.innerHTML = '<div style="padding:6px 16px;color:#6e7681;font-size:12px;">No projects yet.</div>';
-      return;
-    }
-    pl.innerHTML = projects.map(p =>
-      `<a class="nav-link" id="nav-proj-${esc(p)}" onclick="showBoard(${JSON.stringify(p)})">${esc(p)}</a>`
-    ).join('');
-  } catch (e) {
-    pl.innerHTML = '<div style="padding:6px 16px;color:#f85149;font-size:12px;">Failed to load.</div>';
-  }
-}
-
-// ── Navigation ─────────────────────────────────────────────────────────────
-function setActiveNav(id) {
-  document.querySelectorAll('.nav-link').forEach(el => el.classList.remove('active'));
-  const el = document.getElementById(id);
-  if (el) el.classList.add('active');
-}
-
-function showEventLogControls(show) {
-  const el = document.getElementById('toolbar-eventlog-controls');
-  el.style.display = show ? 'flex' : 'none';
-}
-
-function showBoard(projectId) {
-  state.view = 'board';
-  state.projectId = projectId;
-  state.ticketId = null;
-  document.getElementById('view-title').textContent = projectId ? `Board: ${projectId}` : 'Board';
-  showEventLogControls(false);
-  if (projectId) {
-    setActiveNav(`nav-proj-${projectId}`);
-  } else {
-    setActiveNav('nav-board');
-  }
-  scheduleAutoRefresh();
-  renderBoard();
-}
-
-function showEventLog() {
-  state.view = 'eventlog';
-  state.projectId = null;
-  state.ticketId = null;
-  document.getElementById('view-title').textContent = 'Event Log';
-  showEventLogControls(true);
-  setActiveNav('nav-eventlog');
-  scheduleAutoRefresh();
-  renderEventLog();
-}
-
-function showDetail(ticketId) {
-  state.view = 'detail';
-  state.ticketId = ticketId;
-  state.detailTab = null;
-  showEventLogControls(false);
-  document.getElementById('view-title').textContent = `Ticket: ${ticketId}`;
-  stopAutoRefresh();
-  renderDetail(ticketId);
-}
-
-function applyEventFilter() {
-  state.filterType = document.getElementById('filter-type').value;
-  renderEventLog();
-}
-
-function refreshCurrentView() {
-  if (state.view === 'board') {
-    renderBoard();
-  } else if (state.view === 'eventlog') {
-    renderEventLog();
-  } else if (state.view === 'detail') {
-    renderDetail(state.ticketId);
-  }
-}
-
-// ── Board rendering ────────────────────────────────────────────────────────
-async function renderBoard() {
-  const content = document.getElementById('content');
-  try {
-    let url = '/api/workspaces';
-    if (state.projectId) url += `?project_id=${encodeURIComponent(state.projectId)}`;
-    const data = await fetchJSON(url);
-    const workspaces = data.workspaces || [];
-
-    if (workspaces.length === 0) {
-      content.innerHTML = '<div class="state-msg">No workspaces found.</div>';
-      return;
-    }
-
-    // Group by project
-    const byProject = {};
-    workspaces.forEach(ws => {
-      const proj = ws.company_id || 'unknown';
-      if (!byProject[proj]) byProject[proj] = [];
-      byProject[proj].push(ws);
-    });
-
-    let html = '';
-    for (const [proj, wsList] of Object.entries(byProject)) {
-      html += `<div class="project-group">
-        <div class="project-group-title">${esc(proj)}</div>
-        <div class="cards-grid">`;
-      for (const ws of wsList) {
-        html += renderCard(ws);
-      }
-      html += `</div></div>`;
-    }
-
-    content.innerHTML = html;
-  } catch (e) {
-    content.innerHTML = `<div class="state-msg" style="color:#f85149;">Error loading workspaces: ${esc(String(e))}</div>`;
-  }
-}
-
-function renderCard(ws) {
-  const stateVal = ws.current_state || 'NEW';
-  let cardClass = 'card';
-  if (stateVal === 'BLOCKED') cardClass += ' card-blocked';
-  if (stateVal === 'AWAITING_APPROVAL') cardClass += ' card-awaiting';
-
-  const prLink = ws.pr_url
-    ? `<a class="card-pr-link" href="${esc(ws.pr_url)}" target="_blank" onclick="event.stopPropagation()">PR #${esc(String(ws.pr_number || ''))}</a>`
-    : '';
-
-  const errorHtml = ws.error
-    ? `<div class="card-error" title="${esc(ws.error)}">${esc(ws.error)}</div>`
-    : '';
-
-  const started = timeAgo(ws.started_at);
-
-  return `<div class="${cardClass}" onclick="showDetail(${JSON.stringify(ws.ticket_id)})">
-    <div class="card-header">
-      <span class="card-ticket">${esc(ws.ticket_id)}</span>
-      ${stateBadgeHtml(stateVal)}
-    </div>
-    <div class="card-repo">${esc(ws.repo_id || '')}</div>
-    ${errorHtml}
-    <div class="card-footer">
-      <span class="card-time">${esc(started)}</span>
-      ${prLink}
-    </div>
-  </div>`;
-}
-
-// ── Detail rendering ───────────────────────────────────────────────────────
-async function renderDetail(ticketId) {
-  const content = document.getElementById('content');
-  content.innerHTML = '<div class="state-msg">Loading…</div>';
-
-  try {
-    // Load workspace info
-    const data = await fetchJSON('/api/workspaces');
-    const workspaces = data.workspaces || [];
-    const ws = workspaces.find(w => w.ticket_id === ticketId);
-
-    if (!ws) {
-      content.innerHTML = `<div class="state-msg" style="color:#f85149;">Workspace not found: ${esc(ticketId)}</div>`;
-      return;
-    }
-
-    // Load events for this ticket
-    let events = [];
-    try {
-      const evData = await fetchJSON(`/api/events?ticket_id=${encodeURIComponent(ticketId)}&limit=200`);
-      events = evData.events || [];
-    } catch (e) { /* ignore */ }
-
-    const stateVal = ws.current_state || 'NEW';
-    const stageIdx = STAGE_ORDER[stateVal] != null ? STAGE_ORDER[stateVal] : -1;
-
-    // Pipeline bar
-    let pipelineHtml = '<div class="pipeline-stages">';
-    PIPELINE_STAGES.forEach((stage, idx) => {
-      let dotClass = 'stage-dot';
-      let labelClass = 'stage-label';
-      let symbol = (idx + 1).toString();
-
-      if (stateVal === 'FAILED' && idx === stageIdx) {
-        dotClass += ' failed';
-        labelClass += ' failed';
-        symbol = '!';
-      } else if (idx < stageIdx) {
-        dotClass += ' done';
-        labelClass += ' done';
-        symbol = '✓';
-      } else if (idx === stageIdx) {
-        dotClass += ' current';
-        labelClass += ' current';
-      }
-
-      pipelineHtml += `<div class="pipeline-stage">
-        <div class="stage-node">
-          <div class="${dotClass}">${symbol}</div>
-          <div class="${labelClass}">${esc(stage)}</div>
-        </div>`;
-      if (idx < PIPELINE_STAGES.length - 1) {
-        const connClass = idx < stageIdx ? ' done' : '';
-        pipelineHtml += `</div><div class="stage-connector${connClass}"></div>`;
-      } else {
-        pipelineHtml += '</div>';
-      }
-    });
-    pipelineHtml += '</div>';
-
-    // Info grid
-    const iterations = ws.stage_iterations ? Object.entries(ws.stage_iterations).map(([k, v]) => `${esc(k)}: ${esc(String(v))}`).join(', ') : '';
-    let infoHtml = `<div class="info-grid">
-      <span class="info-label">Branch</span>
-      <span class="info-value">${esc(ws.branch || '—')}</span>
-      <span class="info-label">Repo</span>
-      <span class="info-value">${esc(ws.repo_id || '—')}</span>
-      <span class="info-label">Started</span>
-      <span class="info-value">${esc(fmtIso(ws.started_at))}</span>
-      <span class="info-label">Last updated</span>
-      <span class="info-value">${esc(fmtIso(ws.last_updated_at))}</span>`;
-    if (ws.pr_url) {
-      infoHtml += `<span class="info-label">PR</span>
-      <span class="info-value"><a href="${esc(ws.pr_url)}" target="_blank">#${esc(String(ws.pr_number || ''))} ${esc(ws.pr_url)}</a></span>`;
-    }
-    if (ws.error) {
-      infoHtml += `<span class="info-label">Error</span>
-      <span class="info-value error">${esc(ws.error)}</span>`;
-    }
-    if (iterations) {
-      infoHtml += `<span class="info-label">Iterations</span>
-      <span class="info-value">${iterations}</span>`;
-    }
-    if (ws.human_input_pending) {
-      infoHtml += `<span class="info-label">Human input</span>
-      <span class="info-value" style="color:#e3b341;">Pending</span>`;
-    }
-    infoHtml += '</div>';
-
-    // Reports + meta tabs
-    const allReports = [];
-    (ws.reports || []).forEach(f => allReports.push({ name: f, folder: 'reports' }));
-    (ws.meta || []).forEach(f => allReports.push({ name: f, folder: 'meta' }));
-
-    let reportsHtml = '';
-    if (allReports.length > 0) {
-      const tabBar = allReports.map(r =>
-        `<button class="tab-btn" id="tab-btn-${esc(r.folder)}-${esc(r.name)}"
-          onclick="loadReport(${JSON.stringify(ws.ticket_id)}, ${JSON.stringify(r.name)}, ${JSON.stringify(r.folder)})"
-          >${esc(r.name)}</button>`
-      ).join('');
-      reportsHtml = `<div class="detail-section">
-        <div class="detail-section-title">Reports &amp; Files</div>
-        <div class="tab-bar">${tabBar}</div>
-        <div id="report-content-area"><div style="color:#6e7681;font-size:12px;">Select a file to view.</div></div>
-      </div>`;
-    }
-
-    // Events
-    const eventsHtml = renderEventsHtml(events, true);
-
-    content.innerHTML = `<div id="detail-view">
-      <div class="detail-header">
-        <button class="back-btn" onclick="showBoard(${JSON.stringify(ws.company_id)})">← Back</button>
-        <span class="detail-ticket-id">${esc(ws.ticket_id)}</span>
-        ${stateBadgeHtml(stateVal)}
-        <span class="detail-time-info">Started ${esc(timeAgo(ws.started_at))} &middot; Updated ${esc(timeAgo(ws.last_updated_at))}</span>
-      </div>
-
-      <div class="pipeline-bar">
-        <div class="pipeline-bar-title">Pipeline</div>
-        ${pipelineHtml}
-      </div>
-
-      <div class="detail-section">
-        <div class="detail-section-title">Info</div>
-        ${infoHtml}
-      </div>
-
-      ${reportsHtml}
-
-      <div class="detail-section">
-        <div class="detail-section-title">Event Timeline</div>
-        <div class="event-list">${eventsHtml}</div>
-      </div>
-    </div>`;
-
-  } catch (e) {
-    content.innerHTML = `<div class="state-msg" style="color:#f85149;">Error loading detail: ${esc(String(e))}</div>`;
-  }
-}
-
-async function loadReport(ticketId, filename, folder) {
-  // Update tab active state
-  document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
-  const btn = document.getElementById(`tab-btn-${folder}-${filename}`);
-  if (btn) btn.classList.add('active');
-
-  const area = document.getElementById('report-content-area');
-  if (!area) return;
-  area.innerHTML = '<div style="color:#6e7681;font-size:12px;padding:8px 0;">Loading…</div>';
-
-  try {
-    const text = await fetchText(`/api/workspaces/${encodeURIComponent(ticketId)}/report/${encodeURIComponent(filename)}?folder=${encodeURIComponent(folder)}`);
-    area.innerHTML = `<div class="report-content">${esc(text)}</div>`;
-  } catch (e) {
-    area.innerHTML = `<div style="color:#f85149;font-size:12px;">Error loading file: ${esc(String(e))}</div>`;
-  }
-}
-
-// ── Event log rendering ────────────────────────────────────────────────────
-async function renderEventLog() {
-  const content = document.getElementById('content');
-  try {
-    let url = '/api/events?limit=200';
-    if (state.projectId) url += `&project_id=${encodeURIComponent(state.projectId)}`;
-    const data = await fetchJSON(url);
-    let events = data.events || [];
-
-    if (state.filterType) {
-      events = events.filter(e => e.event_type === state.filterType);
-    }
-
-    const html = renderEventsHtml(events, false);
-    content.innerHTML = `<div class="event-list">${html}</div>`;
-  } catch (e) {
-    content.innerHTML = `<div class="state-msg" style="color:#f85149;">Error loading events: ${esc(String(e))}</div>`;
-  }
-}
-
-function renderEventsHtml(events, compact) {
-  if (!events || events.length === 0) {
-    return '<div class="state-msg">No events found.</div>';
-  }
-
-  return events.map(ev => {
-    const cls = badgeClass(ev.event_type);
-    const parts = [];
-    if (!compact && ev.project_id) parts.push(`project: ${esc(ev.project_id)}`);
-    if (!compact && ev.ticket_id)  parts.push(`ticket: ${esc(ev.ticket_id)}`);
-    if (ev.agent_id)   parts.push(`agent: ${esc(ev.agent_id)}`);
-    if (ev.data && ev.data.duration != null) parts.push(`${ev.data.duration.toFixed(1)}s`);
-    if (ev.data && ev.data.input_tokens != null) parts.push(`${ev.data.input_tokens}/${ev.data.output_tokens} tok`);
-
-    return `<div class="event-row">
-      <span class="event-ts">${fmtTs(ev.timestamp)}</span>
-      <span class="event-badge ${cls}">${esc(ev.event_type)}</span>
-      <div class="event-body">
-        <div class="event-msg">${esc(ev.message)}</div>
-        ${parts.length ? `<div class="event-meta">${parts.map(p => `<span>${p}</span>`).join('')}</div>` : ''}
-      </div>
-    </div>`;
-  }).join('');
-}
-
-// ── Auto-refresh ───────────────────────────────────────────────────────────
-function stopAutoRefresh() {
-  if (state.timer) { clearInterval(state.timer); state.timer = null; }
-}
-
-function scheduleAutoRefresh() {
-  stopAutoRefresh();
-  const cb = document.getElementById('auto-refresh-cb');
-  if (cb && cb.checked) {
-    state.timer = setInterval(refreshCurrentView, 5000);
-  }
-}
-
-document.getElementById('auto-refresh-cb').addEventListener('change', () => {
-  if (state.view === 'detail') return;
-  scheduleAutoRefresh();
-});
-
-// ── Init ───────────────────────────────────────────────────────────────────
-(async function init() {
-  await loadProjects();
-  setActiveNav('nav-board');
-  await renderBoard();
-  scheduleAutoRefresh();
-})();
-</script>
+<script type="module" src="/static/js/app.js"></script>
 </body>
 </html>

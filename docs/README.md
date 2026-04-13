@@ -40,7 +40,7 @@ Jira Poll                                              Telegram
          DONE (notify human, await merge)
 ```
 
-**11 pipeline states:** NEW, ANALYSIS, DEV, SCOPE_CHECK, QA, PUSHED, PR_REVIEW, DONE, BLOCKED, FAILED, ARCHIVED
+**13 pipeline states:** NEW, ANALYSIS, DEV, SCOPE_CHECK, QA, PUSHED, PR_REVIEW, DONE, BLOCKED, FAILED, ARCHIVED, AWAITING_APPROVAL, MANUAL_CONTROL
 
 **State machine:** File-based (`state.json`), atomic writes (temp + rename), BLOCKED stores `previous_state` for resume.
 
@@ -152,7 +152,7 @@ Secrets via `${ENV_VAR}` references resolved at load time.
 ## Current Status (2026-04-08)
 
 ### Implemented (Phases 1-4)
-- State machine with 11 states and BLOCKED/resume
+- State machine with 13 states and BLOCKED/resume (incl. AWAITING_APPROVAL, MANUAL_CONTROL)
 - Multi-company workspace hierarchy
 - Config schemas with VCS/CI provider abstraction
 - Workflow router with 8-stage pipeline

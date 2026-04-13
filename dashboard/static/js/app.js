@@ -55,10 +55,6 @@ function updateActiveNav(id) {
 // ── Board ──
 async function doRenderBoard() {
   const { workspaces } = await renderBoard(state.projectId, state.showDone);
-  // Bind card clicks
-  document.querySelectorAll('.card[data-ticket]').forEach(card => {
-    card.addEventListener('click', () => showDetail(card.dataset.ticket));
-  });
   // Update sidebar project list from workspace data
   updateProjectSidebar(workspaces || []);
   // Update toolbar stats
@@ -151,6 +147,15 @@ async function init() {
   // Bind nav
   document.getElementById('nav-board').addEventListener('click', () => showBoard(null));
   document.getElementById('nav-eventlog').addEventListener('click', () => showEventLog());
+
+  // Delegated card click — survives innerHTML replacement on auto-refresh
+  document.getElementById('content').addEventListener('click', (e) => {
+    if (state.view !== 'board') return;
+    const card = e.target.closest('.card[data-ticket]');
+    if (!card) return;
+    if (e.target.closest('[data-action]')) return;
+    showDetail(card.dataset.ticket);
+  });
 
   // Bind filter
   document.getElementById('filter-type').addEventListener('change', () => {

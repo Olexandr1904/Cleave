@@ -148,6 +148,12 @@ NEW → ANALYSIS → DEV → SCOPE_CHECK → QA → PUSHED → PR_REVIEW → DON
 Any stage → BLOCKED (awaiting human)
 BLOCKED → (resume previous stage)
 
+Any active stage → AWAITING_APPROVAL (operator gate)
+AWAITING_APPROVAL → (resume previous stage)
+
+Any active stage → MANUAL_CONTROL (operator takes control)
+MANUAL_CONTROL → ANALYSIS (release control)
+
 Any stage → FAILED (unrecoverable)
 DONE → ARCHIVED (source cleanup)
 ```
@@ -166,23 +172,27 @@ DONE → ARCHIVED (source cleanup)
 | `DONE` | All stages complete, PR open and ready for human merge |
 | `BLOCKED` | Waiting for human input via Telegram |
 | `FAILED` | Unrecoverable error, human intervention needed |
+| `AWAITING_APPROVAL` | Pipeline paused, waiting for operator approval to continue |
+| `MANUAL_CONTROL` | Operator has taken control, pipeline paused, Claude Code session active |
 | `ARCHIVED` | Source code deleted after merge (ticket artifacts remain) |
 
 **Valid transitions:**
 
 ```python
 VALID_TRANSITIONS = {
-    "NEW":          {"ANALYSIS", "FAILED"},
-    "ANALYSIS":     {"DEV", "BLOCKED", "FAILED"},
-    "DEV":          {"SCOPE_CHECK", "BLOCKED", "FAILED"},
-    "SCOPE_CHECK":  {"QA", "DEV", "BLOCKED", "FAILED"},       # DEV on violations
-    "QA":           {"PUSHED", "DEV", "BLOCKED", "FAILED"},    # DEV on test failure
-    "PUSHED":       {"PR_REVIEW", "BLOCKED", "FAILED"},
-    "PR_REVIEW":    {"DEV", "DONE", "BLOCKED", "FAILED"},      # DEV on fix_required
-    "DONE":         {"ARCHIVED"},
-    "BLOCKED":      {"ANALYSIS", "DEV", "SCOPE_CHECK", "QA", "PUSHED", "PR_REVIEW", "FAILED"},
-    "FAILED":       set(),  # terminal
-    "ARCHIVED":     set(),  # terminal
+    "NEW":                {"ANALYSIS", "FAILED"},
+    "ANALYSIS":           {"DEV", "BLOCKED", "FAILED", "AWAITING_APPROVAL", "MANUAL_CONTROL"},
+    "DEV":                {"SCOPE_CHECK", "BLOCKED", "FAILED", "AWAITING_APPROVAL", "MANUAL_CONTROL"},
+    "SCOPE_CHECK":        {"QA", "DEV", "BLOCKED", "FAILED", "AWAITING_APPROVAL", "MANUAL_CONTROL"},
+    "QA":                 {"PUSHED", "DEV", "BLOCKED", "FAILED", "AWAITING_APPROVAL", "MANUAL_CONTROL"},
+    "PUSHED":             {"PR_REVIEW", "BLOCKED", "FAILED", "AWAITING_APPROVAL", "MANUAL_CONTROL"},
+    "PR_REVIEW":          {"DEV", "DONE", "BLOCKED", "FAILED", "AWAITING_APPROVAL", "MANUAL_CONTROL"},
+    "DONE":               {"ARCHIVED"},
+    "BLOCKED":            {"ANALYSIS", "DEV", "SCOPE_CHECK", "QA", "PUSHED", "PR_REVIEW", "FAILED"},
+    "FAILED":             set(),  # terminal
+    "ARCHIVED":           set(),  # terminal
+    "AWAITING_APPROVAL":  {"ANALYSIS", "DEV", "SCOPE_CHECK", "QA", "PUSHED", "PR_REVIEW", "FAILED"},
+    "MANUAL_CONTROL":     {"ANALYSIS"},  # release control → back to ANALYSIS
 }
 ```
 
@@ -203,6 +213,8 @@ VALID_TRANSITIONS = {
   "human_input_pending": false,
   "human_input_question": null,
   "human_input_reply": null,
+  "manual_control_started_at": null,
+  "manual_control_comment": null,
   "started_at": "2026-04-08T10:00:00Z",
   "last_updated_at": "2026-04-08T10:30:00Z",
   "error": null

@@ -201,3 +201,88 @@ class TestDaemonStatusEndpoint:
         assert data["active"] == 3
         assert data["blocked"] == 1
         assert data["awaiting"] == 1
+
+
+class TestRetryEndpointExtended:
+    def test_retry_failed_workspace(self, client, orchestrator):
+        """Retry should work for FAILED state too."""
+        ws = _make_workspace("T-1", "FAILED", previous="DEV", error="crashed")
+        orchestrator.get_active_workspaces.return_value = [ws]
+        resp = client.post("/api/workspaces/T-1/retry")
+        assert resp.status_code == 200
+
+    def test_retry_not_found(self, client, orchestrator):
+        orchestrator.get_active_workspaces.return_value = []
+        resp = client.post("/api/workspaces/T-1/retry")
+        assert resp.status_code == 404
+
+    def test_retry_clears_error_and_pending(self, client, orchestrator):
+        ws = _make_workspace("T-1", "BLOCKED", previous="DEV", error="stuck")
+        orchestrator.get_active_workspaces.return_value = [ws]
+        resp = client.post("/api/workspaces/T-1/retry")
+        assert resp.status_code == 200
+        assert ws.state.error is None
+        assert ws.state.human_input_pending is False
+
+
+class TestTakeControlExtended:
+    def test_take_control_confirm_with_agent_running(self, client, orchestrator):
+        """confirm=True should kill agent and proceed."""
+        ws = _make_workspace("T-1", "DEV")
+        orchestrator.get_active_workspaces.return_value = [ws]
+        orchestrator._agent_runtime.get_running.return_value = {
+            "agent_id": "dev-agent", "pid": 123, "started_at": 1000.0,
+        }
+        resp = client.post("/api/workspaces/T-1/take-control",
+                           content=json.dumps({"confirm": True}))
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["status"] == "ok"
+        orchestrator._agent_runtime.cancel.assert_called_with("T-1")
+        ws.transition.assert_called_with("MANUAL_CONTROL")
+
+    def test_take_control_manual_control_state_rejected(self, client, orchestrator):
+        ws = _make_workspace("T-1", "MANUAL_CONTROL", previous="DEV")
+        orchestrator.get_active_workspaces.return_value = [ws]
+        resp = client.post("/api/workspaces/T-1/take-control",
+                           content=json.dumps({"confirm": True}))
+        assert resp.status_code == 400
+
+    def test_take_control_not_found(self, client, orchestrator):
+        orchestrator.get_active_workspaces.return_value = []
+        resp = client.post("/api/workspaces/T-1/take-control",
+                           content=json.dumps({"confirm": True}))
+        assert resp.status_code == 404
+
+
+class TestReleaseControlExtended:
+    def test_release_with_empty_comment(self, client, orchestrator):
+        ws = _make_workspace("T-1", "MANUAL_CONTROL", previous="DEV")
+        orchestrator.get_active_workspaces.return_value = [ws]
+        resp = client.post("/api/workspaces/T-1/release-control",
+                           content=json.dumps({"comment": ""}))
+        assert resp.status_code == 200
+        assert resp.json()["new_state"] == "ANALYSIS"
+
+    def test_release_not_found(self, client, orchestrator):
+        orchestrator.get_active_workspaces.return_value = []
+        resp = client.post("/api/workspaces/T-1/release-control")
+        assert resp.status_code == 404
+
+    def test_release_no_body(self, client, orchestrator):
+        """Release without JSON body should still work (defaults to empty comment)."""
+        ws = _make_workspace("T-1", "MANUAL_CONTROL", previous="DEV")
+        orchestrator.get_active_workspaces.return_value = [ws]
+        resp = client.post("/api/workspaces/T-1/release-control")
+        assert resp.status_code == 200
+
+
+class TestDaemonStatusExtended:
+    def test_daemon_status_with_manual_control(self, client, orchestrator, mode_handler):
+        ws_manual = _make_workspace("T-1", "MANUAL_CONTROL", previous="DEV")
+        ws_active = _make_workspace("T-2", "DEV")
+        orchestrator.get_active_workspaces.return_value = [ws_manual, ws_active]
+        resp = client.get("/api/daemon/status")
+        data = resp.json()
+        assert data["manual_control"] == 1
+        assert data["active"] == 2

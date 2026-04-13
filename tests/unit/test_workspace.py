@@ -400,6 +400,39 @@ class TestManualControlState:
                 f"{state} cannot transition to MANUAL_CONTROL"
             )
 
+    def test_manual_control_stores_previous_state_and_pending(self, workspace):
+        """Entering MANUAL_CONTROL preserves previous_state and sets human_input_pending."""
+        workspace.transition("ANALYSIS")
+        workspace.transition("MANUAL_CONTROL")
+        assert workspace.state.previous_state == "ANALYSIS"
+        assert workspace.state.human_input_pending is True
+
+    def test_exit_manual_control_clears_pending_and_previous(self, workspace):
+        """Leaving MANUAL_CONTROL clears human_input_pending and previous_state."""
+        workspace.transition("ANALYSIS")
+        workspace.transition("DEV")
+        workspace.transition("MANUAL_CONTROL")
+        workspace.transition("ANALYSIS")
+        assert workspace.state.human_input_pending is False
+        assert workspace.state.previous_state is None
+
+    def test_blocked_to_manual_control(self, workspace):
+        """Can take control from BLOCKED state."""
+        workspace.transition("ANALYSIS")
+        workspace.transition("DEV")
+        workspace.transition("BLOCKED")
+        workspace.transition("MANUAL_CONTROL")
+        assert workspace.state.current_state == "MANUAL_CONTROL"
+        assert workspace.state.previous_state == "BLOCKED"
+
+    def test_awaiting_approval_to_manual_control(self, workspace):
+        """Can take control from AWAITING_APPROVAL state."""
+        workspace.transition("ANALYSIS")
+        workspace.transition("AWAITING_APPROVAL")
+        workspace.transition("MANUAL_CONTROL")
+        assert workspace.state.current_state == "MANUAL_CONTROL"
+        assert workspace.state.previous_state == "AWAITING_APPROVAL"
+
 
 class TestIterations:
     def test_increment_iteration(self, workspace):

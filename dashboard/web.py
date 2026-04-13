@@ -11,6 +11,7 @@ from starlette.applications import Starlette
 from starlette.requests import Request
 from starlette.responses import HTMLResponse, JSONResponse, PlainTextResponse
 from starlette.routing import Route
+from starlette.staticfiles import StaticFiles
 
 from dashboard.event_store import EventStore
 from dashboard.events import EventBus
@@ -156,4 +157,7 @@ def create_app(
         )
         routes.extend(action_routes)
 
-    return Starlette(routes=routes)
+    static_dir = str(Path(__file__).parent / "static")
+    app = Starlette(routes=routes)
+    app.mount("/static", StaticFiles(directory=static_dir), name="static")
+    return app

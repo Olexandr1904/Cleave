@@ -21,12 +21,14 @@ Local web dashboard providing real-time visibility into the Sickle pipeline. Sho
 - FR8: Workspace API serving state.json data and report/meta/log files from disk
 - FR9: Action endpoints for workspace control (approve, reject, retry, take-control, release-control)
 - FR10: Daemon mode and status endpoints
+- FR11: Take Control feature: pause pipeline, open Claude Code session, release back
+- FR12: Frontend split into ES modules (no build step)
 
 ## Technical Approach
 
 - EventBus (in-memory) with listener pattern for async SQLite persistence
 - Starlette embedded web server sharing the daemon's asyncio loop
-- Single HTML file with inline CSS/JS, no build step
+- Multi-file vanilla JS frontend (ES modules), CSS extracted, no build step
 - REST API: /api/events, /api/projects, /api/projects/{id}/tickets, /api/tickets/{id}/events, /api/workspaces, /api/workspaces/{id}/report/{file}
 - Action API: /api/workspaces/{id}/approve|reject|retry|take-control|release-control, /api/daemon/mode, /api/daemon/status
 - Three UI views: Board (ticket cards by project), Ticket Detail (progress + reports), Event Log
@@ -54,6 +56,13 @@ Local web dashboard providing real-time visibility into the Sickle pipeline. Sho
 - [x] Action endpoints: approve, reject, retry, take-control, release-control
 - [x] Daemon mode switch and status endpoints
 - [x] Action routes wired via orchestrator/mode_handler passed to create_app
+- [x] MANUAL_CONTROL state added to workspace state machine
+- [x] Orchestrator skips MANUAL_CONTROL workspaces
+- [x] Agent cancellation works when taking control
+- [x] Frontend modularized into separate JS files
+- [x] Sidebar project list derived from workspaces (not events)
+- [x] Take Control launches terminal with Claude Code command
+- [x] Release Control transitions back to ANALYSIS
 
 ## Change Log
 
@@ -62,3 +71,4 @@ Local web dashboard providing real-time visibility into the Sickle pipeline. Sho
 | 2026-04-11 | Initial implementation |
 | 2026-04-12 | Add operations dashboard: workspace board, ticket detail, report viewer |
 | 2026-04-12 | Add action endpoints: approve, reject, retry, take-control, release, mode, status |
+| 2026-04-12 | V2: Operations dashboard with actions, take-control, modular frontend |

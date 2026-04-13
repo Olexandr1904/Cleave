@@ -14,7 +14,7 @@ Each ticket gets a fully isolated workspace via a fresh `git clone`. No ticket s
 - FR1: Each ticket gets a fully isolated workspace (fresh `git clone` into `/workspaces/{project}/{repo}/{ticket}_{timestamp}/`)
 - FR2: Each workspace has `context/` and `logs/` subdirectories
 - FR3: Shallow clone depth configurable via `git.depth` (0 = full clone)
-- FR4: `state.json` created on init tracking: ticket_id, project_id, repo_id, workspace_root, branch, pr_number, current_stage, stage_iterations, human_input_pending, started_at, last_updated_at, status
+- FR4: `state.json` created on init tracking: ticket_id, project_id, repo_id, workspace_root, branch, pr_number, current_stage, stage_iterations, human_input_pending, manual_control_started_at, manual_control_comment, started_at, last_updated_at, status
 - FR5: State machine transitions: pending → running → waiting_for_human → running → completed/failed
 - FR6: Invalid transitions raise errors
 - FR7: State writes are atomic (temp file + rename)

@@ -241,3 +241,26 @@ class TestRetryDeferred:
         )
         await handler.handle_message("resume T-D", "12345")
         ws.transition.assert_called_once_with("QA")
+
+    async def test_retry_deferred_ticket_discriminates_branch(
+        self, mock_notifier, mock_mode_handler,
+    ):
+        # Use a previous_state whose lowercase form IS a key in _VALID_RETRY_STATES
+        # but maps to a DIFFERENT value, so the two code paths diverge:
+        #   - DEFERRED branch:  target = ws.state.previous_state → "push"
+        #   - fallback path:    target = _VALID_RETRY_STATES.get("push") → "PUSHED"
+        # This proves the DEFERRED branch in the (BLOCKED, FAILED, DEFERRED) tuple
+        # is actually taken; removing DEFERRED from the tuple will fail this test.
+        ws = _make_workspace("T-D", "DEFERRED", previous_state="push")
+        mock_intent_parser = AsyncMock()
+        mock_intent_parser.parse = AsyncMock(return_value=ParsedIntent(
+            intent="retry", params={"ticket_id": "T-D"}, reply="",
+        ))
+        handler = CommandHandler(
+            intent_parser=mock_intent_parser,
+            notifier=mock_notifier,
+            mode_handler=mock_mode_handler,
+            active_workspaces_fn=lambda: [ws],
+        )
+        await handler.handle_message("resume T-D", "12345")
+        ws.transition.assert_called_once_with("push")

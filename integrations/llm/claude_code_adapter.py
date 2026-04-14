@@ -296,6 +296,9 @@ class ClaudeCodeAdapter(LLMInterface):
 
         if proc.returncode != 0:
             logger.error("Claude Code CLI failed (rc=%d): %s", proc.returncode, stderr_str)
+            classified = _classify_cli_error(stdout_str, stderr_str)
+            if classified is not None:
+                raise classified
             raise RuntimeError(
                 f"Claude Code CLI exited with code {proc.returncode}: {stderr_str}"
             )
@@ -329,6 +332,9 @@ class ClaudeCodeAdapter(LLMInterface):
 
         if is_error:
             logger.error("Claude Code CLI error: %s", content[:200])
+            classified = _classify_cli_error(stdout_str, stderr_str)
+            if classified is not None:
+                raise classified
             raise RuntimeError(f"Claude Code returned error: {content[:500]}")
 
         logger.info(

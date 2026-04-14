@@ -294,3 +294,67 @@ class TestDaemonStatusExtended:
         data = resp.json()
         assert data["manual_control"] == 1
         assert data["active"] == 2
+
+
+class TestTakeControlOnFailed:
+    def test_take_control_allowed_on_failed(self, client, orchestrator):
+        ws = _make_workspace("T-F1", "FAILED", previous="DEV", error="boom")
+        orchestrator.get_active_workspaces.return_value = [ws]
+        resp = client.post("/api/workspaces/T-F1/take-control")
+        assert resp.status_code == 200
+        ws.transition.assert_called()
+
+    def test_take_control_allowed_on_deferred(self, client, orchestrator):
+        ws = _make_workspace("T-D1", "DEFERRED", previous="QA")
+        orchestrator.get_active_workspaces.return_value = [ws]
+        resp = client.post("/api/workspaces/T-D1/take-control")
+        assert resp.status_code == 200
+        ws.transition.assert_called()
+
+    def test_take_control_still_blocked_on_done(self, client, orchestrator):
+        ws = _make_workspace("T-DN", "DONE")
+        orchestrator.get_active_workspaces.return_value = [ws]
+        resp = client.post("/api/workspaces/T-DN/take-control")
+        assert resp.status_code == 400
+
+
+class TestResumeEndpoint:
+    def test_resume_deferred_transitions_to_previous(self, client, orchestrator):
+        ws = _make_workspace("T-R1", "DEFERRED", previous="QA")
+        orchestrator.get_active_workspaces.return_value = [ws]
+        resp = client.post("/api/workspaces/T-R1/resume")
+        assert resp.status_code == 200
+        ws.transition.assert_called_with("QA")
+
+    def test_resume_wrong_state(self, client, orchestrator):
+        ws = _make_workspace("T-R2", "DEV")
+        orchestrator.get_active_workspaces.return_value = [ws]
+        resp = client.post("/api/workspaces/T-R2/resume")
+        assert resp.status_code == 400
+
+    def test_resume_not_found(self, client, orchestrator):
+        orchestrator.get_active_workspaces.return_value = []
+        resp = client.post("/api/workspaces/missing/resume")
+        assert resp.status_code == 404
+
+
+class TestArchiveEndpoint:
+    def test_archive_failed_transitions_to_archived(self, client, orchestrator):
+        ws = _make_workspace("T-A1", "FAILED", previous="DEV")
+        orchestrator.get_active_workspaces.return_value = [ws]
+        resp = client.post("/api/workspaces/T-A1/archive")
+        assert resp.status_code == 200
+        ws.transition.assert_called_with("ARCHIVED")
+
+    def test_archive_done_transitions_to_archived(self, client, orchestrator):
+        ws = _make_workspace("T-A2", "DONE")
+        orchestrator.get_active_workspaces.return_value = [ws]
+        resp = client.post("/api/workspaces/T-A2/archive")
+        assert resp.status_code == 200
+        ws.transition.assert_called_with("ARCHIVED")
+
+    def test_archive_wrong_state(self, client, orchestrator):
+        ws = _make_workspace("T-A3", "DEV")
+        orchestrator.get_active_workspaces.return_value = [ws]
+        resp = client.post("/api/workspaces/T-A3/archive")
+        assert resp.status_code == 400

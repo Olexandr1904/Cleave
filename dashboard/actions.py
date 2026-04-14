@@ -106,7 +106,8 @@ def build_action_routes(
         ws = _find_workspace(orchestrator, ticket_id)
         if ws is None:
             return _error(f"Workspace not found: {ticket_id}", 404)
-        if ws.state.current_state in TERMINAL_STATES | {"MANUAL_CONTROL"}:
+        BLOCKS_TAKE_CONTROL = {"DONE", "ARCHIVED", "MANUAL_CONTROL"}
+        if ws.state.current_state in BLOCKS_TAKE_CONTROL:
             return _error(f"Cannot take control: state is {ws.state.current_state}")
 
         body = {}
@@ -199,6 +200,46 @@ def build_action_routes(
             )
         return JSONResponse({"status": "ok", "new_state": "ANALYSIS"})
 
+    async def resume(request: Request) -> JSONResponse:
+        ticket_id = request.path_params["ticket_id"]
+        ws = _find_workspace(orchestrator, ticket_id)
+        if ws is None:
+            return _error(f"Workspace not found: {ticket_id}", 404)
+        if ws.state.current_state != "DEFERRED":
+            return _error(f"Cannot resume: state is {ws.state.current_state}")
+
+        target = ws.state.previous_state or "ANALYSIS"
+        ws.transition(target)
+        if event_bus:
+            event_bus.emit(
+                "deferred_resumed",
+                f"Resumed {ticket_id} via dashboard \u2192 {target}",
+                ticket_id=ticket_id,
+                data={"new_state": target, "trigger": "dashboard"},
+            )
+        return JSONResponse({"status": "ok", "new_state": target})
+
+    async def archive(request: Request) -> JSONResponse:
+        ticket_id = request.path_params["ticket_id"]
+        ws = _find_workspace(orchestrator, ticket_id)
+        if ws is None:
+            return _error(f"Workspace not found: {ticket_id}", 404)
+        if ws.state.current_state not in ("FAILED", "DONE", "DEFERRED"):
+            return _error(f"Cannot archive: state is {ws.state.current_state}")
+
+        # DEFERRED -> ARCHIVED is not a valid direct transition; hop via FAILED.
+        if ws.state.current_state == "DEFERRED":
+            ws.transition("FAILED")
+        ws.transition("ARCHIVED")
+
+        if event_bus:
+            event_bus.emit(
+                "workspace_archived",
+                f"Archived {ticket_id} via dashboard",
+                ticket_id=ticket_id,
+            )
+        return JSONResponse({"status": "ok", "new_state": "ARCHIVED"})
+
     async def set_mode(request: Request) -> JSONResponse:
         try:
             body = await request.json()
@@ -236,6 +277,8 @@ def build_action_routes(
         Route("/api/workspaces/{ticket_id:path}/retry", retry, methods=["POST"]),
         Route("/api/workspaces/{ticket_id:path}/take-control", take_control, methods=["POST"]),
         Route("/api/workspaces/{ticket_id:path}/release-control", release_control, methods=["POST"]),
+        Route("/api/workspaces/{ticket_id:path}/resume", resume, methods=["POST"]),
+        Route("/api/workspaces/{ticket_id:path}/archive", archive, methods=["POST"]),
         Route("/api/daemon/mode", set_mode, methods=["POST"]),
         Route("/api/daemon/status", daemon_status),
     ]

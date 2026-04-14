@@ -8,6 +8,7 @@ import logging
 import signal
 import time
 from collections import deque
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from config.schemas import GlobalConfig, LoadedProject, RepoConfig
@@ -31,6 +32,9 @@ from workspace.workspace import Workspace
 from workspace.workspace_manager import WorkspaceManager
 
 logger = logging.getLogger(__name__)
+
+
+DEFAULT_QUOTA_RETRY_DELAY = timedelta(hours=1)
 
 
 class Orchestrator:
@@ -81,6 +85,10 @@ class Orchestrator:
         # Ring buffer of recently-terminated workspaces for /status visibility.
         # Each entry is (ticket_id, final_state, timestamp_epoch).
         self._recent_completions: deque[tuple[str, str, float]] = deque(maxlen=20)
+        # In-memory debounce for Claude CLI quota notifications.
+        # Stores the retry_at of the first notification in the current window;
+        # further quota hits while now < _quota_window_end are silenced.
+        self._quota_window_end: datetime | None = None
 
     def register_repo_vcs(
         self, repo_id: str, vcs: VCSInterface, repo_config: RepoConfig,
@@ -510,9 +518,24 @@ class Orchestrator:
         )
 
         if not result.success:
-            self._emit("agent_failed", f"{stage_def.agent} failed for {state.ticket_id}: {result.error}", project_id=state.company_id, ticket_id=state.ticket_id, agent_id=stage_def.agent, data={"stage": stage_id, "error": result.error})
-            workspace.transition("FAILED")
-            workspace.update_state(error=result.error)
+            self._emit(
+                "agent_failed",
+                f"{stage_def.agent} failed for {state.ticket_id}: {result.error}",
+                project_id=state.company_id, ticket_id=state.ticket_id,
+                agent_id=stage_def.agent,
+                data={"stage": stage_id, "error": result.error},
+            )
+            if result.failure_kind == "quota":
+                self._rollback_iteration(workspace, stage_id)
+                retry_at = result.retry_at or (
+                    datetime.now(timezone.utc) + DEFAULT_QUOTA_RETRY_DELAY
+                )
+                workspace.transition("DEFERRED", retry_at=retry_at.isoformat())
+                await self._notify_deferred(workspace, retry_at)
+            else:
+                workspace.transition("FAILED")
+                workspace.update_state(error=result.error)
+                await self._notify_failed(workspace, result.error or "")
             return
 
         self._emit("agent_completed", f"{stage_def.agent} completed for {state.ticket_id}", project_id=state.company_id, ticket_id=state.ticket_id, agent_id=stage_def.agent, data={"stage": stage_id, "duration": result.duration_seconds, "input_tokens": result.input_tokens, "output_tokens": result.output_tokens})
@@ -537,6 +560,60 @@ class Orchestrator:
                 self._advance_to_stage(workspace, next_stage)
         else:
             workspace.transition("DONE")
+
+    def _rollback_iteration(self, workspace: Workspace, stage_id: str) -> None:
+        """Undo the iteration counter increment for an aborted stage run.
+
+        Used when a quota failure preempts the agent before it produced output —
+        the stage should not consume one of its retry budget slots.
+        """
+        state = workspace.state
+        current = state.stage_iterations.get(stage_id, 0)
+        if current > 0:
+            state.stage_iterations[stage_id] = current - 1
+            workspace.save_state()
+
+    async def _notify_deferred(
+        self, workspace: Workspace, retry_at: datetime,
+    ) -> None:
+        """Send a one-shot Telegram notification for quota deferral (debounced)."""
+        now = datetime.now(timezone.utc)
+        if self._quota_window_end is not None and now < self._quota_window_end:
+            return  # still inside the already-announced quota window
+        self._quota_window_end = retry_at
+
+        if self._notifier is None:
+            return
+
+        state = workspace.state
+        chat_id = self._get_chat_id(workspace)
+        msg = (
+            f"\u23f1 [{state.company_id}/{state.repo_id}] Quota exhausted. "
+            f"{state.ticket_id} (at {state.previous_state or '?'}) deferred, "
+            f"will retry at {retry_at.strftime('%Y-%m-%d %H:%M')} UTC. "
+            f"Other tickets hitting the same quota will defer silently until then."
+        )
+        try:
+            await self._notifier.send_message(chat_id, msg)
+        except Exception as e:
+            logger.warning("Failed to send deferred notification: %s", e)
+
+    async def _notify_failed(self, workspace: Workspace, error: str) -> None:
+        """Send a one-shot Telegram notification for a permanent failure."""
+        if self._notifier is None:
+            return
+        state = workspace.state
+        chat_id = self._get_chat_id(workspace)
+        first_line = (error or "").splitlines()[0] if error else ""
+        msg = (
+            f"\u274c [{state.company_id}/{state.repo_id}] {state.ticket_id} "
+            f"FAILED at {state.previous_state or '?'}. Error: {first_line}. "
+            f"Reply 'retry {state.ticket_id}' or use the dashboard."
+        )
+        try:
+            await self._notifier.send_message(chat_id, msg)
+        except Exception as e:
+            logger.warning("Failed to send failure notification: %s", e)
 
     async def _handle_action_stage(
         self, workspace: Workspace, stage_id: str, stage_def: Any,

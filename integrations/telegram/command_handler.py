@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 import logging
 import time
 from datetime import datetime, timezone
@@ -49,10 +48,23 @@ class CommandHandler:
         self._allowed_chat_ids = allowed_chat_ids
         self._events = event_bus
         self._last_poll_time: float = time.time()
+        # ticket_id -> (unblocked_at, resumed_state) for the last few minutes,
+        # so a second answer arriving after we already started can be acknowledged.
+        self._recently_unblocked: dict[str, tuple[float, str]] = {}
 
     def update_last_poll_time(self) -> None:
         """Called by orchestrator after each Jira poll."""
         self._last_poll_time = time.time()
+
+    async def _reply(self, chat_id: str, text: str, processing_msg_id: int | None) -> None:
+        """Send response: edit the processing indicator if present, else send new."""
+        if processing_msg_id and hasattr(self._notifier, "edit_message"):
+            try:
+                await self._notifier.edit_message(chat_id, processing_msg_id, text)
+                return
+            except Exception:
+                logger.debug("Failed to edit processing indicator, sending new message", exc_info=True)
+        await self._notifier.send_message(chat_id, text)
 
     async def handle_message(self, text: str, chat_id: str) -> None:
         """Process an incoming Telegram message."""
@@ -61,52 +73,53 @@ class CommandHandler:
                 "Rejecting command from unauthorized chat_id=%s", chat_id,
             )
             return
-        # Show typing continuously while LLM parses intent (expires after 5s)
-        typing_task = None
-        if hasattr(self._notifier, "send_typing"):
-            async def _keep_typing() -> None:
-                try:
-                    while True:
-                        await self._notifier.send_typing(chat_id)
-                        await asyncio.sleep(4)
-                except asyncio.CancelledError:
-                    pass
-            typing_task = asyncio.create_task(_keep_typing())
+        # Send a visible processing message so the user knows we're working
+        processing_msg_id = None
+        preview = text[:100].replace("\n", " ")
+        try:
+            processing_msg_id = await self._notifier.send_message(
+                chat_id, f"\u2699\ufe0f Processing... ({preview})",
+            )
+        except Exception:
+            logger.debug("Failed to send processing indicator", exc_info=True)
 
         workspaces = self._active_workspaces_fn()
         context = self._build_context(workspaces)
-        try:
-            intent = await self._intent_parser.parse(text, context)
-        finally:
-            if typing_task:
-                typing_task.cancel()
+        intent = await self._intent_parser.parse(text, context)
         logger.info("Parsed intent: %s (params=%s)", intent.intent, intent.params)
         if self._events:
             self._events.emit("intent_parsed", f"Intent: {intent.intent} (params={intent.params})", data={"intent": intent.intent, "params": intent.params, "raw_text": text[:200]})
 
         if intent.intent == "status":
-            await self._handle_status(intent, chat_id, workspaces)
+            await self._handle_status(intent, chat_id, workspaces, processing_msg_id)
         elif intent.intent == "set_mode":
-            await self._handle_set_mode(intent, chat_id)
+            await self._handle_set_mode(intent, chat_id, processing_msg_id)
         elif intent.intent == "approve":
-            await self._handle_approve(intent, chat_id, workspaces)
+            await self._handle_approve(intent, chat_id, workspaces, processing_msg_id)
         elif intent.intent == "reject":
-            await self._handle_reject(intent, chat_id, workspaces)
+            await self._handle_reject(intent, chat_id, workspaces, processing_msg_id)
         elif intent.intent == "analyze":
-            await self._handle_analyze(intent, chat_id, workspaces)
+            await self._handle_analyze(intent, chat_id, workspaces, processing_msg_id)
         elif intent.intent == "retry":
-            await self._handle_retry(intent, chat_id, workspaces)
+            await self._handle_retry(intent, chat_id, workspaces, processing_msg_id)
+        elif intent.intent == "provide_input":
+            await self._handle_provide_input(intent, chat_id, workspaces, processing_msg_id)
         elif intent.intent == "error":
-            await self._notifier.send_message(chat_id, intent.reply)
+            await self._reply(chat_id, intent.reply, processing_msg_id)
         else:
-            await self._notifier.send_message(chat_id, intent.reply or
-                "I didn't understand that. I can do: status, analyze, approve, reject, retry, set_mode.")
+            await self._reply(chat_id, intent.reply or
+                "I didn't understand that. I can do: status, analyze, approve, reject, retry, set_mode.", processing_msg_id)
 
     def _build_context(self, workspaces: list[Any]) -> dict[str, Any]:
         awaiting = [
             f"{ws.state.ticket_id} ({ws.state.previous_state})"
             for ws in workspaces
             if ws.state.current_state == "AWAITING_APPROVAL"
+        ]
+        blocked = [
+            f"{ws.state.ticket_id} ({ws.state.previous_state or 'unknown'})"
+            for ws in workspaces
+            if ws.state.current_state == "BLOCKED"
         ]
         active = [
             f"{ws.state.ticket_id} — {ws.state.current_state}"
@@ -116,10 +129,11 @@ class CommandHandler:
         return {
             "mode": self._mode_handler.get_mode(),
             "awaiting_approval": awaiting,
+            "blocked_workspaces": blocked,
             "active_workspaces": active,
         }
 
-    async def _handle_status(self, intent: ParsedIntent, chat_id: str, workspaces: list[Any]) -> None:
+    async def _handle_status(self, intent: ParsedIntent, chat_id: str, workspaces: list[Any], processing_msg_id: int | None = None) -> None:
         ticket_id = intent.params.get("ticket_id")
         if ticket_id:
             matches = [ws for ws in workspaces if ws.state.ticket_id == ticket_id]
@@ -146,58 +160,60 @@ class CommandHandler:
                 active_workspaces=active,
                 recent_completions=recent,
             )
-        await self._notifier.send_message(chat_id, msg)
+        await self._reply(chat_id, msg, processing_msg_id)
 
-    async def _handle_set_mode(self, intent: ParsedIntent, chat_id: str) -> None:
+    async def _handle_set_mode(self, intent: ParsedIntent, chat_id: str, processing_msg_id: int | None = None) -> None:
         mode = intent.params.get("mode", "")
         try:
             self._mode_handler.set_mode(mode)
-            await self._notifier.send_message(chat_id, intent.reply or f"Switched to {mode} mode.")
+            await self._reply(chat_id, intent.reply or f"Switched to {mode} mode.", processing_msg_id)
         except ValueError as e:
-            await self._notifier.send_message(chat_id, str(e))
+            await self._reply(chat_id, str(e), processing_msg_id)
 
-    async def _handle_approve(self, intent: ParsedIntent, chat_id: str, workspaces: list[Any]) -> None:
+    async def _handle_approve(self, intent: ParsedIntent, chat_id: str, workspaces: list[Any], processing_msg_id: int | None = None) -> None:
         ticket_id = intent.params.get("ticket_id")
         awaiting = self._approval_handler.find_awaiting(workspaces, ticket_id)
         if not awaiting:
-            await self._notifier.send_message(chat_id, "No workspaces awaiting approval.")
+            await self._reply(chat_id, "No workspaces awaiting approval.", processing_msg_id)
             return
         if len(awaiting) > 1 and not ticket_id:
             tickets = ", ".join(ws.state.ticket_id for ws in awaiting)
-            await self._notifier.send_message(chat_id, f"Multiple workspaces awaiting approval: {tickets}. Please specify which one.")
+            await self._reply(chat_id, f"Multiple workspaces awaiting approval: {tickets}. Please specify which one.", processing_msg_id)
             return
         ws = awaiting[0]
         next_state = self._approval_handler.resolve_next_state(ws)
         ws.transition(next_state)
-        await self._notifier.send_message(chat_id, intent.reply or f"Approved {ws.state.ticket_id}. Moving to {next_state}.")
+        await self._reply(chat_id, intent.reply or f"Approved {ws.state.ticket_id}. Moving to {next_state}.", processing_msg_id)
 
-    async def _handle_reject(self, intent: ParsedIntent, chat_id: str, workspaces: list[Any]) -> None:
+    async def _handle_reject(self, intent: ParsedIntent, chat_id: str, workspaces: list[Any], processing_msg_id: int | None = None) -> None:
         ticket_id = intent.params.get("ticket_id")
         awaiting = self._approval_handler.find_awaiting(workspaces, ticket_id)
         if not awaiting:
-            await self._notifier.send_message(chat_id, "No workspaces awaiting approval.")
+            await self._reply(chat_id, "No workspaces awaiting approval.", processing_msg_id)
             return
         if len(awaiting) > 1 and not ticket_id:
             tickets = ", ".join(ws.state.ticket_id for ws in awaiting)
-            await self._notifier.send_message(
+            await self._reply(
                 chat_id,
                 f"Multiple workspaces awaiting approval: {tickets}. Please specify which one to reject.",
+                processing_msg_id,
             )
             return
         ws = awaiting[0]
         ws.transition("FAILED")
         ws.update_state(error="Rejected by operator via Telegram")
-        await self._notifier.send_message(chat_id, intent.reply or f"Rejected {ws.state.ticket_id}. Marked as FAILED.")
+        await self._reply(chat_id, intent.reply or f"Rejected {ws.state.ticket_id}. Marked as FAILED.", processing_msg_id)
 
-    async def _handle_analyze(self, intent: ParsedIntent, chat_id: str, workspaces: list[Any]) -> None:
+    async def _handle_analyze(self, intent: ParsedIntent, chat_id: str, workspaces: list[Any], processing_msg_id: int | None = None) -> None:
         ticket_ids = intent.params.get("ticket_ids", [])
         if not ticket_ids:
-            await self._notifier.send_message(chat_id, "Please specify ticket IDs to analyze.")
+            await self._reply(chat_id, "Please specify ticket IDs to analyze.", processing_msg_id)
             return
         if not self._analyze_callback:
-            await self._notifier.send_message(
+            await self._reply(
                 chat_id,
                 "Analyze is not available — no orchestrator callback configured.",
+                processing_msg_id,
             )
             return
 
@@ -205,7 +221,7 @@ class CommandHandler:
             result = await self._analyze_callback(ticket_ids)
         except Exception as e:
             logger.error("analyze_callback failed: %s", e, exc_info=True)
-            await self._notifier.send_message(chat_id, f"Analyze failed: {e}")
+            await self._reply(chat_id, f"Analyze failed: {e}", processing_msg_id)
             return
         # result is expected to be dict with keys: valid (list of ticket IDs),
         # invalid (list of "TICKET: reason" strings). Missing keys default to [].
@@ -220,7 +236,7 @@ class CommandHandler:
                 lines.append(f"  - {entry}")
         if not lines:
             lines.append(intent.reply or "No tickets were queued.")
-        await self._notifier.send_message(chat_id, "\n".join(lines))
+        await self._reply(chat_id, "\n".join(lines), processing_msg_id)
 
     _VALID_RETRY_STATES = {
         "analysis": "ANALYSIS",
@@ -230,15 +246,15 @@ class CommandHandler:
         "push": "PUSHED",
     }
 
-    async def _handle_retry(self, intent: ParsedIntent, chat_id: str, workspaces: list[Any]) -> None:
+    async def _handle_retry(self, intent: ParsedIntent, chat_id: str, workspaces: list[Any], processing_msg_id: int | None = None) -> None:
         ticket_id = intent.params.get("ticket_id")
         if not ticket_id:
-            await self._notifier.send_message(chat_id, "Please specify a ticket ID to retry.")
+            await self._reply(chat_id, "Please specify a ticket ID to retry.", processing_msg_id)
             return
 
         matches = [ws for ws in workspaces if ws.state.ticket_id == ticket_id]
         if not matches:
-            await self._notifier.send_message(chat_id, f"No active workspace found for {ticket_id}.")
+            await self._reply(chat_id, f"No active workspace found for {ticket_id}.", processing_msg_id)
             return
 
         ws = matches[0]
@@ -248,8 +264,9 @@ class CommandHandler:
             target_state = self._VALID_RETRY_STATES.get(from_stage)
             if not target_state:
                 valid = ", ".join(self._VALID_RETRY_STATES.keys())
-                await self._notifier.send_message(
+                await self._reply(
                     chat_id, f"Unknown stage '{from_stage}'. Valid stages: {valid}",
+                    processing_msg_id,
                 )
                 return
         else:
@@ -265,11 +282,95 @@ class CommandHandler:
         ws.transition(target_state)
         ws.save_state()
 
-        await self._notifier.send_message(
+        await self._reply(
             chat_id,
             f"Retrying {ticket_id} from {target_state}.",
+            processing_msg_id,
         )
         logger.info("Retry %s -> %s", ticket_id, target_state)
+
+    async def _handle_provide_input(
+        self,
+        intent: ParsedIntent,
+        chat_id: str,
+        workspaces: list[Any],
+        processing_msg_id: int | None = None,
+    ) -> None:
+        """Resume a BLOCKED workspace with free-text input the user typed."""
+        blocked = [ws for ws in workspaces if ws.state.current_state == "BLOCKED"]
+        if not blocked:
+            recent = self._format_recent_unblock_notice()
+            if recent:
+                await self._reply(
+                    chat_id,
+                    f"{recent} Your new message was NOT added — that input is already being processed. "
+                    f"If the pipeline blocks again with a new question, you can answer it then, "
+                    f"or use `retry <ticket>` to re-run the stage.",
+                    processing_msg_id,
+                )
+            else:
+                await self._reply(
+                    chat_id,
+                    "No blocked workspaces are waiting for input.",
+                    processing_msg_id,
+                )
+            return
+
+        ticket_id = intent.params.get("ticket_id")
+        if ticket_id:
+            target = next((ws for ws in blocked if ws.state.ticket_id == ticket_id), None)
+            if not target:
+                await self._reply(
+                    chat_id, f"No blocked workspace found for {ticket_id}.", processing_msg_id,
+                )
+                return
+        elif len(blocked) == 1:
+            target = blocked[0]
+        else:
+            tickets = ", ".join(ws.state.ticket_id for ws in blocked)
+            await self._reply(
+                chat_id,
+                f"Multiple blocked workspaces: {tickets}. Please prefix your answer with the ticket ID.",
+                processing_msg_id,
+            )
+            return
+
+        input_text = intent.params.get("input_text", "").strip()
+        if not input_text:
+            await self._reply(chat_id, "Empty input — nothing to resume with.", processing_msg_id)
+            return
+
+        target.state.human_input_reply = input_text
+        target.state.human_input_pending = False
+        resume_state = target.state.previous_state or "ANALYSIS"
+        target.transition(resume_state)
+        target.save_state()
+        self._recently_unblocked[target.state.ticket_id] = (time.time(), resume_state)
+
+        await self._reply(
+            chat_id,
+            intent.reply or f"Got it. Resuming {target.state.ticket_id} from {resume_state} with your input.",
+            processing_msg_id,
+        )
+        logger.info(
+            "Unblocked %s via provide_input -> %s", target.state.ticket_id, resume_state,
+        )
+
+    def _format_recent_unblock_notice(self, window_seconds: float = 300.0) -> str | None:
+        """Return a human-readable note about recently-unblocked tickets, or None."""
+        now = time.time()
+        # Drop stale entries
+        self._recently_unblocked = {
+            t: (ts, st) for t, (ts, st) in self._recently_unblocked.items()
+            if now - ts < window_seconds
+        }
+        if not self._recently_unblocked:
+            return None
+        parts = [
+            f"{ticket} (resumed from {state}, {int(now - ts)}s ago)"
+            for ticket, (ts, state) in self._recently_unblocked.items()
+        ]
+        return f"Already started: {', '.join(parts)}."
 
     async def handle_reply(self, reply_to_msg_id: int, text: str, chat_id: str) -> bool:
         """Handle a reply to an escalation message. Returns True if matched."""
@@ -283,11 +384,13 @@ class CommandHandler:
             ):
                 ws.state.human_input_reply = text
                 ws.state.human_input_pending = False
-                ws.transition("ANALYSIS")
+                resume_state = ws.state.previous_state or "ANALYSIS"
+                ws.transition(resume_state)
                 ws.save_state()
+                self._recently_unblocked[ws.state.ticket_id] = (time.time(), resume_state)
                 await self._notifier.send_message(
                     chat_id,
-                    f"Got it. Resuming {ws.state.ticket_id} with your input.",
+                    f"Got it. Resuming {ws.state.ticket_id} from {resume_state} with your input.",
                 )
                 logger.info(
                     "Unblocked %s via reply to msg %d",

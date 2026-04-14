@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import shlex
 import subprocess
 import time
 from pathlib import Path
@@ -130,22 +131,37 @@ def build_action_routes(
         if running:
             agent_runtime.cancel(ticket_id)
 
-        # Transition to MANUAL_CONTROL
-        ws.transition("MANUAL_CONTROL")
-        ws.update_state(manual_control_started_at=time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()))
+        # Transition to MANUAL_CONTROL atomically with timestamp
+        ws.transition(
+            "MANUAL_CONTROL",
+            manual_control_started_at=time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        )
 
-        # Build claude command
-        command = _build_claude_command(ws)
-
-        # Launch terminal
-        terminal_cmd = "gnome-terminal -- bash -c"
-        if global_config and hasattr(global_config, "dashboard"):
-            terminal_cmd = getattr(global_config.dashboard, "terminal_command", terminal_cmd)
+        # Write a launcher script — avoids all shell-quoting issues.
+        # All file I/O is best-effort: if it fails (broken meta dir, mocked
+        # workspace in tests, etc.) we still complete the state transition.
+        full_cmd = ""
         try:
-            full_cmd = f'{terminal_cmd} \'{command}; exec bash\''
+            prompt = _build_claude_prompt(ws)
+            prompt_path = Path(ws.meta_dir) / "manual_control_prompt.txt"
+            prompt_path.write_text(prompt)
+            script_path = Path(ws.meta_dir) / "manual_control_launch.sh"
+            script_path.write_text(
+                "#!/bin/bash\n"
+                f"cd {shlex.quote(str(ws.source_dir))}\n"
+                f"claude \"$(cat {shlex.quote(str(prompt_path))})\"\n"
+                "exec bash\n"
+            )
+            script_path.chmod(0o755)
+
+            terminal_cmd = "gnome-terminal -- bash -c"
+            if global_config and hasattr(global_config, "dashboard"):
+                terminal_cmd = getattr(global_config.dashboard, "terminal_command", terminal_cmd)
+            full_cmd = f"{terminal_cmd} {shlex.quote(str(script_path))}"
+            logger.info("take_control launching: %s", full_cmd)
             subprocess.Popen(full_cmd, shell=True)
         except Exception as e:
-            logger.warning("Failed to launch terminal: %s", e)
+            logger.warning("Failed to launch manual-control terminal: %s", e)
 
         if event_bus:
             event_bus.emit(
@@ -154,7 +170,7 @@ def build_action_routes(
                 ticket_id=ticket_id,
                 data={"previous_state": ws.state.previous_state},
             )
-        return JSONResponse({"status": "ok", "command": command})
+        return JSONResponse({"status": "ok", "command": full_cmd})
 
     async def release_control(request: Request) -> JSONResponse:
         ticket_id = request.path_params["ticket_id"]
@@ -225,10 +241,9 @@ def build_action_routes(
     ]
 
 
-def _build_claude_command(ws: Any) -> str:
-    """Build the claude CLI command with full workspace context."""
+def _build_claude_prompt(ws: Any) -> str:
+    """Build the initial prompt to hand to interactive claude."""
     state = ws.state
-    source_dir = str(ws.source_dir)
     reports_dir = str(ws.reports_dir)
     meta_dir = str(ws.meta_dir)
 
@@ -264,7 +279,4 @@ def _build_claude_command(ws: Any) -> str:
         "The operator has taken manual control. Ask them what they want to do."
     )
 
-    prompt = "\n\n".join(parts)
-    # Escape single quotes for shell
-    prompt = prompt.replace("'", "'\\''")
-    return f"cd {source_dir} && claude -p '{prompt}'"
+    return "\n\n".join(parts)

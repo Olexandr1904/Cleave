@@ -697,12 +697,17 @@ class Orchestrator:
                 report_content = outputs[0].read_text(encoding="utf-8").strip()
 
         if report_content:
-            # Telegram has a 4096 char limit
-            if len(message) + len(report_content) > 4000:
-                report_content = report_content[:4000 - len(message)] + "\n..."
-            message += report_content
+            # Telegram has a 4096 char limit; reserve room for the hint footer
+            hint = "\n\n— Just type your answer in this chat to resume the pipeline."
+            budget = 4000 - len(message) - len(hint)
+            if len(report_content) > budget:
+                report_content = report_content[:budget] + "\n..."
+            message += report_content + hint
         else:
-            message += "The pipeline could not proceed automatically. Please check the workspace for details."
+            message += (
+                "The pipeline could not proceed automatically. Please check the workspace for details.\n\n"
+                "— Just type your answer in this chat to resume the pipeline."
+            )
 
         try:
             msg_id = await self._notifier.send_message(chat_id, message)

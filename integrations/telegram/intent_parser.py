@@ -15,9 +15,10 @@ Current state:
 - Mode: {mode}
 - Awaiting approval: {awaiting_approval}
 - Active workspaces: {active_workspaces}
+- Blocked (waiting for human input): {blocked_workspaces}
 
 Classify the user message into one of these intents:
-  status, analyze, approve, reject, set_mode, retry, unknown
+  status, analyze, approve, reject, set_mode, retry, provide_input, unknown
 
 Return ONLY valid JSON (no markdown, no code fences):
 {{"intent": "...", "params": {{...}}, "reply": "..."}}
@@ -29,7 +30,10 @@ Intent param schemas:
 - reject: params.ticket_id (optional string)
 - set_mode: params.mode (required, "auto" or "manual")
 - retry: params.ticket_id (required string), params.from_stage (optional: "analysis", "dev", "qa", "push" — defaults to current stage)
+- provide_input: params.ticket_id (required if multiple blocked, infer from context if exactly one), params.input_text (the user's full answer/clarification verbatim)
 - unknown: params.raw_text (the original message)
+
+IMPORTANT: If there are blocked workspaces and the user's message looks like an answer/clarification/requirements (not a command), classify as "provide_input". Free-form text like "the bug is X", "we need to scroll Y", "yes, both screens", or descriptions of requirements should be "provide_input" when a workspace is blocked.
 
 The "reply" field is a natural language confirmation message for the user.\
 """
@@ -83,6 +87,7 @@ class IntentParser:
             mode=pipeline_context.get("mode", "auto"),
             awaiting_approval=", ".join(pipeline_context.get("awaiting_approval", [])) or "none",
             active_workspaces=", ".join(pipeline_context.get("active_workspaces", [])) or "none",
+            blocked_workspaces=", ".join(pipeline_context.get("blocked_workspaces", [])) or "none",
         )
 
         try:

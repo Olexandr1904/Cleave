@@ -341,6 +341,7 @@ def main(argv: list[str] | None = None) -> int:
                 orchestrator=orchestrator,
                 mode_handler=mode_handler,
                 global_config=global_config,
+                projects=projects,
             )
             config = uvicorn.Config(
                 app, host=dash_config.host, port=dash_config.port,

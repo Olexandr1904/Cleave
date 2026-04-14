@@ -133,7 +133,11 @@ class TestTakeControlEndpoint:
         data = resp.json()
         assert data["status"] == "ok"
         assert "command" in data
-        ws.transition.assert_called_with("MANUAL_CONTROL")
+        # transition is now called with the timestamp atomically
+        assert ws.transition.called
+        args, kwargs = ws.transition.call_args
+        assert args[0] == "MANUAL_CONTROL"
+        assert "manual_control_started_at" in kwargs
 
     def test_take_control_agent_running_without_confirm(self, client, orchestrator):
         ws = _make_workspace("T-1", "DEV")
@@ -239,7 +243,11 @@ class TestTakeControlExtended:
         data = resp.json()
         assert data["status"] == "ok"
         orchestrator._agent_runtime.cancel.assert_called_with("T-1")
-        ws.transition.assert_called_with("MANUAL_CONTROL")
+        # transition is now called with the timestamp atomically
+        assert ws.transition.called
+        args, kwargs = ws.transition.call_args
+        assert args[0] == "MANUAL_CONTROL"
+        assert "manual_control_started_at" in kwargs
 
     def test_take_control_manual_control_state_rejected(self, client, orchestrator):
         ws = _make_workspace("T-1", "MANUAL_CONTROL", previous="DEV")

@@ -44,6 +44,8 @@ class TestCommandHandler:
     def mock_notifier(self):
         notifier = AsyncMock()
         notifier.send_message = AsyncMock(return_value=1)
+        notifier.edit_message = AsyncMock()
+        notifier.delete_message = AsyncMock()
         return notifier
 
     @pytest.fixture
@@ -65,9 +67,11 @@ class TestCommandHandler:
 
     async def test_handle_status_sends_message(self, command_handler, mock_notifier):
         await command_handler.handle_message("what's going on", "12345")
+        # Processing indicator sent, then response edited into it
         mock_notifier.send_message.assert_called_once()
-        call_args = mock_notifier.send_message.call_args
-        assert call_args[0][0] == "12345"
+        assert "Processing" in mock_notifier.send_message.call_args[0][1]
+        mock_notifier.edit_message.assert_called_once()
+        assert mock_notifier.edit_message.call_args[0][0] == "12345"
 
     async def test_handle_set_mode(self, command_handler, mock_intent_parser, mock_notifier, mock_mode_handler):
         mock_intent_parser.parse = AsyncMock(return_value=ParsedIntent(
@@ -82,14 +86,15 @@ class TestCommandHandler:
         ))
         await command_handler.handle_message("gibberish", "12345")
         mock_notifier.send_message.assert_called_once()
+        mock_notifier.edit_message.assert_called_once()
 
     async def test_handle_error_sends_error_message(self, command_handler, mock_intent_parser, mock_notifier):
         mock_intent_parser.parse = AsyncMock(return_value=ParsedIntent(
             intent="error", params={}, reply="I'm having trouble.",
         ))
         await command_handler.handle_message("hello", "12345")
-        mock_notifier.send_message.assert_called_once()
-        call_text = mock_notifier.send_message.call_args[0][1]
+        mock_notifier.edit_message.assert_called_once()
+        call_text = mock_notifier.edit_message.call_args[0][2]
         assert "trouble" in call_text.lower()
 
     async def test_unauthorized_chat_id_is_dropped(
@@ -137,7 +142,7 @@ class TestCommandHandler:
         # Should ask operator to disambiguate, not mark any as FAILED
         ws_a.transition.assert_not_called()
         ws_b.transition.assert_not_called()
-        msg = mock_notifier.send_message.call_args[0][1]
+        msg = mock_notifier.edit_message.call_args[0][2]
         assert "T-1" in msg and "T-2" in msg
 
     async def test_analyze_dispatches_callback_and_reports(
@@ -156,7 +161,7 @@ class TestCommandHandler:
         )
         await handler.handle_message("analyze T-1 and T-2", "12345")
         callback.assert_awaited_once_with(["T-1", "T-2"])
-        msg = mock_notifier.send_message.call_args[0][1]
+        msg = mock_notifier.edit_message.call_args[0][2]
         assert "T-1" in msg
         assert "T-2: not found" in msg
 
@@ -173,7 +178,7 @@ class TestCommandHandler:
             active_workspaces_fn=lambda: [],
         )
         await handler.handle_message("analyze T-1", "12345")
-        msg = mock_notifier.send_message.call_args[0][1]
+        msg = mock_notifier.edit_message.call_args[0][2]
         assert "not available" in msg.lower()
 
     async def test_status_includes_recent_completions(
@@ -187,5 +192,22 @@ class TestCommandHandler:
             recent_completions_fn=lambda: [("T-DONE", "DONE", 1_700_000_000.0)],
         )
         await handler.handle_message("status", "12345")
-        msg = mock_notifier.send_message.call_args[0][1]
+        msg = mock_notifier.edit_message.call_args[0][2]
         assert "T-DONE" in msg
+
+    async def test_processing_indicator_includes_original_text(
+        self, command_handler, mock_notifier,
+    ):
+        await command_handler.handle_message("check status please", "12345")
+        processing_text = mock_notifier.send_message.call_args[0][1]
+        assert "Processing" in processing_text
+        assert "check status please" in processing_text
+
+    async def test_processing_indicator_truncates_long_messages(
+        self, command_handler, mock_notifier,
+    ):
+        long_msg = "x" * 200
+        await command_handler.handle_message(long_msg, "12345")
+        processing_text = mock_notifier.send_message.call_args[0][1]
+        # Original text should be truncated to 100 chars
+        assert len(processing_text) < 200

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import json
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, call
 
 import pytest
 from starlette.testclient import TestClient
@@ -358,3 +358,10 @@ class TestArchiveEndpoint:
         orchestrator.get_active_workspaces.return_value = [ws]
         resp = client.post("/api/workspaces/T-A3/archive")
         assert resp.status_code == 400
+
+    def test_archive_deferred_hops_via_failed(self, client, orchestrator):
+        ws = _make_workspace("T-A4", "DEFERRED", previous="DEV")
+        orchestrator.get_active_workspaces.return_value = [ws]
+        resp = client.post("/api/workspaces/T-A4/archive")
+        assert resp.status_code == 200
+        assert ws.transition.call_args_list == [call("FAILED"), call("ARCHIVED")]

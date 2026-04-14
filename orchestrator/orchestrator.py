@@ -265,6 +265,8 @@ class Orchestrator:
     async def poll_cycle(self) -> None:
         """Single poll + advance cycle."""
         self._emit("poll_cycle", "Poll cycle started")
+        # 0. Resume any DEFERRED workspaces whose retry_at has passed
+        await self._sweep_deferred()
         # 1. Poll for new tickets and create workspaces (skip in manual mode)
         is_manual = bool(
             self._mode_handler and self._mode_handler.get_mode() == "manual"
@@ -619,6 +621,42 @@ class Orchestrator:
             await self._notifier.send_message(chat_id, msg)
         except Exception as e:
             logger.warning("Failed to send failure notification: %s", e)
+
+    async def _sweep_deferred(self) -> None:
+        """Resume DEFERRED workspaces whose retry_at has passed.
+
+        Called at the top of each poll cycle. Also clears the in-memory
+        quota debounce window once its retry_at has passed.
+        """
+        now = datetime.now(timezone.utc)
+
+        if self._quota_window_end is not None and now >= self._quota_window_end:
+            self._quota_window_end = None
+
+        for ws in list(self._active_workspaces):
+            if ws.state.current_state != "DEFERRED":
+                continue
+            retry_at_str = ws.state.retry_at
+            if not retry_at_str:
+                continue
+            try:
+                retry_at = datetime.fromisoformat(retry_at_str)
+            except ValueError:
+                logger.warning(
+                    "Workspace %s has malformed retry_at: %s",
+                    ws.state.ticket_id, retry_at_str,
+                )
+                continue
+            if retry_at <= now:
+                target = ws.state.previous_state or "ANALYSIS"
+                ws.transition(target)
+                self._emit(
+                    "deferred_resumed",
+                    f"Resumed {ws.state.ticket_id} from DEFERRED to {target}",
+                    project_id=ws.state.company_id,
+                    ticket_id=ws.state.ticket_id,
+                    data={"target_state": target},
+                )
 
     async def _handle_action_stage(
         self, workspace: Workspace, stage_id: str, stage_def: Any,

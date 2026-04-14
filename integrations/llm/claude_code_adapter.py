@@ -13,12 +13,64 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import re
 import shutil
+from datetime import datetime, timezone
 from typing import Any
 
 from integrations.llm.llm_interface import LLMInterface, LLMResponse
 
 logger = logging.getLogger(__name__)
+
+_QUOTA_MARKER_RE = re.compile(
+    r"Claude AI usage limit reached\|(\d+)",
+    re.IGNORECASE,
+)
+_QUOTA_SUBSTRINGS = (
+    "usage limit reached",
+    "rate_limit",
+    "overloaded_error",
+    "quota",
+)
+
+
+class QuotaExhaustedError(RuntimeError):
+    """Claude CLI hit a usage/rate limit. Carries the reset time if known."""
+
+    def __init__(self, message: str, retry_at: datetime | None = None) -> None:
+        super().__init__(message)
+        self.retry_at = retry_at
+
+
+def _classify_cli_error(stdout: str, stderr: str) -> QuotaExhaustedError | None:
+    """Return a QuotaExhaustedError if stdout/stderr look like a quota hit, else None."""
+    # Structured parse first: JSON stdout with is_error=true and a usage-limit marker.
+    structured_text = ""
+    try:
+        data = json.loads(stdout)
+        if isinstance(data, dict) and data.get("is_error"):
+            structured_text = str(data.get("result") or data.get("content") or "")
+    except (json.JSONDecodeError, TypeError):
+        pass
+
+    if structured_text:
+        m = _QUOTA_MARKER_RE.search(structured_text)
+        if m:
+            epoch_ms = int(m.group(1))
+            retry_at = datetime.fromtimestamp(epoch_ms / 1000, tz=timezone.utc)
+            return QuotaExhaustedError(structured_text, retry_at=retry_at)
+
+    # Substring fallback across combined stdout + stderr.
+    combined = f"{stdout}\n{stderr}".lower()
+    for marker in _QUOTA_SUBSTRINGS:
+        if marker in combined:
+            return QuotaExhaustedError(
+                f"Quota/rate limit detected: {marker}",
+                retry_at=None,
+            )
+
+    return None
+
 
 # Map our tool names to Claude Code's built-in tool names
 TOOL_MAP = {

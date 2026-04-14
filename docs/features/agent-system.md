@@ -59,3 +59,4 @@ Pluggable AI agent system following the BMAD pattern. Each agent is a standalone
 | 2026-04-07 | Initial draft — seeded from PRD and architecture docs |
 | 2026-04-08 | Added `quick_query` to `ClaudeCodeAdapter` — lightweight single-turn, no-tools call for intent parsing (5s timeout) |
 | 2026-04-12 | Added agent tracking and cancellation to `AgentRuntime`: `register_running`, `unregister_running`, `get_running`, `cancel` methods; `_running` dict maps ticket_id → agent info; `_execute_cli` wrapped with register/unregister; `cancel()` sends SIGTERM. |
+| 2026-04-14 | Added QuotaExhaustedError exception and _classify_cli_error helper for detecting Claude CLI usage-limit hits. Not yet wired into _run_cli (Task 4). |

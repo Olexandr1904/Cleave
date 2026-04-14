@@ -71,3 +71,34 @@ class TestIntentParser:
         parser = IntentParser(llm_adapter=mock_adapter, intent_parser_config=None)
         result = await parser.parse("hello", pipeline_context={})
         assert result.intent == "unknown"
+
+
+class TestDeferredContext:
+    @pytest.fixture
+    def mock_adapter(self):
+        adapter = AsyncMock()
+        adapter.quick_query = AsyncMock(return_value=json.dumps({
+            "intent": "retry",
+            "params": {"ticket_id": "T-D"},
+            "reply": "Retrying T-D",
+        }))
+        return adapter
+
+    @pytest.fixture
+    def parser(self, mock_adapter):
+        return IntentParser(llm_adapter=mock_adapter, intent_parser_config=None)
+
+    async def test_deferred_workspaces_included_in_system_prompt(self, parser, mock_adapter):
+        context = {
+            "mode": "auto",
+            "awaiting_approval": [],
+            "active_workspaces": [],
+            "blocked_workspaces": [],
+            "deferred_workspaces": ["T-D (QA, retry at 20:00)"],
+        }
+        await parser.parse("resume T-D", pipeline_context=context)
+        assert mock_adapter.quick_query.called
+        system_prompt = mock_adapter.quick_query.call_args.kwargs.get("system") \
+            or mock_adapter.quick_query.call_args[0][1]
+        lowered = system_prompt.lower()
+        assert "t-d" in lowered or "deferred" in lowered

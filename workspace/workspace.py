@@ -32,7 +32,7 @@ VALID_TRANSITIONS: dict[str, set[str]] = {
     "BLOCKED":            {"ANALYSIS", "DEV", "SCOPE_CHECK", "QA", "PUSHED", "PR_REVIEW", "FAILED", "MANUAL_CONTROL"},
     "FAILED":             set(),
     "ARCHIVED":           set(),
-    "AWAITING_APPROVAL":  {"DEV", "PUSHED", "DONE", "FAILED", "MANUAL_CONTROL"},
+    "AWAITING_APPROVAL":  {"ANALYSIS", "DEV", "SCOPE_CHECK", "QA", "PUSHED", "PR_REVIEW", "DONE", "FAILED", "MANUAL_CONTROL"},
     "MANUAL_CONTROL":     {"ANALYSIS"},
 }
 

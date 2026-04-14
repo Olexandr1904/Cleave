@@ -154,10 +154,10 @@ class TestWorkspaceDiscovery:
         assert len(workspaces) == 0
 
     def test_skips_failed(self, manager, base_dir):
-        """FAILED workspaces are skipped."""
+        """FAILED workspaces are now discovered (no longer terminal)."""
         _create_fake_workspace(base_dir, current_state="FAILED")
         workspaces = manager.discover_workspaces()
-        assert len(workspaces) == 0
+        assert len(workspaces) == 1
 
     def test_skips_archived(self, manager, base_dir):
         """ARCHIVED workspaces are skipped."""
@@ -166,15 +166,15 @@ class TestWorkspaceDiscovery:
         assert len(workspaces) == 0
 
     def test_discovers_multiple(self, manager, base_dir):
-        """Multiple active workspaces discovered, terminal skipped."""
+        """Multiple active workspaces discovered; only DONE/ARCHIVED skipped."""
         _create_fake_workspace(base_dir, current_state="DEV", ticket_id="T-1")
         _create_fake_workspace(base_dir, current_state="BLOCKED", ticket_id="T-2")
         _create_fake_workspace(base_dir, current_state="DONE", ticket_id="T-3")
         _create_fake_workspace(base_dir, current_state="FAILED", ticket_id="T-4")
         workspaces = manager.discover_workspaces()
-        assert len(workspaces) == 2
+        assert len(workspaces) == 3
         ids = {ws.state.ticket_id for ws in workspaces}
-        assert ids == {"T-1", "T-2"}
+        assert ids == {"T-1", "T-2", "T-4"}
 
     def test_empty_base_dir(self, manager):
         workspaces = manager.discover_workspaces()
@@ -241,3 +241,71 @@ class TestFullCleanup:
     def test_empty_base_dir(self, manager):
         deleted = manager.cleanup_old_workspaces(max_age_days=7)
         assert deleted == []
+
+
+class TestDiscoverWorkspacesIncludesFailedDeferred:
+    def test_discover_includes_failed(self, tmp_path):
+        from workspace.workspace_manager import WorkspaceManager
+        from workspace.workspace import Workspace, WorkspaceState
+
+        base = tmp_path / "sickle"
+        ws_root = base / "co" / "repo" / "tickets" / "T-1"
+        ws_root.mkdir(parents=True)
+        (ws_root / "meta").mkdir()
+        (ws_root / "source").mkdir()
+
+        state = WorkspaceState(
+            ticket_id="T-1", company_id="co", repo_id="repo",
+            workspace_root=str(ws_root), current_state="FAILED",
+            previous_state="DEV",
+        )
+        ws = Workspace(str(ws_root), state)
+        ws.save_state()
+
+        mgr = WorkspaceManager(str(base))
+        discovered = mgr.discover_workspaces()
+        assert len(discovered) == 1
+        assert discovered[0].state.ticket_id == "T-1"
+        assert discovered[0].state.current_state == "FAILED"
+
+    def test_discover_includes_deferred(self, tmp_path):
+        from workspace.workspace_manager import WorkspaceManager
+        from workspace.workspace import Workspace, WorkspaceState
+
+        base = tmp_path / "sickle"
+        ws_root = base / "co" / "repo" / "tickets" / "T-2"
+        ws_root.mkdir(parents=True)
+        (ws_root / "meta").mkdir()
+        (ws_root / "source").mkdir()
+
+        state = WorkspaceState(
+            ticket_id="T-2", company_id="co", repo_id="repo",
+            workspace_root=str(ws_root), current_state="DEFERRED",
+            previous_state="QA", retry_at="2026-04-14T20:00:00+00:00",
+        )
+        ws = Workspace(str(ws_root), state)
+        ws.save_state()
+
+        mgr = WorkspaceManager(str(base))
+        discovered = mgr.discover_workspaces()
+        assert len(discovered) == 1
+        assert discovered[0].state.current_state == "DEFERRED"
+
+    def test_discover_excludes_done_and_archived(self, tmp_path):
+        from workspace.workspace_manager import WorkspaceManager
+        from workspace.workspace import Workspace, WorkspaceState
+
+        base = tmp_path / "sickle"
+        for tid, state_name in [("T-3", "DONE"), ("T-4", "ARCHIVED")]:
+            ws_root = base / "co" / "repo" / "tickets" / tid
+            ws_root.mkdir(parents=True)
+            (ws_root / "meta").mkdir()
+            state = WorkspaceState(
+                ticket_id=tid, company_id="co", repo_id="repo",
+                workspace_root=str(ws_root), current_state=state_name,
+            )
+            Workspace(str(ws_root), state).save_state()
+
+        mgr = WorkspaceManager(str(base))
+        discovered = mgr.discover_workspaces()
+        assert len(discovered) == 0

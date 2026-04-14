@@ -15,7 +15,7 @@ from starlette.responses import JSONResponse
 
 logger = logging.getLogger(__name__)
 
-TERMINAL_STATES = {"DONE", "FAILED", "ARCHIVED"}
+TERMINAL_STATES = {"DONE", "ARCHIVED"}
 
 
 def _find_workspace(orchestrator: Any, ticket_id: str) -> Any | None:

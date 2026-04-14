@@ -281,7 +281,7 @@ class Orchestrator:
 
         # 3. Cleanup terminal workspaces from active list and record them for
         # /status to show recent completions even after they leave the list.
-        terminal = {"DONE", "FAILED", "ARCHIVED"}
+        terminal = {"DONE", "ARCHIVED"}
         still_active: list[Workspace] = []
         now = time.time()
         for ws in self._active_workspaces:
@@ -455,7 +455,7 @@ class Orchestrator:
             await self.advance_workspace(workspace)
             return
 
-        if current in ("DONE", "FAILED", "ARCHIVED"):
+        if current in ("DONE", "ARCHIVED"):
             return  # Terminal
 
         # Map pipeline state to workflow stage

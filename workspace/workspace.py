@@ -16,24 +16,25 @@ VALID_STATES = {
     "NEW", "ANALYSIS", "DEV", "SCOPE_CHECK", "QA",
     "PUSHED", "PR_REVIEW", "DONE",
     "BLOCKED", "FAILED", "ARCHIVED",
-    "AWAITING_APPROVAL", "MANUAL_CONTROL",
+    "AWAITING_APPROVAL", "MANUAL_CONTROL", "DEFERRED",
 }
 
 # Valid state transitions (architecture-v2 §3.3)
 VALID_TRANSITIONS: dict[str, set[str]] = {
     "NEW":                {"ANALYSIS", "FAILED"},
-    "ANALYSIS":           {"DEV", "BLOCKED", "FAILED", "AWAITING_APPROVAL", "MANUAL_CONTROL"},
-    "DEV":                {"SCOPE_CHECK", "BLOCKED", "FAILED", "MANUAL_CONTROL"},
-    "SCOPE_CHECK":        {"QA", "DEV", "BLOCKED", "FAILED", "MANUAL_CONTROL"},
-    "QA":                 {"PUSHED", "DEV", "BLOCKED", "FAILED", "AWAITING_APPROVAL", "MANUAL_CONTROL"},
-    "PUSHED":             {"PR_REVIEW", "BLOCKED", "FAILED", "MANUAL_CONTROL"},
-    "PR_REVIEW":          {"DEV", "DONE", "BLOCKED", "FAILED", "AWAITING_APPROVAL", "MANUAL_CONTROL"},
+    "ANALYSIS":           {"DEV", "BLOCKED", "FAILED", "DEFERRED", "AWAITING_APPROVAL", "MANUAL_CONTROL"},
+    "DEV":                {"SCOPE_CHECK", "BLOCKED", "FAILED", "DEFERRED", "MANUAL_CONTROL"},
+    "SCOPE_CHECK":        {"QA", "DEV", "BLOCKED", "FAILED", "DEFERRED", "MANUAL_CONTROL"},
+    "QA":                 {"PUSHED", "DEV", "BLOCKED", "FAILED", "DEFERRED", "AWAITING_APPROVAL", "MANUAL_CONTROL"},
+    "PUSHED":             {"PR_REVIEW", "BLOCKED", "FAILED", "DEFERRED", "MANUAL_CONTROL"},
+    "PR_REVIEW":          {"DEV", "DONE", "BLOCKED", "FAILED", "DEFERRED", "AWAITING_APPROVAL", "MANUAL_CONTROL"},
     "DONE":               {"ARCHIVED"},
     "BLOCKED":            {"ANALYSIS", "DEV", "SCOPE_CHECK", "QA", "PUSHED", "PR_REVIEW", "FAILED", "MANUAL_CONTROL"},
-    "FAILED":             set(),
+    "FAILED":             {"ANALYSIS", "DEV", "SCOPE_CHECK", "QA", "PUSHED", "PR_REVIEW", "MANUAL_CONTROL", "ARCHIVED"},
     "ARCHIVED":           set(),
     "AWAITING_APPROVAL":  {"ANALYSIS", "DEV", "SCOPE_CHECK", "QA", "PUSHED", "PR_REVIEW", "DONE", "FAILED", "MANUAL_CONTROL"},
     "MANUAL_CONTROL":     {"ANALYSIS"},
+    "DEFERRED":           {"ANALYSIS", "DEV", "SCOPE_CHECK", "QA", "PUSHED", "PR_REVIEW", "FAILED", "MANUAL_CONTROL"},
 }
 
 
@@ -60,6 +61,7 @@ class WorkspaceState:
     error: str | None = None
     manual_control_started_at: str | None = None
     manual_control_comment: str | None = None
+    retry_at: str | None = None
 
     def __post_init__(self) -> None:
         now = _now_iso()
@@ -152,8 +154,9 @@ class Workspace:
     def transition(self, new_state: str, **extra: Any) -> None:
         """Transition workspace to a new pipeline state with validation.
 
-        For BLOCKED/AWAITING_APPROVAL: stores previous_state so we can resume later.
-        For resuming from BLOCKED/AWAITING_APPROVAL: previous_state is cleared.
+        For BLOCKED/AWAITING_APPROVAL/MANUAL_CONTROL/DEFERRED/FAILED: stores
+        previous_state so we can resume later.
+        For resuming from any paused state: previous_state is cleared.
         Extra kwargs are applied in the same atomic save.
         """
         current = self.state.current_state
@@ -166,13 +169,15 @@ class Workspace:
 
         updates: dict[str, Any] = {"current_state": new_state}
 
-        if new_state in ("BLOCKED", "AWAITING_APPROVAL", "MANUAL_CONTROL"):
+        paused_states = {"BLOCKED", "AWAITING_APPROVAL", "MANUAL_CONTROL", "DEFERRED", "FAILED"}
+        if new_state in paused_states:
             updates["previous_state"] = current
             updates["human_input_pending"] = True
-        elif current in ("BLOCKED", "AWAITING_APPROVAL", "MANUAL_CONTROL"):
+        elif current in paused_states:
             # Resuming from a paused state — clear pending flag
             updates["previous_state"] = None
             updates["human_input_pending"] = False
+            updates["retry_at"] = None
 
         updates.update(extra)
         self.update_state(**updates)

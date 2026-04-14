@@ -434,6 +434,86 @@ class TestManualControlState:
         assert workspace.state.previous_state == "AWAITING_APPROVAL"
 
 
+class TestDeferred:
+    def test_deferred_in_valid_states(self):
+        assert "DEFERRED" in VALID_STATES
+
+    def test_retry_at_field_defaults_none(self):
+        state = WorkspaceState(
+            ticket_id="T-1", company_id="c", repo_id="r", workspace_root="/tmp"
+        )
+        assert state.retry_at is None
+
+    def test_dev_to_deferred(self, workspace):
+        workspace.transition("ANALYSIS")
+        workspace.transition("DEV")
+        workspace.transition("DEFERRED", retry_at="2026-04-14T20:00:00+00:00")
+        assert workspace.state.current_state == "DEFERRED"
+        assert workspace.state.previous_state == "DEV"
+        assert workspace.state.retry_at == "2026-04-14T20:00:00+00:00"
+
+    def test_qa_to_deferred(self, workspace):
+        workspace.transition("ANALYSIS")
+        workspace.transition("DEV")
+        workspace.transition("SCOPE_CHECK")
+        workspace.transition("QA")
+        workspace.transition("DEFERRED", retry_at="2026-04-14T20:00:00+00:00")
+        assert workspace.state.current_state == "DEFERRED"
+        assert workspace.state.previous_state == "QA"
+
+    def test_resume_from_deferred_clears_retry_at(self, workspace):
+        workspace.transition("ANALYSIS")
+        workspace.transition("DEV")
+        workspace.transition("DEFERRED", retry_at="2026-04-14T20:00:00+00:00")
+        workspace.transition("DEV", retry_at=None)
+        assert workspace.state.current_state == "DEV"
+        assert workspace.state.previous_state is None
+        assert workspace.state.retry_at is None
+
+    def test_deferred_to_failed_allowed(self, workspace):
+        workspace.transition("ANALYSIS")
+        workspace.transition("DEV")
+        workspace.transition("DEFERRED", retry_at="2026-04-14T20:00:00+00:00")
+        workspace.transition("FAILED")
+        assert workspace.state.current_state == "FAILED"
+
+
+class TestFailedRecoverable:
+    def test_failed_records_previous_state(self, workspace):
+        workspace.transition("ANALYSIS")
+        workspace.transition("DEV")
+        workspace.transition("FAILED")
+        assert workspace.state.previous_state == "DEV"
+
+    def test_retry_from_failed_to_dev(self, workspace):
+        workspace.transition("ANALYSIS")
+        workspace.transition("DEV")
+        workspace.transition("FAILED")
+        workspace.transition("DEV")
+        assert workspace.state.current_state == "DEV"
+        assert workspace.state.previous_state is None
+
+    def test_failed_to_archived(self, workspace):
+        workspace.transition("ANALYSIS")
+        workspace.transition("FAILED")
+        workspace.transition("ARCHIVED")
+        assert workspace.state.current_state == "ARCHIVED"
+
+    def test_failed_to_done_rejected(self, workspace):
+        workspace.transition("ANALYSIS")
+        workspace.transition("FAILED")
+        with pytest.raises(InvalidTransitionError):
+            workspace.transition("DONE")
+
+    def test_retry_from_failed_clears_human_input_pending(self, workspace):
+        workspace.transition("ANALYSIS")
+        workspace.transition("DEV")
+        workspace.transition("FAILED")
+        assert workspace.state.human_input_pending is True
+        workspace.transition("DEV")
+        assert workspace.state.human_input_pending is False
+
+
 class TestIterations:
     def test_increment_iteration(self, workspace):
         count = workspace.increment_iteration("SCOPE_CHECK")

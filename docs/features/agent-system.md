@@ -61,3 +61,4 @@ Pluggable AI agent system following the BMAD pattern. Each agent is a standalone
 | 2026-04-12 | Added agent tracking and cancellation to `AgentRuntime`: `register_running`, `unregister_running`, `get_running`, `cancel` methods; `_running` dict maps ticket_id → agent info; `_execute_cli` wrapped with register/unregister; `cancel()` sends SIGTERM. |
 | 2026-04-14 | Added QuotaExhaustedError exception and _classify_cli_error helper for detecting Claude CLI usage-limit hits. Not yet wired into _run_cli (Task 4). |
 | 2026-04-14 | Wired _classify_cli_error into _run_cli: execute_in_workspace now raises QuotaExhaustedError (instead of generic RuntimeError) on quota/rate-limit hits. |
+| 2026-04-14 | AgentResult now carries failure_kind ("quota" / "permanent") and retry_at; execute() distinguishes QuotaExhaustedError from generic failures. |

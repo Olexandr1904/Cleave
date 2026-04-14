@@ -576,13 +576,17 @@ class Orchestrator:
     async def _notify_deferred(
         self, workspace: Workspace, retry_at: datetime,
     ) -> None:
-        """Send a one-shot Telegram notification for quota deferral (debounced)."""
+        """Send a one-shot Telegram notification for quota deferral (debounced).
+
+        On send failure, `_quota_window_end` is left unchanged so the next quota
+        hit will retry the notification instead of silencing for the full window.
+        """
         now = datetime.now(timezone.utc)
         if self._quota_window_end is not None and now < self._quota_window_end:
             return  # still inside the already-announced quota window
-        self._quota_window_end = retry_at
 
         if self._notifier is None:
+            self._quota_window_end = retry_at
             return
 
         state = workspace.state
@@ -595,6 +599,7 @@ class Orchestrator:
         )
         try:
             await self._notifier.send_message(chat_id, msg)
+            self._quota_window_end = retry_at
         except Exception as e:
             logger.warning("Failed to send deferred notification: %s", e)
 

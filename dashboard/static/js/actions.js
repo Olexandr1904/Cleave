@@ -23,6 +23,14 @@ export async function releaseControl(ticketId, comment = '') {
   return postJSON(`/api/workspaces/${encodeURIComponent(ticketId)}/release-control`, { comment });
 }
 
+export async function resumeWorkspace(ticketId) {
+  return postJSON(`/api/workspaces/${encodeURIComponent(ticketId)}/resume`);
+}
+
+export async function archiveWorkspace(ticketId) {
+  return postJSON(`/api/workspaces/${encodeURIComponent(ticketId)}/archive`);
+}
+
 export async function setMode(mode) {
   return postJSON('/api/daemon/mode', { mode });
 }

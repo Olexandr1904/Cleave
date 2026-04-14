@@ -4,7 +4,7 @@ import { loadWorkspaces, loadEvents } from './api.js';
 import { esc, timeAgo, fmtIso, stateBadgeHtml, PIPELINE_STAGES, STAGE_ORDER } from './helpers.js';
 import { renderEventsHtml } from './events.js';
 import { renderReportTabs, bindReportTabClicks } from './reports.js';
-import { approveWorkspace, rejectWorkspace, retryWorkspace, takeControl, releaseControl, showConfirmDialog } from './actions.js';
+import { approveWorkspace, rejectWorkspace, retryWorkspace, takeControl, releaseControl, resumeWorkspace, archiveWorkspace, showConfirmDialog } from './actions.js';
 
 export async function renderDetail(ticketId, onBack) {
   const content = document.getElementById('content');
@@ -28,9 +28,14 @@ export async function renderDetail(ticketId, onBack) {
 
     // Build HTML sections
     const headerHtml = buildHeader(ws, stateVal, onBack);
-    const actionBarHtml = stateVal === 'MANUAL_CONTROL'
-      ? buildManualBanner(ws)
-      : buildActionBar(ws, stateVal);
+    let actionBarHtml;
+    if (stateVal === 'MANUAL_CONTROL') {
+      actionBarHtml = buildManualBanner(ws);
+    } else if (stateVal === 'DEFERRED') {
+      actionBarHtml = buildDeferredBanner(ws) + buildActionBar(ws, stateVal);
+    } else {
+      actionBarHtml = buildActionBar(ws, stateVal);
+    }
     const pipelineHtml = buildPipeline(ws, stateVal);
     const infoHtml = buildInfoSection(ws);
     const reportsHtml = renderReportTabs(ws.ticket_id, ws.reports, ws.meta);
@@ -90,7 +95,9 @@ function buildHeader(ws, stateVal, onBack) {
 
 function buildActionBar(ws, stateVal) {
   const isAwaiting = stateVal === 'AWAITING_APPROVAL';
-  const isBlocked = stateVal === 'BLOCKED' || stateVal === 'FAILED';
+  const isBlockedLike = stateVal === 'BLOCKED' || stateVal === 'FAILED';
+  const isDeferred = stateVal === 'DEFERRED';
+  const canArchive = ['FAILED', 'DONE', 'DEFERRED'].includes(stateVal);
   const canTakeControl = !['DONE', 'ARCHIVED', 'MANUAL_CONTROL'].includes(stateVal);
 
   let buttons = '<span class="action-label">Actions</span>';
@@ -98,8 +105,14 @@ function buildActionBar(ws, stateVal) {
     buttons += `<button class="action-btn btn-approve" id="act-approve">Approve</button>`;
     buttons += `<button class="action-btn btn-reject" id="act-reject">Reject</button>`;
   }
-  if (isBlocked) {
+  if (isBlockedLike) {
     buttons += `<button class="action-btn btn-retry" id="act-retry">Retry</button>`;
+  }
+  if (isDeferred) {
+    buttons += `<button class="action-btn btn-retry" id="act-resume">Resume now</button>`;
+  }
+  if (canArchive) {
+    buttons += `<button class="action-btn btn-reject" id="act-archive">Archive</button>`;
   }
   if (canTakeControl) {
     buttons += `<span style="display:inline-block;width:1px;height:20px;background:#30363d;margin:0 4px;"></span>`;
@@ -133,10 +146,35 @@ function buildManualBanner(ws) {
   </div>`;
 }
 
+function buildDeferredBanner(ws) {
+  const retryAtIso = ws.retry_at;
+  if (!retryAtIso) return '';
+  const retryAt = new Date(retryAtIso);
+  const now = new Date();
+  const diffMs = retryAt.getTime() - now.getTime();
+  const localLabel = retryAt.toLocaleString();
+  let relative;
+  if (diffMs <= 0) {
+    relative = 'any moment';
+  } else {
+    const mins = Math.floor(diffMs / 60000);
+    const hours = Math.floor(mins / 60);
+    relative = hours > 0 ? `in ${hours}h ${mins % 60}m` : `in ${mins}m`;
+  }
+  const prev = ws.previous_state || '?';
+  return `<div class="manual-banner">
+    <div class="manual-banner-header">
+      ${stateBadgeHtml('DEFERRED')}
+      <span style="font-size:12px;color:#d2a8ff;">Waiting for Claude quota reset &middot; ${esc(localLabel)} (${esc(relative)})</span>
+      <span style="font-size:11px;color:#6e7681;">(will resume from ${esc(prev)})</span>
+    </div>
+  </div>`;
+}
+
 function buildPipeline(ws, stateVal) {
-  // For off-pipeline states (BLOCKED, FAILED, MANUAL_CONTROL, AWAITING_APPROVAL),
+  // For off-pipeline states (BLOCKED, FAILED, MANUAL_CONTROL, AWAITING_APPROVAL, DEFERRED),
   // fall back to previous_state so we still highlight where the ticket is "stuck".
-  const OFF_PIPELINE = ['BLOCKED', 'FAILED', 'MANUAL_CONTROL', 'AWAITING_APPROVAL'];
+  const OFF_PIPELINE = ['BLOCKED', 'FAILED', 'MANUAL_CONTROL', 'AWAITING_APPROVAL', 'DEFERRED'];
   const directIdx = STAGE_ORDER[stateVal];
   const prevIdx = ws.previous_state != null ? STAGE_ORDER[ws.previous_state] : undefined;
   const activeIdx = directIdx != null
@@ -149,6 +187,7 @@ function buildPipeline(ws, stateVal) {
   else if (stateVal === 'FAILED') activeMode = 'failed';
   else if (stateVal === 'MANUAL_CONTROL') activeMode = 'manual';
   else if (stateVal === 'AWAITING_APPROVAL') activeMode = 'awaiting';
+  else if (stateVal === 'DEFERRED') activeMode = 'deferred';
 
   let html = '<div class="pipeline-stages">';
   PIPELINE_STAGES.forEach((stage, idx) => {
@@ -266,6 +305,35 @@ function bindActionButtons(ticketId, ws, stateVal, onBack) {
         await retryWorkspace(ticketId);
         await renderDetail(ticketId, onBack);
       } catch (e) { alert('Retry failed: ' + e.message); }
+    });
+  }
+
+  // Resume (from DEFERRED)
+  const resumeBtn = document.getElementById('act-resume');
+  if (resumeBtn) {
+    resumeBtn.addEventListener('click', async () => {
+      try {
+        await resumeWorkspace(ticketId);
+        location.reload();
+      } catch (e) { alert('Resume failed: ' + e.message); }
+    });
+  }
+
+  // Archive (from FAILED / DONE / DEFERRED)
+  const archiveBtn = document.getElementById('act-archive');
+  if (archiveBtn) {
+    archiveBtn.addEventListener('click', async () => {
+      showConfirmDialog(
+        `Archive ${ticketId}?`,
+        '<p>This workspace will be hidden from the board. The source directory will be cleaned up on the next cleanup sweep.</p>',
+        'Archive',
+        async () => {
+          try {
+            await archiveWorkspace(ticketId);
+            location.href = '/';
+          } catch (e) { alert('Archive failed: ' + e.message); }
+        },
+      );
     });
   }
 

@@ -465,7 +465,7 @@ class TestDeferred:
         workspace.transition("ANALYSIS")
         workspace.transition("DEV")
         workspace.transition("DEFERRED", retry_at="2026-04-14T20:00:00+00:00")
-        workspace.transition("DEV", retry_at=None)
+        workspace.transition("DEV")
         assert workspace.state.current_state == "DEV"
         assert workspace.state.previous_state is None
         assert workspace.state.retry_at is None
@@ -476,6 +476,7 @@ class TestDeferred:
         workspace.transition("DEFERRED", retry_at="2026-04-14T20:00:00+00:00")
         workspace.transition("FAILED")
         assert workspace.state.current_state == "FAILED"
+        assert workspace.state.retry_at is None
 
 
 class TestFailedRecoverable:

@@ -157,6 +157,14 @@ class Workspace:
         For BLOCKED/AWAITING_APPROVAL/MANUAL_CONTROL/DEFERRED/FAILED: stores
         previous_state so we can resume later.
         For resuming from any paused state: previous_state is cleared.
+        retry_at is only valid while in DEFERRED — it is cleared on any
+        transition to a non-DEFERRED state.
+
+        Note: transitioning between two paused states (e.g. DEFERRED → FAILED)
+        stores the paused state as previous_state; the original active stage is
+        not preserved. Callers resuming from FAILED should not assume
+        previous_state is an active stage.
+
         Extra kwargs are applied in the same atomic save.
         """
         current = self.state.current_state
@@ -177,6 +185,9 @@ class Workspace:
             # Resuming from a paused state — clear pending flag
             updates["previous_state"] = None
             updates["human_input_pending"] = False
+
+        # retry_at is meaningful only while in DEFERRED; clear on any other target
+        if new_state != "DEFERRED":
             updates["retry_at"] = None
 
         updates.update(extra)

@@ -100,5 +100,9 @@ class TestDeferredContext:
         assert mock_adapter.quick_query.called
         system_prompt = mock_adapter.quick_query.call_args.kwargs.get("system") \
             or mock_adapter.quick_query.call_args[0][1]
-        lowered = system_prompt.lower()
-        assert "t-d" in lowered or "deferred" in lowered
+        # The ticket ID and retry-time details only appear in the prompt if
+        # deferred_workspaces was actually substituted into the template. The
+        # bare word "deferred" already exists in the template, so we must check
+        # for content unique to the context value.
+        assert "T-D" in system_prompt
+        assert "retry at 20:00" in system_prompt

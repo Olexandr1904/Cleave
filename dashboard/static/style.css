@@ -224,6 +224,7 @@
   .state-PR_REVIEW  { background: #1a3d35; color: #56d4a0; border: 1px solid #2ea068; }
   .state-DONE       { background: #1a3d1a; color: #56d364; border: 1px solid #2ea043; }
   .state-FAILED     { background: #3d1a1a; color: #f85149; border: 1px solid #da3633; }
+  .state-DEFERRED   { background: #2d1f3d; color: #b392f0; border: 1px solid #8a63d2; }
   .state-BLOCKED    { background: #3d1a1a; color: #f85149; border: 1px solid #da3633; }
   .state-AWAITING_APPROVAL { background: #3d3318; color: #e3b341; border: 1px solid #9e6a03; }
 

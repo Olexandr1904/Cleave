@@ -264,3 +264,56 @@ class TestQuotaNotificationDebounce:
         assert orch._quota_window_end == retry_at
         assert ws1.state.current_state == "DEFERRED"
         assert ws2.state.current_state == "DEFERRED"
+
+
+class TestDeferredSweep:
+    async def test_sweep_resumes_when_retry_at_passed(
+        self, orchestrator_with_stubs, tmp_path, monkeypatch
+    ):
+        orch = orchestrator_with_stubs
+        ws = _make_workspace(tmp_path, "T-1", state="DEV")
+        # Put it in DEFERRED with a retry_at in the past.
+        past = datetime.now(timezone.utc) - timedelta(minutes=1)
+        ws.transition("DEFERRED", retry_at=past.isoformat())
+        orch._active_workspaces.append(ws)
+
+        # Make sweep-only: monkeypatch the rest of poll_cycle to no-op.
+        await orch._sweep_deferred()
+
+        assert ws.state.current_state == "DEV"
+        assert ws.state.previous_state is None
+        assert ws.state.retry_at is None
+
+    async def test_sweep_leaves_workspace_when_retry_at_future(
+        self, orchestrator_with_stubs, tmp_path
+    ):
+        orch = orchestrator_with_stubs
+        ws = _make_workspace(tmp_path, "T-2", state="QA")
+        future = datetime.now(timezone.utc) + timedelta(hours=1)
+        ws.transition("DEFERRED", retry_at=future.isoformat())
+        orch._active_workspaces.append(ws)
+
+        await orch._sweep_deferred()
+
+        assert ws.state.current_state == "DEFERRED"
+        assert ws.state.retry_at == future.isoformat()
+
+    async def test_sweep_clears_quota_window_end_when_passed(
+        self, orchestrator_with_stubs, tmp_path
+    ):
+        orch = orchestrator_with_stubs
+        past = datetime.now(timezone.utc) - timedelta(minutes=1)
+        orch._quota_window_end = past
+
+        await orch._sweep_deferred()
+        assert orch._quota_window_end is None
+
+    async def test_sweep_keeps_quota_window_end_when_future(
+        self, orchestrator_with_stubs, tmp_path
+    ):
+        orch = orchestrator_with_stubs
+        future = datetime.now(timezone.utc) + timedelta(hours=1)
+        orch._quota_window_end = future
+
+        await orch._sweep_deferred()
+        assert orch._quota_window_end == future

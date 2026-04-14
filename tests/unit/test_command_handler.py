@@ -211,3 +211,33 @@ class TestCommandHandler:
         processing_text = mock_notifier.send_message.call_args[0][1]
         # Original text should be truncated to 100 chars
         assert len(processing_text) < 200
+
+
+class TestRetryDeferred:
+    @pytest.fixture
+    def mock_notifier(self):
+        notifier = AsyncMock()
+        notifier.send_message = AsyncMock(return_value=1)
+        notifier.edit_message = AsyncMock()
+        return notifier
+
+    @pytest.fixture
+    def mock_mode_handler(self):
+        handler = MagicMock()
+        handler.get_mode.return_value = "auto"
+        return handler
+
+    async def test_retry_deferred_ticket(self, mock_notifier, mock_mode_handler):
+        ws = _make_workspace("T-D", "DEFERRED", previous_state="QA")
+        mock_intent_parser = AsyncMock()
+        mock_intent_parser.parse = AsyncMock(return_value=ParsedIntent(
+            intent="retry", params={"ticket_id": "T-D"}, reply="",
+        ))
+        handler = CommandHandler(
+            intent_parser=mock_intent_parser,
+            notifier=mock_notifier,
+            mode_handler=mock_mode_handler,
+            active_workspaces_fn=lambda: [ws],
+        )
+        await handler.handle_message("resume T-D", "12345")
+        ws.transition.assert_called_once_with("QA")

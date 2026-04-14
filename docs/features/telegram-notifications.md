@@ -77,3 +77,4 @@ Telegram bot adapter behind the NotifierInterface. Sends formatted notifications
 | 2026-04-09 | Orchestrator maintains a 20-entry ring buffer of recently-terminated workspaces exposed via `get_recent_completions()`; StatusHandler.format_summary now renders them in /status. |
 | 2026-04-09 | Instrumented TelegramAdapter and CommandHandler with optional event_bus: emits tg_message_sent, tg_message_received, and intent_parsed events. |
 | 2026-04-12 | Added retry command: retries a ticket from a specified or inferred stage; added escalation reply handler to unblock BLOCKED workspaces via Telegram reply-to; added typing indicator during intent parsing |
+| 2026-04-14 | Extended retry/resume to DEFERRED tickets: `_handle_retry` treats DEFERRED like BLOCKED/FAILED (transitions to `previous_state`); IntentParser system prompt now lists deferred workspaces and advertises retry for DEFERRED tickets; `_build_context` exposes `deferred_workspaces`. |

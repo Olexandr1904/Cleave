@@ -16,6 +16,7 @@ Current state:
 - Awaiting approval: {awaiting_approval}
 - Active workspaces: {active_workspaces}
 - Blocked (waiting for human input): {blocked_workspaces}
+- Deferred (waiting for Claude quota reset): {deferred_workspaces}
 
 Classify the user message into one of these intents:
   status, analyze, approve, reject, set_mode, retry, provide_input, unknown
@@ -29,7 +30,7 @@ Intent param schemas:
 - approve: params.ticket_id (optional string, infer from context if one workspace awaiting)
 - reject: params.ticket_id (optional string)
 - set_mode: params.mode (required, "auto" or "manual")
-- retry: params.ticket_id (required string), params.from_stage (optional: "analysis", "dev", "qa", "push" — defaults to current stage)
+- retry: params.ticket_id (required string), params.from_stage (optional: "analysis", "dev", "qa", "push" — defaults to current stage). Use for BLOCKED, FAILED, or DEFERRED tickets. "resume TICKET" and "retry TICKET" both map here.
 - provide_input: params.ticket_id (required if multiple blocked, infer from context if exactly one), params.input_text (the user's full answer/clarification verbatim)
 - unknown: params.raw_text (the original message)
 
@@ -88,6 +89,7 @@ class IntentParser:
             awaiting_approval=", ".join(pipeline_context.get("awaiting_approval", [])) or "none",
             active_workspaces=", ".join(pipeline_context.get("active_workspaces", [])) or "none",
             blocked_workspaces=", ".join(pipeline_context.get("blocked_workspaces", [])) or "none",
+            deferred_workspaces=", ".join(pipeline_context.get("deferred_workspaces", [])) or "none",
         )
 
         try:

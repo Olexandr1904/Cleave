@@ -121,6 +121,11 @@ class CommandHandler:
             for ws in workspaces
             if ws.state.current_state == "BLOCKED"
         ]
+        deferred = [
+            f"{ws.state.ticket_id} ({ws.state.previous_state or 'unknown'}, retry at {ws.state.retry_at or '?'})"
+            for ws in workspaces
+            if ws.state.current_state == "DEFERRED"
+        ]
         active = [
             f"{ws.state.ticket_id} — {ws.state.current_state}"
             for ws in workspaces
@@ -130,6 +135,7 @@ class CommandHandler:
             "mode": self._mode_handler.get_mode(),
             "awaiting_approval": awaiting,
             "blocked_workspaces": blocked,
+            "deferred_workspaces": deferred,
             "active_workspaces": active,
         }
 
@@ -273,8 +279,8 @@ class CommandHandler:
             # Default: re-run from the stage where it got stuck
             prev = ws.state.previous_state or ws.state.current_state
             target_state = self._VALID_RETRY_STATES.get(prev.lower(), prev)
-            # If blocked/failed, use previous_state
-            if ws.state.current_state in ("BLOCKED", "FAILED"):
+            # If blocked/failed/deferred, use previous_state
+            if ws.state.current_state in ("BLOCKED", "FAILED", "DEFERRED"):
                 target_state = ws.state.previous_state or "ANALYSIS"
 
         ws.state.human_input_pending = False

@@ -229,3 +229,38 @@ class TestQuotaNotificationDebounce:
         await orch._handle_agent_stage(ws, "qa", stage_def)
 
         assert orch._notifier.send_message.await_count == 1
+
+    async def test_notification_retried_if_first_send_fails(
+        self, orchestrator_with_stubs, tmp_path
+    ):
+        """If the first Telegram send raises, _quota_window_end stays None
+        so the next quota hit retries the notification instead of silencing."""
+        orch = orchestrator_with_stubs
+        ws1 = _make_workspace(tmp_path, "T-1", state="DEV")
+        ws2 = _make_workspace(tmp_path, "T-2", state="DEV")
+        orch._active_workspaces.extend([ws1, ws2])
+
+        # First send raises; second succeeds.
+        orch._notifier.send_message = AsyncMock(
+            side_effect=[RuntimeError("telegram flake"), None]
+        )
+
+        retry_at = datetime.now(timezone.utc) + timedelta(hours=5)
+        orch._agent_runtime.execute = AsyncMock(
+            return_value=AgentResult(
+                agent_id="dev-agent", success=False, output="",
+                error="usage limit", failure_kind="quota", retry_at=retry_at,
+            )
+        )
+
+        stage_def = MagicMock()
+        stage_def.agent = "dev-agent"
+        stage_def.max_iterations = 0
+        await orch._handle_agent_stage(ws1, "dev", stage_def)
+        # First send failed → window not marked → second call should retry.
+        assert orch._quota_window_end is None
+        await orch._handle_agent_stage(ws2, "dev", stage_def)
+        assert orch._notifier.send_message.await_count == 2
+        assert orch._quota_window_end == retry_at
+        assert ws1.state.current_state == "DEFERRED"
+        assert ws2.state.current_state == "DEFERRED"

@@ -2,7 +2,7 @@
 
 **Status:** In Progress
 **Created:** 2026-04-07
-**Updated:** 2026-04-12
+**Updated:** 2026-04-14
 **Author:** Oleksandr Brazhenko
 
 ## Description
@@ -61,3 +61,4 @@ Central daemon process that continuously polls for work, manages isolated worksp
 | 2026-04-12 | Added explicit MANUAL_CONTROL skip in advance_workspace: orchestrator no longer advances workspaces under operator direct control. |
 | 2026-04-14 | Narrowed terminal-state filter to `{DONE, ARCHIVED}`: FAILED is now retained in the active list so it can be retried or manually recovered. DEFERRED (added in same release) is likewise active. |
 | 2026-04-14 | Split agent failure routing: quota (`result.failure_kind == "quota"`) now routes to DEFERRED with `retry_at` and iteration rollback; permanent failures continue to FAILED. Added `_quota_window_end` in-memory debounce so multiple concurrent quota hits produce a single Telegram notification per window. New `_rollback_iteration`, `_notify_deferred`, `_notify_failed` helpers. |
+| 2026-04-14 | Quota notification debounce now only marks `_quota_window_end` after a successful Telegram send, so transient send failures don't silence an entire retry window. |

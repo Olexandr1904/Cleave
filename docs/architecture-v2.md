@@ -191,7 +191,7 @@ VALID_TRANSITIONS = {
     "BLOCKED":            {"ANALYSIS", "DEV", "SCOPE_CHECK", "QA", "PUSHED", "PR_REVIEW", "FAILED"},
     "FAILED":             set(),  # terminal
     "ARCHIVED":           set(),  # terminal
-    "AWAITING_APPROVAL":  {"ANALYSIS", "DEV", "SCOPE_CHECK", "QA", "PUSHED", "PR_REVIEW", "FAILED"},
+    "AWAITING_APPROVAL":  {"ANALYSIS", "DEV", "SCOPE_CHECK", "QA", "PUSHED", "PR_REVIEW", "DONE", "FAILED", "MANUAL_CONTROL"},
     "MANUAL_CONTROL":     {"ANALYSIS"},  # release control → back to ANALYSIS
 }
 ```

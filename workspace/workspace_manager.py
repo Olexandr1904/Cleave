@@ -155,14 +155,14 @@ class WorkspaceManager:
     def discover_workspaces(self) -> list[Workspace]:
         """Discover existing workspaces by scanning for state.json files.
 
-        Returns workspaces with active states (not DONE/FAILED/ARCHIVED).
+        Returns workspaces with active states (not DONE/ARCHIVED).
         """
         active_workspaces: list[Workspace] = []
 
         if not self._base_dir.exists():
             return active_workspaces
 
-        terminal_states = {"DONE", "FAILED", "ARCHIVED"}
+        terminal_states = {"DONE", "ARCHIVED"}
 
         for state_file in self._base_dir.rglob("state.json"):
             workspace_root = state_file.parent

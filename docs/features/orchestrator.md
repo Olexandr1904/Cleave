@@ -59,3 +59,4 @@ Central daemon process that continuously polls for work, manages isolated worksp
 | 2026-04-09 | Added mode-aware behavior: manual-mode skips polling, inserts approval gates after ANALYSIS/QA/PR_REVIEW, skips advancing AWAITING_APPROVAL workspaces. New `set_mode_handler` setter and `_should_approval_gate` check. |
 | 2026-04-09 | Instrumented with optional event_bus: emits daemon_started, poll_cycle, workspace_created, agent_dispatched, agent_completed, agent_failed, approval_requested, stage_transition, escalation_sent, and pr_created events. |
 | 2026-04-12 | Added explicit MANUAL_CONTROL skip in advance_workspace: orchestrator no longer advances workspaces under operator direct control. |
+| 2026-04-14 | Narrowed terminal-state filter to `{DONE, ARCHIVED}`: FAILED is now retained in the active list so it can be retried or manually recovered. DEFERRED (added in same release) is likewise active. |

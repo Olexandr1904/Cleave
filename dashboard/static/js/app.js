@@ -16,7 +16,13 @@ const state = {
 };
 
 // ── Navigation ──
-function showBoard(projectId) {
+function setHash(h) {
+  state._suppressHashChange = true;
+  if (location.hash !== h) location.hash = h;
+  setTimeout(() => { state._suppressHashChange = false; }, 0);
+}
+
+function showBoard(projectId, fromHash) {
   state.view = 'board';
   state.projectId = projectId;
   state.ticketId = null;
@@ -25,9 +31,10 @@ function showBoard(projectId) {
   updateActiveNav(projectId ? `nav-proj-${projectId}` : 'nav-board');
   scheduleAutoRefresh();
   doRenderBoard();
+  if (!fromHash) setHash(projectId ? `#/board/${projectId}` : '#/board');
 }
 
-function showEventLog() {
+function showEventLog(fromHash) {
   state.view = 'eventlog';
   state.ticketId = null;
   document.getElementById('view-title').textContent = 'Event Log';
@@ -35,15 +42,28 @@ function showEventLog() {
   updateActiveNav('nav-eventlog');
   scheduleAutoRefresh();
   doRenderEventLog();
+  if (!fromHash) setHash('#/eventlog');
 }
 
-function showDetail(ticketId) {
+function showDetail(ticketId, fromHash) {
   state.view = 'detail';
   state.ticketId = ticketId;
   document.getElementById('toolbar-eventlog-controls').style.display = 'none';
   document.getElementById('view-title').textContent = `Ticket: ${ticketId}`;
   stopAutoRefresh();
   renderDetail(ticketId, (projectId) => showBoard(projectId));
+  if (!fromHash) setHash(`#/ticket/${ticketId}`);
+}
+
+function routeFromHash() {
+  const h = location.hash || '#/board';
+  const m = h.match(/^#\/(board|eventlog|ticket)(?:\/(.+))?$/);
+  if (!m) { showBoard(null, true); return; }
+  const [, view, arg] = m;
+  if (view === 'board') showBoard(arg || null, true);
+  else if (view === 'eventlog') showEventLog(true);
+  else if (view === 'ticket' && arg) showDetail(arg, true);
+  else showBoard(null, true);
 }
 
 function updateActiveNav(id) {
@@ -184,9 +204,19 @@ async function init() {
     });
   }
 
-  // Initial load
-  updateActiveNav('nav-board');
-  await doRenderBoard();
+  // Hash routing — survives page refresh
+  window.addEventListener('hashchange', () => {
+    if (state._suppressHashChange) return;
+    routeFromHash();
+  });
+
+  // Initial load — honor URL hash if present, else default board
+  if (location.hash && location.hash.startsWith('#/')) {
+    routeFromHash();
+  } else {
+    updateActiveNav('nav-board');
+    await doRenderBoard();
+  }
   await updateDaemonStatus();
   scheduleAutoRefresh();
 }

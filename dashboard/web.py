@@ -19,7 +19,62 @@ from dashboard.events import EventBus
 logger = logging.getLogger(__name__)
 
 
-def _scan_all_workspaces(base_dir: str) -> list[dict[str, Any]]:
+def _build_external_links(
+    data: dict,
+    projects: dict[str, Any] | None,
+) -> list[dict[str, str]]:
+    """Build a list of external links for a workspace based on project/repo config."""
+    links: list[dict[str, str]] = []
+
+    ticket_id = data.get("ticket_id", "")
+    company_id = data.get("company_id", "")
+    repo_id = data.get("repo_id", "")
+
+    project = projects.get(company_id) if projects else None
+
+    # Jira ticket link
+    jira = getattr(project.config, "jira", None) if project else None
+    if jira and jira.url and ticket_id:
+        base = jira.url.rstrip("/")
+        links.append({
+            "label": f"Jira: {ticket_id}",
+            "url": f"{base}/browse/{ticket_id}",
+            "type": "jira",
+        })
+
+    # PR link (already on workspace)
+    pr_url = data.get("pr_url")
+    if pr_url:
+        pr_number = data.get("pr_number")
+        label = f"PR #{pr_number}" if pr_number else "Pull Request"
+        links.append({"label": label, "url": pr_url, "type": "pr"})
+
+    # Repo link (root of the repo on the VCS)
+    repo = project.repos.get(repo_id) if project and repo_id else None
+    if repo:
+        vcs = getattr(repo, "vcs", None)
+        if vcs:
+            if vcs.provider == "github" and vcs.github.owner and vcs.github.repo:
+                links.append({
+                    "label": "Repo",
+                    "url": f"https://github.com/{vcs.github.owner}/{vcs.github.repo}",
+                    "type": "repo",
+                })
+            elif vcs.provider == "gitlab" and vcs.gitlab.url and vcs.gitlab.project_id:
+                base = vcs.gitlab.url.rstrip("/")
+                links.append({
+                    "label": "Repo",
+                    "url": f"{base}/{vcs.gitlab.project_id}",
+                    "type": "repo",
+                })
+
+    return links
+
+
+def _scan_all_workspaces(
+    base_dir: str,
+    projects: dict[str, Any] | None = None,
+) -> list[dict[str, Any]]:
     """Scan workspace base_dir for ALL workspaces (including terminal states)."""
     base = Path(base_dir)
     if not base.exists():
@@ -52,6 +107,7 @@ def _scan_all_workspaces(base_dir: str) -> list[dict[str, Any]]:
                 "reports": reports,
                 "meta": meta,
                 "workspace_root": str(ws_root),
+                "links": _build_external_links(data, projects),
             })
         except Exception as e:
             logger.warning("Failed to read workspace at %s: %s", state_file.parent, e)
@@ -65,6 +121,7 @@ def create_app(
     orchestrator: Any | None = None,
     mode_handler: Any | None = None,
     global_config: Any | None = None,
+    projects: dict[str, Any] | None = None,
 ) -> Starlette:
     """Create the Starlette dashboard application."""
 
@@ -100,7 +157,7 @@ def create_app(
     async def get_workspaces(request: Request) -> JSONResponse:
         """Return all workspaces from disk, optionally filtered by project."""
         project_id = request.query_params.get("project_id")
-        workspaces = _scan_all_workspaces(workspace_base_dir)
+        workspaces = _scan_all_workspaces(workspace_base_dir, projects)
         if project_id:
             workspaces = [w for w in workspaces if w["company_id"] == project_id]
         # Sort: active first (by state order), then by last_updated_at descending
@@ -123,7 +180,7 @@ def create_app(
         if folder not in ("reports", "meta", "logs"):
             return PlainTextResponse("Invalid folder", status_code=400)
         # Find workspace on disk
-        for ws in _scan_all_workspaces(workspace_base_dir):
+        for ws in _scan_all_workspaces(workspace_base_dir, projects):
             if ws["ticket_id"] == ticket_id:
                 file_path = Path(ws["workspace_root"]) / folder / filename
                 if file_path.exists() and file_path.is_file():

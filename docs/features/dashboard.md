@@ -23,6 +23,9 @@ Local web dashboard providing real-time visibility into the Sickle pipeline. Sho
 - FR10: Daemon mode and status endpoints
 - FR11: Take Control feature: pause pipeline, open Claude Code session, release back
 - FR12: Frontend split into ES modules (no build step)
+- FR13: External links on ticket detail (Jira, repo, PR — extensible to CI/CD)
+- FR14: URL hash routing so refresh preserves view (board/ticket/eventlog)
+- FR15: Pipeline bar highlights `previous_state` for off-pipeline states (BLOCKED, FAILED, MANUAL_CONTROL, AWAITING_APPROVAL)
 
 ## Technical Approach
 
@@ -63,6 +66,9 @@ Local web dashboard providing real-time visibility into the Sickle pipeline. Sho
 - [x] Sidebar project list derived from workspaces (not events)
 - [x] Take Control launches terminal with Claude Code command
 - [x] Release Control transitions back to ANALYSIS
+- [x] Ticket detail shows Jira/repo/PR links derived from project config
+- [x] URL hash routing preserves current view across page refresh
+- [x] Off-pipeline states render correctly on the pipeline bar via `previous_state`
 
 ## Change Log
 
@@ -72,3 +78,7 @@ Local web dashboard providing real-time visibility into the Sickle pipeline. Sho
 | 2026-04-12 | Add operations dashboard: workspace board, ticket detail, report viewer |
 | 2026-04-12 | Add action endpoints: approve, reject, retry, take-control, release, mode, status |
 | 2026-04-12 | V2: Operations dashboard with actions, take-control, modular frontend |
+| 2026-04-14 | Take Control: launcher script (no shell-quoting), atomic transition with timestamp |
+| 2026-04-14 | Pipeline bar handles off-pipeline states by falling back to `previous_state` |
+| 2026-04-14 | URL hash routing for board/ticket/eventlog so refresh stays on the same view |
+| 2026-04-14 | External links (Jira, repo, PR) on ticket detail; threaded `projects` through `create_app` |

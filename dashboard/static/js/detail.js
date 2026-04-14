@@ -134,41 +134,56 @@ function buildManualBanner(ws) {
 }
 
 function buildPipeline(ws, stateVal) {
-  const stageIdx = STAGE_ORDER[stateVal] != null ? STAGE_ORDER[stateVal] : -1;
-  const prevIdx = ws.previous_state ? (STAGE_ORDER[ws.previous_state] ?? -1) : -1;
+  // For off-pipeline states (BLOCKED, FAILED, MANUAL_CONTROL, AWAITING_APPROVAL),
+  // fall back to previous_state so we still highlight where the ticket is "stuck".
+  const OFF_PIPELINE = ['BLOCKED', 'FAILED', 'MANUAL_CONTROL', 'AWAITING_APPROVAL'];
+  const directIdx = STAGE_ORDER[stateVal];
+  const prevIdx = ws.previous_state != null ? STAGE_ORDER[ws.previous_state] : undefined;
+  const activeIdx = directIdx != null
+    ? directIdx
+    : (OFF_PIPELINE.includes(stateVal) && prevIdx != null ? prevIdx : -1);
+
+  // What style to give the active stage
+  let activeMode = 'current';
+  if (stateVal === 'BLOCKED') activeMode = 'blocked';
+  else if (stateVal === 'FAILED') activeMode = 'failed';
+  else if (stateVal === 'MANUAL_CONTROL') activeMode = 'manual';
+  else if (stateVal === 'AWAITING_APPROVAL') activeMode = 'awaiting';
 
   let html = '<div class="pipeline-stages">';
   PIPELINE_STAGES.forEach((stage, idx) => {
-    let dotClass = 'stage-dot';
-    let labelClass = 'stage-label';
-    let symbol = (idx + 1).toString();
+    let dotHtml;
+    let labelHtml;
 
-    if (stateVal === 'MANUAL_CONTROL' && idx === prevIdx) {
-      dotClass += ' current';
-      labelClass += ' current';
-      dotClass = dotClass.replace(' current', '');
-      // Purple for manual control position
-      symbol = '\u26A1';
-      html += `<div class="pipeline-stage"><div class="stage-node">
-        <div class="stage-dot" style="background:#2d1a3d;border-color:#8957e5;color:#d2a8ff;box-shadow:0 0 6px #8957e566;">${symbol}</div>
-        <div class="stage-label" style="color:#d2a8ff;">${esc(stage)}</div>
-      </div>`;
-    } else if (stateVal === 'FAILED' && idx === stageIdx) {
-      dotClass += ' failed'; labelClass += ' failed'; symbol = '!';
-      html += `<div class="pipeline-stage"><div class="stage-node"><div class="${dotClass}">${symbol}</div><div class="${labelClass}">${esc(stage)}</div></div>`;
-    } else if (stateVal === 'MANUAL_CONTROL' ? idx < prevIdx : idx < stageIdx) {
-      dotClass += ' done'; labelClass += ' done'; symbol = '\u2713';
-      html += `<div class="pipeline-stage"><div class="stage-node"><div class="${dotClass}">${symbol}</div><div class="${labelClass}">${esc(stage)}</div></div>`;
-    } else if (idx === stageIdx && stateVal !== 'MANUAL_CONTROL') {
-      dotClass += ' current'; labelClass += ' current';
-      html += `<div class="pipeline-stage"><div class="stage-node"><div class="${dotClass}">${symbol}</div><div class="${labelClass}">${esc(stage)}</div></div>`;
+    if (idx === activeIdx) {
+      if (activeMode === 'blocked') {
+        dotHtml = `<div class="stage-dot" style="background:#3d1a1a;border-color:#da3633;color:#f85149;box-shadow:0 0 6px #da363366;">&#9888;</div>`;
+        labelHtml = `<div class="stage-label" style="color:#f85149;">${esc(stage)}</div>`;
+      } else if (activeMode === 'failed') {
+        dotHtml = `<div class="stage-dot failed">!</div>`;
+        labelHtml = `<div class="stage-label failed">${esc(stage)}</div>`;
+      } else if (activeMode === 'manual') {
+        dotHtml = `<div class="stage-dot" style="background:#2d1a3d;border-color:#8957e5;color:#d2a8ff;box-shadow:0 0 6px #8957e566;">&#9889;</div>`;
+        labelHtml = `<div class="stage-label" style="color:#d2a8ff;">${esc(stage)}</div>`;
+      } else if (activeMode === 'awaiting') {
+        dotHtml = `<div class="stage-dot" style="background:#3d2f1a;border-color:#e3b341;color:#e3b341;box-shadow:0 0 6px #e3b34166;">?</div>`;
+        labelHtml = `<div class="stage-label" style="color:#e3b341;">${esc(stage)}</div>`;
+      } else {
+        dotHtml = `<div class="stage-dot current">${idx + 1}</div>`;
+        labelHtml = `<div class="stage-label current">${esc(stage)}</div>`;
+      }
+    } else if (idx < activeIdx) {
+      dotHtml = `<div class="stage-dot done">&#10003;</div>`;
+      labelHtml = `<div class="stage-label done">${esc(stage)}</div>`;
     } else {
-      html += `<div class="pipeline-stage"><div class="stage-node"><div class="${dotClass}">${symbol}</div><div class="${labelClass}">${esc(stage)}</div></div>`;
+      dotHtml = `<div class="stage-dot">${idx + 1}</div>`;
+      labelHtml = `<div class="stage-label">${esc(stage)}</div>`;
     }
 
+    html += `<div class="pipeline-stage"><div class="stage-node">${dotHtml}${labelHtml}</div>`;
+
     if (idx < PIPELINE_STAGES.length - 1) {
-      const active = stateVal === 'MANUAL_CONTROL' ? prevIdx : stageIdx;
-      const connDone = idx < active ? ' done' : '';
+      const connDone = idx < activeIdx ? ' done' : '';
       html += `</div><div class="stage-connector${connDone}"></div>`;
     } else {
       html += '</div>';
@@ -189,11 +204,14 @@ function buildInfoSection(ws) {
     <span class="info-label">Project</span><span class="info-value">${esc(ws.company_id || '\u2014')}</span>
     <span class="info-label">Started</span><span class="info-value">${esc(fmtIso(ws.started_at))}</span>
     <span class="info-label">Last updated</span><span class="info-value">${esc(fmtIso(ws.last_updated_at))}</span>`;
-  if (ws.pr_url) {
-    grid += `<span class="info-label">PR</span><span class="info-value"><a href="${esc(ws.pr_url)}" target="_blank">#${esc(String(ws.pr_number || ''))}</a></span>`;
-  }
   if (iters) {
     grid += `<span class="info-label">Iterations</span><span class="info-value">${iters}</span>`;
+  }
+  if (Array.isArray(ws.links) && ws.links.length > 0) {
+    const linksHtml = ws.links.map(link =>
+      `<a href="${esc(link.url)}" target="_blank" rel="noopener" class="info-link info-link-${esc(link.type || 'other')}">${esc(link.label)}</a>`
+    ).join('');
+    grid += `<span class="info-label">Links</span><span class="info-value info-links">${linksHtml}</span>`;
   }
   grid += '</div>';
 

@@ -8,6 +8,7 @@ from typing import Any
 
 from telegram import Bot, Update
 from telegram.ext import Application, MessageHandler, filters
+from telegram.request import HTTPXRequest
 
 from integrations.base.notifier import NotifierInterface
 
@@ -18,7 +19,17 @@ class TelegramAdapter(NotifierInterface):
     """Telegram Bot API adapter using python-telegram-bot."""
 
     def __init__(self, bot_token: str, event_bus: Any | None = None) -> None:
-        self._bot = Bot(token=bot_token)
+        # Default python-telegram-bot timeouts (5s) trip easily on slow links
+        # or long messages — bump them so transient slowness doesn't bubble up
+        # as TimedOut and crash a notification path.
+        request = HTTPXRequest(
+            connection_pool_size=8,
+            connect_timeout=10.0,
+            read_timeout=30.0,
+            write_timeout=30.0,
+            pool_timeout=10.0,
+        )
+        self._bot = Bot(token=bot_token, request=request)
         self._pending_replies: dict[int, asyncio.Future[str]] = {}
         self._app: Application | None = None
         self._command_handler: Any | None = None
@@ -56,6 +67,10 @@ class TelegramAdapter(NotifierInterface):
     async def send_typing(self, chat_id: str) -> None:
         """Send 'typing...' chat action (visible for ~5 seconds)."""
         await self._bot.send_chat_action(chat_id=chat_id, action="typing")
+
+    async def delete_message(self, chat_id: str, message_id: int) -> None:
+        """Delete a message."""
+        await self._bot.delete_message(chat_id=chat_id, message_id=message_id)
 
     async def wait_for_reply(
         self, chat_id: str, message_id: int, timeout_seconds: int = 0

@@ -149,11 +149,12 @@ class Workspace:
             setattr(state, key, value)
         self.save_state()
 
-    def transition(self, new_state: str) -> None:
+    def transition(self, new_state: str, **extra: Any) -> None:
         """Transition workspace to a new pipeline state with validation.
 
         For BLOCKED/AWAITING_APPROVAL: stores previous_state so we can resume later.
         For resuming from BLOCKED/AWAITING_APPROVAL: previous_state is cleared.
+        Extra kwargs are applied in the same atomic save.
         """
         current = self.state.current_state
         if new_state not in VALID_STATES:
@@ -173,6 +174,7 @@ class Workspace:
             updates["previous_state"] = None
             updates["human_input_pending"] = False
 
+        updates.update(extra)
         self.update_state(**updates)
 
     def increment_iteration(self, stage_id: str) -> int:

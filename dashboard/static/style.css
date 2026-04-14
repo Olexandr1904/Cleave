@@ -410,6 +410,21 @@
   .info-value a:hover { text-decoration: underline; }
   .info-value.error { color: #f85149; }
 
+  .info-links { display: flex; flex-wrap: wrap; gap: 6px; }
+  .info-link {
+    display: inline-block;
+    padding: 2px 8px;
+    border-radius: 10px;
+    border: 1px solid #30363d;
+    background: #161b22;
+    font-size: 11px;
+    line-height: 16px;
+  }
+  .info-link:hover { border-color: #58a6ff; text-decoration: none !important; }
+  .info-link-jira { color: #4f9eff; border-color: #4f9eff44; }
+  .info-link-pr { color: #56d364; border-color: #56d36444; }
+  .info-link-repo { color: #d2a8ff; border-color: #d2a8ff44; }
+
   /* ── Report tabs ── */
   .tab-bar {
     display: flex;

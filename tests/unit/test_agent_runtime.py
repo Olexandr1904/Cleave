@@ -338,3 +338,51 @@ class TestToolUseExecution:
         user_msgs = [m for m in messages if m["role"] == "user"]
         tool_result_msg = user_msgs[-1]
         assert tool_result_msg["content"][0]["is_error"] is True
+
+
+class TestQuotaFailureClassification:
+    async def test_quota_error_sets_failure_kind_and_retry_at(
+        self, registry, workspace, tmp_path
+    ):
+        from datetime import datetime, timezone
+        from integrations.llm.claude_code_adapter import (
+            ClaudeCodeAdapter,
+            QuotaExhaustedError,
+        )
+        from orchestrator.agent_runtime import AgentRuntime
+
+        retry_at = datetime(2026, 4, 14, 20, 0, 0, tzinfo=timezone.utc)
+
+        class StubAdapter(ClaudeCodeAdapter):
+            def __init__(self):
+                pass
+
+            async def execute_in_workspace(self, *args, **kwargs):
+                raise QuotaExhaustedError("usage limit", retry_at=retry_at)
+
+        runtime = AgentRuntime(registry, StubAdapter())
+        result = await runtime.execute("dev-agent", workspace)
+
+        assert result.success is False
+        assert result.failure_kind == "quota"
+        assert result.retry_at == retry_at
+
+    async def test_generic_error_sets_failure_kind_permanent(
+        self, registry, workspace
+    ):
+        from integrations.llm.claude_code_adapter import ClaudeCodeAdapter
+        from orchestrator.agent_runtime import AgentRuntime
+
+        class StubAdapter(ClaudeCodeAdapter):
+            def __init__(self):
+                pass
+
+            async def execute_in_workspace(self, *args, **kwargs):
+                raise RuntimeError("disk full")
+
+        runtime = AgentRuntime(registry, StubAdapter())
+        result = await runtime.execute("dev-agent", workspace)
+
+        assert result.success is False
+        assert result.failure_kind == "permanent"
+        assert result.retry_at is None

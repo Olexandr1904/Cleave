@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 import time
 from dataclasses import dataclass, field
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -15,9 +16,10 @@ from workspace.workspace import Workspace
 
 # Import conditionally to avoid hard dependency
 try:
-    from integrations.llm.claude_code_adapter import ClaudeCodeAdapter
+    from integrations.llm.claude_code_adapter import ClaudeCodeAdapter, QuotaExhaustedError
 except ImportError:
     ClaudeCodeAdapter = None  # type: ignore[misc,assignment]
+    QuotaExhaustedError = None  # type: ignore[misc,assignment]
 
 logger = logging.getLogger(__name__)
 
@@ -36,6 +38,8 @@ class AgentResult:
     tool_rounds: int = 0
     duration_seconds: float = 0
     error: str | None = None
+    failure_kind: str | None = None  # "quota" | "permanent" | None
+    retry_at: datetime | None = None
 
 
 class AgentRuntime:
@@ -223,12 +227,23 @@ class AgentRuntime:
             return result
 
         except Exception as e:
+            if QuotaExhaustedError is not None and isinstance(e, QuotaExhaustedError):
+                logger.warning("Agent '%s' deferred on quota: %s", agent_id, e)
+                return AgentResult(
+                    agent_id=agent_id,
+                    success=False,
+                    output="",
+                    error=str(e),
+                    failure_kind="quota",
+                    retry_at=e.retry_at,
+                )
             logger.error("Agent '%s' failed: %s", agent_id, e)
             return AgentResult(
                 agent_id=agent_id,
                 success=False,
                 output="",
                 error=str(e),
+                failure_kind="permanent",
             )
 
     async def _execute_simple(

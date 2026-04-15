@@ -186,6 +186,14 @@ def _load_yaml_file(path: Path) -> dict:
 def _parse_jira_section(data: dict, file_path: str) -> JiraConfig:
     """Parse jira section, handling nested statuses."""
     jira_data = dict(data.get("jira", {}) or {})
+    if "trigger_label" in jira_data:
+        raise ConfigError(
+            "Legacy 'trigger_label' (singular) is no longer supported. "
+            "Rename to 'trigger_labels' and make it a list, e.g. "
+            'trigger_labels: ["ai-pipeline"]',
+            file_path=file_path,
+            field="jira.trigger_label",
+        )
     statuses_data = jira_data.pop("statuses", None) or {}
     statuses = JiraStatusesConfig(**statuses_data) if statuses_data else JiraStatusesConfig()
     try:

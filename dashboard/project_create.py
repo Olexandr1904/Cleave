@@ -11,7 +11,6 @@ import logging
 import os
 import shutil
 from pathlib import Path
-from typing import Any, Callable
 
 from starlette.requests import Request
 from starlette.responses import JSONResponse

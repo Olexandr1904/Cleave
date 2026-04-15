@@ -21,6 +21,7 @@ from integrations.telegram.handlers.approval import APPROVAL_NEXT_STATE
 from integrations.telegram.handlers.mode import ModeHandler
 from orchestrator.agent_runtime import AgentRuntime
 from orchestrator.pr_creation import create_pr
+from orchestrator import stage_verifier
 from orchestrator.ticket_prioritizer import PrioritizedTicket, prioritize_tickets
 from orchestrator.workflow_router import (
     WorkflowDefinition,
@@ -510,6 +511,7 @@ class Orchestrator:
             return
 
         workspace.increment_iteration(stage_id)
+        stage_start_commit = stage_verifier.capture_stage_start(workspace, stage_id)
 
         repo_config = self._get_repo_config(workspace)
         protected = repo_config.architecture.protected_files if repo_config else []
@@ -541,6 +543,19 @@ class Orchestrator:
             return
 
         self._emit("agent_completed", f"{stage_def.agent} completed for {state.ticket_id}", project_id=state.company_id, ticket_id=state.ticket_id, agent_id=stage_def.agent, data={"stage": stage_id, "duration": result.duration_seconds, "input_tokens": result.input_tokens, "output_tokens": result.output_tokens})
+        verify_result = stage_verifier.verify(stage_id, workspace, stage_start_commit)
+        if not verify_result.ok:
+            agent_snippet = (result.output or "")[:200].replace("\n", " ")
+            error_msg = f"{stage_id}: {verify_result.reason} (agent said: {agent_snippet})"
+            workspace.transition("BLOCKED")
+            workspace.update_state(error=error_msg)
+            self._emit(
+                "stage_verification_failed",
+                f"{stage_id} verification failed for {state.ticket_id}: {verify_result.reason}",
+                project_id=state.company_id, ticket_id=state.ticket_id,
+                data={"stage": stage_id, "reason": verify_result.reason},
+            )
+            return
         # Determine outcome from agent output
         outcome = self._parse_agent_outcome(stage_id, result.output, workspace)
         next_stage = get_next_stage(stage_id, self._workflow, outcome)

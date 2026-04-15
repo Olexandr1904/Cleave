@@ -21,3 +21,4 @@
 | 14 | [CLI Entry Point](cli-entry-point.md) | Implemented | CLI argument parsing, startup diagnostics, and version logging |
 | 15 | [Project Setup Agent (Atlas)](project-setup-agent.md) | In Progress | BMAD-style agent that onboards new projects with guided Q&A, credential validation, and YAML config generation |
 | 16 | [Dashboard & Event Log](dashboard.md) | Implemented | Local web dashboard with structured event log, per-project ticket history, and real-time auto-refresh |
+| 17 | [Project Health + Stage Verification](dashboard.md#fr16) | Implemented | Per-project validators (Jira, vcs, git identity, git remote) + mechanical post-stage checks → BLOCKED on failure |

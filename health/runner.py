@@ -112,3 +112,46 @@ _default_runner = HealthRunner()
 async def check_all(projects: dict[str, Any], force: bool = False) -> list[ProjectHealth]:
     """Convenience wrapper around the default module-level runner."""
     return await _default_runner.check_all(projects, force=force)
+
+
+def _main() -> int:
+    import argparse
+    import asyncio
+    import sys
+    from config.config_loader import load_config, ConfigError
+
+    parser = argparse.ArgumentParser(
+        prog="python -m health.runner",
+        description="Run project health checks without starting the daemon.",
+    )
+    parser.add_argument("--config", required=True, help="Path to config directory")
+    args = parser.parse_args()
+
+    try:
+        _, projects = load_config(args.config)
+    except ConfigError as e:
+        print(f"Configuration error: {e}", file=sys.stderr)
+        return 1
+
+    if not projects:
+        print("No projects found.")
+        return 0
+
+    results = asyncio.run(check_all(projects, force=True))
+    any_bad = False
+    for r in results:
+        print(f"[{r.status.upper()}] {r.project_id} — {len(r.checks)} check(s)")
+        for c in r.checks:
+            mark = "  OK " if c.ok else "  FAIL"
+            print(f"  {mark} {c.name}: {c.target}")
+            if not c.ok:
+                print(f"       reason: {c.reason}")
+                if c.fix_hint:
+                    print(f"       fix:    {c.fix_hint}")
+                any_bad = True
+    return 1 if any_bad else 0
+
+
+if __name__ == "__main__":
+    import sys
+    sys.exit(_main())

@@ -352,6 +352,17 @@ def main(argv: list[str] | None = None) -> int:
             web_server_task = asyncio.create_task(web_server.serve())
             print(f"  Dashboard: http://{dash_config.host}:{dash_config.port}")
 
+            # Warm the health-check cache so the first dashboard load is instant.
+            if projects:
+                try:
+                    from health.runner import check_all as _warm_health
+                    await _warm_health(projects)
+                    print("  Health check: warmed cache")
+                except Exception as e:
+                    logging.getLogger(__name__).warning(
+                        "Failed to warm health cache: %s", e,
+                    )
+
         event_bus.emit("daemon_started", f"Sickle v{version} started")
 
         # Emit events for configured projects so they appear in the dashboard

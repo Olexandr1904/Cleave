@@ -8,7 +8,7 @@ jira:
   token: "${TEST_JIRA_TOKEN}"
   email: "${TEST_JIRA_EMAIL}"
   project_key: "TEST"
-  trigger_label: "ai-ready"
+  trigger_labels: ["ai-ready"]
   ignore_labels: ["blocked"]
   statuses:
     todo: "To Do"

@@ -30,7 +30,6 @@ _QUOTA_SUBSTRINGS = (
     "usage limit reached",
     "rate_limit",
     "overloaded_error",
-    "quota",
 )
 
 

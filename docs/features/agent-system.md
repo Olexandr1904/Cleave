@@ -62,3 +62,4 @@ Pluggable AI agent system following the BMAD pattern. Each agent is a standalone
 | 2026-04-14 | Added QuotaExhaustedError exception and _classify_cli_error helper for detecting Claude CLI usage-limit hits. Not yet wired into _run_cli (Task 4). |
 | 2026-04-14 | Wired _classify_cli_error into _run_cli: execute_in_workspace now raises QuotaExhaustedError (instead of generic RuntimeError) on quota/rate-limit hits. |
 | 2026-04-14 | AgentResult now carries failure_kind ("quota" / "permanent") and retry_at; execute() distinguishes QuotaExhaustedError from generic failures. |
+| 2026-04-14 | Tightened `_QUOTA_SUBSTRINGS` in `_classify_cli_error`: dropped the bare `"quota"` token which false-positive'd on any diagnostic containing the word (e.g. file paths). Rate-limit/overloaded markers cover real CLI quota errors. |

@@ -187,7 +187,6 @@ function buildPipeline(ws, stateVal) {
   else if (stateVal === 'FAILED') activeMode = 'failed';
   else if (stateVal === 'MANUAL_CONTROL') activeMode = 'manual';
   else if (stateVal === 'AWAITING_APPROVAL') activeMode = 'awaiting';
-  else if (stateVal === 'DEFERRED') activeMode = 'deferred';
 
   let html = '<div class="pipeline-stages">';
   PIPELINE_STAGES.forEach((stage, idx) => {

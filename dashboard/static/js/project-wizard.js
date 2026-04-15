@@ -375,9 +375,50 @@ function buildPayload() {
   };
 }
 
+async function renderFailure(entry) {
+  let report = '';
+  try {
+    const res = await fetch(`/api/workspaces/${encodeURIComponent(entry.ticket_id)}/report/project-setup-output.md`);
+    report = await res.text();
+  } catch {}
+  els.body.innerHTML = `
+    <div class="status-panel failed">
+      <h3>Setup failed</h3>
+      <pre style="text-align:left;white-space:pre-wrap;max-height:300px;overflow:auto;">${escapeHtml(report)}</pre>
+      <button id="retry-btn" class="btn-primary">Edit & retry</button>
+    </div>
+  `;
+  document.getElementById('retry-btn').onclick = () => {
+    state.data.jira.token = '';
+    if (state.data.vcs.provider === 'github') state.data.vcs.github.token = '';
+    else state.data.vcs.gitlab.token = '';
+    state.data.extras.telegram_bot_token = null;
+    state.running = null;
+    state.step = 0;
+    els.next.disabled = false;
+    render();
+  };
+}
+
 function renderSubmitError(status, body) {
-  // Populated in Task 22.
-  els.body.innerHTML = `<div class="status-panel failed"><p>Error ${status}: ${JSON.stringify(body)}</p></div>`;
+  els.body.innerHTML = `
+    <div class="status-panel failed">
+      <h3>Error ${status}</h3>
+      <pre>${escapeHtml(JSON.stringify(body, null, 2))}</pre>
+      <button id="back-to-form" class="btn-primary">Back to form</button>
+    </div>
+  `;
+  document.getElementById('back-to-form').onclick = () => {
+    state.step = 0;
+    els.next.disabled = false;
+    render();
+  };
+}
+
+function escapeHtml(s) {
+  return String(s).replace(/[&<>"']/g, (c) => ({
+    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
+  }[c]));
 }
 
 async function pollStatus() {

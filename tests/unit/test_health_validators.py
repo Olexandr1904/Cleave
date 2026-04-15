@@ -6,7 +6,7 @@ from pathlib import Path
 import pytest
 from unittest.mock import patch, AsyncMock
 
-from health.validators import ValidatorResult, check_jira, check_github, check_gitlab, check_git_identity
+from health.validators import ValidatorResult, check_jira, check_github, check_gitlab, check_git_identity, check_git_remote
 
 
 def test_validator_result_ok_shape():
@@ -124,4 +124,35 @@ class TestCheckGitIdentity:
     def test_does_not_raise_on_missing_git_binary(self, tmp_path, monkeypatch):
         monkeypatch.setenv("PATH", "/nonexistent")
         r = check_git_identity(tmp_path)
+        assert r.ok is False
+
+
+class TestCheckGitRemote:
+    def test_reachable_remote(self, tmp_path):
+        bare = tmp_path / "bare.git"
+        subprocess.run(["git", "init", "--bare", "-q", str(bare)], check=True)
+        clone = tmp_path / "clone"
+        subprocess.run(["git", "clone", "-q", str(bare), str(clone)], check=True)
+        r = check_git_remote(clone)
+        assert r.ok is True
+        assert r.name == "git_remote"
+
+    def test_unreachable_remote(self, tmp_path):
+        repo = _init_repo(tmp_path)
+        subprocess.run(
+            ["git", "remote", "add", "origin", "https://10.255.255.1/nonexistent.git"],
+            cwd=repo, check=True,
+        )
+        r = check_git_remote(repo)
+        assert r.ok is False
+        assert r.reason
+
+    def test_no_remote_configured(self, tmp_path):
+        repo = _init_repo(tmp_path)
+        r = check_git_remote(repo)
+        assert r.ok is False
+        assert "remote" in r.reason.lower() or "origin" in r.reason.lower()
+
+    def test_not_a_git_dir(self, tmp_path):
+        r = check_git_remote(tmp_path)
         assert r.ok is False

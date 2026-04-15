@@ -82,3 +82,4 @@ Local web dashboard providing real-time visibility into the Sickle pipeline. Sho
 | 2026-04-14 | Pipeline bar handles off-pipeline states by falling back to `previous_state` |
 | 2026-04-14 | URL hash routing for board/ticket/eventlog so refresh stays on the same view |
 | 2026-04-14 | External links (Jira, repo, PR) on ticket detail; threaded `projects` through `create_app` |
+| 2026-04-15 | Await dashboard uvicorn task on daemon shutdown (5s timeout, then cancel) so it exits cleanly |

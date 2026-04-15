@@ -240,6 +240,37 @@ const renderers = {
       body.querySelector('#f-gl-prefix').oninput = (ev) => d.gitlab.branch_prefix = ev.target.value;
     }
   },
+  quality(body) {
+    const d = state.data.quality;
+    const row = (key, label) => `
+      <div class="form-field">
+        <label>${label} command</label>
+        <input id="f-q-${key}-cmd" value="${d[key].command || ''}" placeholder="optional" />
+        <label><input type="checkbox" id="f-q-${key}-gate" ${d[key].hard_gate ? 'checked' : ''}/> Hard gate</label>
+      </div>
+    `;
+    body.innerHTML = `<h3>Quality gates</h3>${row('lint', 'Lint')}${row('test', 'Test')}${row('build', 'Build')}`;
+    for (const key of ['lint', 'test', 'build']) {
+      body.querySelector(`#f-q-${key}-cmd`).oninput = (ev) => d[key].command = ev.target.value;
+      body.querySelector(`#f-q-${key}-gate`).onchange = (ev) => d[key].hard_gate = ev.target.checked;
+    }
+  },
+  extras(body) {
+    const d = state.data.extras;
+    body.innerHTML = `
+      <h3>Extras</h3>
+      <div class="form-field"><label>Telegram bot token (optional)</label><input type="password" id="f-ex-tg-token" value="${d.telegram_bot_token || ''}" placeholder="blank = inherit global" /></div>
+      <div class="form-field"><label>Telegram chat ID (optional)</label><input id="f-ex-tg-chat" value="${d.telegram_chat_id || ''}" /></div>
+      <div class="form-field"><label>Architecture rules file</label><input id="f-ex-arch" value="${d.arch_rules_file || ''}" placeholder="docs/arch-rules.md" /></div>
+      <div class="form-field"><label>Protected files (comma-separated)</label><input id="f-ex-protected" value="${(d.protected_files || []).join(', ')}" /></div>
+      <div class="form-field"><label>Max concurrent tickets (optional)</label><input id="f-ex-max" type="number" value="${d.max_concurrent_tickets || ''}" /></div>
+    `;
+    body.querySelector('#f-ex-tg-token').oninput = (ev) => d.telegram_bot_token = ev.target.value || null;
+    body.querySelector('#f-ex-tg-chat').oninput = (ev) => d.telegram_chat_id = ev.target.value || null;
+    body.querySelector('#f-ex-arch').oninput = (ev) => d.arch_rules_file = ev.target.value || null;
+    body.querySelector('#f-ex-protected').oninput = (ev) => d.protected_files = ev.target.value.split(',').map(s => s.trim()).filter(Boolean);
+    body.querySelector('#f-ex-max').oninput = (ev) => d.max_concurrent_tickets = ev.target.value ? parseInt(ev.target.value, 10) : null;
+  },
 };
 
 const validators = {
@@ -274,6 +305,8 @@ const validators = {
     }
     return errors;
   },
+  quality() { return {}; },
+  extras() { return {}; },
 };
 
 async function submit() {

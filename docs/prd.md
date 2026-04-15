@@ -312,7 +312,7 @@ so that the pipeline can discover work and report progress.
 
 #### Acceptance Criteria
 
-- AC1: `poll_tickets()` fetches tickets matching: has `trigger_label`, status = todo, not in `ignore_labels`, unassigned or bot-assigned
+- AC1: `poll_tickets()` fetches tickets matching: has ALL `trigger_labels`, status = todo, not in `ignore_labels`, unassigned or bot-assigned
 - AC2: Tickets are returned with: id, summary, description, labels, priority, sprint, linked issues, acceptance criteria
 - AC3: `transition_ticket()` moves tickets between configured statuses (todo → in_progress → in_review → done)
 - AC4: `add_comment()` posts a formatted comment to the ticket

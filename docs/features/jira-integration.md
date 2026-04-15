@@ -34,6 +34,7 @@ Jira adapter behind the TrackerInterface. Polls Jira for tickets matching config
 - httpx for async HTTP
 - Configuration Cascade for Jira project settings (url, token, email, labels, statuses)
 - Abstract TrackerInterface from `integrations/base/`
+- PM Agent and Project Setup Agent for orchestration and configuration
 
 ## Acceptance Criteria
 

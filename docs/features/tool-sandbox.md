@@ -14,3 +14,6 @@ Sandboxed tool execution layer for agents. Each agent receives a restricted set 
 - Architecture: `docs/architecture-v2.md` §9 (Agent Execution Model)
 - Contracts: `docs/agent-contracts.md` (Tool Allowlist Matrix)
 - Implementation: `orchestrator/tool_sandbox.py`
+
+## Changelog
+- 2026-04-15: Refactored `_tool_validate_git_identity` — hoisted `health.validators` imports to module top for consistency with peer methods

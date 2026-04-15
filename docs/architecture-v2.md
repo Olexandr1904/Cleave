@@ -154,7 +154,10 @@ AWAITING_APPROVAL → (resume previous stage)
 Any active stage → MANUAL_CONTROL (operator takes control)
 MANUAL_CONTROL → ANALYSIS (release control)
 
-Any stage → FAILED (unrecoverable)
+Any active stage → DEFERRED (Claude CLI quota hit)
+DEFERRED → (resume previous stage after retry_at)
+
+Any stage → FAILED (recoverable — operator can re-run from any active stage or archive)
 DONE → ARCHIVED (source cleanup)
 ```
 
@@ -171,9 +174,10 @@ DONE → ARCHIVED (source cleanup)
 | `PR_REVIEW` | PR Comment Responder processing review comments |
 | `DONE` | All stages complete, PR open and ready for human merge |
 | `BLOCKED` | Waiting for human input via Telegram |
-| `FAILED` | Unrecoverable error, human intervention needed |
+| `FAILED` | Recoverable error — operator can re-run from any active stage or archive |
 | `AWAITING_APPROVAL` | Pipeline paused, waiting for operator approval to continue |
 | `MANUAL_CONTROL` | Operator has taken control, pipeline paused, Claude Code session active |
+| `DEFERRED` | DEFERRED — paused on Claude CLI quota hit; auto-resumes after retry_at |
 | `ARCHIVED` | Source code deleted after merge (ticket artifacts remain) |
 
 **Valid transitions:**
@@ -181,20 +185,23 @@ DONE → ARCHIVED (source cleanup)
 ```python
 VALID_TRANSITIONS = {
     "NEW":                {"ANALYSIS", "FAILED"},
-    "ANALYSIS":           {"DEV", "BLOCKED", "FAILED", "AWAITING_APPROVAL", "MANUAL_CONTROL"},
-    "DEV":                {"SCOPE_CHECK", "BLOCKED", "FAILED", "AWAITING_APPROVAL", "MANUAL_CONTROL"},
-    "SCOPE_CHECK":        {"QA", "DEV", "BLOCKED", "FAILED", "AWAITING_APPROVAL", "MANUAL_CONTROL"},
-    "QA":                 {"PUSHED", "DEV", "BLOCKED", "FAILED", "AWAITING_APPROVAL", "MANUAL_CONTROL"},
-    "PUSHED":             {"PR_REVIEW", "BLOCKED", "FAILED", "AWAITING_APPROVAL", "MANUAL_CONTROL"},
-    "PR_REVIEW":          {"DEV", "DONE", "BLOCKED", "FAILED", "AWAITING_APPROVAL", "MANUAL_CONTROL"},
+    "ANALYSIS":           {"DEV", "BLOCKED", "FAILED", "DEFERRED", "AWAITING_APPROVAL", "MANUAL_CONTROL"},
+    "DEV":                {"SCOPE_CHECK", "BLOCKED", "FAILED", "DEFERRED", "MANUAL_CONTROL"},
+    "SCOPE_CHECK":        {"QA", "DEV", "BLOCKED", "FAILED", "DEFERRED", "MANUAL_CONTROL"},
+    "QA":                 {"PUSHED", "DEV", "BLOCKED", "FAILED", "DEFERRED", "AWAITING_APPROVAL", "MANUAL_CONTROL"},
+    "PUSHED":             {"PR_REVIEW", "BLOCKED", "FAILED", "DEFERRED", "MANUAL_CONTROL"},
+    "PR_REVIEW":          {"DEV", "DONE", "BLOCKED", "FAILED", "DEFERRED", "AWAITING_APPROVAL", "MANUAL_CONTROL"},
     "DONE":               {"ARCHIVED"},
-    "BLOCKED":            {"ANALYSIS", "DEV", "SCOPE_CHECK", "QA", "PUSHED", "PR_REVIEW", "FAILED"},
-    "FAILED":             set(),  # terminal
+    "BLOCKED":            {"ANALYSIS", "DEV", "SCOPE_CHECK", "QA", "PUSHED", "PR_REVIEW", "FAILED", "MANUAL_CONTROL"},
+    "FAILED":             {"ANALYSIS", "DEV", "SCOPE_CHECK", "QA", "PUSHED", "PR_REVIEW", "MANUAL_CONTROL", "ARCHIVED"},
     "ARCHIVED":           set(),  # terminal
     "AWAITING_APPROVAL":  {"ANALYSIS", "DEV", "SCOPE_CHECK", "QA", "PUSHED", "PR_REVIEW", "DONE", "FAILED", "MANUAL_CONTROL"},
     "MANUAL_CONTROL":     {"ANALYSIS"},  # release control → back to ANALYSIS
+    "DEFERRED":           {"ANALYSIS", "DEV", "SCOPE_CHECK", "QA", "PUSHED", "PR_REVIEW", "FAILED", "MANUAL_CONTROL"},
 }
 ```
+
+See `docs/superpowers/specs/2026-04-14-quota-deferral-and-recoverable-failed-design.md` for the DEFERRED / recoverable-FAILED design.
 
 ### 3.4 WorkspaceState (`state.json`)
 

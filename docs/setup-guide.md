@@ -21,6 +21,40 @@ git --version        # 2.x+
 node --version       # 18+
 ```
 
+### Host configuration
+
+Before running the daemon, configure these on the host machine. The
+daemon verifies them at startup and the dashboard shows a health strip
+if anything is broken.
+
+**Git identity** — the dev-agent commits code on behalf of the operator.
+Git needs a name and email or `git commit` will refuse to run.
+
+```bash
+git config --global user.name "Your Name"
+git config --global user.email "you@company.com"
+```
+
+Per-workspace overrides also work (`git config user.email ...` inside
+the workspace dir). The daemon reads the effective value the same way
+`git commit` does.
+
+**Git remote auth** — if `git push` works from this shell against your
+configured repo, the daemon's push step will too. See the GitHub or
+GitLab integration docs for SSH key and HTTPS credential-helper setup.
+
+**Jira token** — covered in the project configuration section below.
+
+**Verifying setup before first run** — run the health check from the
+CLI without starting the daemon:
+
+```bash
+python -m health.runner --config config-live
+```
+
+This prints each project's validator results — use it in CI or for
+smoke-testing a new environment.
+
 ---
 
 ## 2. Install Claude Code CLI

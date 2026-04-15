@@ -83,7 +83,7 @@ references (`${VAR_NAME}`). Never write raw secrets into config files.
 4. Ask for **Jira project key** (e.g. `ACME`)
 5. Ask for **Jira email** for API auth (e.g. `bot@company.com`)
 6. Ask for **env var name** for the Jira token (default: `JIRA_TOKEN`)
-7. Ask for **trigger label** (default: `ai-pipeline`) and any **ignore labels** (comma-separated, optional)
+7. Ask for **trigger labels (comma-separated, default: ai-pipeline)** and any **ignore labels** (comma-separated, optional)
 8. Ask for **Jira status mappings** — provide defaults:
    - todo: "To Do"
    - in_progress: "In Progress"
@@ -156,7 +156,7 @@ jira:
   token: "${JIRA_TOKEN_VAR}"
   email: "{jira_email}"
   project_key: "{project_key}"
-  trigger_labels: [{trigger_labels}]
+  trigger_labels: ["ai-pipeline"]
   ignore_labels: [{ignore_labels}]
   statuses:
     todo: "{status_todo}"
@@ -234,6 +234,27 @@ parallelism:
     - `{JIRA_TOKEN_VAR}` — Jira API token
     - `{VCS_TOKEN_VAR}` — GitHub/GitLab token
     - `{JENKINS_*}` — if Jenkins was selected
+
+## Operation: Add (orchestrator mode)
+
+When `meta/input.md` exists in the current workspace, Atlas MUST NOT ask
+questions. Instead:
+
+1. Read `meta/input.md` and parse the key-value pairs under each section.
+2. Read env vars referenced as `token_var:` — they are already set in the
+   process environment by the dashboard handler.
+3. For each credential, call the matching validator (`validate_jira`,
+   `validate_github` or `validate_gitlab`). On failure, write
+   `reports/project-setup-output.md` with the validation error and raise —
+   the supervising handler will transition state to `SETUP_FAILED`.
+4. Write `config-live/projects/{project_id}/project.yaml` and
+   `config-live/projects/{project_id}/repos/{repo_id}.yaml` using
+   `${TOKEN_VAR}` references (never raw values). Use `trigger_labels` (plural
+   list) in the Jira block.
+5. Do NOT write a `ci:` block (CI/CD is out of scope for the web flow).
+6. Write `reports/project-setup-output.md` with a summary of what was created,
+   including the list of env var names that must remain set for the project
+   to operate.
 
 ## Operation: List
 

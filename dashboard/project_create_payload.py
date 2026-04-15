@@ -150,7 +150,7 @@ def redact_to_input_md(payload: dict[str, Any]) -> str:
     lines.append(f"- telegram_bot_token_var: {tg_var}")
     lines.append(f"- telegram_chat_id: {extras.get('telegram_chat_id')}")
     lines.append(f"- arch_rules_file: {extras.get('arch_rules_file')}")
-    lines.append(f"- protected_files: [" + ", ".join(extras.get("protected_files") or []) + "]")
+    lines.append("- protected_files: [" + ", ".join(extras.get("protected_files") or []) + "]")
     lines.append(f"- max_concurrent_tickets: {extras.get('max_concurrent_tickets')}")
 
     return "\n".join(lines) + "\n"

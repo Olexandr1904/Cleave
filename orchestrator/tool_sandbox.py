@@ -10,6 +10,7 @@ from typing import Any
 
 import yaml
 
+from health.validators import check_git_identity, read_git_identity
 from integrations.config import config_tools
 
 logger = logging.getLogger(__name__)
@@ -456,8 +457,6 @@ class ToolSandbox:
         workspace_root = params.get("workspace_root", "")
         if not workspace_root:
             raise ToolError("validate_git_identity requires 'workspace_root'")
-        from pathlib import Path
-        from health.validators import check_git_identity, read_git_identity
         path = Path(workspace_root)
         result = check_git_identity(path)
         user_name, user_email = read_git_identity(path) if result.ok else ("", "")

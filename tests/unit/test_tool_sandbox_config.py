@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 
 import httpx
 import pytest
@@ -44,6 +45,7 @@ def run(coro):
 
 CONFIG_TOOL_NAMES = {
     "validate_jira", "validate_github", "validate_gitlab", "validate_jenkins",
+    "validate_git_identity",
     "list_projects", "read_project_config",
     "write_project_config", "write_repo_config", "remove_project",
 }
@@ -239,3 +241,41 @@ class TestInvalidIdRaisesToolError:
                 "repo_id": "../evil",
                 "yaml_content": "repo: {id: x}",
             }))
+
+
+class TestValidateGitIdentitySandbox:
+    @pytest.mark.asyncio
+    async def test_git_identity_set_via_sandbox(self, workspace, tmp_path):
+        import subprocess
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
+        subprocess.run(["git", "config", "user.name", "Test"], cwd=repo, check=True)
+        subprocess.run(["git", "config", "user.email", "t@t"], cwd=repo, check=True)
+
+        from orchestrator.tool_sandbox import ToolSandbox
+        sandbox = ToolSandbox(str(workspace), ["validate_git_identity"])
+        result = await sandbox.execute_tool(
+            "validate_git_identity", {"workspace_root": str(repo)}
+        )
+        data = json.loads(result)
+        assert data["ok"] is True
+        assert data["user_email"] == "t@t"
+
+    @pytest.mark.asyncio
+    async def test_git_identity_missing_via_sandbox(self, workspace, tmp_path, monkeypatch):
+        import subprocess
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
+        monkeypatch.setenv("HOME", str(tmp_path / "empty"))
+        (tmp_path / "empty").mkdir()
+
+        from orchestrator.tool_sandbox import ToolSandbox
+        sandbox = ToolSandbox(str(workspace), ["validate_git_identity"])
+        result = await sandbox.execute_tool(
+            "validate_git_identity", {"workspace_root": str(repo)}
+        )
+        data = json.loads(result)
+        assert data["ok"] is False
+        assert "fix_hint" in data

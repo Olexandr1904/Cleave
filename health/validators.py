@@ -112,6 +112,13 @@ def _git_config(workspace_root: Path, key: str) -> tuple[bool, str]:
     return False, stderr
 
 
+def read_git_identity(workspace_root: Path) -> tuple[str, str]:
+    """Return (user_name, user_email), empty strings if unset or unreadable."""
+    name_ok, name_val = _git_config(workspace_root, "user.name")
+    email_ok, email_val = _git_config(workspace_root, "user.email")
+    return (name_val if name_ok else "", email_val if email_ok else "")
+
+
 def check_git_identity(workspace_root: Path) -> ValidatorResult:
     """Check that git will accept commits in the given workspace.
 

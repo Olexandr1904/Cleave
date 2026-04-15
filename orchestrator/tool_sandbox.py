@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 import subprocess
 from pathlib import Path
@@ -26,6 +27,7 @@ ALL_TOOLS = {
     "validate_github",
     "validate_gitlab",
     "validate_jenkins",
+    "validate_git_identity",
     "list_projects",
     "read_project_config",
     "write_project_config",
@@ -450,6 +452,23 @@ class ToolSandbox:
             return f"OK: Jenkins job '{result['job_name']}' is accessible."
         return f"FAILED: {result['error']}"
 
+    async def _tool_validate_git_identity(self, params: dict[str, Any]) -> str:
+        workspace_root = params.get("workspace_root", "")
+        if not workspace_root:
+            raise ToolError("validate_git_identity requires 'workspace_root'")
+        from pathlib import Path
+        from health.validators import check_git_identity, read_git_identity
+        path = Path(workspace_root)
+        result = check_git_identity(path)
+        user_name, user_email = read_git_identity(path) if result.ok else ("", "")
+        return json.dumps({
+            "ok": result.ok,
+            "user_name": user_name,
+            "user_email": user_email,
+            "reason": result.reason,
+            "fix_hint": result.fix_hint,
+        })
+
     async def _tool_list_projects(self, params: dict[str, Any]) -> str:
         config_dir = params.get("config_dir", "")
         if not config_dir:
@@ -680,6 +699,17 @@ def get_tool_definitions(allowed_tools: list[str]) -> list[dict[str, Any]]:
                     "job_key": {"type": "string", "description": "Jenkins job path (e.g. my-project/main)"},
                 },
                 "required": ["url", "username", "token", "job_key"],
+            },
+        },
+        "validate_git_identity": {
+            "name": "validate_git_identity",
+            "description": "Check that git user.name and user.email are set for a workspace.",
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "workspace_root": {"type": "string"},
+                },
+                "required": ["workspace_root"],
             },
         },
         "list_projects": {

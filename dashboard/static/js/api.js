@@ -49,3 +49,13 @@ export async function loadReport(ticketId, filename, folder) {
     `/api/workspaces/${encodeURIComponent(ticketId)}/report/${encodeURIComponent(filename)}?folder=${encodeURIComponent(folder)}`
   );
 }
+
+export async function createProject(payload) {
+  const res = await fetch('/api/projects/create', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify(payload),
+  });
+  const body = await res.json().catch(() => ({}));
+  return { status: res.status, body };
+}

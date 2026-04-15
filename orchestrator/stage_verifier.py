@@ -53,7 +53,82 @@ def verify(stage_id: str, workspace: Any, stage_start_commit: str | None) -> Ver
     """Run the mechanical verifier for the given stage."""
     if stage_id == "dev":
         return _verify_dev(workspace, stage_start_commit)
+    if stage_id == "scope_check":
+        return _verify_report_exists("scope_check", workspace, "scope-guard-agent-output.md")
+    if stage_id == "qa":
+        return _verify_report_exists("qa", workspace, "qa-agent-output.md")
+    if stage_id == "push":
+        return _verify_push(workspace)
+    if stage_id == "pr_review":
+        return _verify_pr_review(workspace)
     return VerifyResult(ok=True, stage_id=stage_id, reason="")
+
+
+def _verify_report_exists(stage_id: str, workspace: Any, filename: str) -> VerifyResult:
+    reports_dir = Path(workspace.reports_dir)
+    if not (reports_dir / filename).exists():
+        return VerifyResult(
+            ok=False, stage_id=stage_id,
+            reason=f"{filename} was not produced in reports/",
+        )
+    return VerifyResult(ok=True, stage_id=stage_id, reason="")
+
+
+def _verify_push(workspace: Any) -> VerifyResult:
+    source = Path(workspace.source_dir)
+    branch = getattr(workspace.state, "branch", None)
+    if not branch:
+        return VerifyResult(
+            ok=False, stage_id="push",
+            reason="no branch set on workspace state",
+        )
+
+    local = _git_rev_parse(source)
+    if local is None:
+        return VerifyResult(
+            ok=False, stage_id="push",
+            reason="could not read local HEAD",
+        )
+
+    try:
+        result = subprocess.run(
+            ["git", "-C", str(source), "ls-remote", "origin", f"refs/heads/{branch}"],
+            capture_output=True, text=True, timeout=15,
+        )
+    except (FileNotFoundError, subprocess.TimeoutExpired, OSError) as e:
+        return VerifyResult(
+            ok=False, stage_id="push",
+            reason=f"git ls-remote failed: {type(e).__name__}: {e}",
+        )
+    if result.returncode != 0:
+        return VerifyResult(
+            ok=False, stage_id="push",
+            reason=f"git ls-remote origin failed: {result.stderr.strip()[:200]}",
+        )
+
+    line = result.stdout.strip()
+    if not line:
+        return VerifyResult(
+            ok=False, stage_id="push",
+            reason=f"remote has no ref refs/heads/{branch} (branch not pushed)",
+        )
+    remote_sha = line.split()[0]
+    if remote_sha != local:
+        return VerifyResult(
+            ok=False, stage_id="push",
+            reason=f"remote branch {branch} is at {remote_sha[:8]}, local at {local[:8]}",
+        )
+    return VerifyResult(ok=True, stage_id="push", reason="")
+
+
+def _verify_pr_review(workspace: Any) -> VerifyResult:
+    pr_number = getattr(workspace.state, "pr_number", None)
+    if not pr_number:
+        return VerifyResult(
+            ok=False, stage_id="pr_review",
+            reason="workspace state has no pr_number (PR not created)",
+        )
+    return VerifyResult(ok=True, stage_id="pr_review", reason="")
 
 
 def _verify_dev(workspace: Any, stage_start_commit: str | None) -> VerifyResult:

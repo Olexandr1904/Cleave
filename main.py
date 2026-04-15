@@ -331,6 +331,7 @@ def main(argv: list[str] | None = None) -> int:
         # Start dashboard web server
         dash_config = global_config.dashboard
         web_server = None
+        web_server_task: asyncio.Task | None = None
         if dash_config.enabled:
             from dashboard.web import create_app
             import uvicorn
@@ -348,7 +349,7 @@ def main(argv: list[str] | None = None) -> int:
                 log_level="warning",
             )
             web_server = uvicorn.Server(config)
-            asyncio.create_task(web_server.serve())
+            web_server_task = asyncio.create_task(web_server.serve())
             print(f"  Dashboard: http://{dash_config.host}:{dash_config.port}")
 
         event_bus.emit("daemon_started", f"Sickle v{version} started")
@@ -389,6 +390,22 @@ def main(argv: list[str] | None = None) -> int:
                     )
             if web_server:
                 web_server.should_exit = True
+            if web_server_task is not None:
+                try:
+                    await asyncio.wait_for(web_server_task, timeout=5.0)
+                except asyncio.TimeoutError:
+                    logging.getLogger(__name__).warning(
+                        "Dashboard server did not shut down within 5s; cancelling",
+                    )
+                    web_server_task.cancel()
+                    try:
+                        await web_server_task
+                    except (asyncio.CancelledError, Exception):
+                        pass
+                except Exception as e:
+                    logging.getLogger(__name__).warning(
+                        "Error during dashboard shutdown: %s", e,
+                    )
             await event_store.close()
 
     try:

@@ -61,7 +61,7 @@ tools: []                          # No tools — pure analysis, no side effects
 
 constraints:
   - "Never modify ticket data — read only"
-  - "Never process tickets without the trigger_label"
+  - "Never process tickets without all trigger_labels"
   - "Never process tickets assigned to a human"
   - "Never route a ticket without a matching repo label — escalate instead"
 
@@ -76,7 +76,7 @@ decision_policy:
 ### PM Agent — Detailed Behavior
 
 **Step 1: Filter**
-- Must have `trigger_label` → skip if missing
+- Must have ALL `trigger_labels` → skip if missing any
 - Must NOT have any `ignore_labels` → skip if present
 - Must be unassigned or bot-assigned → skip if human-assigned
 

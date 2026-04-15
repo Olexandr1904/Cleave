@@ -167,7 +167,7 @@ stateDiagram-v2
 - `project.id`: str
 - `project.name`: str
 - `project.enabled`: bool
-- `jira`: JiraConfig — url, token, email, project_key, trigger_label, ignore_labels, statuses
+- `jira`: JiraConfig — url, token, email, project_key, trigger_labels, ignore_labels, statuses
 - `telegram.chat_id`: str — override for this project
 - `parallelism.max_concurrent_tickets`: int
 
@@ -448,7 +448,7 @@ graph LR
 - `POST /issue/{issueIdOrKey}/comment` — add comment to ticket
 - `GET /issue/{issueIdOrKey}/remotelink` — get linked issues
 
-**Integration Notes:** JQL query constructed from config: `project = {key} AND labels = {trigger_label} AND status = "{todo_status}" AND labels NOT IN ({ignore_labels}) ORDER BY priority ASC, created ASC`
+**Integration Notes:** JQL query constructed from config: `project = {key} AND labels in ({trigger_labels}) AND status = "{todo_status}" AND labels NOT IN ({ignore_labels}) ORDER BY priority ASC, created ASC`
 
 ### GitHub REST API
 

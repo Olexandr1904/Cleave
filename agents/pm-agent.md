@@ -52,7 +52,7 @@ You receive:
 - `poll_data/tickets.md` — list of tickets from the current poll cycle, each with:
   id, summary, labels, priority, sprint, linked_issues, assignee
 - `poll_data/project_config.md` — project and repo configuration including:
-  - `trigger_label` — label that marks a ticket as pipeline-ready
+  - `trigger_labels` — labels that mark a ticket as pipeline-ready (ticket must have ALL)
   - `ignore_labels` — labels that exclude a ticket
   - `repos` — list of repos with their `jira_repo_label`
 
@@ -62,7 +62,7 @@ You receive:
 
 For each ticket, apply these filters in order:
 
-1. **Trigger label**: ticket MUST have the `trigger_label` in its labels. Skip if missing.
+1. **Trigger labels**: ticket MUST have ALL `trigger_labels` in its labels. Skip if missing any.
 2. **Ignore labels**: ticket MUST NOT have any label in `ignore_labels`. Skip if present.
 3. **Assignee**: ticket must be unassigned OR assigned to the pipeline bot. Skip if assigned to a human.
 

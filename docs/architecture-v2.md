@@ -296,7 +296,7 @@ jira:
   token: "${JIRA_TOKEN_ACME}"
   email: "${JIRA_EMAIL_ACME}"
   project_key: "ACME"
-  trigger_label: "ai-pipeline"
+  trigger_labels: ["ai-pipeline"]
   ignore_labels: ["manual-only", "blocked"]
   statuses:
     todo: "To Do"

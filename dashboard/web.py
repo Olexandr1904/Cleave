@@ -15,6 +15,7 @@ from starlette.staticfiles import StaticFiles
 
 from dashboard.event_store import EventStore
 from dashboard.events import EventBus
+from health.runner import check_all
 
 logger = logging.getLogger(__name__)
 
@@ -188,6 +189,32 @@ def create_app(
                 return PlainTextResponse(f"File not found: {folder}/{filename}", status_code=404)
         return PlainTextResponse(f"Workspace not found: {ticket_id}", status_code=404)
 
+    async def projects_health(request: Request) -> JSONResponse:
+        force = request.query_params.get("refresh") == "1"
+        if not projects:
+            return JSONResponse({"projects": []})
+        results = await check_all(projects, force=force)
+        return JSONResponse({
+            "projects": [
+                {
+                    "project_id": r.project_id,
+                    "status": r.status,
+                    "checks": [
+                        {
+                            "name": c.name,
+                            "target": c.target,
+                            "ok": c.ok,
+                            "reason": c.reason,
+                            "fix_hint": c.fix_hint,
+                        }
+                        for c in r.checks
+                    ],
+                    "checked_at": r.checked_at.isoformat(),
+                }
+                for r in results
+            ]
+        })
+
     async def index(request: Request) -> HTMLResponse:
         html_path = Path(__file__).parent / "static" / "index.html"
         return HTMLResponse(html_path.read_text(encoding="utf-8"))
@@ -197,6 +224,7 @@ def create_app(
         Route("/api/health", health),
         Route("/api/events", get_events),
         Route("/api/projects", get_projects),
+        Route("/api/projects/health", projects_health),
         Route("/api/projects/{project_id}/tickets", get_project_tickets),
         Route("/api/tickets/{ticket_id:path}/events", get_ticket_events),
         Route("/api/workspaces", get_workspaces),

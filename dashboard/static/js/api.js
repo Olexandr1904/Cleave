@@ -49,3 +49,10 @@ export async function loadReport(ticketId, filename, folder) {
     `/api/workspaces/${encodeURIComponent(ticketId)}/report/${encodeURIComponent(filename)}?folder=${encodeURIComponent(folder)}`
   );
 }
+
+export async function loadHealth(force = false) {
+  const qs = force ? '?refresh=1' : '';
+  const resp = await fetch(`/api/projects/health${qs}`);
+  if (!resp.ok) throw new Error(`health fetch failed: ${resp.status}`);
+  return resp.json();
+}

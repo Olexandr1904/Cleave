@@ -1,6 +1,6 @@
 // board.js — board view rendering
 
-import { loadWorkspaces } from './api.js';
+import { loadWorkspaces, loadHealth } from './api.js';
 import { esc, timeAgo, stateBadgeHtml } from './helpers.js';
 import { approveWorkspace } from './actions.js';
 
@@ -10,7 +10,8 @@ export async function renderBoard(projectId, showDone = true) {
     const workspaces = await loadWorkspaces(projectId);
 
     if (workspaces.length === 0) {
-      content.innerHTML = '<div class="state-msg">No workspaces found.</div>';
+      content.innerHTML = `<div id="health-strip-container"></div><div class="state-msg">No workspaces found.</div>`;
+      renderHealthStrip(document.getElementById('health-strip-container'));
       return { workspaces };
     }
 
@@ -46,7 +47,8 @@ export async function renderBoard(projectId, showDone = true) {
       html += `</div></div>`;
     }
 
-    content.innerHTML = html;
+    content.innerHTML = `<div id="health-strip-container"></div>` + html;
+    renderHealthStrip(document.getElementById('health-strip-container'));
 
     // Bind inline approve buttons
     content.querySelectorAll('[data-action="approve"]').forEach(btn => {
@@ -66,6 +68,79 @@ export async function renderBoard(projectId, showDone = true) {
   } catch (e) {
     content.innerHTML = `<div class="state-msg" style="color:#f85149;">Error loading workspaces: ${esc(String(e))}</div>`;
     return { workspaces: [] };
+  }
+}
+
+async function renderHealthStrip(container) {
+  if (!container) return;
+  let data;
+  try {
+    data = await loadHealth();
+  } catch (e) {
+    container.innerHTML = '';
+    return;
+  }
+
+  const projects = data.projects || [];
+  if (projects.length === 0) {
+    container.innerHTML = '';
+    return;
+  }
+
+  const unhealthy = projects.filter(p => p.status !== 'green');
+  if (unhealthy.length === 0) {
+    container.innerHTML = `
+      <div class="health-strip green">
+        <span class="health-dot green"></span>
+        <span>All projects healthy</span>
+        <button class="health-refresh" id="health-refresh">&#x21bb;</button>
+      </div>`;
+    bindHealthRefresh(container);
+    return;
+  }
+
+  const rowsHtml = unhealthy.map(p => {
+    const badChecks = p.checks.filter(c => !c.ok);
+    const checksHtml = badChecks.map(c => `
+      <div class="health-check">
+        <span class="health-check-name">${esc(c.name)}</span>
+        <span class="health-check-target">${esc(c.target)}</span>
+        <span class="health-check-reason">${esc(c.reason)}</span>
+        ${c.fix_hint ? `<code class="health-check-fix">${esc(c.fix_hint)}</code>` : ''}
+      </div>`).join('');
+    return `
+      <div class="health-row">
+        <span class="health-dot ${esc(p.status)}"></span>
+        <span class="health-project">${esc(p.project_id)}</span>
+        <div class="health-checks">${checksHtml}</div>
+      </div>`;
+  }).join('');
+
+  const topStatus = unhealthy.some(p => p.status === 'red') ? 'red' : 'yellow';
+  container.innerHTML = `
+    <div class="health-strip ${topStatus}">
+      <div class="health-strip-header">
+        <span class="health-dot ${topStatus}"></span>
+        <span>${unhealthy.length} project(s) need attention</span>
+        <button class="health-refresh" id="health-refresh">&#x21bb;</button>
+      </div>
+      ${rowsHtml}
+    </div>`;
+  bindHealthRefresh(container);
+}
+
+function bindHealthRefresh(container) {
+  const btn = container.querySelector('#health-refresh');
+  if (btn) {
+    btn.addEventListener('click', async () => {
+      btn.disabled = true;
+      try {
+        await loadHealth(true);
+      } finally {
+        btn.disabled = false;
+        renderHealthStrip(container);
+      }
+    });
   }
 }
 

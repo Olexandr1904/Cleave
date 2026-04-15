@@ -156,7 +156,7 @@ jira:
   token: "${JIRA_TOKEN_VAR}"
   email: "{jira_email}"
   project_key: "{project_key}"
-  trigger_labels: ["ai-pipeline"]
+  trigger_labels: [{trigger_labels}]
   ignore_labels: [{ignore_labels}]
   statuses:
     todo: "{status_todo}"

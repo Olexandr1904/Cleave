@@ -336,6 +336,33 @@ def main(argv: list[str] | None = None) -> int:
             from dashboard.web import create_app
             import uvicorn
 
+            async def _production_atlas_fn(setup_ws, cfg_dir):
+                """Run project-setup-agent against a dashboard-created setup workspace.
+
+                Wraps the SetupWorkspace in a Workspace shim so AgentRuntime's
+                prompt assembly and tool sandbox can reuse the ticket-agent path.
+                """
+                from workspace.workspace import Workspace, WorkspaceState
+
+                state = WorkspaceState(
+                    ticket_id=setup_ws.project_id,
+                    company_id=setup_ws.project_id,
+                    repo_id=setup_ws.repo_id,
+                    workspace_root=str(setup_ws.setup_dir),
+                )
+                ws = Workspace(str(setup_ws.setup_dir), state=state)
+                ws.source_dir.mkdir(parents=True, exist_ok=True)
+
+                result = await agent_runtime.execute(
+                    agent_id="project-setup-agent",
+                    workspace=ws,
+                    extra_context={"config_dir": str(cfg_dir)},
+                )
+                if not result.success:
+                    raise RuntimeError(
+                        f"project-setup-agent failed: {result.error or 'unknown error'}"
+                    )
+
             app = create_app(
                 event_bus, event_store,
                 workspace_base_dir=global_config.workspaces.base_dir,
@@ -343,6 +370,8 @@ def main(argv: list[str] | None = None) -> int:
                 mode_handler=mode_handler,
                 global_config=global_config,
                 projects=projects,
+                config_dir=args.config,
+                atlas_fn=_production_atlas_fn,
             )
             config = uvicorn.Config(
                 app, host=dash_config.host, port=dash_config.port,

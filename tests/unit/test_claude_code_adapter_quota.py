@@ -57,6 +57,12 @@ class TestClassifyCliError:
         err = _classify_cli_error("file not found", "")
         assert err is None
 
+    def test_innocuous_quota_substring_does_not_match(self):
+        # A path or unrelated diagnostic that merely contains "quota"
+        # must NOT be classified as a quota hit.
+        err = _classify_cli_error("failed to read /home/user/quota/cfg.yaml", "")
+        assert err is None
+
     def test_empty_returns_none(self):
         assert _classify_cli_error("", "") is None
 

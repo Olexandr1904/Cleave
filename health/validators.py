@@ -146,3 +146,53 @@ def check_git_identity(workspace_root: Path) -> ValidatorResult:
             fix_hint=fix_hint,
         )
     return ValidatorResult(ok=True, name="git_identity", target=target, reason="", fix_hint="")
+
+
+def check_git_remote(workspace_root: Path, remote: str = "origin") -> ValidatorResult:
+    """Check that the configured git remote accepts read auth.
+
+    Uses `git ls-remote <remote> HEAD` — this is a lightweight operation
+    that validates network reach + auth without fetching any refs.
+    """
+    target = f"{workspace_root}:{remote}"
+    fix_hint = (
+        "Verify the remote is set and authentication works: "
+        "git -C <workspace> remote -v && git -C <workspace> ls-remote origin HEAD"
+    )
+
+    if not workspace_root.exists():
+        return ValidatorResult(
+            ok=False, name="git_remote", target=target,
+            reason="workspace directory does not exist", fix_hint=fix_hint,
+        )
+
+    try:
+        result = subprocess.run(
+            ["git", "-C", str(workspace_root), "ls-remote", remote, "HEAD"],
+            capture_output=True, text=True, timeout=15,
+        )
+    except FileNotFoundError:
+        return ValidatorResult(
+            ok=False, name="git_remote", target=target,
+            reason="git binary not found on PATH", fix_hint=fix_hint,
+        )
+    except subprocess.TimeoutExpired:
+        return ValidatorResult(
+            ok=False, name="git_remote", target=target,
+            reason=f"git ls-remote {remote} timed out", fix_hint=fix_hint,
+        )
+    except Exception as e:
+        return ValidatorResult(
+            ok=False, name="git_remote", target=target,
+            reason=f"{type(e).__name__}: {e}", fix_hint=fix_hint,
+        )
+
+    if result.returncode == 0:
+        return ValidatorResult(ok=True, name="git_remote", target=target, reason="", fix_hint="")
+
+    stderr = result.stderr.strip().splitlines()
+    first_line = stderr[0] if stderr else f"exit {result.returncode}"
+    return ValidatorResult(
+        ok=False, name="git_remote", target=target,
+        reason=first_line, fix_hint=fix_hint,
+    )

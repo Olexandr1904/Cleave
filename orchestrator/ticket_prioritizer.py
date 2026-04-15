@@ -25,20 +25,26 @@ class PrioritizedTicket:
 
 def filter_tickets(
     tickets: list[TicketData],
-    trigger_label: str,
+    trigger_labels: list[str],
     ignore_labels: list[str],
     bot_name: str = "Sickle Pipeline",
 ) -> list[TicketData]:
     """Filter tickets by label and assignee rules.
 
-    AC3: Must have trigger label, must not have ignore labels,
+    AC3: Must have all trigger labels, must not have ignore labels,
     must be unassigned or bot-assigned.
     """
+    if not trigger_labels:
+        return []
+
     result = []
     for ticket in tickets:
-        # Must have trigger label
-        if trigger_label not in ticket.labels:
-            logger.debug("Skipping %s: missing trigger label '%s'", ticket.id, trigger_label)
+        # Must have ALL trigger labels
+        missing = [l for l in trigger_labels if l not in ticket.labels]
+        if missing:
+            logger.debug(
+                "Skipping %s: missing trigger labels %s", ticket.id, missing
+            )
             continue
 
         # Must not have any ignore labels
@@ -185,7 +191,7 @@ def prioritize_and_route(
     # AC3: Filter by labels and assignee
     filtered = filter_tickets(
         tickets,
-        trigger_label=jira_config.trigger_label,
+        trigger_labels=jira_config.trigger_labels,
         ignore_labels=jira_config.ignore_labels,
         bot_name=bot_name,
     )

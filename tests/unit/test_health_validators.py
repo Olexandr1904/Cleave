@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+import subprocess
+from pathlib import Path
+
 import pytest
 from unittest.mock import patch, AsyncMock
 
-from health.validators import ValidatorResult, check_jira, check_github, check_gitlab
+from health.validators import ValidatorResult, check_jira, check_github, check_gitlab, check_git_identity
 
 
 def test_validator_result_ok_shape():
@@ -85,3 +88,40 @@ class TestCheckGitlab:
         assert r.ok is True
         assert r.name == "gitlab"
         assert r.target == "123"
+
+
+def _init_repo(tmp_path: Path) -> Path:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
+    return repo
+
+
+class TestCheckGitIdentity:
+    def test_identity_set_via_local_config(self, tmp_path):
+        repo = _init_repo(tmp_path)
+        subprocess.run(["git", "config", "user.name", "Test"], cwd=repo, check=True)
+        subprocess.run(["git", "config", "user.email", "t@t.io"], cwd=repo, check=True)
+        r = check_git_identity(repo)
+        assert r.ok is True
+        assert r.name == "git_identity"
+        assert r.reason == ""
+
+    def test_identity_missing(self, tmp_path, monkeypatch):
+        repo = _init_repo(tmp_path)
+        monkeypatch.setenv("HOME", str(tmp_path / "empty_home"))
+        (tmp_path / "empty_home").mkdir()
+        r = check_git_identity(repo)
+        assert r.ok is False
+        assert "user.email" in r.reason or "user.name" in r.reason
+        assert "git config" in r.fix_hint
+
+    def test_not_a_git_dir(self, tmp_path):
+        r = check_git_identity(tmp_path)
+        assert r.ok is False
+        assert "git" in r.reason.lower()
+
+    def test_does_not_raise_on_missing_git_binary(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("PATH", "/nonexistent")
+        r = check_git_identity(tmp_path)
+        assert r.ok is False

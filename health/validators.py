@@ -7,7 +7,9 @@ exception class in `reason`.
 
 from __future__ import annotations
 
+import subprocess
 from dataclasses import dataclass
+from pathlib import Path
 
 from integrations.config import config_tools
 
@@ -89,3 +91,58 @@ async def check_gitlab(token: str, project_id: str, url: str = "https://gitlab.c
         reason=result.get("error", "GitLab check failed"),
         fix_hint=f"Verify GitLab token has access to project {project_id}",
     )
+
+
+def _git_config(workspace_root: Path, key: str) -> tuple[bool, str]:
+    """Run `git -C <workspace> config <key>` and return (ok, value_or_error)."""
+    try:
+        result = subprocess.run(
+            ["git", "-C", str(workspace_root), "config", key],
+            capture_output=True, text=True, timeout=5,
+        )
+    except FileNotFoundError:
+        return False, "git binary not found on PATH"
+    except subprocess.TimeoutExpired:
+        return False, "git config timed out"
+    except Exception as e:
+        return False, f"{type(e).__name__}: {e}"
+    if result.returncode == 0:
+        return True, result.stdout.strip()
+    stderr = result.stderr.strip() or f"exit {result.returncode}"
+    return False, stderr
+
+
+def check_git_identity(workspace_root: Path) -> ValidatorResult:
+    """Check that git will accept commits in the given workspace.
+
+    Reads user.name and user.email with `git config` (which resolves
+    local → global → system in the same order git commit does).
+    """
+    target = str(workspace_root)
+    fix_hint = (
+        'git config --global user.name "Your Name" && '
+        'git config --global user.email <you@company.com>'
+    )
+
+    if not workspace_root.exists():
+        return ValidatorResult(
+            ok=False, name="git_identity", target=target,
+            reason="workspace directory does not exist", fix_hint=fix_hint,
+        )
+
+    name_ok, name_val = _git_config(workspace_root, "user.name")
+    email_ok, email_val = _git_config(workspace_root, "user.email")
+
+    if not name_ok or not name_val:
+        return ValidatorResult(
+            ok=False, name="git_identity", target=target,
+            reason=f"git user.name not set ({name_val or 'empty'})",
+            fix_hint=fix_hint,
+        )
+    if not email_ok or not email_val:
+        return ValidatorResult(
+            ok=False, name="git_identity", target=target,
+            reason=f"git user.email not set ({email_val or 'empty'})",
+            fix_hint=fix_hint,
+        )
+    return ValidatorResult(ok=True, name="git_identity", target=target, reason="", fix_hint="")

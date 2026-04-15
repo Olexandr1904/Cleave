@@ -1,6 +1,9 @@
 from __future__ import annotations
 
-from health.validators import ValidatorResult
+import pytest
+from unittest.mock import patch, AsyncMock
+
+from health.validators import ValidatorResult, check_jira, check_github, check_gitlab
 
 
 def test_validator_result_ok_shape():
@@ -23,12 +26,6 @@ def test_validator_result_failure_shape():
     assert r.ok is False
     assert "user.email" in r.reason
     assert "git config" in r.fix_hint
-
-
-import pytest
-from unittest.mock import patch, AsyncMock
-
-from health.validators import check_jira, check_github, check_gitlab
 
 
 class TestCheckJira:

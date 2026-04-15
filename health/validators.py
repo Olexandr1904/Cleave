@@ -9,6 +9,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from integrations.config import config_tools
+
 
 @dataclass
 class ValidatorResult:
@@ -27,9 +29,6 @@ class ValidatorResult:
     target: str
     reason: str
     fix_hint: str
-
-
-from integrations.config import config_tools
 
 
 async def check_jira(url: str, email: str, token: str, project_key: str) -> ValidatorResult:

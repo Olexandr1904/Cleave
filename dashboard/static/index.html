@@ -55,6 +55,7 @@
     <label class="toggle-done">
       <input type="checkbox" id="toggle-done"> Hide done
     </label>
+    <button id="new-project-btn" class="btn-primary">+ New Project</button>
     <button id="toolbar-refresh-btn">Refresh</button>
     <label class="auto-refresh">
       <input type="checkbox" id="auto-refresh-cb" checked>
@@ -64,6 +65,22 @@
 
   <div id="content">
     <div class="state-msg">Loading…</div>
+  </div>
+</div>
+
+<div id="project-wizard-modal" class="modal hidden" role="dialog" aria-modal="true">
+  <div class="modal-backdrop"></div>
+  <div class="modal-panel">
+    <header class="wizard-header">
+      <h2 id="wizard-title">New Project</h2>
+      <button id="wizard-close" class="icon-btn" aria-label="Close">×</button>
+    </header>
+    <nav class="wizard-steps" id="wizard-steps"></nav>
+    <main class="wizard-body" id="wizard-body"></main>
+    <footer class="wizard-footer">
+      <button id="wizard-back" class="btn-secondary">Back</button>
+      <button id="wizard-next" class="btn-primary">Next</button>
+    </footer>
   </div>
 </div>
 

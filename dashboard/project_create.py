@@ -6,7 +6,6 @@ Atlas supervision, and rollback.
 
 from __future__ import annotations
 
-import asyncio
 import json
 import logging
 import os
@@ -29,7 +28,7 @@ from dashboard.setup_workspace import create_setup_workspace
 
 logger = logging.getLogger(__name__)
 
-_run_lock = asyncio.Lock()
+_busy: bool = False
 _active_workspace: str | None = None
 
 
@@ -41,7 +40,7 @@ def build_create_route(
     atlas_fn: AtlasFn,
 ):
     async def create_project(request: Request) -> JSONResponse:
-        global _active_workspace
+        global _busy, _active_workspace
 
         try:
             payload = await request.json()
@@ -56,52 +55,57 @@ def build_create_route(
                 status_code=400,
             )
 
-        project_id = payload["identity"]["project_id"]
-        repo_id = payload["identity"]["repo_id"]
-
-        if _run_lock.locked():
+        if _busy:
             return JSONResponse(
                 {"error": "busy", "active_workspace": _active_workspace},
                 status_code=429,
             )
 
-        async with _run_lock:
-            project_config_dir = config_dir / "projects" / project_id
-            if project_config_dir.exists():
-                return JSONResponse(
-                    {"error": "project_exists", "project_id": project_id},
-                    status_code=409,
-                )
+        project_id = payload["identity"]["project_id"]
+        repo_id = payload["identity"]["repo_id"]
 
-            env_vars = derive_env_vars(payload)
-            try:
-                append_vars(env_path, env_vars)
-            except EnvCollisionError as exc:
-                return JSONResponse(
-                    {"error": "env_var_conflict", "vars": exc.vars},
-                    status_code=409,
-                )
-
-            for name, value in env_vars.items():
-                os.environ[name] = value
-
-            workspace = create_setup_workspace(
-                base_dir=workspace_base_dir,
-                project_id=project_id,
-                repo_id=repo_id,
-                redacted_input_md=redact_to_input_md(payload),
+        project_config_dir = config_dir / "projects" / project_id
+        if project_config_dir.exists():
+            return JSONResponse(
+                {"error": "project_exists", "project_id": project_id},
+                status_code=409,
             )
 
-            _active_workspace = f"{project_id}/{repo_id}/setup"
+        env_vars = derive_env_vars(payload)
+        try:
+            append_vars(env_path, env_vars)
+        except EnvCollisionError as exc:
+            return JSONResponse(
+                {"error": "env_var_conflict", "vars": exc.vars},
+                status_code=409,
+            )
 
-            def rollback() -> None:
-                if project_config_dir.exists():
-                    shutil.rmtree(project_config_dir, ignore_errors=True)
-                remove_vars(env_path, list(env_vars.keys()))
-                for name in env_vars:
-                    os.environ.pop(name, None)
+        for name, value in env_vars.items():
+            os.environ[name] = value
 
-            schedule(workspace, config_dir, atlas_fn, rollback)
+        workspace = create_setup_workspace(
+            base_dir=workspace_base_dir,
+            project_id=project_id,
+            repo_id=repo_id,
+            redacted_input_md=redact_to_input_md(payload),
+        )
+
+        _busy = True
+        _active_workspace = f"{project_id}/{repo_id}/setup"
+
+        def rollback() -> None:
+            if project_config_dir.exists():
+                shutil.rmtree(project_config_dir, ignore_errors=True)
+            remove_vars(env_path, list(env_vars.keys()))
+            for name in env_vars:
+                os.environ.pop(name, None)
+
+        def clear_busy() -> None:
+            global _busy, _active_workspace
+            _busy = False
+            _active_workspace = None
+
+        schedule(workspace, config_dir, atlas_fn, rollback, clear_busy)
 
         return JSONResponse(
             {

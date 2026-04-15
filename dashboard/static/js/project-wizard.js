@@ -189,6 +189,57 @@ const renderers = {
     mountChipInput(body.querySelector('#f-jira-labels'), d.trigger_labels, () => {});
     mountChipInput(body.querySelector('#f-jira-ignore'), d.ignore_labels, () => {});
   },
+  vcs(body) {
+    const d = state.data.vcs;
+    const e = state.errors;
+    const common = `
+      <div class="form-field">
+        <label>Provider</label>
+        <select id="f-vcs-provider">
+          <option value="github" ${d.provider === 'github' ? 'selected' : ''}>GitHub</option>
+          <option value="gitlab" ${d.provider === 'gitlab' ? 'selected' : ''}>GitLab</option>
+        </select>
+      </div>
+    `;
+    const github = `
+      <div class="form-field"><label>Owner</label><input id="f-gh-owner" value="${d.github.owner || ''}" />${e.owner ? `<span class="error">${e.owner}</span>` : ''}</div>
+      <div class="form-field"><label>Repo</label><input id="f-gh-repo" value="${d.github.repo || ''}" />${e.repo ? `<span class="error">${e.repo}</span>` : ''}</div>
+      <div class="form-field"><label>Token</label><input type="password" id="f-gh-token" value="${d.github.token || ''}" />${e.token ? `<span class="error">${e.token}</span>` : ''}</div>
+      <div class="form-field"><label>Default branch</label><input id="f-gh-branch" value="${d.github.default_branch}" /></div>
+      <div class="form-field"><label>Branch prefix</label><input id="f-gh-prefix" value="${d.github.branch_prefix}" /></div>
+      <div class="form-field"><label>Merge method</label>
+        <select id="f-gh-merge">
+          <option value="squash" ${d.github.merge_method === 'squash' ? 'selected' : ''}>squash</option>
+          <option value="merge" ${d.github.merge_method === 'merge' ? 'selected' : ''}>merge</option>
+          <option value="rebase" ${d.github.merge_method === 'rebase' ? 'selected' : ''}>rebase</option>
+        </select>
+      </div>
+    `;
+    const gitlab = `
+      <div class="form-field"><label>GitLab URL</label><input id="f-gl-url" value="${d.gitlab.url || 'https://gitlab.com'}" /></div>
+      <div class="form-field"><label>Project ID (numeric)</label><input id="f-gl-pid" value="${d.gitlab.project_id || ''}" /></div>
+      <div class="form-field"><label>Token</label><input type="password" id="f-gl-token" value="${d.gitlab.token || ''}" /></div>
+      <div class="form-field"><label>Default branch</label><input id="f-gl-branch" value="${d.gitlab.default_branch || 'develop'}" /></div>
+      <div class="form-field"><label>Branch prefix</label><input id="f-gl-prefix" value="${d.gitlab.branch_prefix || 'feature'}" /></div>
+    `;
+    body.innerHTML = `<h3>VCS</h3>${common}<div id="vcs-provider-fields">${d.provider === 'github' ? github : gitlab}</div>`;
+    const rerender = () => renderers.vcs(body);
+    body.querySelector('#f-vcs-provider').onchange = (ev) => { d.provider = ev.target.value; rerender(); };
+    if (d.provider === 'github') {
+      body.querySelector('#f-gh-owner').oninput = (ev) => d.github.owner = ev.target.value;
+      body.querySelector('#f-gh-repo').oninput = (ev) => d.github.repo = ev.target.value;
+      body.querySelector('#f-gh-token').oninput = (ev) => d.github.token = ev.target.value;
+      body.querySelector('#f-gh-branch').oninput = (ev) => d.github.default_branch = ev.target.value;
+      body.querySelector('#f-gh-prefix').oninput = (ev) => d.github.branch_prefix = ev.target.value;
+      body.querySelector('#f-gh-merge').onchange = (ev) => d.github.merge_method = ev.target.value;
+    } else {
+      body.querySelector('#f-gl-url').oninput = (ev) => d.gitlab.url = ev.target.value;
+      body.querySelector('#f-gl-pid').oninput = (ev) => d.gitlab.project_id = ev.target.value;
+      body.querySelector('#f-gl-token').oninput = (ev) => d.gitlab.token = ev.target.value;
+      body.querySelector('#f-gl-branch').oninput = (ev) => d.gitlab.default_branch = ev.target.value;
+      body.querySelector('#f-gl-prefix').oninput = (ev) => d.gitlab.branch_prefix = ev.target.value;
+    }
+  },
 };
 
 const validators = {
@@ -208,6 +259,19 @@ const validators = {
     if (!d.project_key) errors.project_key = 'required';
     if (!d.token) errors.token = 'required';
     if (!d.trigger_labels || d.trigger_labels.length === 0) errors.trigger_labels = 'at least one label required';
+    return errors;
+  },
+  vcs(d) {
+    const errors = {};
+    if (d.provider === 'github') {
+      if (!d.github.owner) errors.owner = 'required';
+      if (!d.github.repo) errors.repo = 'required';
+      if (!d.github.token) errors.token = 'required';
+    } else {
+      if (!d.gitlab.url) errors.url = 'required';
+      if (!d.gitlab.project_id) errors.project_id = 'required';
+      if (!d.gitlab.token) errors.token = 'required';
+    }
     return errors;
   },
 };

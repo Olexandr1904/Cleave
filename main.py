@@ -203,7 +203,7 @@ def main(argv: list[str] | None = None) -> int:
             email=jira_cfg.email,
             token=jira_cfg.token,
             project_key=jira_cfg.project_key,
-            trigger_label=jira_cfg.trigger_label,
+            trigger_labels=jira_cfg.trigger_labels,
             ignore_labels=jira_cfg.ignore_labels,
             statuses={
                 "todo": jira_cfg.statuses.todo,

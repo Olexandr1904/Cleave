@@ -90,9 +90,54 @@ async function onNext() {
   }
 }
 
-// Step renderers and validators are populated in Tasks 17–22.
-const renderers = {};
-const validators = {};
+const SLUG_RE = /^[a-z][a-z0-9-]{0,62}$/;
+
+const renderers = {
+  identity(body) {
+    const d = state.data.identity;
+    const e = state.errors;
+    body.innerHTML = `
+      <h3>Identity</h3>
+      <div class="form-field">
+        <label>Project ID (slug)</label>
+        <input id="f-project-id" value="${d.project_id || ''}" placeholder="acme" />
+        ${e.project_id ? `<span class="error">${e.project_id}</span>` : ''}
+      </div>
+      <div class="form-field">
+        <label>Display name</label>
+        <input id="f-display-name" value="${d.display_name || ''}" placeholder="Acme Corp" />
+        ${e.display_name ? `<span class="error">${e.display_name}</span>` : ''}
+      </div>
+      <div class="form-field">
+        <label>Repo ID (slug)</label>
+        <input id="f-repo-id" value="${d.repo_id || ''}" placeholder="acme-app" />
+        ${e.repo_id ? `<span class="error">${e.repo_id}</span>` : ''}
+      </div>
+      <div class="form-field">
+        <label>Repo display name</label>
+        <input id="f-repo-display-name" value="${d.repo_display_name || ''}" />
+        ${e.repo_display_name ? `<span class="error">${e.repo_display_name}</span>` : ''}
+      </div>
+    `;
+    body.querySelector('#f-project-id').oninput = (ev) => d.project_id = ev.target.value;
+    body.querySelector('#f-display-name').oninput = (ev) => d.display_name = ev.target.value;
+    body.querySelector('#f-repo-id').oninput = (ev) => d.repo_id = ev.target.value;
+    body.querySelector('#f-repo-display-name').oninput = (ev) => d.repo_display_name = ev.target.value;
+  },
+};
+
+const validators = {
+  identity(d) {
+    const errors = {};
+    if (!d.project_id) errors.project_id = 'required';
+    else if (!SLUG_RE.test(d.project_id)) errors.project_id = 'must be a lowercase slug';
+    if (!d.display_name) errors.display_name = 'required';
+    if (!d.repo_id) errors.repo_id = 'required';
+    else if (!SLUG_RE.test(d.repo_id)) errors.repo_id = 'must be a lowercase slug';
+    if (!d.repo_display_name) errors.repo_display_name = 'required';
+    return errors;
+  },
+};
 
 async function submit() {
   const payload = buildPayload();

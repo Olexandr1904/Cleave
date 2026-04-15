@@ -26,6 +26,7 @@ Local web dashboard providing real-time visibility into the Sickle pipeline. Sho
 - FR13: External links on ticket detail (Jira, repo, PR — extensible to CI/CD)
 - FR14: URL hash routing so refresh preserves view (board/ticket/eventlog)
 - FR15: Pipeline bar highlights `previous_state` for off-pipeline states (BLOCKED, FAILED, MANUAL_CONTROL, AWAITING_APPROVAL)
+- FR16: Per-project health panel (Jira, vcs, git identity, git remote) with fix hints
 
 ## Technical Approach
 
@@ -69,6 +70,8 @@ Local web dashboard providing real-time visibility into the Sickle pipeline. Sho
 - [x] Ticket detail shows Jira/repo/PR links derived from project config
 - [x] URL hash routing preserves current view across page refresh
 - [x] Off-pipeline states render correctly on the pipeline bar via `previous_state`
+- [x] Dashboard shows a health strip on the board; red/yellow expands with fix hints; refresh button works
+- [x] Stage verifier transitions workspace to BLOCKED when a stage produces no mechanical effect
 
 ## Change Log
 
@@ -84,3 +87,4 @@ Local web dashboard providing real-time visibility into the Sickle pipeline. Sho
 | 2026-04-14 | External links (Jira, repo, PR) on ticket detail; threaded `projects` through `create_app` |
 | 2026-04-15 | Await dashboard uvicorn task on daemon shutdown (5s timeout, then cancel) so it exits cleanly |
 | 2026-04-15 | Warm health-check cache at startup so first `/api/projects/health` request is instant |
+| 2026-04-15 | Project health strip + stage verifier; prevents silent drift to AWAITING_APPROVAL when agent can't commit |

@@ -16,7 +16,7 @@ def adapter():
         email="test@example.com",
         token="fake-token",
         project_key="TEST",
-        trigger_label="ai-ready",
+        trigger_labels=["ai-ready"],
         ignore_labels=["blocked"],
     )
 
@@ -131,3 +131,17 @@ class TestJiraRetry:
 
         with pytest.raises(httpx.HTTPStatusError):
             await adapter.get_ticket("TEST-123")
+
+
+def test_build_jql_ands_multiple_trigger_labels():
+    adapter = JiraAdapter(
+        url="https://example.atlassian.net",
+        email="bot@example.com",
+        token="tok",
+        project_key="ACME",
+        trigger_labels=["ai-pipeline", "acme-mobile-android"],
+    )
+    jql = adapter._build_todo_jql()
+    assert 'labels = "ai-pipeline"' in jql
+    assert 'labels = "acme-mobile-android"' in jql
+    assert jql.count("AND") >= 3  # project AND label1 AND label2 AND status

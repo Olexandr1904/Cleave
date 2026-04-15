@@ -25,13 +25,13 @@ class JiraAdapter(TrackerInterface):
         email: str,
         token: str,
         project_key: str,
-        trigger_label: str = "ai-ready",
+        trigger_labels: list[str] | None = None,
         ignore_labels: list[str] | None = None,
         statuses: dict[str, str] | None = None,
     ) -> None:
         self._url = url.rstrip("/")
         self._project_key = project_key
-        self._trigger_label = trigger_label
+        self._trigger_labels = trigger_labels or ["ai-pipeline"]
         self._ignore_labels = ignore_labels or []
         self._statuses = statuses or {
             "todo": "To Do",
@@ -75,14 +75,17 @@ class JiraAdapter(TrackerInterface):
                     )
         raise last_error  # type: ignore[misc]
 
-    def _build_jql(self) -> str:
+    def _build_todo_jql(self) -> str:
         """Build JQL query from config."""
-        ignore = ", ".join(f'"{l}"' for l in self._ignore_labels)
+        label_clauses = " AND ".join(
+            f'labels = "{l}"' for l in self._trigger_labels
+        )
         jql = (
             f'project = {self._project_key} '
-            f'AND labels = "{self._trigger_label}" '
+            f'AND {label_clauses} '
             f'AND status = "{self._statuses["todo"]}"'
         )
+        ignore = ", ".join(f'"{l}"' for l in self._ignore_labels)
         if ignore:
             jql += f" AND labels NOT IN ({ignore})"
         jql += " ORDER BY priority ASC, created ASC"
@@ -128,7 +131,7 @@ class JiraAdapter(TrackerInterface):
 
     async def poll_tickets(self) -> list[TicketData]:
         """Fetch tickets matching trigger criteria."""
-        jql = self._build_jql()
+        jql = self._build_todo_jql()
         data = await self._request(
             "POST", "/search/jql",
             json={"jql": jql, "maxResults": 50},

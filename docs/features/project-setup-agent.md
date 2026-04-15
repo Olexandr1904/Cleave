@@ -84,3 +84,4 @@ A BMAD-style agent (`project-setup-agent`, codename Atlas) that onboards new pro
 | 2026-04-09 | Task 9 verification: full unit suite 425/425 passing; agent registry discovers `project-setup-agent` with 9 tools; tool definitions complete (9/9); feature complete |
 | 2026-04-09 | Example-update: replaced real deployment identifiers in the Atlas prompt's example project ID and display name with generic placeholders (part of repo public-release scrub) |
 | 2026-04-15 | Task 10 implemented: Atlas orchestrator-mode flow in prompt; added new section "Operation: Add (orchestrator mode)" with non-interactive dashboard-driven setup; updated trigger_label references to trigger_labels (plural) in CLI-mode and YAML skeleton |
+| 2026-04-15 | Task 10 follow-up: restored `{trigger_labels}` placeholder in project.yaml skeleton (was inadvertently hardcoded to `["ai-pipeline"]`) |

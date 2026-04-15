@@ -271,6 +271,42 @@ const renderers = {
     body.querySelector('#f-ex-protected').oninput = (ev) => d.protected_files = ev.target.value.split(',').map(s => s.trim()).filter(Boolean);
     body.querySelector('#f-ex-max').oninput = (ev) => d.max_concurrent_tickets = ev.target.value ? parseInt(ev.target.value, 10) : null;
   },
+  review(body) {
+    const d = state.data;
+    const prefix = (d.identity.project_id || '').toUpperCase().replace(/-/g, '_');
+    const tokenHint = (name) => `<code>${prefix}_${name}</code>`;
+    const vcsProvider = d.vcs.provider;
+    const vcsBlock = vcsProvider === 'github'
+      ? `<li>Owner/repo: ${d.vcs.github.owner}/${d.vcs.github.repo}</li>
+         <li>Token: •••• → will be saved to ${tokenHint('GITHUB_TOKEN')}</li>`
+      : `<li>URL: ${d.vcs.gitlab.url}</li>
+         <li>Project ID: ${d.vcs.gitlab.project_id}</li>
+         <li>Token: •••• → will be saved to ${tokenHint('GITLAB_TOKEN')}</li>`;
+    body.innerHTML = `
+      <h3>Review</h3>
+      <h4>Identity</h4>
+      <ul>
+        <li>project_id: ${d.identity.project_id}</li>
+        <li>display_name: ${d.identity.display_name}</li>
+        <li>repo_id: ${d.identity.repo_id}</li>
+      </ul>
+      <h4>Jira</h4>
+      <ul>
+        <li>URL: ${d.jira.url}</li>
+        <li>Project key: ${d.jira.project_key}</li>
+        <li>Trigger labels: ${d.jira.trigger_labels.join(', ')}</li>
+        <li>Token: •••• → will be saved to ${tokenHint('JIRA_TOKEN')}</li>
+      </ul>
+      <h4>VCS (${vcsProvider})</h4>
+      <ul>${vcsBlock}</ul>
+      <h4>Quality</h4>
+      <ul>
+        <li>lint: ${d.quality.lint.command || '—'}</li>
+        <li>test: ${d.quality.test.command || '—'}</li>
+        <li>build: ${d.quality.build.command || '—'}</li>
+      </ul>
+    `;
+  },
 };
 
 const validators = {
@@ -307,6 +343,7 @@ const validators = {
   },
   quality() { return {}; },
   extras() { return {}; },
+  review() { return {}; },
 };
 
 async function submit() {
@@ -325,8 +362,17 @@ async function submit() {
 }
 
 function buildPayload() {
-  // Assembled in Task 21 — this stub lets tests import the module.
-  return state.data;
+  const d = state.data;
+  const vcs = { provider: d.vcs.provider };
+  if (d.vcs.provider === 'github') vcs.github = { ...d.vcs.github };
+  else vcs.gitlab = { ...d.vcs.gitlab };
+  return {
+    identity: { ...d.identity },
+    jira: { ...d.jira, trigger_labels: [...d.jira.trigger_labels], ignore_labels: [...d.jira.ignore_labels] },
+    vcs,
+    quality: { ...d.quality },
+    extras: { ...d.extras, protected_files: [...d.extras.protected_files] },
+  };
 }
 
 function renderSubmitError(status, body) {
@@ -334,8 +380,53 @@ function renderSubmitError(status, body) {
   els.body.innerHTML = `<div class="status-panel failed"><p>Error ${status}: ${JSON.stringify(body)}</p></div>`;
 }
 
-function pollStatus() {
-  // Populated in Task 21.
+async function pollStatus() {
+  const { workspace } = state.running;
+  els.body.innerHTML = `
+    <div class="status-panel">
+      <h3>Setting up…</h3>
+      <div>
+        <span class="status-step" id="st-validating">VALIDATING</span>
+        <span class="status-step" id="st-writing">WRITING</span>
+        <span class="status-step" id="st-done">DONE</span>
+      </div>
+      <p id="st-message"></p>
+    </div>
+  `;
+  const project = workspace.split('/')[0];
+  let poll;
+  const tick = async () => {
+    const res = await fetch(`/api/workspaces?project_id=${project}`);
+    const body = await res.json();
+    const entry = (body.workspaces || []).find(
+      (w) => w.workspace_root && w.workspace_root.endsWith('/setup')
+        && w.company_id === project,
+    );
+    if (!entry) return;
+    const st = entry.current_state;
+    const active = (id, on) => {
+      const el = document.getElementById(id);
+      if (el) el.classList.toggle('active', on);
+    };
+    const done = (id, on) => {
+      const el = document.getElementById(id);
+      if (el) el.classList.toggle('done', on);
+    };
+    if (st === 'VALIDATING') { active('st-validating', true); }
+    if (st === 'WRITING') { done('st-validating', true); active('st-writing', true); }
+    if (st === 'SETUP_DONE') {
+      done('st-validating', true); done('st-writing', true); done('st-done', true);
+      clearInterval(poll);
+      setTimeout(closeWizard, 3000);
+      window.dispatchEvent(new CustomEvent('sickle:projects-changed'));
+    }
+    if (st === 'SETUP_FAILED') {
+      clearInterval(poll);
+      await renderFailure(entry);
+    }
+  };
+  poll = setInterval(tick, 2000);
+  tick();
 }
 
 // Expose for Task 17+ module additions.

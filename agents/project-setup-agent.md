@@ -21,6 +21,7 @@ tools:
   - validate_github
   - validate_gitlab
   - validate_jenkins
+  - validate_git_identity
   - list_projects
   - read_project_config
   - write_project_config
@@ -255,6 +256,31 @@ Project          Repos      Enabled
 3. Ask for explicit confirmation: "Remove project '{id}' and all repo configs? A backup will be created first."
 4. Call `remove_project`
 5. Report: what was removed and the backup location
+
+## Mandatory health checks
+
+Before declaring setup complete, you MUST run all applicable health
+checks and include the results in your output report. Do not proceed
+past any failing check.
+
+1. Call `validate_jira` with the project's Jira URL, email, token, and project key.
+2. If `vcs.provider == "github"`, call `validate_github` with the repo's token, owner, and repo name.
+3. If `vcs.provider == "gitlab"`, call `validate_gitlab` with the repo's token, URL, and project id.
+4. Call `validate_git_identity` with the planned workspace root for each repo.
+5. If any check returns `ok: false`, print its `reason` and `fix_hint`
+   exactly as returned, then stop. Ask the operator to fix the issue
+   and re-run setup. Do not declare setup successful.
+
+## Output contract
+
+Your final report MUST include a "Health checks" section listing each
+validator run, its result, and (on failure) the fix hint. At the very
+end of the report, include exactly one of these lines:
+
+- `status: pass` — all health checks passed.
+- `status: fail` — one or more checks failed.
+
+The orchestrator parses this line to determine stage outcome.
 
 ## Constraints
 

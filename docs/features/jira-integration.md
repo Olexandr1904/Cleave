@@ -2,7 +2,7 @@
 
 **Status:** Planned
 **Created:** 2026-04-07
-**Updated:** 2026-04-07
+**Updated:** 2026-04-15
 **Author:** Oleksandr Brazhenko
 
 ## Description

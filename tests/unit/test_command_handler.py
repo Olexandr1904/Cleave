@@ -264,3 +264,69 @@ class TestRetryDeferred:
         )
         await handler.handle_message("resume T-D", "12345")
         ws.transition.assert_called_once_with("push")
+
+
+def test_set_tracker_attaches_after_init():
+    from unittest.mock import MagicMock
+    from integrations.telegram.command_handler import CommandHandler
+
+    handler = CommandHandler(
+        intent_parser=MagicMock(),
+        notifier=MagicMock(),
+        mode_handler=MagicMock(),
+        active_workspaces_fn=lambda: [],
+        jira_base_url="",
+        started_at="2026-04-16T00:00:00Z",
+        tracker=None,
+        analyze_callback=MagicMock(),
+        recent_completions_fn=lambda: [],
+        allowed_chat_ids=None,
+        event_bus=None,
+    )
+    assert handler._tracker is None
+
+    new_tracker = MagicMock()
+    handler.set_tracker(new_tracker)
+    assert handler._tracker is new_tracker
+
+
+def test_add_allowed_chat_id_admits_new_chat():
+    from unittest.mock import MagicMock
+    from integrations.telegram.command_handler import CommandHandler
+
+    handler = CommandHandler(
+        intent_parser=MagicMock(),
+        notifier=MagicMock(),
+        mode_handler=MagicMock(),
+        active_workspaces_fn=lambda: [],
+        jira_base_url="",
+        started_at="2026-04-16T00:00:00Z",
+        tracker=MagicMock(),
+        analyze_callback=MagicMock(),
+        recent_completions_fn=lambda: [],
+        allowed_chat_ids={"1001"},
+        event_bus=None,
+    )
+    handler.add_allowed_chat_id("2002")
+    assert handler._allowed_chat_ids == {"1001", "2002"}
+
+
+def test_add_allowed_chat_id_noop_when_allowlist_is_none():
+    from unittest.mock import MagicMock
+    from integrations.telegram.command_handler import CommandHandler
+
+    handler = CommandHandler(
+        intent_parser=MagicMock(),
+        notifier=MagicMock(),
+        mode_handler=MagicMock(),
+        active_workspaces_fn=lambda: [],
+        jira_base_url="",
+        started_at="2026-04-16T00:00:00Z",
+        tracker=MagicMock(),
+        analyze_callback=MagicMock(),
+        recent_completions_fn=lambda: [],
+        allowed_chat_ids=None,
+        event_bus=None,
+    )
+    handler.add_allowed_chat_id("2002")
+    assert handler._allowed_chat_ids is None

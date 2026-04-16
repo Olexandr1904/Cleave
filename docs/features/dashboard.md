@@ -88,3 +88,7 @@ Local web dashboard providing real-time visibility into the Sickle pipeline. Sho
 | 2026-04-15 | Await dashboard uvicorn task on daemon shutdown (5s timeout, then cancel) so it exits cleanly |
 | 2026-04-15 | Warm health-check cache at startup so first `/api/projects/health` request is instant |
 | 2026-04-15 | Project health strip + stage verifier; prevents silent drift to AWAITING_APPROVAL when agent can't commit |
+| 2026-04-16 | main.py no longer early-exits when projects == {}; dashboard starts so the wizard is reachable |
+| 2026-04-16 | Wire on_project_added closure into Orchestrator: hot-reload builds GitHub adapters, attaches Jira tracker, and extends Telegram allowlist when a new project is discovered at runtime |
+| 2026-04-16 | Wizard kicks orchestrator.rescan_projects() immediately after Atlas writes project.yaml, rather than waiting for the next poll tick |
+| 2026-04-16 | Integration test: wizard POST → stub Atlas writes YAML → orchestrator.rescan_projects called → project merged into live dict |

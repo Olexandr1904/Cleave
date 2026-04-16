@@ -50,3 +50,4 @@ Each ticket gets a fully isolated workspace via a fresh `git clone`. No ticket s
 | Date | Description |
 |------|-------------|
 | 2026-04-07 | Initial draft — seeded from PRD and architecture docs |
+| 2026-04-16 | Fix signature drift in test_e2e_dry_run.py: align WorkspaceState construction and state assertions with current dataclass fields (company_id, current_state) and state names (ANALYSIS, DEV, SCOPE_CHECK) |

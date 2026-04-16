@@ -36,17 +36,17 @@ def mock_llm():
 def workspace(tmp_path):
     ws_root = tmp_path / "test-ws"
     ws_root.mkdir()
-    (ws_root / "context").mkdir()
+    (ws_root / "meta").mkdir()
+    (ws_root / "reports").mkdir()
     (ws_root / "logs").mkdir()
-    (ws_root / "repo").mkdir()
+    (ws_root / "source").mkdir()
 
     state = WorkspaceState(
         ticket_id="DRY-1",
-        project_id="test-project",
+        company_id="test-project",
         repo_id="test-repo",
         workspace_root=str(ws_root),
-        current_stage="pm",
-        status="pending",
+        current_state="ANALYSIS",
     )
     ws = Workspace(str(ws_root), state)
     ws.save_state()
@@ -87,37 +87,37 @@ class TestE2EDryRun:
         """AC1: Dry run advances through stages without executing agents."""
         # Run one poll cycle
         await orchestrator.poll_cycle()
-        # In dry run, pm stage advances to ba
-        assert workspace.state.current_stage == "ba"
+        # In dry run, ANALYSIS stage advances to DEV
+        assert workspace.state.current_state == "DEV"
 
         # Run another cycle
         await orchestrator.poll_cycle()
-        assert workspace.state.current_stage == "dev"
+        assert workspace.state.current_state == "SCOPE_CHECK"
 
     async def test_dry_run_full_pipeline(self, orchestrator, workspace):
         """AC4: Pipeline completes all stages in dry run."""
-        stages_visited = [workspace.state.current_stage]
+        stages_visited = [workspace.state.current_state]
 
         # Run enough cycles to complete the pipeline
         for _ in range(20):
             await orchestrator.poll_cycle()
-            stage = workspace.state.current_stage
+            stage = workspace.state.current_state
             if stage not in stages_visited:
                 stages_visited.append(stage)
-            if workspace.state.status in ("completed", "failed"):
+            if workspace.state.current_state in ("DONE", "FAILED", "ARCHIVED"):
                 break
 
         # Should have visited multiple stages
         assert len(stages_visited) > 1
-        assert "pm" in stages_visited
-        assert "ba" in stages_visited
-        assert "dev" in stages_visited
+        assert "ANALYSIS" in stages_visited
+        assert "DEV" in stages_visited
+        assert "SCOPE_CHECK" in stages_visited
 
     async def test_dry_run_no_llm_calls(self, orchestrator, workspace, mock_llm):
         """AC1: Dry run does not call the LLM."""
         for _ in range(10):
             await orchestrator.poll_cycle()
-            if workspace.state.status in ("completed", "failed"):
+            if workspace.state.current_state in ("DONE", "FAILED", "ARCHIVED"):
                 break
 
         mock_llm.send_message.assert_not_called()
@@ -127,17 +127,17 @@ class TestE2EDryRun:
         # Create a second workspace
         ws2_root = tmp_path / "test-ws-2"
         ws2_root.mkdir()
-        (ws2_root / "context").mkdir()
+        (ws2_root / "meta").mkdir()
+        (ws2_root / "reports").mkdir()
         (ws2_root / "logs").mkdir()
-        (ws2_root / "repo").mkdir()
+        (ws2_root / "source").mkdir()
 
         state2 = WorkspaceState(
             ticket_id="DRY-2",
-            project_id="test-project",
+            company_id="test-project",
             repo_id="test-repo",
             workspace_root=str(ws2_root),
-            current_stage="pm",
-            status="pending",
+            current_state="ANALYSIS",
         )
         ws2 = Workspace(str(ws2_root), state2)
         ws2.save_state()
@@ -147,5 +147,5 @@ class TestE2EDryRun:
         # Both workspaces should advance independently
         await orchestrator.poll_cycle()
 
-        assert workspace.state.current_stage == "ba"
-        assert ws2.state.current_stage == "ba"
+        assert workspace.state.current_state == "DEV"
+        assert ws2.state.current_state == "DEV"

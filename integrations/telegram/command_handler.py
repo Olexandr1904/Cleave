@@ -56,6 +56,19 @@ class CommandHandler:
         """Called by orchestrator after each Jira poll."""
         self._last_poll_time = time.time()
 
+    def set_tracker(self, tracker) -> None:
+        """Attach a tracker after init (used by wizard hot-reload)."""
+        self._tracker = tracker
+
+    def add_allowed_chat_id(self, chat_id: str) -> None:
+        """Extend the chat allowlist with a new id.
+
+        No-op if the startup allowlist was None ('admit all' semantic preserved).
+        """
+        if self._allowed_chat_ids is None:
+            return
+        self._allowed_chat_ids.add(chat_id)
+
     async def _reply(self, chat_id: str, text: str, processing_msg_id: int | None) -> None:
         """Send response: edit the processing indicator if present, else send new."""
         if processing_msg_id and hasattr(self._notifier, "edit_message"):

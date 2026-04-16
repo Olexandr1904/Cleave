@@ -1,7 +1,7 @@
 # Zero-Project Boot and Hot-Reload After Wizard
 
 **Date:** 2026-04-16
-**Status:** Design
+**Status:** Design (rev2)
 **Author:** Oleksandr Brazhenko
 
 ## Problem
@@ -16,91 +16,92 @@ Both break the "zero-to-first-project, no terminal" onboarding the wizard was bu
 ## Goals
 
 - Daemon boots cleanly with zero configured projects; dashboard and wizard are reachable.
-- When Atlas completes successfully in the wizard flow, the newly-created project becomes live in-process: orchestrator polls its Jira, dashboard shows it in the project list, health strip runs its validators.
+- When Atlas completes successfully in the wizard flow, the newly-created project becomes live in-process within seconds: orchestrator polls its Jira, dashboard shows it, health strip runs its validators.
+- Hand-edited YAML under `config-live/projects/` is also picked up — no restart required.
 - No disruption to any in-flight workspace when a new project is added.
 
 ## Non-goals
 
-- Hot-reload for hand-edited YAML files (still requires restart — accepted by user).
-- Filesystem watcher on `config-live/` (deferred).
-- Hot-reload on project *deletion* or *disable* (out of scope for this pass).
+- Hot-reload on project *deletion* or *disable* (out of scope for this pass — orchestrator keeps polling removed projects until restart; low-risk, noisy logs at worst).
 - Hot-reload of `global.yaml` changes.
+- Filesystem watcher (`watchfiles`, inotify). Polling is sufficient.
 
 ## Architecture
 
-Two independent changes with one shared callback plumbing:
+Two independent changes:
 
 ### Change 1 — Boot with zero projects
 
 Drop the early return in [main.py:124-126](../../../main.py#L124). Replace the "Nothing to do" message with an informational log that the dashboard is starting so the wizard is reachable. Everything downstream already tolerates `projects == {}`:
 
 - `first_project = next(iter(projects.values()), None)` → `None`; Jira adapter init is gated on `if first_project and jira.url:`, so `tracker` stays `None`.
-- GitHub adapter loop `for proj_id, proj in projects.items():` → empty, `vcs` stays `None`, `github_adapters` stays `{}`.
+- GitHub adapter loop `for proj_id, proj in projects.items():` → empty, `vcs` stays `None`.
 - Telegram adapter is built from `global_config.telegram` (independent of projects).
 - Orchestrator accepts `tracker=None`; its [poll_cycle](../../../orchestrator/orchestrator.py#L266) already gates work on `if self._tracker and not is_manual:`.
 - `projects_health` endpoint already guards `if not projects: return {"projects": []}`.
 
-No code in `main.py` downstream of the early return fails on empty projects today — it just never runs.
+### Change 2 — Poll-driven config rescan, with wizard kick
 
-### Change 2 — Hot-reload on Atlas success
+**Discovery at poll time.** At the top of each `poll_cycle()`, orchestrator calls a new `_rescan_projects_from_disk()`:
+1. Re-runs `load_config(self._config_dir)` (catch `ConfigError` → log at `WARNING`, skip rescan for this cycle).
+2. Diffs the loaded keys against `self._projects`.
+3. For each **new** project id, stores the `LoadedProject` in `self._projects` and fires a new-project hook (see below).
+4. Existing projects are left untouched — this pass intentionally does not handle config edits for already-loaded projects (out of scope).
 
-A single callback, `on_project_added(project_id: str)`, threaded through:
+**Immediate kick from wizard.** After Atlas success in the wizard flow, the create route calls `orchestrator.rescan_projects()` (a public wrapper for `_rescan_projects_from_disk`). Latency from "Atlas done" to "project live" drops from up to `poll_interval_seconds` (default 300s) to effectively zero — no waiting for the next poll tick.
 
-```
-main.py
-  └─ builds on_project_added closure (captures projects dict, orchestrator,
-     agent_runtime, command_handler, event_bus, global_config, args.config)
-  └─ create_app(..., on_project_added=callback)
-      └─ project_create.create_route_handler(..., on_project_added=callback)
-          └─ called from the existing Atlas on_complete hook (same place
-             that clears the _busy flag today)
-```
+**New-project hook.** Building adapters is main.py's job (that's where the startup path builds them today). Orchestrator does not own adapter construction. At construction time, `main.py` passes an `on_project_added: Callable[[str, LoadedProject], None] | None = None` kwarg to `Orchestrator`. When rescan finds a new project, orchestrator invokes the hook for each.
 
-The closure performs, in order:
-1. Re-run `load_config(args.config, project_filter=project_id)` to get the single new `LoadedProject`.
-2. Mutate the shared `projects` dict in place: `projects[project_id] = new_project`. Mutation (not rebind) is load-bearing — `create_app` and `Orchestrator.__init__` both captured this dict by reference.
-3. For each repo in the new project, build its VCS adapter (GitHub or GitLab) and call `orchestrator.register_repo_vcs(repo_id, adapter, repo_cfg)` (existing method).
-4. If `orchestrator._tracker is None` *and* the new project has a Jira URL, build a `JiraAdapter` from it and call a new `orchestrator.set_tracker(adapter)`. If `command_handler` exists (it only does when a Telegram notifier was configured at startup), backfill its tracker via a new setter so `/status` works against the new tracker.
-5. If `command_handler` exists and the new project has a Telegram `default_chat_id`, call a new `command_handler.add_allowed_chat_id(chat_id)` so its operators can drive the bot. If the startup allowlist was `None` ("admit all"), this call is a no-op to preserve that semantic.
-6. Emit `project_loaded` events for each `(project_id, repo_id)` so the dashboard board view picks them up.
-7. Log at `INFO`: `project <id> added and live (no restart required)`.
-
-Step order matters: register VCS before setting tracker, because the orchestrator's next poll cycle will want both.
+The hook, defined in `main.py`, does:
+1. For each repo in the new project, build its VCS adapter (GitHub or GitLab) and call `orchestrator.register_repo_vcs(repo_id, adapter, repo_cfg)` (existing method).
+2. If `orchestrator._tracker is None` *and* the new project has a Jira URL, build a `JiraAdapter` and call a new `orchestrator.set_tracker(adapter)`. If `command_handler` exists (only when a Telegram notifier was configured at startup), backfill its tracker via a new setter.
+3. If `command_handler` exists and the new project has a Telegram `default_chat_id`, call a new `command_handler.add_allowed_chat_id(chat_id)`. If the startup allowlist was `None` ("admit all"), this call is a no-op.
+4. Emit `project_loaded` events for each `(project_id, repo_id)` so the dashboard board view picks it up.
+5. Log at `INFO`: `project <id> added and live (no restart required)`.
 
 ### New orchestrator API
 
-Two new methods on `Orchestrator`:
+Three additions:
 
 ```python
-def set_tracker(self, tracker: TrackerProtocol) -> None:
+def __init__(self, ..., config_dir: str, on_project_added: Callable[[str, LoadedProject], None] | None = None) -> None:
+    # config_dir and the hook are stored on self
+
+def set_tracker(self, tracker: TrackerInterface) -> None:
     """Attach a tracker after startup. Idempotent; last writer wins."""
     self._tracker = tracker
 
-def add_project(self, project_id: str, project: LoadedProject) -> None:
-    """Merge a newly-loaded project into the in-memory map.
-
-    Called from main.py's on_project_added callback. Does NOT own VCS adapter
-    registration — caller handles that via register_repo_vcs() for parity
-    with startup wiring.
+async def rescan_projects(self) -> list[str]:
+    """Re-read config from disk and add any new projects.
+    Returns the list of newly-added project ids.
+    Public wrapper — called from the wizard create route for instant kick.
     """
-    self._projects[project_id] = project
+    return await self._rescan_projects_from_disk()
 ```
 
-Rationale for two methods vs one: `register_repo_vcs` is already the startup path's own method; reusing it from the callback keeps adapter-construction logic in `main.py` (where it lives today) rather than pushing adapter knowledge into the orchestrator.
+Plus a private `_rescan_projects_from_disk()` called at the top of `poll_cycle()`.
 
 ### New command_handler API
 
 ```python
-def set_tracker(self, tracker: TrackerProtocol) -> None: ...
+def set_tracker(self, tracker) -> None: ...
 def add_allowed_chat_id(self, chat_id: str) -> None: ...  # no-op if _allowed_chat_ids is None
 ```
 
 Both are trivial mutators on the existing `_tracker` and `_allowed_chat_ids` attributes.
 
+### Wizard route change
+
+`dashboard/project_create.py`'s route handler gains one new kwarg, `orchestrator` (the same Orchestrator already passed to `create_app`). Inside the existing `on_complete` callback (which fires in both success and failure paths), we conditionally schedule `await orchestrator.rescan_projects()` *only* on success.
+
+But: the current `on_complete` is called from `atlas_runner.run_supervised`'s `finally` block — it doesn't know success vs failure. Simplest fix: check for the presence of `project_config_dir / "project.yaml"` on disk. If it exists (atlas wrote it) → success → kick rescan. If not → failure → no rescan needed. This keeps `atlas_runner` untouched.
+
+Alternative: pass a success-only callback into `atlas_runner.schedule()`. Rejected — adds 30 lines of plumbing for the sake of one `if path.exists():` check.
+
 ## Data flow — wizard → live project
 
 ```
-Browser                 Dashboard                 Atlas                 Daemon core
+Browser                 Dashboard                 Atlas                 Orchestrator
    │                       │                        │                        │
    │ POST /api/projects/   │                        │                        │
    │ create  ──────────────▶                        │                        │
@@ -112,24 +113,30 @@ Browser                 Dashboard                 Atlas                 Daemon c
    │◀──────────────────────│                        │ write project.yaml     │
    │                       │                        │ write repos/*.yaml     │
    │                       │ on_complete ◀──────────│                        │
-   │                       │   clear _busy          │                        │
-   │                       │   on_project_added(id) ────────────────────────▶│
-   │                       │                        │   load_config(filter=id)
-   │                       │                        │   projects[id] = proj
-   │                       │                        │   register VCS adapters
-   │                       │                        │   set_tracker if None
-   │                       │                        │   emit project_loaded
+   │                       │   clear_busy           │                        │
+   │                       │   if project.yaml      │                        │
+   │                       │   exists:              │                        │
+   │                       │     rescan_projects() ────────────────────────▶│
+   │                       │                        │  load_config(dir)      │
+   │                       │                        │  diff vs _projects     │
+   │                       │                        │  add new project       │
+   │                       │                        │  invoke hook(id, proj) │
+   │                       │                        │     ↓ callback in main.py
+   │                       │                        │     register VCS       │
+   │                       │                        │     set_tracker if None│
+   │                       │                        │     emit events        │
    │ poll /api/workspaces  │                        │                        │
    │ (existing)  ──────────▶                        │                        │
    │ new workspace visible │                        │                        │
 ```
 
+Same flow works when a human edits YAML directly — on the next `poll_cycle` tick (≤300s), orchestrator picks it up.
+
 ## Error handling
 
-- `load_config(project_filter=...)` raises `ConfigError` — catch, log at `ERROR`, emit `event: project_added_failed` with the exception string, do *not* mutate state. The on-disk YAML exists but the project is not loaded; the user can retry or restart. (Expected to be rare: Atlas validates before writing.)
-- Adapter construction (`JiraAdapter`, `GitHubAdapter`, `GitLabAdapter`) is pure I/O-free — unlikely to raise. If it does, catch per-adapter, log, emit event, continue with the rest.
-- `register_repo_vcs` is idempotent (`dict[repo_id] = ...`), safe to call even if the repo_id collided with an earlier one.
-- If `on_project_added` raises unexpectedly, the wizard success response still goes back to the browser (it's called after the POST returns). The user sees their project on disk but it's not live; log + event make this visible. On next restart it'll be picked up normally.
+- `load_config` raises `ConfigError` during rescan (e.g., YAML saved mid-edit): catch, log at `WARNING` with the project_id if derivable, skip this rescan. Next poll tick retries. No state mutated.
+- Hook raises during adapter construction: catch per-project, log at `ERROR`, emit `project_added_failed` event, leave the project in `_projects` but unregistered. On next rescan tick, the project is already in `_projects` so it's NOT re-added (the hook doesn't re-fire). Operator must restart to retry. This is an acceptable degradation for an unexpected adapter build failure.
+- `rescan_projects()` called from the wizard route when `config_dir / "projects" / project_id / "project.yaml"` is missing (atlas failed): not called at all — the existence check guards.
 
 ## Testing
 
@@ -137,50 +144,52 @@ Browser                 Dashboard                 Atlas                 Daemon c
 
 - `tests/unit/test_orchestrator_hot_reload.py` — **new file**
   - `test_set_tracker_attaches_after_init`
-  - `test_add_project_merges_into_projects_dict`
-  - `test_register_repo_vcs_after_add_project_is_polled_next_cycle` (uses existing orchestrator test fixtures)
+  - `test_set_tracker_replaces_existing`
+  - `test_rescan_adds_new_project_and_calls_hook` (monkeypatch `load_config` to return a new project; assert hook was called)
+  - `test_rescan_does_not_recall_hook_for_existing_project`
+  - `test_rescan_handles_config_error_gracefully` (load_config raises; rescan returns empty list; no state change)
+  - `test_rescan_called_at_top_of_poll_cycle` (mock `_rescan_projects_from_disk`, run one poll_cycle, assert it was awaited)
 
 - `tests/unit/test_command_handler.py` — **extend**
+  - `test_set_tracker_attaches_after_init`
   - `test_add_allowed_chat_id_admits_new_chat`
-  - `test_set_tracker_replaces_existing`
+  - `test_add_allowed_chat_id_noop_when_allowlist_is_none`
 
-- `tests/unit/test_main_startup.py` — **new file** (no `test_main.py` currently covers startup branching at this level; will be tiny)
-  - `test_main_runs_dashboard_with_zero_projects` — assert `main()` returns 0 via normal shutdown (SIGTERM) rather than the old "nothing to do" early exit. Uses the existing `global.yaml` fixture + empty projects dir.
+- `tests/unit/test_main_startup.py` — **new file**
+  - `test_main_runs_dashboard_with_zero_projects` — asserts `main()` proceeds past the zero-project check rather than early-exiting.
 
 ### Integration
 
-- `tests/integration/test_project_create_flow.py` — **extend** existing file
-  - `test_wizard_creates_project_and_daemon_picks_it_up_without_restart`:
-    1. Start the daemon with zero projects (using pytest fixture).
-    2. POST `/api/projects/create` with a stub Atlas function that writes valid YAML into `config-live/projects/<id>/`.
-    3. Await the `on_complete` promise.
-    4. Assert `GET /api/projects` now includes the new project.
-    5. Assert `orchestrator._projects` has the new entry and `orchestrator._tracker is not None`.
+- `tests/integration/test_project_create_flow.py` — **extend**
+  - `test_wizard_creates_project_and_rescan_makes_it_live`:
+    1. Build an Orchestrator + app with empty `projects` dict.
+    2. POST `/api/projects/create` with a stub Atlas fn that writes valid YAML.
+    3. After Atlas completes, assert `orchestrator._projects` contains the new id and the hook fired.
 
 ### Manual
 
-1. `rm -rf config-live/projects/*` (ensure empty)
-2. `./run.sh` — expect daemon stays up, dashboard binds `:8080`, prints "No projects configured — dashboard started for wizard use".
-3. Open browser, run wizard to completion against real Jira + GitHub.
-4. Without restarting, hit `/api/projects` — new project present.
-5. Within `poll_interval_seconds`, observe orchestrator poll log entry for the new Jira project.
+1. `rm -rf config-live/projects/*` (ensure empty).
+2. `./run.sh` — expect daemon stays up, dashboard binds `:8080`.
+3. Open browser, walk the wizard to completion.
+4. Without restarting, within a few seconds hit `/api/projects` — new project present.
+5. Within `poll_interval_seconds` of editing a YAML by hand, observe new project appears.
 
 ## File changes
 
 | File | Change | Est LOC |
 |------|--------|---------|
-| `main.py` | drop early return; build `on_project_added` closure; pass to `create_app` | +50 −3 |
-| `dashboard/web.py` | add `on_project_added` kwarg; plumb into `create_project_create_handler` | +4 |
-| `dashboard/project_create.py` | accept callback; call inside existing `on_complete` hook after `clear_busy` | +6 |
-| `orchestrator/orchestrator.py` | add `set_tracker` and `add_project` methods | +12 |
+| `main.py` | drop early return; add `on_project_added` hook closure; pass to Orchestrator; pre-declare `command_handler = None` | +40 −3 |
+| `orchestrator/orchestrator.py` | accept `config_dir` + `on_project_added`; add `set_tracker`, `rescan_projects`, `_rescan_projects_from_disk`; call rescan at top of `poll_cycle` | +40 |
 | `integrations/telegram/command_handler.py` | add `set_tracker` and `add_allowed_chat_id` | +8 |
-| `tests/unit/test_orchestrator_hot_reload.py` | new | +40 |
-| `tests/unit/test_main_startup.py` | new | +25 |
-| `tests/unit/test_command_handler.py` | extend | +15 |
-| `tests/integration/test_project_create_flow.py` | extend | +30 |
+| `dashboard/project_create.py` | accept `orchestrator` kwarg; after on_complete, if project.yaml exists schedule `rescan_projects()` | +15 |
+| `dashboard/web.py` | thread `orchestrator` into `build_create_route` (already has orchestrator in scope) | +2 |
+| `tests/unit/test_orchestrator_hot_reload.py` | new | +80 |
+| `tests/unit/test_main_startup.py` | new | +30 |
+| `tests/unit/test_command_handler.py` | extend | +20 |
+| `tests/integration/test_project_create_flow.py` | extend | +35 |
 
-Target: ≤200 LOC production + ≤110 LOC tests.
+Target: ≤110 LOC production + ≤165 LOC tests.
 
 ## Open questions
 
-None at design time. Any surprises during implementation get surfaced before code changes.
+None at design time.

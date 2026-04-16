@@ -1,3 +1,4 @@
+import asyncio
 import json
 from pathlib import Path
 
@@ -202,3 +203,196 @@ def test_busy_flag_returns_429(tmp_path):
     finally:
         pc._busy = False
         pc._active_workspace = None
+
+
+# ---------------------------------------------------------------------------
+# Helpers for the end-to-end integration test
+# ---------------------------------------------------------------------------
+
+_MINIMAL_GLOBAL_YAML_INT = """\
+telegram:
+  bot_token: ''
+  default_chat_id: ''
+claude:
+  api_key: ''
+  model: claude-sonnet-4-5
+workspaces:
+  base_dir: {ws}
+  max_age_days: 14
+  min_free_disk_gb: 0
+  max_workspace_size_gb: 2
+defaults:
+  poll_interval_seconds: 300
+  max_iterations: {{scope_guard: 1, fix: 1, qa: 1, dev: 1}}
+  max_parallel_tickets: 1
+  pr_comment_fetch_delay_minutes: 30
+logging:
+  level: WARNING
+  dir: {log}
+heartbeat:
+  enabled: false
+  interval_hours: 24
+operator:
+  role: ''
+  stack: []
+  preferences:
+    code_style: ''
+  rules: []
+"""
+
+_STUB_PROJECT_YAML = """\
+project:
+  id: "{pid}"
+  name: "Demo"
+  enabled: true
+jira:
+  url: "https://example.atlassian.net"
+  token: "stub"
+  email: "t@t"
+  project_key: "DEMO"
+  trigger_labels: ["ai-pipeline"]
+  ignore_labels: []
+  statuses:
+    todo: "To Do"
+    in_progress: "In Progress"
+    in_review: "In Review"
+    done: "Done"
+telegram:
+  bot_token: ""
+  default_chat_id: ""
+parallelism:
+  max_concurrent_tickets: 1
+defaults:
+  poll_interval_seconds: 300
+  max_iterations:
+    scope_guard: 1
+    fix: 1
+    qa: 1
+    dev: 1
+  pr_comment_fetch_delay_minutes: 30
+"""
+
+_STUB_REPO_YAML = """\
+repo:
+  id: "{rid}"
+  name: "Demo Repo"
+  enabled: true
+vcs:
+  provider: "github"
+  github:
+    token: "stub"
+    owner: "demo-org"
+    repo: "demo-repo"
+"""
+
+
+def _make_valid_payload(project_id: str, repo_id: str) -> dict:
+    return {
+        "identity": {
+            "project_id": project_id,
+            "display_name": "Demo",
+            "repo_id": repo_id,
+            "repo_display_name": "Demo Repo",
+        },
+        "jira": {
+            "url": "https://example.atlassian.net",
+            "project_key": "DEMO",
+            "email": "t@t",
+            "token": "stub",
+            "trigger_labels": ["ai-pipeline"],
+        },
+        "vcs": {
+            "provider": "github",
+            "github": {"token": "stub", "owner": "demo-org", "repo": "demo-repo"},
+        },
+    }
+
+
+# ---------------------------------------------------------------------------
+# End-to-end test
+# ---------------------------------------------------------------------------
+
+import pytest
+
+
+@pytest.mark.asyncio
+async def test_wizard_creates_project_and_rescan_makes_it_live(tmp_path):
+    """End-to-end: wizard POST → Atlas stub writes YAML → rescan adds project."""
+    from unittest.mock import MagicMock
+
+    from dashboard.event_store import EventStore
+    from dashboard.events import EventBus
+    from dashboard.web import create_app
+
+    cfg_dir = tmp_path / "config-live"
+    (cfg_dir / "projects").mkdir(parents=True)
+    (cfg_dir / "global.yaml").write_text(
+        _MINIMAL_GLOBAL_YAML_INT.format(
+            ws=tmp_path / "ws",
+            log=tmp_path / "log",
+            db=tmp_path / "events.db",
+        ),
+        encoding="utf-8",
+    )
+    ws_base = tmp_path / "ws"
+    ws_base.mkdir()
+
+    projects_dict: dict = {}
+    rescan_calls: list = []
+
+    async def fake_rescan():
+        rescan_calls.append(True)
+        # Mimic real rescan: load_config → diff → merge.
+        from config.config_loader import load_config
+        try:
+            _, loaded = load_config(str(cfg_dir))
+        except Exception:
+            return []
+        added = []
+        for pid, proj in loaded.items():
+            if pid not in projects_dict:
+                projects_dict[pid] = proj
+                added.append(pid)
+        return added
+
+    orchestrator = MagicMock()
+    orchestrator.rescan_projects = fake_rescan
+
+    async def stub_atlas(setup_ws, cfg):
+        pid = setup_ws.project_id
+        rid = setup_ws.repo_id
+        pdir = cfg / "projects" / pid
+        pdir.mkdir(parents=True, exist_ok=True)
+        (pdir / "project.yaml").write_text(
+            _STUB_PROJECT_YAML.format(pid=pid), encoding="utf-8",
+        )
+        (pdir / "repos").mkdir(exist_ok=True)
+        (pdir / "repos" / f"{rid}.yaml").write_text(
+            _STUB_REPO_YAML.format(rid=rid), encoding="utf-8",
+        )
+
+    bus = EventBus()
+    store = EventStore(str(tmp_path / "events.db"))
+    await store.initialize()
+
+    app = create_app(
+        bus, store,
+        workspace_base_dir=str(ws_base),
+        orchestrator=orchestrator,
+        projects=projects_dict,
+        config_dir=str(cfg_dir),
+        atlas_fn=stub_atlas,
+        env_path=str(tmp_path / ".env"),
+    )
+
+    with TestClient(app) as client:
+        resp = client.post("/api/projects/create", json=_make_valid_payload("demo", "main"))
+    assert resp.status_code == 202, resp.text
+
+    for _ in range(40):
+        if rescan_calls and "demo" in projects_dict:
+            break
+        await asyncio.sleep(0.05)
+
+    assert rescan_calls, "orchestrator.rescan_projects was not called"
+    assert "demo" in projects_dict, "demo project not merged into projects dict"

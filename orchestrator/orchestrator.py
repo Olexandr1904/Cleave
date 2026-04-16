@@ -8,8 +8,11 @@ import logging
 import signal
 import time
 from collections import deque
+from collections.abc import Callable
 from datetime import datetime, timedelta, timezone
 from typing import Any
+
+from config.config_loader import ConfigError, load_config
 
 from config.schemas import GlobalConfig, LoadedProject, RepoConfig
 from config.resource_registry import ResourceRegistry
@@ -65,6 +68,8 @@ class Orchestrator:
         notifier: NotifierInterface | None = None,
         dry_run: bool = False,
         event_bus: Any | None = None,
+        config_dir: str | None = None,
+        on_project_added: Callable[[str, LoadedProject], None] | None = None,
     ) -> None:
         self._global_config = global_config
         self._projects = projects
@@ -90,12 +95,58 @@ class Orchestrator:
         # Stores the retry_at of the first notification in the current window;
         # further quota hits while now < _quota_window_end are silenced.
         self._quota_window_end: datetime | None = None
+        self._config_dir = config_dir
+        self._on_project_added = on_project_added
 
     def register_repo_vcs(
         self, repo_id: str, vcs: VCSInterface, repo_config: RepoConfig,
     ) -> None:
         """Register a VCS adapter for a specific repo."""
         self._repo_vcs[repo_id] = (vcs, repo_config)
+
+    def set_tracker(self, tracker: TrackerInterface) -> None:
+        """Attach a tracker after startup (used by wizard hot-reload)."""
+        self._tracker = tracker
+
+    async def rescan_projects(self) -> list[str]:
+        """Re-read config from disk; add new projects; invoke hook for each.
+
+        Returns the list of newly-added project ids. Public entry point called
+        from the wizard route for instant kick.
+        """
+        return await self._rescan_projects_from_disk()
+
+    async def _rescan_projects_from_disk(self) -> list[str]:
+        """Internal: re-read config and merge new projects into _projects.
+
+        Does NOT touch already-loaded projects (hot-reload of edits is out of
+        scope). Swallows ConfigError (e.g., mid-edit YAML) and logs at WARNING.
+        """
+        if not self._config_dir:
+            return []
+        try:
+            _, loaded = load_config(self._config_dir)
+        except ConfigError as exc:
+            logger.warning("Rescan: load_config failed: %s", exc)
+            return []
+        except Exception:
+            logger.exception("Rescan: unexpected error reading %s", self._config_dir)
+            return []
+
+        added: list[str] = []
+        for pid, proj in loaded.items():
+            if pid in self._projects:
+                continue
+            self._projects[pid] = proj
+            added.append(pid)
+            if self._on_project_added is not None:
+                try:
+                    self._on_project_added(pid, proj)
+                except Exception:
+                    logger.exception("on_project_added hook failed for %s", pid)
+        if added:
+            logger.info("Rescan added projects: %s", added)
+        return added
 
     def set_mode_handler(self, handler: ModeHandler) -> None:
         """Register the mode handler for auto/manual switching."""
@@ -265,6 +316,8 @@ class Orchestrator:
 
     async def poll_cycle(self) -> None:
         """Single poll + advance cycle."""
+        # Pick up any projects added to config-live/ since last cycle (wizard or hand-edit).
+        await self._rescan_projects_from_disk()
         self._emit("poll_cycle", "Poll cycle started")
         # 0. Resume any DEFERRED workspaces whose retry_at has passed
         await self._sweep_deferred()

@@ -127,6 +127,7 @@ def create_app(
     projects: dict[str, Any] | None = None,
     config_dir: str | None = None,
     atlas_fn: Any | None = None,
+    env_path: Any | None = None,
 ) -> Starlette:
     """Create the Starlette dashboard application."""
 
@@ -255,7 +256,7 @@ def create_app(
     create_route_handler = build_create_route(
         workspace_base_dir=Path(workspace_base_dir),
         config_dir=Path(config_dir) if config_dir else Path("config-live"),
-        env_path=Path(".env"),
+        env_path=Path(env_path) if env_path is not None else Path(".env"),
         atlas_fn=atlas_fn or _default_atlas_fn,
         orchestrator=orchestrator,
     )

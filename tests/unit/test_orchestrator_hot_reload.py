@@ -87,6 +87,7 @@ async def test_rescan_does_not_recall_hook_for_existing_project(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_rescan_handles_config_error_gracefully(monkeypatch, caplog):
+    import logging
     from config.config_loader import ConfigError
     hook = MagicMock()
     orch = _make_orch(projects={}, on_project_added=hook)
@@ -96,11 +97,34 @@ async def test_rescan_handles_config_error_gracefully(monkeypatch, caplog):
 
     monkeypatch.setattr("orchestrator.orchestrator.load_config", fake_load_config)
 
-    added = await orch.rescan_projects()
+    with caplog.at_level(logging.WARNING, logger="orchestrator.orchestrator"):
+        added = await orch.rescan_projects()
 
     assert added == []
     assert orch._projects == {}
     hook.assert_not_called()
+    assert "Rescan: load_config failed" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_rescan_handles_unexpected_error_gracefully(monkeypatch, caplog):
+    """Non-ConfigError exceptions from load_config (e.g. PermissionError) are also swallowed."""
+    import logging
+    hook = MagicMock()
+    orch = _make_orch(projects={}, on_project_added=hook)
+
+    def fake_load_config(path, **kwargs):
+        raise PermissionError("denied")
+
+    monkeypatch.setattr("orchestrator.orchestrator.load_config", fake_load_config)
+
+    with caplog.at_level(logging.ERROR, logger="orchestrator.orchestrator"):
+        added = await orch.rescan_projects()
+
+    assert added == []
+    assert orch._projects == {}
+    hook.assert_not_called()
+    assert "Rescan: unexpected error" in caplog.text
 
 
 @pytest.mark.asyncio

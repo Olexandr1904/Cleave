@@ -257,6 +257,7 @@ def create_app(
         config_dir=Path(config_dir) if config_dir else Path("config-live"),
         env_path=Path(".env"),
         atlas_fn=atlas_fn or _default_atlas_fn,
+        orchestrator=orchestrator,
     )
     routes.append(Route("/api/projects/create", create_route_handler, methods=["POST"]))
 

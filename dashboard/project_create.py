@@ -37,6 +37,7 @@ def build_create_route(
     config_dir: Path,
     env_path: Path,
     atlas_fn: AtlasFn,
+    orchestrator=None,
 ):
     async def create_project(request: Request) -> JSONResponse:
         global _busy, _active_workspace
@@ -100,9 +101,20 @@ def build_create_route(
                 os.environ.pop(name, None)
 
         def clear_busy() -> None:
+            import asyncio as _asyncio
+
             global _busy, _active_workspace
             _busy = False
             _active_workspace = None
+
+            # Atlas success <=> project.yaml exists on disk.
+            if orchestrator is not None and (project_config_dir / "project.yaml").exists():
+                try:
+                    _asyncio.ensure_future(orchestrator.rescan_projects())
+                except Exception:
+                    logger.exception(
+                        "Failed to schedule orchestrator rescan for %s", project_id,
+                    )
 
         schedule(workspace, config_dir, atlas_fn, rollback, clear_busy)
 

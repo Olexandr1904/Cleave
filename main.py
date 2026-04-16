@@ -122,8 +122,7 @@ def main(argv: list[str] | None = None) -> int:
             print(f"  WARNING: {w}")
 
     if not projects:
-        print("  No active projects found. Nothing to do.")
-        return 0
+        print("  No active projects configured — dashboard starting so you can create one via the wizard.")
 
     # Initialize orchestrator components
     import asyncio

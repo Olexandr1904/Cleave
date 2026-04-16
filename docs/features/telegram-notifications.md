@@ -78,3 +78,4 @@ Telegram bot adapter behind the NotifierInterface. Sends formatted notifications
 | 2026-04-09 | Instrumented TelegramAdapter and CommandHandler with optional event_bus: emits tg_message_sent, tg_message_received, and intent_parsed events. |
 | 2026-04-12 | Added retry command: retries a ticket from a specified or inferred stage; added escalation reply handler to unblock BLOCKED workspaces via Telegram reply-to; added typing indicator during intent parsing |
 | 2026-04-14 | Extended retry/resume to DEFERRED tickets: `_handle_retry` treats DEFERRED like BLOCKED/FAILED (transitions to `previous_state`); IntentParser system prompt now lists deferred workspaces and advertises retry for DEFERRED tickets; `_build_context` exposes `deferred_workspaces`. |
+| 2026-04-16 | Added `set_tracker` and `add_allowed_chat_id` mutators to CommandHandler for wizard hot-reload: tracker can be attached post-init; allowlist extended per-project (no-op when None/'admit all'). |

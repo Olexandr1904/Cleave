@@ -61,7 +61,7 @@ def _project(**repo_overrides: dict) -> LoadedProject:
         config=ProjectConfig(
             project=ProjectInfo(id="test-project"),
             jira=JiraConfig(
-                trigger_label="ai-ready",
+                trigger_labels=["ai-ready"],
                 ignore_labels=["do-not-automate", "manual"],
             ),
         ),
@@ -72,32 +72,32 @@ def _project(**repo_overrides: dict) -> LoadedProject:
 class TestFilterTickets:
     def test_passes_valid_ticket(self):
         tickets = [_ticket(labels=["ai-ready", "android"])]
-        result = filter_tickets(tickets, "ai-ready", ["do-not-automate"])
+        result = filter_tickets(tickets, trigger_labels=["ai-ready"], ignore_labels=["do-not-automate"])
         assert len(result) == 1
 
     def test_rejects_missing_trigger_label(self):
         tickets = [_ticket(labels=["android"])]
-        result = filter_tickets(tickets, "ai-ready", [])
+        result = filter_tickets(tickets, trigger_labels=["ai-ready"], ignore_labels=[])
         assert len(result) == 0
 
     def test_rejects_ignore_label(self):
         tickets = [_ticket(labels=["ai-ready", "do-not-automate"])]
-        result = filter_tickets(tickets, "ai-ready", ["do-not-automate"])
+        result = filter_tickets(tickets, trigger_labels=["ai-ready"], ignore_labels=["do-not-automate"])
         assert len(result) == 0
 
     def test_passes_unassigned(self):
         tickets = [_ticket(labels=["ai-ready"], assignee=None)]
-        result = filter_tickets(tickets, "ai-ready", [])
+        result = filter_tickets(tickets, trigger_labels=["ai-ready"], ignore_labels=[])
         assert len(result) == 1
 
     def test_passes_bot_assigned(self):
         tickets = [_ticket(labels=["ai-ready"], assignee="Sickle Pipeline")]
-        result = filter_tickets(tickets, "ai-ready", [])
+        result = filter_tickets(tickets, trigger_labels=["ai-ready"], ignore_labels=[])
         assert len(result) == 1
 
     def test_rejects_human_assigned(self):
         tickets = [_ticket(labels=["ai-ready"], assignee="John Doe")]
-        result = filter_tickets(tickets, "ai-ready", [])
+        result = filter_tickets(tickets, trigger_labels=["ai-ready"], ignore_labels=[])
         assert len(result) == 0
 
     def test_multiple_tickets_mixed(self):
@@ -107,7 +107,7 @@ class TestFilterTickets:
             _ticket(id="T-3", labels=["ai-ready", "manual"]),
             _ticket(id="T-4", labels=["ai-ready"], assignee="Human"),
         ]
-        result = filter_tickets(tickets, "ai-ready", ["manual"])
+        result = filter_tickets(tickets, trigger_labels=["ai-ready"], ignore_labels=["manual"])
         assert len(result) == 1
         assert result[0].id == "T-1"
 
@@ -280,3 +280,23 @@ class TestPrioritizeAndRoute:
         # done_ticket_ids=None means skip dependency check entirely
         result = prioritize_and_route(tickets, project, done_ticket_ids=None)
         assert len(result) == 1
+
+
+def test_filter_tickets_requires_all_trigger_labels():
+    t1 = _ticket(id="A-1", labels=["ai-pipeline", "acme-mobile-android"])
+    t2 = _ticket(id="A-2", labels=["ai-pipeline"])
+    t3 = _ticket(id="A-3", labels=["acme-mobile-android"])
+
+    result = filter_tickets(
+        [t1, t2, t3],
+        trigger_labels=["ai-pipeline", "acme-mobile-android"],
+        ignore_labels=[],
+    )
+
+    assert [t.id for t in result] == ["A-1"]
+
+
+def test_filter_tickets_empty_trigger_labels_rejects_all():
+    t1 = _ticket(id="A-1", labels=["ai-pipeline"])
+    result = filter_tickets([t1], trigger_labels=[], ignore_labels=[])
+    assert result == []

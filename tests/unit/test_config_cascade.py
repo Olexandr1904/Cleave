@@ -53,7 +53,7 @@ class TestLoadConfig:
         assert proj.config.project.name == "Test Project"
         assert proj.config.jira.url == "https://test.atlassian.net"
         assert proj.config.jira.project_key == "TEST"
-        assert proj.config.jira.trigger_label == "ai-ready"
+        assert proj.config.jira.trigger_labels == ["ai-ready"]
 
     def test_repo_config_loaded(self):
         """AC3: repo yaml is loaded and merged on top of project config."""

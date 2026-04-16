@@ -799,3 +799,39 @@
   font-size: 14px;
 }
 .health-refresh:hover { border-color: #58a6ff; color: #58a6ff; }
+  .modal.hidden { display: none; }
+  .modal { position: fixed; inset: 0; z-index: 1000; }
+  .modal-backdrop { position: absolute; inset: 0; background: rgba(0,0,0,.5); }
+  .modal-panel {
+    position: relative;
+    max-width: 720px;
+    margin: 5vh auto;
+    background: #fff;
+    border-radius: 8px;
+    display: flex;
+    flex-direction: column;
+    max-height: 90vh;
+    box-shadow: 0 20px 40px rgba(0,0,0,.2);
+  }
+  .wizard-header { display: flex; justify-content: space-between; padding: 16px 24px; border-bottom: 1px solid #eee; }
+  .wizard-steps { display: flex; gap: 8px; padding: 12px 24px; border-bottom: 1px solid #eee; flex-wrap: wrap; }
+  .wizard-steps .step { padding: 4px 12px; border-radius: 12px; background: #eee; font-size: 12px; }
+  .wizard-steps .step.active { background: #2563eb; color: #fff; }
+  .wizard-steps .step.done { background: #bbf7d0; }
+  .wizard-body { padding: 24px; overflow-y: auto; flex: 1; }
+  .wizard-footer { display: flex; justify-content: space-between; padding: 16px 24px; border-top: 1px solid #eee; }
+  .form-field { display: flex; flex-direction: column; margin-bottom: 16px; }
+  .form-field label { font-weight: 600; margin-bottom: 4px; }
+  .form-field input, .form-field select, .form-field textarea {
+    padding: 8px; border: 1px solid #ccc; border-radius: 4px;
+  }
+  .form-field .error { color: #c00; font-size: 12px; margin-top: 4px; }
+  .chip-input { display: flex; flex-wrap: wrap; gap: 4px; padding: 6px; border: 1px solid #ccc; border-radius: 4px; }
+  .chip { background: #e0e7ff; border-radius: 12px; padding: 2px 8px; display: inline-flex; align-items: center; gap: 4px; }
+  .chip button { background: none; border: none; cursor: pointer; }
+  .chip-input input { flex: 1; border: none; outline: none; min-width: 80px; }
+  .status-panel { text-align: center; padding: 40px; }
+  .status-panel .status-step { display: inline-block; padding: 8px 16px; margin: 4px; border-radius: 4px; background: #eee; }
+  .status-panel .status-step.active { background: #2563eb; color: #fff; }
+  .status-panel .status-step.done { background: #bbf7d0; }
+  .status-panel.failed { color: #c00; }

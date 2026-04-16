@@ -2,7 +2,7 @@
 
 **Status:** Planned
 **Created:** 2026-04-07
-**Updated:** 2026-04-07
+**Updated:** 2026-04-15
 **Author:** Oleksandr Brazhenko
 
 ## Description
@@ -11,7 +11,7 @@ Jira adapter behind the TrackerInterface. Polls Jira for tickets matching config
 
 ## Requirements
 
-- FR1: Poll tickets matching: has `trigger_label`, status = todo, not in `ignore_labels`, unassigned or bot-assigned
+- FR1: Poll tickets matching: has ALL `trigger_labels` (AND semantics), status = todo, not in `ignore_labels`, unassigned or bot-assigned
 - FR2: Return ticket data: id, summary, description, labels, priority, sprint, linked issues, acceptance criteria
 - FR3: Transition tickets between configured statuses (todo → in_progress → in_review → done)
 - FR4: Post formatted comments to tickets for status updates
@@ -24,7 +24,7 @@ Jira adapter behind the TrackerInterface. Polls Jira for tickets matching config
 
 - `JiraAdapter` class implementing `TrackerInterface`
 - Uses httpx async client for Jira REST API v3
-- JQL queries built from config (project_key, trigger_label, ignore_labels, statuses)
+- JQL queries built from config (project_key, trigger_labels, ignore_labels, statuses)
 - Ticket data normalized into `TicketData` model and written to `context/ticket.json`
 - Retry logic with exponential backoff for transient HTTP errors
 - Input sanitization strips potential prompt injection patterns from ticket content
@@ -34,6 +34,7 @@ Jira adapter behind the TrackerInterface. Polls Jira for tickets matching config
 - httpx for async HTTP
 - Configuration Cascade for Jira project settings (url, token, email, labels, statuses)
 - Abstract TrackerInterface from `integrations/base/`
+- PM Agent and Project Setup Agent for orchestration and configuration
 
 ## Acceptance Criteria
 
@@ -49,3 +50,4 @@ Jira adapter behind the TrackerInterface. Polls Jira for tickets matching config
 | Date | Description |
 |------|-------------|
 | 2026-04-07 | Initial draft — seeded from PRD and architecture docs |
+| 2026-04-15 | trigger_label renamed to trigger_labels (list, AND semantics) |

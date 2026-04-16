@@ -88,7 +88,7 @@ config-live/
 Key fields to customize per repo:
 - `vcs.github.owner/repo` — target repository
 - `git.clone_url` — clone URL with token interpolation
-- `jira.project_key` / `jira.trigger_label` — which Jira tickets to pick up
+- `jira.project_key` / `jira.trigger_labels` — which Jira tickets to pick up
 - `linting.run_command` / `testing.run_command` / `build.check_command` — quality gate commands
 - `architecture.protected_files` — files agents must never modify
 

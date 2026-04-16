@@ -2,7 +2,7 @@
 
 **Status:** Complete
 **Created:** 2026-04-08
-**Updated:** 2026-04-09
+**Updated:** 2026-04-15 (production atlas_fn wired into dashboard web server)
 **Author:** Oleksandr Brazhenko
 
 ## Description
@@ -84,3 +84,6 @@ A BMAD-style agent (`project-setup-agent`, codename Atlas) that onboards new pro
 | 2026-04-09 | Task 9 verification: full unit suite 425/425 passing; agent registry discovers `project-setup-agent` with 9 tools; tool definitions complete (9/9); feature complete |
 | 2026-04-09 | Example-update: replaced real deployment identifiers in the Atlas prompt's example project ID and display name with generic placeholders (part of repo public-release scrub) |
 | 2026-04-15 | Task 13: added `validate_git_identity` to Atlas tool list; added "Mandatory health checks" and "Output contract" sections to agent prompt |
+| 2026-04-15 | Task 10 implemented: Atlas orchestrator-mode flow in prompt; added new section "Operation: Add (orchestrator mode)" with non-interactive dashboard-driven setup; updated trigger_label references to trigger_labels (plural) in CLI-mode and YAML skeleton |
+| 2026-04-15 | Task 10 follow-up: restored `{trigger_labels}` placeholder in project.yaml skeleton (was inadvertently hardcoded to `["ai-pipeline"]`) |
+| 2026-04-15 | Task 23: production `_production_atlas_fn` wired in `main.py`; wraps `SetupWorkspace` in a `Workspace` shim and dispatches to `AgentRuntime.execute("project-setup-agent", ...)`. `create_app` now accepts `atlas_fn` as a direct kwarg. |

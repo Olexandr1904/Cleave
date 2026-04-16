@@ -11,7 +11,7 @@ jira:
   token: "${JIRA_TOKEN}"
   email: "${JIRA_EMAIL}"
   project_key: "EXPROJ"             # Your Jira project key (uppercase)
-  trigger_label: "ai-pipeline"      # Tickets must carry this label to run
+  trigger_labels: ["ai-pipeline"]   # Tickets must carry ALL of these labels to run
   ignore_labels:
     - "manual-only"
     - "blocked"

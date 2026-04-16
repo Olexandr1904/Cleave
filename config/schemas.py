@@ -112,7 +112,7 @@ class JiraConfig:
     token: str = ""
     email: str = ""
     project_key: str = ""
-    trigger_label: str = "ai-pipeline"
+    trigger_labels: list[str] = field(default_factory=lambda: ["ai-pipeline"])
     ignore_labels: list[str] = field(default_factory=list)
     statuses: JiraStatusesConfig = field(default_factory=JiraStatusesConfig)
 

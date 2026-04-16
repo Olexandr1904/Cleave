@@ -168,6 +168,11 @@ async function init() {
   document.getElementById('nav-board').addEventListener('click', () => showBoard(null));
   document.getElementById('nav-eventlog').addEventListener('click', () => showEventLog());
 
+  // Bind new project button
+  document.getElementById('new-project-btn')?.addEventListener('click', () => {
+    import('./project-wizard.js').then(({ openWizard }) => openWizard());
+  });
+
   // Delegated card click — survives innerHTML replacement on auto-refresh
   document.getElementById('content').addEventListener('click', (e) => {
     if (state.view !== 'board') return;

@@ -129,6 +129,9 @@ class Orchestrator:
         except ConfigError as exc:
             logger.warning("Rescan: load_config failed: %s", exc)
             return []
+        except Exception:
+            logger.exception("Rescan: unexpected error reading %s", self._config_dir)
+            return []
 
         added: list[str] = []
         for pid, proj in loaded.items():

@@ -8,6 +8,7 @@ and starts the orchestrator.
 from __future__ import annotations
 
 import argparse
+import logging
 import sys
 
 
@@ -126,7 +127,6 @@ def main(argv: list[str] | None = None) -> int:
 
     # Initialize orchestrator components
     import asyncio
-    import logging
 
     from integrations.llm.claude_adapter import ClaudeAdapter
     from orchestrator.agent_runtime import AgentRuntime
@@ -238,6 +238,64 @@ def main(argv: list[str] | None = None) -> int:
         notifier = TelegramAdapter(bot_token=tg_config.bot_token, event_bus=event_bus)
         print("  Telegram adapter initialized")
 
+    def _build_repo_adapters(project, logger_):
+        """Build + register VCS adapters for each repo in a single project."""
+        for repo_id, repo_cfg in project.repos.items():
+            provider = repo_cfg.vcs.provider
+            if provider == "github" and repo_cfg.vcs.github.token:
+                from integrations.github.github_adapter import GitHubAdapter
+                gh = GitHubAdapter(
+                    token=repo_cfg.vcs.github.token,
+                    owner=repo_cfg.vcs.github.owner,
+                    repo=repo_cfg.vcs.github.repo,
+                )
+                orchestrator.register_repo_vcs(repo_id, gh, repo_cfg)
+                logger_.info(
+                    "Hot-reload: registered GitHub adapter for %s: %s/%s",
+                    repo_id, repo_cfg.vcs.github.owner, repo_cfg.vcs.github.repo,
+                )
+
+    def on_project_added(project_id, new_project):
+        log = logging.getLogger(__name__)
+        _build_repo_adapters(new_project, log)
+
+        jira_cfg = new_project.config.jira
+        if orchestrator._tracker is None and jira_cfg.url:
+            from integrations.jira.jira_adapter import JiraAdapter
+            new_tracker = JiraAdapter(
+                url=jira_cfg.url,
+                email=jira_cfg.email,
+                token=jira_cfg.token,
+                project_key=jira_cfg.project_key,
+                trigger_labels=jira_cfg.trigger_labels,
+                ignore_labels=jira_cfg.ignore_labels,
+                statuses={
+                    "todo": jira_cfg.statuses.todo,
+                    "in_progress": jira_cfg.statuses.in_progress,
+                    "in_review": jira_cfg.statuses.in_review,
+                    "done": jira_cfg.statuses.done,
+                },
+            )
+            orchestrator.set_tracker(new_tracker)
+            log.info("Jira tracker attached from project %s", project_id)
+
+        if command_handler is not None:
+            pcid = new_project.config.telegram.default_chat_id
+            if pcid:
+                command_handler.add_allowed_chat_id(pcid)
+            if orchestrator._tracker is not None:
+                command_handler.set_tracker(orchestrator._tracker)
+
+        for rid, repo in new_project.repos.items():
+            event_bus.emit(
+                "project_loaded",
+                f"Project {project_id}/{rid}: {repo.repo.name}",
+                project_id=project_id,
+                data={"repo_id": rid, "repo_name": repo.repo.name},
+            )
+
+        log.info("Project %s added and live (no restart required)", project_id)
+
     # Initialize orchestrator
     orchestrator = Orchestrator(
         global_config=global_config,
@@ -251,6 +309,8 @@ def main(argv: list[str] | None = None) -> int:
         notifier=notifier,
         dry_run=args.dry_run,
         event_bus=event_bus,
+        config_dir=args.config,
+        on_project_added=on_project_added,
     )
 
     # Register per-repo VCS adapters
@@ -269,6 +329,7 @@ def main(argv: list[str] | None = None) -> int:
     print(f"  Mode handler initialized (mode: {mode_handler.get_mode()})")
 
     # Initialize command handler for Telegram free-text control
+    command_handler = None
     if notifier is not None:
         from datetime import datetime, timezone
 

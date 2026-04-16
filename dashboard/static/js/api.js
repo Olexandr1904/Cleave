@@ -50,9 +50,20 @@ export async function loadReport(ticketId, filename, folder) {
   );
 }
 
+<<<<<<< HEAD
 export async function loadHealth(force = false) {
   const qs = force ? '?refresh=1' : '';
   const resp = await fetch(`/api/projects/health${qs}`);
   if (!resp.ok) throw new Error(`health fetch failed: ${resp.status}`);
   return resp.json();
+=======
+export async function createProject(payload) {
+  const res = await fetch('/api/projects/create', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify(payload),
+  });
+  const body = await res.json().catch(() => ({}));
+  return { status: res.status, body };
+>>>>>>> feat/project-create-wizard
 }

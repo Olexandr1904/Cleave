@@ -140,7 +140,7 @@ Secrets are referenced as `${ENV_VAR}` in YAML and resolved at load time from `.
 | `vcs.github.owner` / `vcs.github.repo` | Target GitHub repository |
 | `git.clone_url` | Clone URL (use `${GITHUB_TOKEN}` for auth) |
 | `jira.project_key` | Jira project to poll |
-| `jira.trigger_label` | Label that marks tickets for Sickle |
+| `jira.trigger_labels` | Labels that mark tickets for Sickle (ticket must have ALL) |
 | `linting.run_command` | Lint command (e.g., `./gradlew detekt`) |
 | `testing.run_command` | Test command (e.g., `./gradlew test`) |
 | `build.check_command` | Build command (e.g., `./gradlew assembleDebug`) |

@@ -42,8 +42,8 @@ MOCK_ISSUE = {
 class TestJiraPollTickets:
     @respx.mock
     async def test_poll_returns_tickets(self, adapter):
-        respx.get(
-            "https://test.atlassian.net/rest/api/3/search",
+        respx.post(
+            "https://test.atlassian.net/rest/api/3/search/jql",
         ).mock(return_value=httpx.Response(200, json={"issues": [MOCK_ISSUE]}))
 
         tickets = await adapter.poll_tickets()
@@ -54,8 +54,8 @@ class TestJiraPollTickets:
 
     @respx.mock
     async def test_poll_empty(self, adapter):
-        respx.get(
-            "https://test.atlassian.net/rest/api/3/search",
+        respx.post(
+            "https://test.atlassian.net/rest/api/3/search/jql",
         ).mock(return_value=httpx.Response(200, json={"issues": []}))
 
         tickets = await adapter.poll_tickets()

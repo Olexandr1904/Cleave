@@ -51,3 +51,4 @@ Jira adapter behind the TrackerInterface. Polls Jira for tickets matching config
 |------|-------------|
 | 2026-04-07 | Initial draft — seeded from PRD and architecture docs |
 | 2026-04-15 | trigger_label renamed to trigger_labels (list, AND semantics) |
+| 2026-04-16 | Fix integration tests: poll_tickets uses POST /search/jql (Jira Cloud API); update mocks from GET /search |

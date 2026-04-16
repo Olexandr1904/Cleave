@@ -2,7 +2,7 @@
 
 **Status:** In Progress
 **Created:** 2026-04-07
-**Updated:** 2026-04-14
+**Updated:** 2026-04-16
 **Author:** Oleksandr Brazhenko
 
 ## Description
@@ -66,3 +66,4 @@ Central daemon process that continuously polls for work, manages isolated worksp
 | 2026-04-15 | Added `stage_verifier` module: mechanical post-stage verification captures git HEAD before each verifiable stage and transitions workspace to BLOCKED if HEAD is unchanged after the agent finishes. Prevents silent commit failures (e.g. missing git identity) from going undetected. |
 | 2026-04-15 | Extended `stage_verifier` with verifiers for `scope_check` (checks scope-guard-agent-output.md), `qa` (checks qa-agent-output.md), `push` (git ls-remote confirms branch pushed), and `pr_review` (workspace state has pr_number). |
 | 2026-04-15 | Wired `stage_verifier` into `_handle_agent_stage`: captures git HEAD before each stage, calls `verify` after successful agent run, transitions to BLOCKED and emits `stage_verification_failed` on failure. |
+| 2026-04-16 | Added hot-reload: `config_dir` and `on_project_added` kwargs; `set_tracker`, `rescan_projects`, `_rescan_projects_from_disk` methods; `poll_cycle` calls `_rescan_projects_from_disk` at start so wizard-created projects become live without restart. |

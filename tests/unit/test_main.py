@@ -3,6 +3,7 @@
 import subprocess
 import sys
 from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 
@@ -69,21 +70,24 @@ class TestMain:
             monkeypatch.setenv(var, "test-val")
 
     def test_main_returns_zero(self, monkeypatch):
-        """main() returns 0 on success (no matching projects = no daemon start)."""
+        """main() returns 0 on success (dashboard starts even with no projects)."""
         self._set_all_env(monkeypatch)
-        result = main(["--config", FIXTURES_DIR, "--project", "nonexistent"])
+        with patch("asyncio.run", side_effect=lambda coro: coro.close()):
+            result = main(["--config", FIXTURES_DIR, "--project", "nonexistent"])
         assert result == 0
 
     def test_main_with_all_flags(self, monkeypatch):
         """main() accepts all flag combinations."""
         self._set_all_env(monkeypatch)
-        result = main(["--config", FIXTURES_DIR, "--project", "p", "--repo", "r", "--dry-run"])
+        with patch("asyncio.run", side_effect=lambda coro: coro.close()):
+            result = main(["--config", FIXTURES_DIR, "--project", "p", "--repo", "r", "--dry-run"])
         assert result == 0
 
     def test_version_printed_at_startup(self, capsys, monkeypatch):
         """main() prints the version string on startup."""
         self._set_all_env(monkeypatch)
-        main(["--config", FIXTURES_DIR, "--project", "nonexistent"])
+        with patch("asyncio.run", side_effect=lambda coro: coro.close()):
+            main(["--config", FIXTURES_DIR, "--project", "nonexistent"])
         captured = capsys.readouterr()
         assert "Sickle v" in captured.out
 

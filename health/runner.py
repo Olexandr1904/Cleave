@@ -114,10 +114,38 @@ async def check_all(projects: dict[str, Any], force: bool = False) -> list[Proje
     return await _default_runner.check_all(projects, force=force)
 
 
+def _load_dotenv(path: "Path") -> None:
+    """Merge VAR=value pairs from a .env file into os.environ.
+
+    Accepts bare (``VAR=val``) and exported (``export VAR=val``) forms.
+    Already-set environment variables win — file entries never override
+    an explicit shell export.
+    """
+    import os
+
+    if not path.is_file():
+        return
+    for raw in path.read_text(encoding="utf-8").splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#"):
+            continue
+        if line.startswith("export "):
+            line = line[len("export "):].lstrip()
+        if "=" not in line:
+            continue
+        name, _, value = line.partition("=")
+        name = name.strip()
+        value = value.strip()
+        if len(value) >= 2 and value[0] == value[-1] and value[0] in ("'", '"'):
+            value = value[1:-1]
+        os.environ.setdefault(name, value)
+
+
 def _main() -> int:
     import argparse
     import asyncio
     import sys
+    from pathlib import Path
     from config.config_loader import load_config, ConfigError
 
     parser = argparse.ArgumentParser(
@@ -125,7 +153,14 @@ def _main() -> int:
         description="Run project health checks without starting the daemon.",
     )
     parser.add_argument("--config", required=True, help="Path to config directory")
+    parser.add_argument(
+        "--env-file",
+        default=".env",
+        help="Path to a .env file to load (default: ./.env; missing file is ignored)",
+    )
     args = parser.parse_args()
+
+    _load_dotenv(Path(args.env_file))
 
     try:
         _, projects = load_config(args.config)

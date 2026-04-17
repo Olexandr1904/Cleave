@@ -25,6 +25,7 @@ from integrations.telegram.handlers.mode import ModeHandler
 from orchestrator.agent_runtime import AgentRuntime
 from orchestrator.pr_creation import create_pr
 from orchestrator import stage_verifier
+from orchestrator.stage_verifier import ActionResult
 from orchestrator.ticket_prioritizer import PrioritizedTicket, prioritize_tickets
 from orchestrator.workflow_router import (
     WorkflowDefinition,
@@ -729,7 +730,7 @@ class Orchestrator:
     async def _handle_action_stage(
         self, workspace: Workspace, stage_id: str, stage_def: Any,
     ) -> None:
-        """Execute an action stage (non-agent)."""
+        """Execute an action stage with capture → execute → verify → transition."""
         action = stage_def.action
         state = workspace.state
 
@@ -743,46 +744,116 @@ class Orchestrator:
                 self._advance_to_stage(workspace, next_stage)
             return
 
-        if action == "push_and_open_pr":
-            await self._action_push_and_open_pr(workspace)
-        elif action == "fetch_pr_comments":
-            await self._action_fetch_pr_comments(workspace, stage_def)
-        elif action == "notify_human":
+        if action == "notify_human":
             await self._handle_escalate(workspace)
+            return
+
+        stage_start_commit = stage_verifier.capture_stage_start(workspace, stage_id)
+        workspace.increment_iteration(stage_id)
+
+        if action == "push_and_open_pr":
+            result = await self._action_push_and_open_pr(workspace)
+        elif action == "fetch_pr_comments":
+            result = await self._action_fetch_pr_comments(workspace, stage_def)
         elif action == "finalize":
-            await self._action_finalize(workspace)
+            result = await self._action_finalize(workspace)
         else:
             logger.warning("Unknown action: %s", action)
+            return
 
-    async def _action_push_and_open_pr(self, workspace: Workspace) -> None:
-        """Push branch and open PR."""
+        if result.skipped:
+            self._rollback_iteration(workspace, stage_id)
+            return
+
+        if not result.success:
+            workspace.transition("FAILED")
+            workspace.update_state(error=result.error)
+            self._emit(
+                "action_failed",
+                f"Action {action} failed for {state.ticket_id}: {result.error}",
+                project_id=state.company_id, ticket_id=state.ticket_id,
+                data={"stage": stage_id, "error": result.error},
+            )
+            return
+
+        verify_result = stage_verifier.verify(stage_id, workspace, stage_start_commit)
+        if not verify_result.ok:
+            error_msg = f"{stage_id}: {verify_result.reason}"
+            workspace.transition("BLOCKED")
+            workspace.update_state(error=error_msg)
+            self._emit(
+                "stage_verification_failed",
+                f"{stage_id} verification failed for {state.ticket_id}: {verify_result.reason}",
+                project_id=state.company_id, ticket_id=state.ticket_id,
+                data={"stage": stage_id, "reason": verify_result.reason},
+            )
+            return
+
+        if result.metadata:
+            workspace.update_state(**result.metadata)
+
+        current_state = workspace.state.current_state
+        if self._should_approval_gate(current_state):
+            workspace.transition("AWAITING_APPROVAL")
+            self._emit(
+                "approval_requested",
+                f"Awaiting approval for {state.ticket_id} after {current_state}",
+                project_id=state.company_id, ticket_id=state.ticket_id,
+                data={"gate": current_state},
+            )
+            if self._notifier:
+                chat_id = self._get_chat_id(workspace)
+                summary = self._build_gate_summary(workspace, current_state)
+                await self._notifier.send_message(chat_id, summary)
+            return
+
+        self._emit(
+            "stage_transition",
+            f"{state.ticket_id}: {current_state} -> {result.next_state}",
+            project_id=state.company_id, ticket_id=state.ticket_id,
+            data={"from_state": current_state, "to_state": result.next_state},
+        )
+        workspace.transition(result.next_state)
+
+        self._emit(
+            "action_completed",
+            f"Action {action} completed for {state.ticket_id}",
+            project_id=state.company_id, ticket_id=state.ticket_id,
+            data={"stage": stage_id, **result.metadata},
+        )
+
+    async def _action_push_and_open_pr(self, workspace: Workspace) -> ActionResult:
+        """Push branch and open PR. Returns ActionResult — caller transitions."""
         vcs, repo_config = self._get_vcs_for_workspace(workspace)
         if not vcs or not repo_config:
             logger.error("No VCS configured for %s", workspace.state.repo_id)
-            workspace.transition("FAILED")
-            workspace.update_state(error="No VCS adapter configured")
-            return
+            return ActionResult(
+                success=False, next_state="", error="No VCS adapter configured",
+                metadata={},
+            )
 
         result = await create_pr(workspace, vcs, self._tracker, repo_config)
         if result.success:
-            workspace.transition("PR_REVIEW")
-            self._emit("pr_created", f"PR created for {workspace.state.ticket_id}: {result.pr_url}", project_id=workspace.state.company_id, ticket_id=workspace.state.ticket_id, data={"pr_url": result.pr_url, "pr_number": result.pr_number})
-        else:
-            workspace.transition("FAILED")
-            workspace.update_state(error=result.error)
+            return ActionResult(
+                success=True, next_state="PR_REVIEW", error="",
+                metadata={"pr_url": result.pr_url, "pr_number": result.pr_number},
+            )
+        return ActionResult(
+            success=False, next_state="", error=result.error, metadata={},
+        )
 
     async def _action_fetch_pr_comments(
         self, workspace: Workspace, stage_def: Any,
-    ) -> None:
-        """Fetch PR comments and decide if fixes are needed."""
+    ) -> ActionResult:
+        """Fetch PR comments and decide if fixes are needed. Returns ActionResult."""
         state = workspace.state
         pr_number = state.pr_number
 
         if not pr_number:
-            workspace.transition("DONE")
-            return
+            return ActionResult(
+                success=True, next_state="DONE", error="", metadata={},
+            )
 
-        # Check delay
         delay_minutes = stage_def.delay_minutes
         if delay_minutes > 0:
             last_updated = state.last_updated_at
@@ -796,34 +867,32 @@ class Orchestrator:
                             "%s: PR review delay not met (%.0f/%.0f min)",
                             state.ticket_id, elapsed, delay_minutes,
                         )
-                        return  # Wait longer
+                        return ActionResult(
+                            success=False, next_state="", error="", metadata={},
+                            skipped=True,
+                        )
                 except (ValueError, TypeError):
                     pass
 
-        workspace.increment_iteration("pr_review")
-
         vcs, repo_config = self._get_vcs_for_workspace(workspace)
         if not vcs:
-            workspace.transition("DONE")
-            return
+            return ActionResult(
+                success=True, next_state="DONE", error="", metadata={},
+            )
 
         try:
             comments = await vcs.get_pr_comments(pr_number)
         except Exception as e:
             logger.error("Failed to fetch PR comments for %s: %s", state.ticket_id, e)
-            return
+            return ActionResult(
+                success=False, next_state="", error=f"Failed to fetch PR comments: {e}",
+                metadata={},
+            )
 
         if not comments:
-            # No comments -> done (or gate for approval in manual mode)
-            if self._should_approval_gate("PR_REVIEW"):
-                workspace.transition("AWAITING_APPROVAL")
-                if self._notifier:
-                    chat_id = self._get_chat_id(workspace)
-                    summary = self._build_gate_summary(workspace, "PR_REVIEW")
-                    await self._notifier.send_message(chat_id, summary)
-            else:
-                workspace.transition("DONE")
-            return
+            return ActionResult(
+                success=True, next_state="DONE", error="", metadata={},
+            )
 
         # Write comments to reports for PR Comment Responder agent
         comment_md = "# PR Review Comments\n\n"
@@ -846,11 +915,15 @@ class Orchestrator:
                 "pr-comment-responder-agent", workspace,
             )
             if result.success and "fix_required" in result.output.lower():
-                self._advance_to_stage(workspace, "dev")
-                return
+                return ActionResult(
+                    success=True, next_state="DEV", error="",
+                    metadata={"comments_count": len(comments)},
+                )
 
-        # Default: if there are comments, go back to dev
-        self._advance_to_stage(workspace, "dev")
+        return ActionResult(
+            success=True, next_state="DEV", error="",
+            metadata={"comments_count": len(comments)},
+        )
 
     async def _handle_escalate(self, workspace: Workspace) -> None:
         """Send escalation notification and block workspace."""
@@ -913,11 +986,10 @@ class Orchestrator:
             workspace.transition("FAILED")
             workspace.update_state(error=f"Telegram notification failed: {e}")
 
-    async def _action_finalize(self, workspace: Workspace) -> None:
-        """Finalize a completed ticket."""
+    async def _action_finalize(self, workspace: Workspace) -> ActionResult:
+        """Finalize a completed ticket. Returns ActionResult — caller transitions."""
         state = workspace.state
 
-        # Send completion notification
         if self._notifier:
             chat_id = self._get_chat_id(workspace)
             if chat_id:
@@ -931,7 +1003,6 @@ class Orchestrator:
                 except Exception as e:
                     logger.warning("Finalize notification failed: %s", e)
 
-        # Add Jira comment
         if self._tracker:
             try:
                 await self._tracker.add_comment(
@@ -941,7 +1012,9 @@ class Orchestrator:
             except Exception as e:
                 logger.warning("Finalize Jira comment failed: %s", e)
 
-        workspace.transition("DONE")
+        return ActionResult(
+            success=True, next_state="DONE", error="", metadata={},
+        )
 
     def _advance_to_stage(self, workspace: Workspace, stage_id: str) -> None:
         """Transition workspace to the state corresponding to a workflow stage."""

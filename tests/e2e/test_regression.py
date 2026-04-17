@@ -6,7 +6,7 @@ import json
 
 from playwright.sync_api import Page, expect
 
-from tests.e2e.conftest import goto_and_wait_for_board, wait_for_state_change
+from tests.e2e.conftest import _seed_workspace, goto_and_wait_for_board, wait_for_state_change
 
 
 class TestCardClickSurvivesAutoRefresh:
@@ -72,3 +72,71 @@ class TestNavigationPreservesState:
         page.locator("#nav-board").click()
         page.wait_for_selector(".card[data-ticket]", timeout=3000)
         expect(page.locator(".card[data-ticket]")).to_have_count(3)
+
+
+class TestPushVerificationRegression:
+    """Regression: ACME-14595 — push stage must verify the branch is on the remote.
+
+    Before the fix, action stages bypassed stage_verifier.verify(). A push
+    that silently failed would leave the workspace in PR_REVIEW (or PUSHED)
+    without detecting that no code was actually pushed.
+    """
+
+    def _init_repo(self, ws_path):
+        import subprocess
+        source = ws_path / "source"
+        source.mkdir(exist_ok=True)
+        subprocess.run(["git", "init", "-q"], cwd=source, check=True)
+        subprocess.run(["git", "config", "user.email", "t@t"], cwd=source, check=True)
+        subprocess.run(["git", "config", "user.name", "T"], cwd=source, check=True)
+        subprocess.run(["git", "checkout", "-b", "feature/mbmob-14595"], cwd=source, check=True)
+        (source / "a.txt").write_text("a")
+        subprocess.run(["git", "add", "a.txt"], cwd=source, check=True)
+        subprocess.run(["git", "commit", "-qm", "feat"], cwd=source, check=True)
+
+    def test_push_not_on_remote_lands_in_blocked(self, tmp_path):
+        """create_pr reports success but ls-remote finds nothing → BLOCKED."""
+        ws_path = _seed_workspace(tmp_path, "ACME-14595", "PUSHED", previous_state="QA")
+        self._init_repo(ws_path)
+
+        from workspace.workspace import Workspace
+        ws = Workspace(str(ws_path))
+
+        from orchestrator.stage_verifier import verify, capture_stage_start
+        start = capture_stage_start(ws, "push")
+        result = verify("push", ws, start)
+
+        assert result.ok is False
+        assert "branch not pushed" in result.reason or "ls-remote" in result.reason
+
+    def test_push_succeeds_when_branch_on_remote(self, tmp_path):
+        """Positive case: branch IS on remote → verify passes."""
+        import subprocess
+
+        ws_path = _seed_workspace(tmp_path, "ACME-14595-OK", "PUSHED", previous_state="QA")
+        source = ws_path / "source"
+        source.mkdir(exist_ok=True)
+
+        remote = tmp_path / "remote.git"
+        subprocess.run(["git", "init", "--bare", "-q", str(remote)], check=True)
+        subprocess.run(["git", "init", "-q"], cwd=source, check=True)
+        subprocess.run(["git", "config", "user.email", "t@t"], cwd=source, check=True)
+        subprocess.run(["git", "config", "user.name", "T"], cwd=source, check=True)
+        subprocess.run(["git", "remote", "add", "origin", str(remote)], cwd=source, check=True)
+        subprocess.run(["git", "checkout", "-b", "feature/mbmob-14595-ok"], cwd=source, check=True)
+        (source / "a.txt").write_text("a")
+        subprocess.run(["git", "add", "a.txt"], cwd=source, check=True)
+        subprocess.run(["git", "commit", "-qm", "feat"], cwd=source, check=True)
+        subprocess.run(
+            ["git", "push", "-u", "origin", "feature/mbmob-14595-ok"],
+            cwd=source, check=True,
+        )
+
+        from workspace.workspace import Workspace
+        ws = Workspace(str(ws_path))
+
+        from orchestrator.stage_verifier import verify, capture_stage_start
+        start = capture_stage_start(ws, "push")
+        result = verify("push", ws, start)
+
+        assert result.ok is True

@@ -25,6 +25,19 @@ class VerifyResult:
     reason: str
 
 
+@dataclass
+class ActionResult:
+    """Structured result of an action-stage execution.
+
+    Returned by action methods; the handler decides transitions.
+    """
+    success: bool
+    next_state: str
+    error: str
+    metadata: dict[str, Any]
+    skipped: bool = False
+
+
 _GIT_STAGES = {"dev", "push"}
 
 

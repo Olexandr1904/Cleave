@@ -1058,9 +1058,14 @@ class Orchestrator:
         wont_fix = []
         skipped_comments = []
 
+        def _is_fix(d: str) -> bool:
+            """Match 'fix' with common typos."""
+            d = d.lower().strip()
+            return d in ("fix", "fxi", "fifx", "fixx", "fx", "yes", "fix it")
+
         for c in pending:
             decision = (c.get("decision") or "").lower().strip()
-            if decision == "fix":
+            if _is_fix(decision):
                 fixes_needed.append(c)
             elif decision.startswith("won't fix") or decision.startswith("wont fix"):
                 reason = decision.split(":", 1)[1].strip() if ":" in decision else "Operator decision"
@@ -1089,6 +1094,26 @@ class Orchestrator:
 
         if fixes_needed:
             return ActionResult(success=True, next_state=Stage.DEV, error="", metadata={})
+
+        # If any comments were skipped (unresolved), don't go to DONE
+        if skipped_comments:
+            if self._notifier:
+                chat_id = self._get_chat_id(workspace)
+                if chat_id:
+                    sep = "─" * 30
+                    lines = [f"⚠️ [{state.company_id}/{state.repo_id}] {state.ticket_id}"]
+                    lines.append(sep)
+                    lines.append(f"{len(skipped_comments)} comment(s) still unresolved:")
+                    for sc in skipped_comments:
+                        lines.append(f"  • @{sc.get('author','?')} on {sc.get('file','?')}:{sc.get('line','?')}")
+                    lines.append(sep)
+                    lines.append("Reply to the original comment messages with: fix / won't fix [reason]")
+                    await self._notifier.send_message(chat_id, "\n".join(lines))
+            # Re-escalate: put them back as pending so user can re-decide
+            state.pending_review_comments = skipped_comments
+            workspace.save_state()
+            return ActionResult(success=False, next_state="", error="", metadata={}, skipped=True)
+
         return ActionResult(success=True, next_state=Stage.DONE, error="", metadata={})
 
 

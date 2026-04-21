@@ -6,11 +6,11 @@ import asyncio
 import logging
 from typing import Any
 
-from telegram import Bot, Update
-from telegram.ext import Application, MessageHandler, filters
+from telegram import Bot, InlineKeyboardButton, InlineKeyboardMarkup, Update
+from telegram.ext import Application, CallbackQueryHandler, MessageHandler, filters
 from telegram.request import HTTPXRequest
 
-from integrations.base.notifier import NotifierInterface
+from integrations.base.notifier import Button, NotifierInterface
 
 logger = logging.getLogger(__name__)
 
@@ -39,7 +39,13 @@ class TelegramAdapter(NotifierInterface):
         """Register the CommandHandler for processing incoming messages."""
         self._command_handler = handler
 
-    async def send_message(self, chat_id: str, message: str) -> int:
+    async def send_message(
+        self,
+        chat_id: str,
+        message: str,
+        buttons: list[Button] | None = None,
+        reply_to_message_id: int | None = None,
+    ) -> int:
         """Send a message and return the message ID.
 
         Sends as plain text (no parse_mode) so that user-facing content like
@@ -47,10 +53,19 @@ class TelegramAdapter(NotifierInterface):
         contain characters such as _, *, and backticks without triggering
         Telegram's Markdown parser and returning 400 Bad Request.
         """
-        msg = await self._bot.send_message(
-            chat_id=chat_id,
-            text=message,
-        )
+        kwargs: dict[str, Any] = {
+            "chat_id": chat_id,
+            "text": message,
+        }
+        if buttons:
+            keyboard = [
+                [InlineKeyboardButton(b.label, callback_data=b.action) for b in buttons]
+            ]
+            kwargs["reply_markup"] = InlineKeyboardMarkup(keyboard)
+        if reply_to_message_id:
+            kwargs["reply_to_message_id"] = reply_to_message_id
+
+        msg = await self._bot.send_message(**kwargs)
         logger.info("Sent Telegram message %d to chat %s", msg.message_id, chat_id)
         if self._events:
             self._events.emit("tg_message_sent", f"Sent message to chat {chat_id}: {message[:80]}", data={"chat_id": chat_id, "text_preview": message[:200]})
@@ -130,12 +145,36 @@ class TelegramAdapter(NotifierInterface):
             except Exception as e:
                 logger.error("Command handler error: %s", e, exc_info=True)
 
+    async def _handle_callback(self, update: Update, context: object) -> None:
+        """Handle inline keyboard button presses."""
+        query = update.callback_query
+        if not query or not query.data:
+            return
+
+        parts = query.data.split(":", 1)
+        if len(parts) != 2:
+            await query.answer(text="Invalid action")
+            return
+
+        action, ticket_id = parts
+        chat_id = str(query.message.chat.id)
+        message_id = query.message.message_id
+
+        await query.answer()
+
+        if self._command_handler and hasattr(self._command_handler, "handle_callback"):
+            try:
+                await self._command_handler.handle_callback(action, ticket_id, chat_id, message_id)
+            except Exception as e:
+                logger.error("Callback handler error: %s", e, exc_info=True)
+
     async def start_polling(self) -> None:
         """Start the bot's polling loop for receiving messages."""
         self._app = Application.builder().token(self._bot.token).build()
         self._app.add_handler(
             MessageHandler(filters.TEXT, self._handle_incoming)
         )
+        self._app.add_handler(CallbackQueryHandler(self._handle_callback))
         await self._app.initialize()
         await self._app.start()
         await self._app.updater.start_polling()

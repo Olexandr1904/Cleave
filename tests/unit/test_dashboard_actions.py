@@ -9,7 +9,7 @@ from starlette.testclient import TestClient
 from dashboard.event_store import EventStore
 from dashboard.events import EventBus
 from dashboard.web import create_app
-from workspace.workspace import Workspace, WorkspaceState
+from workspace.workspace import Stage, Workspace, WorkspaceState
 
 
 def _make_workspace(ticket_id: str, state: str, previous: str | None = None, error: str | None = None) -> MagicMock:

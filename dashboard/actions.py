@@ -13,9 +13,11 @@ from typing import Any
 from starlette.requests import Request
 from starlette.responses import JSONResponse
 
+from workspace.workspace import Stage
+
 logger = logging.getLogger(__name__)
 
-TERMINAL_STATES = {"DONE", "ARCHIVED"}
+TERMINAL_STATES = {Stage.DONE, Stage.ARCHIVED}
 
 
 def _find_workspace(orchestrator: Any, ticket_id: str) -> Any | None:
@@ -44,7 +46,7 @@ def build_action_routes(
         ws = _find_workspace(orchestrator, ticket_id)
         if ws is None:
             return _error(f"Workspace not found: {ticket_id}", 404)
-        if ws.state.current_state != "AWAITING_APPROVAL":
+        if ws.state.current_state != Stage.AWAITING_APPROVAL:
             return _error(f"Cannot approve: state is {ws.state.current_state}")
 
         from integrations.telegram.handlers.approval import ApprovalHandler
@@ -65,10 +67,10 @@ def build_action_routes(
         ws = _find_workspace(orchestrator, ticket_id)
         if ws is None:
             return _error(f"Workspace not found: {ticket_id}", 404)
-        if ws.state.current_state != "AWAITING_APPROVAL":
+        if ws.state.current_state != Stage.AWAITING_APPROVAL:
             return _error(f"Cannot reject: state is {ws.state.current_state}")
 
-        previous = ws.state.previous_state or "ANALYSIS"
+        previous = ws.state.previous_state or Stage.ANALYSIS
         ws.transition(previous)
         if event_bus:
             event_bus.emit(
@@ -84,10 +86,21 @@ def build_action_routes(
         ws = _find_workspace(orchestrator, ticket_id)
         if ws is None:
             return _error(f"Workspace not found: {ticket_id}", 404)
-        if ws.state.current_state not in ("BLOCKED", "FAILED"):
+        if ws.state.current_state not in (Stage.BLOCKED, Stage.FAILED):
             return _error(f"Cannot retry: state is {ws.state.current_state}")
 
-        target = ws.state.previous_state or "ANALYSIS"
+        # Smart retry: detect furthest completed stage from existing artifacts
+        target = ws.state.previous_state or Stage.ANALYSIS
+        reports = Path(ws.reports_dir)
+        if (reports / "qa-agent-output.md").exists():
+            target = Stage.PUSHED
+        elif (reports / "scope-guard-agent-output.md").exists():
+            target = Stage.QA
+        elif (reports / "dev-agent-output.md").exists():
+            target = Stage.SCOPE_CHECK
+        elif (reports / "ba.md").exists() or (reports / "ba-agent-output.md").exists():
+            target = Stage.DEV
+
         ws.state.human_input_pending = False
         ws.state.error = None
         ws.transition(target)
@@ -106,7 +119,7 @@ def build_action_routes(
         ws = _find_workspace(orchestrator, ticket_id)
         if ws is None:
             return _error(f"Workspace not found: {ticket_id}", 404)
-        BLOCKS_TAKE_CONTROL = {"DONE", "ARCHIVED", "MANUAL_CONTROL"}
+        BLOCKS_TAKE_CONTROL = {Stage.DONE, Stage.ARCHIVED, Stage.MANUAL_CONTROL}
         if ws.state.current_state in BLOCKS_TAKE_CONTROL:
             return _error(f"Cannot take control: state is {ws.state.current_state}")
 
@@ -134,7 +147,7 @@ def build_action_routes(
 
         # Transition to MANUAL_CONTROL atomically with timestamp
         ws.transition(
-            "MANUAL_CONTROL",
+            Stage.MANUAL_CONTROL,
             manual_control_started_at=time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
         )
 
@@ -178,7 +191,7 @@ def build_action_routes(
         ws = _find_workspace(orchestrator, ticket_id)
         if ws is None:
             return _error(f"Workspace not found: {ticket_id}", 404)
-        if ws.state.current_state != "MANUAL_CONTROL":
+        if ws.state.current_state != Stage.MANUAL_CONTROL:
             return _error(f"Cannot release: state is {ws.state.current_state}")
 
         body = {}
@@ -189,7 +202,7 @@ def build_action_routes(
         comment = body.get("comment", "")
 
         ws.update_state(manual_control_comment=comment)
-        ws.transition("ANALYSIS")
+        ws.transition(Stage.ANALYSIS)
 
         if event_bus:
             event_bus.emit(
@@ -198,17 +211,17 @@ def build_action_routes(
                 ticket_id=ticket_id,
                 data={"comment": comment},
             )
-        return JSONResponse({"status": "ok", "new_state": "ANALYSIS"})
+        return JSONResponse({"status": "ok", "new_state": Stage.ANALYSIS})
 
     async def resume(request: Request) -> JSONResponse:
         ticket_id = request.path_params["ticket_id"]
         ws = _find_workspace(orchestrator, ticket_id)
         if ws is None:
             return _error(f"Workspace not found: {ticket_id}", 404)
-        if ws.state.current_state != "DEFERRED":
+        if ws.state.current_state != Stage.DEFERRED:
             return _error(f"Cannot resume: state is {ws.state.current_state}")
 
-        target = ws.state.previous_state or "ANALYSIS"
+        target = ws.state.previous_state or Stage.ANALYSIS
         ws.transition(target)
         if event_bus:
             event_bus.emit(
@@ -224,13 +237,13 @@ def build_action_routes(
         ws = _find_workspace(orchestrator, ticket_id)
         if ws is None:
             return _error(f"Workspace not found: {ticket_id}", 404)
-        if ws.state.current_state not in ("FAILED", "DONE", "DEFERRED"):
+        if ws.state.current_state not in (Stage.FAILED, Stage.DONE, Stage.DEFERRED):
             return _error(f"Cannot archive: state is {ws.state.current_state}")
 
         # DEFERRED -> ARCHIVED is not a valid direct transition; hop via FAILED.
-        if ws.state.current_state == "DEFERRED":
-            ws.transition("FAILED")
-        ws.transition("ARCHIVED")
+        if ws.state.current_state == Stage.DEFERRED:
+            ws.transition(Stage.FAILED)
+        ws.transition(Stage.ARCHIVED)
 
         if event_bus:
             event_bus.emit(
@@ -238,7 +251,7 @@ def build_action_routes(
                 f"Archived {ticket_id} via dashboard",
                 ticket_id=ticket_id,
             )
-        return JSONResponse({"status": "ok", "new_state": "ARCHIVED"})
+        return JSONResponse({"status": "ok", "new_state": Stage.ARCHIVED})
 
     async def set_mode(request: Request) -> JSONResponse:
         try:
@@ -257,9 +270,9 @@ def build_action_routes(
     async def daemon_status(request: Request) -> JSONResponse:
         workspaces = orchestrator.get_active_workspaces()
         active = len(workspaces)
-        blocked = sum(1 for ws in workspaces if ws.state.current_state == "BLOCKED")
-        awaiting = sum(1 for ws in workspaces if ws.state.current_state == "AWAITING_APPROVAL")
-        manual = sum(1 for ws in workspaces if ws.state.current_state == "MANUAL_CONTROL")
+        blocked = sum(1 for ws in workspaces if ws.state.current_state == Stage.BLOCKED)
+        awaiting = sum(1 for ws in workspaces if ws.state.current_state == Stage.AWAITING_APPROVAL)
+        manual = sum(1 for ws in workspaces if ws.state.current_state == Stage.MANUAL_CONTROL)
 
         mode = mode_handler.get_mode() if mode_handler else "auto"
 

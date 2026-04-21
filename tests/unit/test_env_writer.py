@@ -43,7 +43,7 @@ def test_append_vars_atomic_write_and_chmod(tmp_path: Path):
 def test_append_vars_creates_file_if_missing(tmp_path: Path):
     env_path = tmp_path / ".env"
     append_vars(env_path, {"X": "y"})
-    assert env_path.read_text(encoding="utf-8") == "X=y\n"
+    assert env_path.read_text(encoding="utf-8") == "export X=y\n"
 
 
 def test_append_vars_raises_on_collision(tmp_path: Path):

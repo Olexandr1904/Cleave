@@ -10,8 +10,8 @@ def test_jira_config_has_trigger_labels_list():
 
 
 def test_jira_config_accepts_multiple_labels():
-    cfg = JiraConfig(trigger_labels=["ai-pipeline", "acme-mobile-android"])
-    assert cfg.trigger_labels == ["ai-pipeline", "acme-mobile-android"]
+    cfg = JiraConfig(trigger_labels=["ai-pipeline", "acme-mobile"])
+    assert cfg.trigger_labels == ["ai-pipeline", "acme-mobile"]
 
 
 from pathlib import Path

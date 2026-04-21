@@ -8,6 +8,7 @@ import pytest
 
 from workspace.workspace import (
     InvalidTransitionError,
+    Stage,
     Workspace,
     WorkspaceState,
     VALID_STATES,
@@ -49,7 +50,7 @@ class TestWorkspaceState:
             repo_id="r",
             workspace_root="/tmp/ws",
         )
-        assert state.current_state == "NEW"
+        assert state.current_state == Stage.NEW
         assert state.previous_state is None
         assert state.branch is None
         assert state.pr_number is None
@@ -74,11 +75,11 @@ class TestWorkspace:
 
     def test_save_and_load_state(self, workspace):
         """Atomic write via temp file + rename."""
-        workspace.update_state(current_state="ANALYSIS")
+        workspace.update_state(current_state=Stage.ANALYSIS)
 
         # Reload from disk
         ws2 = Workspace(str(workspace.root))
-        assert ws2.state.current_state == "ANALYSIS"
+        assert ws2.state.current_state == Stage.ANALYSIS
         assert ws2.state.ticket_id == "TEST-123"
 
     def test_state_json_format(self, workspace):
@@ -95,7 +96,7 @@ class TestWorkspace:
 
     def test_update_state_updates_timestamp(self, workspace):
         old_ts = workspace.state.last_updated_at
-        workspace.update_state(current_state="ANALYSIS")
+        workspace.update_state(current_state=Stage.ANALYSIS)
         assert workspace.state.last_updated_at >= old_ts
 
     def test_update_unknown_field_raises(self, workspace):
@@ -105,97 +106,97 @@ class TestWorkspace:
 
 class TestStateTransitions:
     def test_new_to_analysis(self, workspace):
-        workspace.transition("ANALYSIS")
-        assert workspace.state.current_state == "ANALYSIS"
+        workspace.transition(Stage.ANALYSIS)
+        assert workspace.state.current_state == Stage.ANALYSIS
 
     def test_analysis_to_dev(self, workspace):
-        workspace.transition("ANALYSIS")
-        workspace.transition("DEV")
-        assert workspace.state.current_state == "DEV"
+        workspace.transition(Stage.ANALYSIS)
+        workspace.transition(Stage.DEV)
+        assert workspace.state.current_state == Stage.DEV
 
     def test_dev_to_scope_check(self, workspace):
-        workspace.transition("ANALYSIS")
-        workspace.transition("DEV")
-        workspace.transition("SCOPE_CHECK")
-        assert workspace.state.current_state == "SCOPE_CHECK"
+        workspace.transition(Stage.ANALYSIS)
+        workspace.transition(Stage.DEV)
+        workspace.transition(Stage.SCOPE_CHECK)
+        assert workspace.state.current_state == Stage.SCOPE_CHECK
 
     def test_scope_check_pass_to_qa(self, workspace):
-        workspace.transition("ANALYSIS")
-        workspace.transition("DEV")
-        workspace.transition("SCOPE_CHECK")
-        workspace.transition("QA")
-        assert workspace.state.current_state == "QA"
+        workspace.transition(Stage.ANALYSIS)
+        workspace.transition(Stage.DEV)
+        workspace.transition(Stage.SCOPE_CHECK)
+        workspace.transition(Stage.QA)
+        assert workspace.state.current_state == Stage.QA
 
     def test_scope_check_fail_to_dev(self, workspace):
         """Scope violations send back to DEV."""
-        workspace.transition("ANALYSIS")
-        workspace.transition("DEV")
-        workspace.transition("SCOPE_CHECK")
-        workspace.transition("DEV")
-        assert workspace.state.current_state == "DEV"
+        workspace.transition(Stage.ANALYSIS)
+        workspace.transition(Stage.DEV)
+        workspace.transition(Stage.SCOPE_CHECK)
+        workspace.transition(Stage.DEV)
+        assert workspace.state.current_state == Stage.DEV
 
     def test_qa_pass_to_pushed(self, workspace):
-        workspace.transition("ANALYSIS")
-        workspace.transition("DEV")
-        workspace.transition("SCOPE_CHECK")
-        workspace.transition("QA")
-        workspace.transition("PUSHED")
-        assert workspace.state.current_state == "PUSHED"
+        workspace.transition(Stage.ANALYSIS)
+        workspace.transition(Stage.DEV)
+        workspace.transition(Stage.SCOPE_CHECK)
+        workspace.transition(Stage.QA)
+        workspace.transition(Stage.PUSHED)
+        assert workspace.state.current_state == Stage.PUSHED
 
     def test_qa_fail_to_dev(self, workspace):
         """Test failures send back to DEV."""
-        workspace.transition("ANALYSIS")
-        workspace.transition("DEV")
-        workspace.transition("SCOPE_CHECK")
-        workspace.transition("QA")
-        workspace.transition("DEV")
-        assert workspace.state.current_state == "DEV"
+        workspace.transition(Stage.ANALYSIS)
+        workspace.transition(Stage.DEV)
+        workspace.transition(Stage.SCOPE_CHECK)
+        workspace.transition(Stage.QA)
+        workspace.transition(Stage.DEV)
+        assert workspace.state.current_state == Stage.DEV
 
     def test_pushed_to_pr_review(self, workspace):
-        workspace.transition("ANALYSIS")
-        workspace.transition("DEV")
-        workspace.transition("SCOPE_CHECK")
-        workspace.transition("QA")
-        workspace.transition("PUSHED")
-        workspace.transition("PR_REVIEW")
-        assert workspace.state.current_state == "PR_REVIEW"
+        workspace.transition(Stage.ANALYSIS)
+        workspace.transition(Stage.DEV)
+        workspace.transition(Stage.SCOPE_CHECK)
+        workspace.transition(Stage.QA)
+        workspace.transition(Stage.PUSHED)
+        workspace.transition(Stage.PR_REVIEW)
+        assert workspace.state.current_state == Stage.PR_REVIEW
 
     def test_pr_review_fix_to_dev(self, workspace):
         """PR comments requiring fixes send back to DEV."""
-        workspace.transition("ANALYSIS")
-        workspace.transition("DEV")
-        workspace.transition("SCOPE_CHECK")
-        workspace.transition("QA")
-        workspace.transition("PUSHED")
-        workspace.transition("PR_REVIEW")
-        workspace.transition("DEV")
-        assert workspace.state.current_state == "DEV"
+        workspace.transition(Stage.ANALYSIS)
+        workspace.transition(Stage.DEV)
+        workspace.transition(Stage.SCOPE_CHECK)
+        workspace.transition(Stage.QA)
+        workspace.transition(Stage.PUSHED)
+        workspace.transition(Stage.PR_REVIEW)
+        workspace.transition(Stage.DEV)
+        assert workspace.state.current_state == Stage.DEV
 
     def test_pr_review_to_done(self, workspace):
         """Happy path completion."""
-        workspace.transition("ANALYSIS")
-        workspace.transition("DEV")
-        workspace.transition("SCOPE_CHECK")
-        workspace.transition("QA")
-        workspace.transition("PUSHED")
-        workspace.transition("PR_REVIEW")
-        workspace.transition("DONE")
-        assert workspace.state.current_state == "DONE"
+        workspace.transition(Stage.ANALYSIS)
+        workspace.transition(Stage.DEV)
+        workspace.transition(Stage.SCOPE_CHECK)
+        workspace.transition(Stage.QA)
+        workspace.transition(Stage.PUSHED)
+        workspace.transition(Stage.PR_REVIEW)
+        workspace.transition(Stage.DONE)
+        assert workspace.state.current_state == Stage.DONE
 
     def test_done_to_archived(self, workspace):
-        workspace.transition("ANALYSIS")
-        workspace.transition("DEV")
-        workspace.transition("SCOPE_CHECK")
-        workspace.transition("QA")
-        workspace.transition("PUSHED")
-        workspace.transition("PR_REVIEW")
-        workspace.transition("DONE")
-        workspace.transition("ARCHIVED")
-        assert workspace.state.current_state == "ARCHIVED"
+        workspace.transition(Stage.ANALYSIS)
+        workspace.transition(Stage.DEV)
+        workspace.transition(Stage.SCOPE_CHECK)
+        workspace.transition(Stage.QA)
+        workspace.transition(Stage.PUSHED)
+        workspace.transition(Stage.PR_REVIEW)
+        workspace.transition(Stage.DONE)
+        workspace.transition(Stage.ARCHIVED)
+        assert workspace.state.current_state == Stage.ARCHIVED
 
     def test_any_stage_to_failed(self, workspace):
         """Every non-terminal state can transition to FAILED."""
-        for state in ["NEW", "ANALYSIS", "DEV", "SCOPE_CHECK", "QA", "PUSHED", "PR_REVIEW", "BLOCKED"]:
+        for state in [Stage.NEW, Stage.ANALYSIS, Stage.DEV, Stage.SCOPE_CHECK, Stage.QA, Stage.PUSHED, Stage.PR_REVIEW, Stage.BLOCKED]:
             ws_root = workspace.root
             s = WorkspaceState(
                 ticket_id="T-1", company_id="c", repo_id="r",
@@ -203,25 +204,25 @@ class TestStateTransitions:
             )
             ws = Workspace(str(ws_root), s)
             ws.save_state()
-            ws.transition("FAILED")
-            assert ws.state.current_state == "FAILED"
+            ws.transition(Stage.FAILED)
+            assert ws.state.current_state == Stage.FAILED
 
     def test_invalid_transition_raises(self, workspace):
         """Terminal states cannot transition."""
-        workspace.transition("ANALYSIS")
-        workspace.transition("DEV")
-        workspace.transition("SCOPE_CHECK")
-        workspace.transition("QA")
-        workspace.transition("PUSHED")
-        workspace.transition("PR_REVIEW")
-        workspace.transition("DONE")
-        workspace.transition("ARCHIVED")
+        workspace.transition(Stage.ANALYSIS)
+        workspace.transition(Stage.DEV)
+        workspace.transition(Stage.SCOPE_CHECK)
+        workspace.transition(Stage.QA)
+        workspace.transition(Stage.PUSHED)
+        workspace.transition(Stage.PR_REVIEW)
+        workspace.transition(Stage.DONE)
+        workspace.transition(Stage.ARCHIVED)
         with pytest.raises(InvalidTransitionError, match="Cannot transition"):
-            workspace.transition("NEW")
+            workspace.transition(Stage.NEW)
 
     def test_new_to_done_invalid(self, workspace):
         with pytest.raises(InvalidTransitionError):
-            workspace.transition("DONE")
+            workspace.transition(Stage.DONE)
 
     def test_unknown_state_raises(self, workspace):
         with pytest.raises(InvalidTransitionError, match="Unknown state"):
@@ -246,20 +247,20 @@ class TestStateTransitions:
 
 class TestBlockedResume:
     def test_blocked_stores_previous_state(self, workspace):
-        workspace.transition("ANALYSIS")
-        workspace.transition("DEV")
-        workspace.transition("BLOCKED")
-        assert workspace.state.current_state == "BLOCKED"
-        assert workspace.state.previous_state == "DEV"
+        workspace.transition(Stage.ANALYSIS)
+        workspace.transition(Stage.DEV)
+        workspace.transition(Stage.BLOCKED)
+        assert workspace.state.current_state == Stage.BLOCKED
+        assert workspace.state.previous_state == Stage.DEV
         assert workspace.state.human_input_pending is True
 
     def test_resume_from_blocked(self, workspace):
-        workspace.transition("ANALYSIS")
-        workspace.transition("DEV")
-        workspace.transition("BLOCKED")
+        workspace.transition(Stage.ANALYSIS)
+        workspace.transition(Stage.DEV)
+        workspace.transition(Stage.BLOCKED)
         # Human replies, resume to SCOPE_CHECK (next step after DEV)
-        workspace.transition("DEV")
-        assert workspace.state.current_state == "DEV"
+        workspace.transition(Stage.DEV)
+        assert workspace.state.current_state == Stage.DEV
         assert workspace.state.previous_state is None
         assert workspace.state.human_input_pending is False
 
@@ -273,8 +274,8 @@ class TestBlockedResume:
             )
             ws = Workspace(str(workspace_dir), s)
             ws.save_state()
-            ws.transition("BLOCKED")
-            assert ws.state.current_state == "BLOCKED"
+            ws.transition(Stage.BLOCKED)
+            assert ws.state.current_state == Stage.BLOCKED
             assert ws.state.previous_state == state
 
 
@@ -283,81 +284,81 @@ class TestAwaitingApproval:
         assert "AWAITING_APPROVAL" in VALID_STATES
 
     def test_analysis_to_awaiting_approval(self, workspace):
-        workspace.transition("ANALYSIS")
-        workspace.transition("AWAITING_APPROVAL")
-        assert workspace.state.current_state == "AWAITING_APPROVAL"
-        assert workspace.state.previous_state == "ANALYSIS"
+        workspace.transition(Stage.ANALYSIS)
+        workspace.transition(Stage.AWAITING_APPROVAL)
+        assert workspace.state.current_state == Stage.AWAITING_APPROVAL
+        assert workspace.state.previous_state == Stage.ANALYSIS
 
     def test_qa_to_awaiting_approval(self, workspace):
-        workspace.transition("ANALYSIS")
-        workspace.transition("DEV")
-        workspace.transition("SCOPE_CHECK")
-        workspace.transition("QA")
-        workspace.transition("AWAITING_APPROVAL")
-        assert workspace.state.current_state == "AWAITING_APPROVAL"
+        workspace.transition(Stage.ANALYSIS)
+        workspace.transition(Stage.DEV)
+        workspace.transition(Stage.SCOPE_CHECK)
+        workspace.transition(Stage.QA)
+        workspace.transition(Stage.AWAITING_APPROVAL)
+        assert workspace.state.current_state == Stage.AWAITING_APPROVAL
 
     def test_pr_review_to_awaiting_approval(self, workspace):
-        workspace.transition("ANALYSIS")
-        workspace.transition("DEV")
-        workspace.transition("SCOPE_CHECK")
-        workspace.transition("QA")
-        workspace.transition("PUSHED")
-        workspace.transition("PR_REVIEW")
-        workspace.transition("AWAITING_APPROVAL")
-        assert workspace.state.current_state == "AWAITING_APPROVAL"
+        workspace.transition(Stage.ANALYSIS)
+        workspace.transition(Stage.DEV)
+        workspace.transition(Stage.SCOPE_CHECK)
+        workspace.transition(Stage.QA)
+        workspace.transition(Stage.PUSHED)
+        workspace.transition(Stage.PR_REVIEW)
+        workspace.transition(Stage.AWAITING_APPROVAL)
+        assert workspace.state.current_state == Stage.AWAITING_APPROVAL
 
     def test_awaiting_approval_to_dev(self, workspace):
-        workspace.transition("ANALYSIS")
-        workspace.transition("AWAITING_APPROVAL")
-        workspace.transition("DEV")
-        assert workspace.state.current_state == "DEV"
+        workspace.transition(Stage.ANALYSIS)
+        workspace.transition(Stage.AWAITING_APPROVAL)
+        workspace.transition(Stage.DEV)
+        assert workspace.state.current_state == Stage.DEV
         assert workspace.state.previous_state is None
 
     def test_awaiting_approval_to_pushed(self, workspace):
         """Post-QA approval resumes to PUSHED."""
-        workspace.transition("ANALYSIS")
-        workspace.transition("DEV")
-        workspace.transition("SCOPE_CHECK")
-        workspace.transition("QA")
-        workspace.transition("AWAITING_APPROVAL")
-        workspace.transition("PUSHED")
-        assert workspace.state.current_state == "PUSHED"
+        workspace.transition(Stage.ANALYSIS)
+        workspace.transition(Stage.DEV)
+        workspace.transition(Stage.SCOPE_CHECK)
+        workspace.transition(Stage.QA)
+        workspace.transition(Stage.AWAITING_APPROVAL)
+        workspace.transition(Stage.PUSHED)
+        assert workspace.state.current_state == Stage.PUSHED
 
     def test_awaiting_approval_to_done(self, workspace):
         """Post-PR_REVIEW approval finalizes."""
-        workspace.transition("ANALYSIS")
-        workspace.transition("DEV")
-        workspace.transition("SCOPE_CHECK")
-        workspace.transition("QA")
-        workspace.transition("PUSHED")
-        workspace.transition("PR_REVIEW")
-        workspace.transition("AWAITING_APPROVAL")
-        workspace.transition("DONE")
-        assert workspace.state.current_state == "DONE"
+        workspace.transition(Stage.ANALYSIS)
+        workspace.transition(Stage.DEV)
+        workspace.transition(Stage.SCOPE_CHECK)
+        workspace.transition(Stage.QA)
+        workspace.transition(Stage.PUSHED)
+        workspace.transition(Stage.PR_REVIEW)
+        workspace.transition(Stage.AWAITING_APPROVAL)
+        workspace.transition(Stage.DONE)
+        assert workspace.state.current_state == Stage.DONE
 
     def test_awaiting_approval_to_failed(self, workspace):
         """Rejection moves to FAILED."""
-        workspace.transition("ANALYSIS")
-        workspace.transition("AWAITING_APPROVAL")
-        workspace.transition("FAILED")
-        assert workspace.state.current_state == "FAILED"
+        workspace.transition(Stage.ANALYSIS)
+        workspace.transition(Stage.AWAITING_APPROVAL)
+        workspace.transition(Stage.FAILED)
+        assert workspace.state.current_state == Stage.FAILED
 
     def test_awaiting_approval_stores_previous_state(self, workspace):
-        workspace.transition("ANALYSIS")
-        workspace.transition("AWAITING_APPROVAL")
-        assert workspace.state.previous_state == "ANALYSIS"
+        workspace.transition(Stage.ANALYSIS)
+        workspace.transition(Stage.AWAITING_APPROVAL)
+        assert workspace.state.previous_state == Stage.ANALYSIS
         assert workspace.state.human_input_pending is True
 
     def test_resume_from_awaiting_approval_clears_pending(self, workspace):
-        workspace.transition("ANALYSIS")
-        workspace.transition("AWAITING_APPROVAL")
-        workspace.transition("DEV")
+        workspace.transition(Stage.ANALYSIS)
+        workspace.transition(Stage.AWAITING_APPROVAL)
+        workspace.transition(Stage.DEV)
         assert workspace.state.human_input_pending is False
         assert workspace.state.previous_state is None
 
     def test_new_to_awaiting_approval_invalid(self, workspace):
         with pytest.raises(InvalidTransitionError):
-            workspace.transition("AWAITING_APPROVAL")
+            workspace.transition(Stage.AWAITING_APPROVAL)
 
 
 class TestManualControlState:
@@ -366,26 +367,26 @@ class TestManualControlState:
         assert "MANUAL_CONTROL" in VALID_STATES
 
     def test_transition_dev_to_manual_control(self, workspace):
-        workspace.transition("ANALYSIS")
-        workspace.transition("DEV")
-        workspace.transition("MANUAL_CONTROL")
-        assert workspace.state.current_state == "MANUAL_CONTROL"
-        assert workspace.state.previous_state == "DEV"
+        workspace.transition(Stage.ANALYSIS)
+        workspace.transition(Stage.DEV)
+        workspace.transition(Stage.MANUAL_CONTROL)
+        assert workspace.state.current_state == Stage.MANUAL_CONTROL
+        assert workspace.state.previous_state == Stage.DEV
 
     def test_transition_manual_control_to_analysis(self, workspace):
-        workspace.transition("ANALYSIS")
-        workspace.transition("DEV")
-        workspace.transition("MANUAL_CONTROL")
-        workspace.transition("ANALYSIS")
-        assert workspace.state.current_state == "ANALYSIS"
+        workspace.transition(Stage.ANALYSIS)
+        workspace.transition(Stage.DEV)
+        workspace.transition(Stage.MANUAL_CONTROL)
+        workspace.transition(Stage.ANALYSIS)
+        assert workspace.state.current_state == Stage.ANALYSIS
 
     def test_manual_control_cannot_go_to_done(self, workspace):
         from workspace.workspace import InvalidTransitionError
-        workspace.transition("ANALYSIS")
-        workspace.transition("DEV")
-        workspace.transition("MANUAL_CONTROL")
+        workspace.transition(Stage.ANALYSIS)
+        workspace.transition(Stage.DEV)
+        workspace.transition(Stage.MANUAL_CONTROL)
         with pytest.raises(InvalidTransitionError):
-            workspace.transition("DONE")
+            workspace.transition(Stage.DONE)
 
     def test_manual_control_fields_default_none(self, workspace):
         assert workspace.state.manual_control_started_at is None
@@ -402,36 +403,36 @@ class TestManualControlState:
 
     def test_manual_control_stores_previous_state_and_pending(self, workspace):
         """Entering MANUAL_CONTROL preserves previous_state and sets human_input_pending."""
-        workspace.transition("ANALYSIS")
-        workspace.transition("MANUAL_CONTROL")
-        assert workspace.state.previous_state == "ANALYSIS"
+        workspace.transition(Stage.ANALYSIS)
+        workspace.transition(Stage.MANUAL_CONTROL)
+        assert workspace.state.previous_state == Stage.ANALYSIS
         assert workspace.state.human_input_pending is True
 
     def test_exit_manual_control_clears_pending_and_previous(self, workspace):
         """Leaving MANUAL_CONTROL clears human_input_pending and previous_state."""
-        workspace.transition("ANALYSIS")
-        workspace.transition("DEV")
-        workspace.transition("MANUAL_CONTROL")
-        workspace.transition("ANALYSIS")
+        workspace.transition(Stage.ANALYSIS)
+        workspace.transition(Stage.DEV)
+        workspace.transition(Stage.MANUAL_CONTROL)
+        workspace.transition(Stage.ANALYSIS)
         assert workspace.state.human_input_pending is False
         assert workspace.state.previous_state is None
 
     def test_blocked_to_manual_control(self, workspace):
         """Can take control from BLOCKED state."""
-        workspace.transition("ANALYSIS")
-        workspace.transition("DEV")
-        workspace.transition("BLOCKED")
-        workspace.transition("MANUAL_CONTROL")
-        assert workspace.state.current_state == "MANUAL_CONTROL"
-        assert workspace.state.previous_state == "BLOCKED"
+        workspace.transition(Stage.ANALYSIS)
+        workspace.transition(Stage.DEV)
+        workspace.transition(Stage.BLOCKED)
+        workspace.transition(Stage.MANUAL_CONTROL)
+        assert workspace.state.current_state == Stage.MANUAL_CONTROL
+        assert workspace.state.previous_state == Stage.BLOCKED
 
     def test_awaiting_approval_to_manual_control(self, workspace):
         """Can take control from AWAITING_APPROVAL state."""
-        workspace.transition("ANALYSIS")
-        workspace.transition("AWAITING_APPROVAL")
-        workspace.transition("MANUAL_CONTROL")
-        assert workspace.state.current_state == "MANUAL_CONTROL"
-        assert workspace.state.previous_state == "AWAITING_APPROVAL"
+        workspace.transition(Stage.ANALYSIS)
+        workspace.transition(Stage.AWAITING_APPROVAL)
+        workspace.transition(Stage.MANUAL_CONTROL)
+        assert workspace.state.current_state == Stage.MANUAL_CONTROL
+        assert workspace.state.previous_state == Stage.AWAITING_APPROVAL
 
 
 class TestDeferred:
@@ -445,73 +446,73 @@ class TestDeferred:
         assert state.retry_at is None
 
     def test_dev_to_deferred(self, workspace):
-        workspace.transition("ANALYSIS")
-        workspace.transition("DEV")
-        workspace.transition("DEFERRED", retry_at="2026-04-14T20:00:00+00:00")
-        assert workspace.state.current_state == "DEFERRED"
-        assert workspace.state.previous_state == "DEV"
+        workspace.transition(Stage.ANALYSIS)
+        workspace.transition(Stage.DEV)
+        workspace.transition(Stage.DEFERRED, retry_at="2026-04-14T20:00:00+00:00")
+        assert workspace.state.current_state == Stage.DEFERRED
+        assert workspace.state.previous_state == Stage.DEV
         assert workspace.state.retry_at == "2026-04-14T20:00:00+00:00"
 
     def test_qa_to_deferred(self, workspace):
-        workspace.transition("ANALYSIS")
-        workspace.transition("DEV")
-        workspace.transition("SCOPE_CHECK")
-        workspace.transition("QA")
-        workspace.transition("DEFERRED", retry_at="2026-04-14T20:00:00+00:00")
-        assert workspace.state.current_state == "DEFERRED"
-        assert workspace.state.previous_state == "QA"
+        workspace.transition(Stage.ANALYSIS)
+        workspace.transition(Stage.DEV)
+        workspace.transition(Stage.SCOPE_CHECK)
+        workspace.transition(Stage.QA)
+        workspace.transition(Stage.DEFERRED, retry_at="2026-04-14T20:00:00+00:00")
+        assert workspace.state.current_state == Stage.DEFERRED
+        assert workspace.state.previous_state == Stage.QA
 
     def test_resume_from_deferred_clears_retry_at(self, workspace):
-        workspace.transition("ANALYSIS")
-        workspace.transition("DEV")
-        workspace.transition("DEFERRED", retry_at="2026-04-14T20:00:00+00:00")
-        workspace.transition("DEV")
-        assert workspace.state.current_state == "DEV"
+        workspace.transition(Stage.ANALYSIS)
+        workspace.transition(Stage.DEV)
+        workspace.transition(Stage.DEFERRED, retry_at="2026-04-14T20:00:00+00:00")
+        workspace.transition(Stage.DEV)
+        assert workspace.state.current_state == Stage.DEV
         assert workspace.state.previous_state is None
         assert workspace.state.retry_at is None
 
     def test_deferred_to_failed_allowed(self, workspace):
-        workspace.transition("ANALYSIS")
-        workspace.transition("DEV")
-        workspace.transition("DEFERRED", retry_at="2026-04-14T20:00:00+00:00")
-        workspace.transition("FAILED")
-        assert workspace.state.current_state == "FAILED"
+        workspace.transition(Stage.ANALYSIS)
+        workspace.transition(Stage.DEV)
+        workspace.transition(Stage.DEFERRED, retry_at="2026-04-14T20:00:00+00:00")
+        workspace.transition(Stage.FAILED)
+        assert workspace.state.current_state == Stage.FAILED
         assert workspace.state.retry_at is None
 
 
 class TestFailedRecoverable:
     def test_failed_records_previous_state(self, workspace):
-        workspace.transition("ANALYSIS")
-        workspace.transition("DEV")
-        workspace.transition("FAILED")
-        assert workspace.state.previous_state == "DEV"
+        workspace.transition(Stage.ANALYSIS)
+        workspace.transition(Stage.DEV)
+        workspace.transition(Stage.FAILED)
+        assert workspace.state.previous_state == Stage.DEV
 
     def test_retry_from_failed_to_dev(self, workspace):
-        workspace.transition("ANALYSIS")
-        workspace.transition("DEV")
-        workspace.transition("FAILED")
-        workspace.transition("DEV")
-        assert workspace.state.current_state == "DEV"
+        workspace.transition(Stage.ANALYSIS)
+        workspace.transition(Stage.DEV)
+        workspace.transition(Stage.FAILED)
+        workspace.transition(Stage.DEV)
+        assert workspace.state.current_state == Stage.DEV
         assert workspace.state.previous_state is None
 
     def test_failed_to_archived(self, workspace):
-        workspace.transition("ANALYSIS")
-        workspace.transition("FAILED")
-        workspace.transition("ARCHIVED")
-        assert workspace.state.current_state == "ARCHIVED"
+        workspace.transition(Stage.ANALYSIS)
+        workspace.transition(Stage.FAILED)
+        workspace.transition(Stage.ARCHIVED)
+        assert workspace.state.current_state == Stage.ARCHIVED
 
     def test_failed_to_done_rejected(self, workspace):
-        workspace.transition("ANALYSIS")
-        workspace.transition("FAILED")
+        workspace.transition(Stage.ANALYSIS)
+        workspace.transition(Stage.FAILED)
         with pytest.raises(InvalidTransitionError):
-            workspace.transition("DONE")
+            workspace.transition(Stage.DONE)
 
     def test_retry_from_failed_clears_human_input_pending(self, workspace):
-        workspace.transition("ANALYSIS")
-        workspace.transition("DEV")
-        workspace.transition("FAILED")
+        workspace.transition(Stage.ANALYSIS)
+        workspace.transition(Stage.DEV)
+        workspace.transition(Stage.FAILED)
         assert workspace.state.human_input_pending is True
-        workspace.transition("DEV")
+        workspace.transition(Stage.DEV)
         assert workspace.state.human_input_pending is False
 
 

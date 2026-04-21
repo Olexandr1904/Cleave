@@ -7,6 +7,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from workspace.workspace import Stage
+
 
 def _init_repo(tmp_path: Path) -> Path:
     repo = tmp_path / "source"
@@ -22,7 +24,7 @@ def _init_repo(tmp_path: Path) -> Path:
 
 @pytest.mark.asyncio
 async def test_dev_stage_without_new_commit_goes_to_blocked(tmp_path):
-    """Reproducer for ACME-14595: dev agent ran, said 'Tests pass',
+    """Reproducer for silent-drift bug: dev agent ran, said 'Tests pass',
     but made no commit. Workspace must land in BLOCKED, not advance."""
     from orchestrator.orchestrator import Orchestrator
 
@@ -35,7 +37,7 @@ async def test_dev_stage_without_new_commit_goes_to_blocked(tmp_path):
     ws.state = SimpleNamespace(
         ticket_id="T-1",
         company_id="acme",
-        repo_id="acme-mobile",
+        repo_id="acme-app",
         current_state="DEV",
         previous_state="ANALYSIS",
         stage_iterations={},
@@ -99,7 +101,7 @@ async def test_dev_stage_with_new_commit_advances_normally(tmp_path):
     ws.reports_dir = tmp_path / "reports"
     ws.reports_dir.mkdir()
     ws.state = SimpleNamespace(
-        ticket_id="T-1", company_id="acme", repo_id="acme-mobile",
+        ticket_id="T-1", company_id="acme", repo_id="acme-app",
         current_state="DEV", previous_state="ANALYSIS",
         stage_iterations={}, branch="feature/t-1", error=None,
     )

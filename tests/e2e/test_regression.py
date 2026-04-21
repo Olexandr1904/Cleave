@@ -7,6 +7,7 @@ import json
 from playwright.sync_api import Page, expect
 
 from tests.e2e.conftest import _seed_workspace, goto_and_wait_for_board, wait_for_state_change
+from workspace.workspace import Stage
 
 
 class TestCardClickSurvivesAutoRefresh:
@@ -39,7 +40,7 @@ class TestCardClickSurvivesAutoRefresh:
         goto_and_wait_for_board(page, dashboard_server["base_url"])
         sp = (
             dashboard_server["workspace_dir"]
-            / "acme" / "acme-mobile" / "tickets" / "SPIKE-2" / "state.json"
+            / "acme" / "acme-app" / "tickets" / "SPIKE-2" / "state.json"
         )
 
         page.locator('.card[data-ticket="SPIKE-2"] [data-action="approve"]').click()
@@ -75,7 +76,7 @@ class TestNavigationPreservesState:
 
 
 class TestPushVerificationRegression:
-    """Regression: ACME-14595 — push stage must verify the branch is on the remote.
+    """Regression: push stage must verify the branch is on the remote.
 
     Before the fix, action stages bypassed stage_verifier.verify(). A push
     that silently failed would leave the workspace in PR_REVIEW (or PUSHED)
@@ -89,14 +90,14 @@ class TestPushVerificationRegression:
         subprocess.run(["git", "init", "-q"], cwd=source, check=True)
         subprocess.run(["git", "config", "user.email", "t@t"], cwd=source, check=True)
         subprocess.run(["git", "config", "user.name", "T"], cwd=source, check=True)
-        subprocess.run(["git", "checkout", "-b", "feature/mbmob-14595"], cwd=source, check=True)
+        subprocess.run(["git", "checkout", "-b", "feature/test-push"], cwd=source, check=True)
         (source / "a.txt").write_text("a")
         subprocess.run(["git", "add", "a.txt"], cwd=source, check=True)
         subprocess.run(["git", "commit", "-qm", "feat"], cwd=source, check=True)
 
     def test_push_not_on_remote_lands_in_blocked(self, tmp_path):
         """create_pr reports success but ls-remote finds nothing → BLOCKED."""
-        ws_path = _seed_workspace(tmp_path, "ACME-14595", "PUSHED", previous_state="QA")
+        ws_path = _seed_workspace(tmp_path, "T-PUSH-1", "PUSHED", previous_state="QA")
         self._init_repo(ws_path)
 
         from workspace.workspace import Workspace
@@ -113,7 +114,7 @@ class TestPushVerificationRegression:
         """Positive case: branch IS on remote → verify passes."""
         import subprocess
 
-        ws_path = _seed_workspace(tmp_path, "ACME-14595-OK", "PUSHED", previous_state="QA")
+        ws_path = _seed_workspace(tmp_path, "T-PUSH-2", "PUSHED", previous_state="QA")
         source = ws_path / "source"
         source.mkdir(exist_ok=True)
 
@@ -123,12 +124,12 @@ class TestPushVerificationRegression:
         subprocess.run(["git", "config", "user.email", "t@t"], cwd=source, check=True)
         subprocess.run(["git", "config", "user.name", "T"], cwd=source, check=True)
         subprocess.run(["git", "remote", "add", "origin", str(remote)], cwd=source, check=True)
-        subprocess.run(["git", "checkout", "-b", "feature/mbmob-14595-ok"], cwd=source, check=True)
+        subprocess.run(["git", "checkout", "-b", "feature/t-push-2"], cwd=source, check=True)
         (source / "a.txt").write_text("a")
         subprocess.run(["git", "add", "a.txt"], cwd=source, check=True)
         subprocess.run(["git", "commit", "-qm", "feat"], cwd=source, check=True)
         subprocess.run(
-            ["git", "push", "-u", "origin", "feature/mbmob-14595-ok"],
+            ["git", "push", "-u", "origin", "feature/t-push-2"],
             cwd=source, check=True,
         )
 

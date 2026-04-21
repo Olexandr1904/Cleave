@@ -8,10 +8,11 @@ from pathlib import Path
 from playwright.sync_api import Page, expect
 
 from tests.e2e.conftest import goto_and_wait_for_board, wait_for_state_change
+from workspace.workspace import Stage
 
 
 def state_path(base: Path, ticket_id: str) -> Path:
-    return base / "acme" / "acme-mobile" / "tickets" / ticket_id / "state.json"
+    return base / "acme" / "acme-app" / "tickets" / ticket_id / "state.json"
 
 
 class TestTakeControlButton:
@@ -152,7 +153,7 @@ class TestReleaseControl:
         base, seed = workspace_seeder
         seed("MC-1", "MANUAL_CONTROL", previous_state="DEV")
         ctx = dashboard_server_custom()
-        sp = Path(base) / "acme" / "acme-mobile" / "tickets" / "MC-1" / "state.json"
+        sp = Path(base) / "acme" / "acme-app" / "tickets" / "MC-1" / "state.json"
 
         goto_and_wait_for_board(page, ctx["base_url"])
         page.locator('.card[data-ticket="MC-1"]').click()
@@ -170,7 +171,7 @@ class TestReleaseControl:
         base, seed = workspace_seeder
         seed("MC-2", "MANUAL_CONTROL", previous_state="DEV")
         ctx = dashboard_server_custom()
-        sp = Path(base) / "acme" / "acme-mobile" / "tickets" / "MC-2" / "state.json"
+        sp = Path(base) / "acme" / "acme-app" / "tickets" / "MC-2" / "state.json"
 
         goto_and_wait_for_board(page, ctx["base_url"])
         page.locator('.card[data-ticket="MC-2"]').click()

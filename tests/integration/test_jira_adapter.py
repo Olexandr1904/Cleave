@@ -139,9 +139,9 @@ def test_build_jql_ands_multiple_trigger_labels():
         email="bot@example.com",
         token="tok",
         project_key="ACME",
-        trigger_labels=["ai-pipeline", "acme-mobile-android"],
+        trigger_labels=["ai-pipeline", "acme-mobile"],
     )
     jql = adapter._build_todo_jql()
     assert 'labels = "ai-pipeline"' in jql
-    assert 'labels = "acme-mobile-android"' in jql
+    assert 'labels = "acme-mobile"' in jql
     assert jql.count("AND") >= 3  # project AND label1 AND label2 AND status

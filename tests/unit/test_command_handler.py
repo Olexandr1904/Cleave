@@ -9,6 +9,7 @@ import pytest
 
 from integrations.telegram.command_handler import CommandHandler
 from integrations.telegram.intent_parser import ParsedIntent
+from workspace.workspace import Stage
 
 
 def _make_workspace(ticket_id, state, previous_state=None):

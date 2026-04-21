@@ -371,6 +371,7 @@ def main(argv: list[str] | None = None) -> int:
                 allowed_chat_ids=allowed_chat_ids or None,
                 event_bus=event_bus,
             )
+            command_handler._wake_fn = lambda: orchestrator._wake_event.set()
             notifier.set_command_handler(command_handler)
             print(
                 f"  Telegram CommandHandler wired (allowlist: {len(allowed_chat_ids)} chat id(s))"
@@ -416,11 +417,51 @@ def main(argv: list[str] | None = None) -> int:
                 result = await agent_runtime.execute(
                     agent_id="project-setup-agent",
                     workspace=ws,
-                    extra_context={"config_dir": str(cfg_dir)},
+                    extra_context={"config_dir": str(Path(cfg_dir).resolve())},
                 )
                 if not result.success:
                     raise RuntimeError(
                         f"project-setup-agent failed: {result.error or 'unknown error'}"
+                    )
+                # Agent exited 0 but may have reported failure in its output
+                output_lower = (result.output or "").lower()
+                if "status: fail" in output_lower or "status:fail" in output_lower:
+                    report_path = setup_ws.setup_dir / "reports" / "project-setup-agent-output.md"
+                    report = report_path.read_text(encoding="utf-8") if report_path.exists() else result.output or ""
+                    raise RuntimeError(
+                        f"project-setup-agent reported failure:\n{report}"
+                    )
+
+                # The agent writes config files into source/ (sandbox boundary).
+                # Copy them to the real config-live directory.
+                import shutil
+                src = ws.source_dir
+                dest = Path(cfg_dir).resolve() / "projects" / setup_ws.project_id
+                dest.mkdir(parents=True, exist_ok=True)
+                # project.yaml — agent may write it at root or under a nested path
+                for candidate in [
+                    src / "project.yaml",
+                    src / "config-live" / "projects" / setup_ws.project_id / "project.yaml",
+                ]:
+                    if candidate.exists():
+                        shutil.copy2(candidate, dest / "project.yaml")
+                        break
+                # repos/*.yaml
+                repos_dest = dest / "repos"
+                repos_dest.mkdir(parents=True, exist_ok=True)
+                for repos_src in [
+                    src / "repos",
+                    src / "config-live" / "projects" / setup_ws.project_id / "repos",
+                ]:
+                    if repos_src.is_dir():
+                        for f in repos_src.glob("*.yaml"):
+                            shutil.copy2(f, repos_dest / f.name)
+                        break
+
+                if not (dest / "project.yaml").exists():
+                    raise RuntimeError(
+                        f"Agent did not produce project.yaml (checked source/ and source/config-live/). "
+                        f"Files in source/: {[p.name for p in src.iterdir()]}"
                     )
 
             app = create_app(

@@ -5,6 +5,7 @@ from __future__ import annotations
 from playwright.sync_api import Page, expect
 
 from tests.e2e.conftest import goto_and_wait_for_board
+from workspace.workspace import Stage
 
 
 class TestBoardRendering:
@@ -32,7 +33,7 @@ class TestBoardRendering:
     def test_card_shows_repo_id(self, page: Page, dashboard_server: dict):
         goto_and_wait_for_board(page, dashboard_server["base_url"])
         card = page.locator('.card[data-ticket="SPIKE-1"]')
-        expect(card.locator(".card-repo")).to_contain_text("acme-mobile")
+        expect(card.locator(".card-repo")).to_contain_text("acme-app")
 
 
 class TestBoardSort:

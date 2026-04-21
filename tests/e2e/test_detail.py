@@ -5,6 +5,7 @@ from __future__ import annotations
 from playwright.sync_api import Page, expect
 
 from tests.e2e.conftest import goto_and_wait_for_board, make_fake_projects
+from workspace.workspace import Stage
 
 
 def open_detail(page: Page, base_url: str, ticket_id: str) -> None:
@@ -46,7 +47,7 @@ class TestDetailInfoSection:
         open_detail(page, dashboard_server["base_url"], "SPIKE-1")
         info = page.locator(".info-grid")
         expect(info).to_contain_text("feature/spike-1")
-        expect(info).to_contain_text("acme-mobile")
+        expect(info).to_contain_text("acme-app")
         expect(info).to_contain_text("acme")
 
     def test_error_panel_shown_for_blocked_state(
@@ -99,7 +100,7 @@ class TestDetailExternalLinks:
 
         repo_link = page.locator(".info-link-repo")
         expect(repo_link).to_have_attribute(
-            "href", "https://github.com/acme/acme-mobile"
+            "href", "https://github.com/acme/acme-app"
         )
 
     def test_pr_link_rendered_when_pr_url_set(
@@ -108,14 +109,14 @@ class TestDetailExternalLinks:
         base, seed = workspace_seeder
         seed(
             "ACME-99", "PR_REVIEW",
-            pr_url="https://github.com/acme/acme-mobile/pull/123",
+            pr_url="https://github.com/acme/acme-app/pull/123",
         )
         ctx = dashboard_server_custom(projects=make_fake_projects())
 
         open_detail(page, ctx["base_url"], "ACME-99")
         pr_link = page.locator(".info-link-pr")
         expect(pr_link).to_have_attribute(
-            "href", "https://github.com/acme/acme-mobile/pull/123"
+            "href", "https://github.com/acme/acme-app/pull/123"
         )
 
     def test_no_links_section_without_project_config(

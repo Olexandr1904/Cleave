@@ -13,7 +13,7 @@ from integrations.llm.llm_interface import LLMResponse
 from orchestrator.agent_runtime import AgentRuntime
 from orchestrator.orchestrator import Orchestrator
 from orchestrator.workflow_router import load_workflow
-from workspace.workspace import Workspace, WorkspaceState
+from workspace.workspace import Stage, Workspace, WorkspaceState
 from workspace.workspace_manager import WorkspaceManager
 
 PROJECT_ROOT = str(Path(__file__).parent.parent.parent)

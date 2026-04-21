@@ -146,6 +146,91 @@ class GitHubAdapter(VCSInterface):
             json={"body": body},
         )
 
+    async def _graphql_request(self, query: str, variables: dict | None = None) -> dict:
+        """Execute a GitHub GraphQL request."""
+        payload: dict[str, Any] = {"query": query}
+        if variables:
+            payload["variables"] = variables
+        response = await self._client.post(
+            "https://api.github.com/graphql",
+            json=payload,
+            headers={"Authorization": f"Bearer {self._token}"},
+        )
+        response.raise_for_status()
+        return response.json()
+
+    async def resolve_comment(self, pr_number: int, comment_id: int) -> None:
+        """Resolve a PR review comment thread via GraphQL."""
+        # Get the comment's node_id via REST
+        try:
+            data = await self._request(
+                "GET", f"{self._repo_path}/pulls/comments/{comment_id}",
+            )
+        except Exception as e:
+            logger.warning("Cannot fetch comment %d for resolve: %s", comment_id, e)
+            return
+        node_id = data.get("node_id")
+        if not node_id:
+            logger.warning("No node_id for comment %d", comment_id)
+            return
+
+        # Find the review thread containing this comment
+        query = """
+        query($nodeId: ID!) {
+          node(id: $nodeId) {
+            ... on PullRequestReviewComment {
+              pullRequestReview {
+                pullRequest {
+                  reviewThreads(last: 100) {
+                    nodes {
+                      id
+                      isResolved
+                      comments(first: 1) {
+                        nodes { id }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+        """
+        try:
+            result = await self._graphql_request(query, {"nodeId": node_id})
+        except Exception as e:
+            logger.warning("GraphQL query failed for comment %d: %s", comment_id, e)
+            return
+
+        threads = (
+            result.get("data", {}).get("node", {})
+            .get("pullRequestReview", {}).get("pullRequest", {})
+            .get("reviewThreads", {}).get("nodes", [])
+        )
+        thread_id = None
+        for thread in threads:
+            if thread.get("isResolved"):
+                continue
+            comment_nodes = thread.get("comments", {}).get("nodes", [])
+            if any(c.get("id") == node_id for c in comment_nodes):
+                thread_id = thread["id"]
+                break
+
+        if not thread_id:
+            return  # Already resolved or not found
+
+        mutation = """
+        mutation($threadId: ID!) {
+          resolveReviewThread(input: {threadId: $threadId}) {
+            thread { id isResolved }
+          }
+        }
+        """
+        try:
+            await self._graphql_request(mutation, {"threadId": thread_id})
+        except Exception as e:
+            logger.warning("Failed to resolve thread for comment %d: %s", comment_id, e)
+
     async def check_pr_status(self, pr_number: int) -> PRStatus:
         """Check CI status for a PR."""
         pr_data = await self._request(

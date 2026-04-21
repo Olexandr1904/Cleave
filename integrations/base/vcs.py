@@ -55,6 +55,10 @@ class VCSInterface(ABC):
         """Post a reply to a specific review comment."""
 
     @abstractmethod
+    async def resolve_comment(self, pr_number: int, comment_id: int) -> None:
+        """Mark a PR review comment thread as resolved."""
+
+    @abstractmethod
     async def check_pr_status(self, pr_number: int) -> PRStatus:
         """Check whether all CI checks are passing."""
 

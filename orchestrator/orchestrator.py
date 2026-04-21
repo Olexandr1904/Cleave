@@ -415,12 +415,18 @@ class Orchestrator:
                     )
                     break
 
-                # Check if workspace already exists for this ticket
+                # Check if workspace already exists (in memory or on disk)
                 already_exists = any(
                     ws.state.ticket_id == pt.ticket.id
                     for ws in self._active_workspaces
                 )
                 if already_exists:
+                    continue
+                # Also check disk — workspace may be DONE/ARCHIVED but still on disk
+                from pathlib import Path
+                ws_dir = Path(self._global_config.workspaces.base_dir) / project_id / pt.repo_id / "tickets" / pt.ticket.id
+                if ws_dir.exists():
+                    logger.debug("Workspace on disk for %s — skipping", pt.ticket.id)
                     continue
 
                 repo_config = project.repos.get(pt.repo_id)

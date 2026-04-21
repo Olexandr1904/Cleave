@@ -47,6 +47,10 @@ class VCSInterface(ABC):
         """Open a pull request. Returns (pr_number, pr_url)."""
 
     @abstractmethod
+    async def find_pr_by_branch(self, branch: str) -> tuple[int, str] | None:
+        """Find an open PR for the given branch. Returns (pr_number, pr_url) or None."""
+
+    @abstractmethod
     async def get_pr_comments(self, pr_number: int) -> list[PRComment]:
         """Get all review comments on a PR."""
 

@@ -504,7 +504,27 @@ class Orchestrator:
             except Exception as e:
                 logger.warning("Failed to transition %s: %s", pt.ticket.id, e)
 
-        # Transition workspace to ANALYSIS
+        # Check if a PR already exists for this ticket's branch
+        vcs_entry = self._repo_vcs.get(pt.repo_id)
+        if vcs_entry:
+            vcs_adapter, _ = vcs_entry
+            branch = ws.state.branch
+            if branch:
+                try:
+                    pr_info = await vcs_adapter.find_pr_by_branch(branch)
+                    if pr_info:
+                        pr_number, pr_url = pr_info
+                        ws.update_state(pr_number=pr_number, pr_url=pr_url)
+                        ws.transition(Stage.PR_REVIEW)
+                        logger.info(
+                            "Found existing PR #%d for %s — resuming from PR_REVIEW",
+                            pr_number, pt.ticket.id,
+                        )
+                        return ws
+                except Exception as e:
+                    logger.warning("Failed to check for existing PR for %s: %s", pt.ticket.id, e)
+
+        # No existing PR — start from ANALYSIS
         ws.transition(Stage.ANALYSIS)
         return ws
 

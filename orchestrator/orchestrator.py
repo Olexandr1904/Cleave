@@ -728,8 +728,7 @@ class Orchestrator:
         first_line = (error or "").splitlines()[0] if error else ""
         msg = (
             f"\u274c [{state.company_id}/{state.repo_id}] {state.ticket_id} "
-            f"FAILED at {state.previous_state or '?'}. Error: {first_line}. "
-            f"Reply 'retry {state.ticket_id}' or use the dashboard."
+            f"FAILED at {state.previous_state or '?'}. Error: {first_line}."
         )
         buttons = [Button(label="Retry", action=f"retry:{state.ticket_id}")]
         try:
@@ -882,20 +881,37 @@ class Orchestrator:
                     f"🔗 [{state.company_id}/{state.repo_id}] {state.ticket_id}\n"
                     f"{sep}\n"
                     f"PR created: {pr_url}\n\n"
-                    f"Please review the code. When the review is complete,\n"
-                    f"reply to THIS message with 'reviewed'.\n"
-                    f"{sep}"
+                    f"Please review the code."
                 )
-                msg_id = await self._notifier.send_message(chat_id, msg)
+                pr_buttons = [Button(label="Review Complete", action=f"reviewed:{state.ticket_id}")]
+                msg_id = await self._notifier.send_message(chat_id, msg, buttons=pr_buttons)
                 workspace.state.escalation_msg_id = msg_id
                 workspace.state.escalation_chat_id = chat_id
                 workspace.save_state()
 
     async def _action_push_and_open_pr(self, workspace: Workspace) -> ActionResult:
         """Push branch and open PR. Returns ActionResult — caller transitions."""
+        state = workspace.state
+
+        # If PR already exists (from a previous cycle), just push new commits and skip to PR_REVIEW
+        if state.pr_number and state.pr_url:
+            vcs, repo_config = self._get_vcs_for_workspace(workspace)
+            if vcs:
+                try:
+                    branch = state.branch
+                    if branch:
+                        await vcs.push(str(workspace.source_dir), branch)
+                        logger.info("Pushed updates to existing PR #%d for %s", state.pr_number, state.ticket_id)
+                except Exception as e:
+                    logger.warning("Failed to push to existing PR: %s", e)
+            return ActionResult(
+                success=True, next_state=Stage.PR_REVIEW, error="",
+                metadata={"pr_url": state.pr_url, "pr_number": state.pr_number},
+            )
+
         vcs, repo_config = self._get_vcs_for_workspace(workspace)
         if not vcs or not repo_config:
-            logger.error("No VCS configured for %s", workspace.state.repo_id)
+            logger.error("No VCS configured for %s", state.repo_id)
             return ActionResult(
                 success=False, next_state="", error="No VCS adapter configured",
                 metadata={},
@@ -1275,24 +1291,20 @@ class Orchestrator:
                 f"⏸ [{state.company_id}/{state.repo_id}] {tid}\n"
                 f"{sep}\n"
                 f"PR: {state.pr_url or 'N/A'}\n"
-                f"{summary}\n"
-                f"{sep}\n"
-                f"↩️ Reply: proceed = finalize, reject = back to dev"
+                f"{summary}"
             )
             return text, buttons
 
         actions = {
-            Stage.ANALYSIS: ("Analysis done → ready for development", "proceed = start coding, reject = back to analysis"),
-            Stage.QA: ("QA passed → ready to push & open PR", "proceed = push code, reject = back to dev"),
+            Stage.ANALYSIS: "Analysis done → ready for development",
+            Stage.QA: "QA passed → ready to push & open PR",
         }
-        title, options = actions.get(gate_state, (f"Awaiting approval at {gate_state}", "proceed or reject"))
+        title = actions.get(gate_state, f"Awaiting approval at {gate_state}")
 
         text = (
             f"⏸ [{state.company_id}/{state.repo_id}] {tid}\n"
             f"{sep}\n"
-            f"{title}\n"
-            f"{sep}\n"
-            f"↩️ Reply: {options}"
+            f"{title}"
         )
         return text, buttons
 

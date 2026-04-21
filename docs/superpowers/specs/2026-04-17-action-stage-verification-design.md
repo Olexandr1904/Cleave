@@ -8,7 +8,7 @@
 
 Feature 1 (project health + stage verification, merged 2026-04-15) wired `stage_verifier.verify()` into `_handle_agent_stage` only. The `push` and `pr_review` stages are action stages (non-agent), handled by `_handle_action_stage`, which never calls the verifier. The original spec ([2026-04-15-project-health-and-stage-verification-design.md](2026-04-15-project-health-and-stage-verification-design.md)) explicitly lists both as mechanically verified stages.
 
-**Concrete failure:** ACME-14595 in the `acme/acme-mobile` workspace. After QA approval, the workspace transitioned to `PUSHED` state. The push action ran `create_pr` against the VCS adapter, but `git ls-remote origin` confirms the feature branch was never pushed. No `stage_verification_failed` event fired because the verifier was never invoked. The workspace sat in `PUSHED` with `pr_number: null` indefinitely.
+**Concrete failure:** ACME-14595 in the `acme/acme-app` workspace. After QA approval, the workspace transitioned to `PUSHED` state. The push action ran `create_pr` against the VCS adapter, but `git ls-remote origin` confirms the feature branch was never pushed. No `stage_verification_failed` event fired because the verifier was never invoked. The workspace sat in `PUSHED` with `pr_number: null` indefinitely.
 
 The verifier functions themselves (`_verify_push`, `_verify_pr_review` in `orchestrator/stage_verifier.py`) are fully implemented and tested. They are simply never called.
 

@@ -130,7 +130,7 @@ advances.
 - Email
 - **Jira API token** (raw secret, password input)
 - Trigger labels — multi-value chip input, at least one required (e.g.
-  `ai-pipeline`, `acme-mobile-android`). A ticket must carry all listed labels
+  `ai-pipeline`, `acme-mobile`). A ticket must carry all listed labels
   to be picked up.
 - Ignore labels (optional, comma-separated)
 - Status mappings: `todo`, `in_progress`, `in_review`, `done` with defaults
@@ -570,7 +570,7 @@ migrates the schema fully:
 - **Trigger-labels AND semantics**: a ticket must carry **all** labels in
   `trigger_labels` to be picked up (logical AND). This matches the user's
   intent of combining a generic `ai-pipeline` label with a project-specific
-  label like `acme-mobile-android` so that the pipeline can distinguish which
+  label like `acme-mobile` so that the pipeline can distinguish which
   project a ticket belongs to.
 
 - **Atlas task supervision**: Atlas runs as a background asyncio task spawned

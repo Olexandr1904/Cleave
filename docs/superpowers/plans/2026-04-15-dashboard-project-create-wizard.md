@@ -81,8 +81,8 @@ def test_jira_config_has_trigger_labels_list():
 
 
 def test_jira_config_accepts_multiple_labels():
-    cfg = JiraConfig(trigger_labels=["ai-pipeline", "acme-mobile-android"])
-    assert cfg.trigger_labels == ["ai-pipeline", "acme-mobile-android"]
+    cfg = JiraConfig(trigger_labels=["ai-pipeline", "acme-mobile"])
+    assert cfg.trigger_labels == ["ai-pipeline", "acme-mobile"]
 ```
 
 - [ ] **Step 2: Run test to verify it fails**
@@ -213,13 +213,13 @@ Append to `tests/unit/test_ticket_prioritizer.py`:
 
 ```python
 def test_filter_tickets_requires_all_trigger_labels(make_ticket):
-    t1 = make_ticket(id="A-1", labels=["ai-pipeline", "acme-mobile-android"])
+    t1 = make_ticket(id="A-1", labels=["ai-pipeline", "acme-mobile"])
     t2 = make_ticket(id="A-2", labels=["ai-pipeline"])
-    t3 = make_ticket(id="A-3", labels=["acme-mobile-android"])
+    t3 = make_ticket(id="A-3", labels=["acme-mobile"])
 
     result = filter_tickets(
         [t1, t2, t3],
-        trigger_labels=["ai-pipeline", "acme-mobile-android"],
+        trigger_labels=["ai-pipeline", "acme-mobile"],
         ignore_labels=[],
     )
 
@@ -316,11 +316,11 @@ def test_build_jql_ands_multiple_trigger_labels():
         email="bot@example.com",
         token="tok",
         project_key="ACME",
-        trigger_labels=["ai-pipeline", "acme-mobile-android"],
+        trigger_labels=["ai-pipeline", "acme-mobile"],
     )
     jql = adapter._build_todo_jql()
     assert 'labels = "ai-pipeline"' in jql
-    assert 'labels = "acme-mobile-android"' in jql
+    assert 'labels = "acme-mobile"' in jql
     assert jql.count("AND") >= 3  # project AND label1 AND label2 AND status
 ```
 

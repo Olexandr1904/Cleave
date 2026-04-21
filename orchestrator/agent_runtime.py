@@ -240,7 +240,7 @@ class AgentRuntime:
             # CLI errors with no meaningful output are likely transient
             # (quota, network, timeout) — treat as deferrable, not permanent
             error_str = str(e).lower()
-            if "cli exited" in error_str or "cli returned" in error_str or "timeout" in error_str:
+            if "cli exited" in error_str or "cli returned" in error_str or "returned error" in error_str or "timeout" in error_str:
                 logger.warning("Agent '%s' CLI error (transient): %s", agent_id, e)
                 return AgentResult(
                     agent_id=agent_id,

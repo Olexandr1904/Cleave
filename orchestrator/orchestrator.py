@@ -16,7 +16,7 @@ from config.config_loader import ConfigError, load_config
 
 from config.schemas import GlobalConfig, LoadedProject, RepoConfig
 from config.resource_registry import ResourceRegistry
-from integrations.base.notifier import NotifierInterface
+from integrations.base.notifier import Button, NotifierInterface
 from integrations.base.tracker import TicketData, TrackerInterface
 from integrations.base.vcs import VCSInterface
 from integrations.telegram.handlers.analyze import AnalyzeHandler
@@ -623,8 +623,8 @@ class Orchestrator:
                 self._emit("approval_requested", f"Awaiting approval for {state.ticket_id} after {current_state}", project_id=state.company_id, ticket_id=state.ticket_id, data={"gate": current_state})
                 if self._notifier:
                     chat_id = self._get_chat_id(workspace)
-                    summary = self._build_gate_summary(workspace, current_state)
-                    await self._notifier.send_message(chat_id, summary)
+                    summary, buttons = self._build_gate_summary(workspace, current_state)
+                    await self._notifier.send_message(chat_id, summary, buttons=buttons)
             elif next_stage == "escalate":
                 await self._handle_escalate(workspace)
             else:
@@ -668,8 +668,9 @@ class Orchestrator:
             f"will retry at {retry_at.strftime('%Y-%m-%d %H:%M')} UTC. "
             f"Other tickets hitting the same quota will defer silently until then."
         )
+        buttons = [Button(label="Retry Now", action=f"retry:{state.ticket_id}")]
         try:
-            await self._notifier.send_message(chat_id, msg)
+            await self._notifier.send_message(chat_id, msg, buttons=buttons)
             self._quota_window_end = retry_at
         except Exception as e:
             logger.warning("Failed to send deferred notification: %s", e)
@@ -686,8 +687,9 @@ class Orchestrator:
             f"FAILED at {state.previous_state or '?'}. Error: {first_line}. "
             f"Reply 'retry {state.ticket_id}' or use the dashboard."
         )
+        buttons = [Button(label="Retry", action=f"retry:{state.ticket_id}")]
         try:
-            await self._notifier.send_message(chat_id, msg)
+            await self._notifier.send_message(chat_id, msg, buttons=buttons)
         except Exception as e:
             logger.warning("Failed to send failure notification: %s", e)
 
@@ -803,8 +805,8 @@ class Orchestrator:
             )
             if self._notifier:
                 chat_id = self._get_chat_id(workspace)
-                summary = self._build_gate_summary(workspace, current_state)
-                await self._notifier.send_message(chat_id, summary)
+                summary, buttons = self._build_gate_summary(workspace, current_state)
+                await self._notifier.send_message(chat_id, summary, buttons=buttons)
             return
 
         self._emit(
@@ -1025,10 +1027,14 @@ class Orchestrator:
         else:
             logger.warning("Cannot map stage '%s' to state", stage_id)
 
-    def _build_gate_summary(self, workspace: Workspace, gate_state: str) -> str:
-        """Build a summary message for an approval gate notification."""
+    def _build_gate_summary(self, workspace: Workspace, gate_state: str) -> tuple[str, list[Button]]:
+        """Build a summary message and buttons for an approval gate notification."""
         state = workspace.state
         ticket_id = state.ticket_id
+        buttons = [
+            Button(label="Approve", action=f"approve:{ticket_id}"),
+            Button(label="Reject", action=f"reject:{ticket_id}"),
+        ]
 
         if gate_state == "ANALYSIS":
             ba_report = workspace.reports_dir / "ba-agent-output.md"
@@ -1036,11 +1042,12 @@ class Orchestrator:
             if ba_report.exists():
                 content = ba_report.read_text(encoding="utf-8")
                 summary = content[:500]
-            return (
+            text = (
                 f"[{state.company_id}/{state.repo_id}] {ticket_id}\n\n"
                 f"Analysis complete. Here's the plan:\n{summary}\n\n"
                 f"Proceed to development?"
             )
+            return text, buttons
 
         if gate_state == "QA":
             qa_report = workspace.reports_dir / "qa-agent-output.md"
@@ -1048,20 +1055,22 @@ class Orchestrator:
             if qa_report.exists():
                 content = qa_report.read_text(encoding="utf-8")
                 summary = content[:500]
-            return (
+            text = (
                 f"[{state.company_id}/{state.repo_id}] {ticket_id}\n\n"
                 f"Tests pass.\n{summary}\n\n"
                 f"Push and open PR?"
             )
+            return text, buttons
 
         if gate_state == "PR_REVIEW":
-            return (
+            text = (
                 f"[{state.company_id}/{state.repo_id}] {ticket_id}\n\n"
                 f"PR review complete. PR: {state.pr_url or 'N/A'}\n\n"
                 f"Finalize and merge?"
             )
+            return text, buttons
 
-        return f"{ticket_id}: Awaiting approval at {gate_state}."
+        return f"{ticket_id}: Awaiting approval at {gate_state}.", buttons
 
     def _parse_agent_outcome(
         self, stage_id: str, output: str, workspace: Workspace,

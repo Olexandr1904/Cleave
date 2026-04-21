@@ -417,3 +417,54 @@ class CommandHandler:
                 )
                 return True
         return False
+
+    async def handle_callback(self, action: str, ticket_id: str, chat_id: str, message_id: int) -> None:
+        """Handle an inline button press. Bypasses LLM intent parsing."""
+        if self._allowed_chat_ids is not None and chat_id not in self._allowed_chat_ids:
+            return
+
+        workspaces = self._active_workspaces_fn()
+
+        if action == "approve":
+            ws = next((w for w in workspaces if w.state.ticket_id == ticket_id and w.state.current_state == "AWAITING_APPROVAL"), None)
+            if not ws:
+                await self._notifier.send_message(chat_id, f"No workspace awaiting approval for {ticket_id}.", reply_to_message_id=message_id)
+                return
+            next_state = self._approval_handler.resolve_next_state(ws)
+            ws.transition(next_state)
+            await self._notifier.send_message(chat_id, f"Approved {ticket_id}. Moving to {next_state}.", reply_to_message_id=message_id)
+
+        elif action == "reject":
+            ws = next((w for w in workspaces if w.state.ticket_id == ticket_id and w.state.current_state == "AWAITING_APPROVAL"), None)
+            if not ws:
+                await self._notifier.send_message(chat_id, f"No workspace awaiting approval for {ticket_id}.", reply_to_message_id=message_id)
+                return
+            ws.transition("FAILED")
+            ws.update_state(error="Rejected by operator via Telegram")
+            await self._notifier.send_message(chat_id, f"Rejected {ticket_id}. Marked as FAILED.", reply_to_message_id=message_id)
+
+        elif action == "reviewed":
+            ws = next((w for w in workspaces if w.state.ticket_id == ticket_id and w.state.current_state == "PR_REVIEW"), None)
+            if not ws:
+                await self._notifier.send_message(chat_id, f"No workspace in PR_REVIEW for {ticket_id}.", reply_to_message_id=message_id)
+                return
+            ws.state.human_input_reply = "reviewed"
+            ws.save_state()
+            await self._notifier.send_message(chat_id, f"Got it. Fetching PR comments for {ticket_id} now.", reply_to_message_id=message_id)
+            if hasattr(self, '_wake_fn') and self._wake_fn:
+                self._wake_fn()
+
+        elif action == "retry":
+            ws = next((w for w in workspaces if w.state.ticket_id == ticket_id), None)
+            if not ws:
+                await self._notifier.send_message(chat_id, f"No active workspace found for {ticket_id}.", reply_to_message_id=message_id)
+                return
+            ws.state.human_input_pending = False
+            ws.state.error = None
+            target_state = ws.state.previous_state or "ANALYSIS"
+            ws.transition(target_state)
+            ws.save_state()
+            await self._notifier.send_message(chat_id, f"Retrying {ticket_id} from {target_state}.", reply_to_message_id=message_id)
+
+        else:
+            await self._notifier.send_message(chat_id, f"Unknown action: {action}", reply_to_message_id=message_id)

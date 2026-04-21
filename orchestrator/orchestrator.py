@@ -1163,19 +1163,24 @@ class Orchestrator:
         sep = "─" * 30
 
         if gate_state == "PR_REVIEW":
-            # Include PR comment summary if available
-            comments_file = workspace.reports_dir / "pr-review-comments.md"
-            responder_file = workspace.reports_dir / "pr-comment-responder-agent-output.md"
+            resolution_file = workspace.reports_dir / "pr-review-resolution.md"
             summary = ""
-            if comments_file.exists():
-                content = comments_file.read_text(encoding="utf-8").strip()
-                comment_count = content.count("## Comment by")
-                summary += f"\n{comment_count} PR comment(s) found."
+            if resolution_file.exists():
+                content = resolution_file.read_text(encoding="utf-8")
+                # Extract the last Resolution Summary line
+                for line in reversed(content.splitlines()):
+                    if line.startswith("Fixed:") or line.startswith("## Resolution Summary"):
+                        summary = line
+                        break
+                if not summary:
+                    summary = "Review complete."
             else:
-                summary += "\nNo PR comments."
-            if responder_file.exists():
-                resp = responder_file.read_text(encoding="utf-8").strip()
-                summary += f"\n\nAgent response:\n{resp[:500]}"
+                comments_file = workspace.reports_dir / "pr-review-comments.md"
+                if comments_file.exists():
+                    count = comments_file.read_text(encoding="utf-8").count("## Comment by")
+                    summary = f"{count} comment(s) processed."
+                else:
+                    summary = "No PR comments found."
             return (
                 f"⏸ [{state.company_id}/{state.repo_id}] {tid}\n"
                 f"{sep}\n"

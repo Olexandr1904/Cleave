@@ -101,7 +101,7 @@ class GitHubAdapter(VCSInterface):
         """Push branch to origin."""
         args = ["push", "-u", "origin", branch_name]
         if force:
-            args.insert(1, "--force-with-lease")
+            args.insert(1, "--force")
         self._run_git(repo_dir, *args)
         logger.info("Pushed branch: %s%s", branch_name, " (force)" if force else "")
 

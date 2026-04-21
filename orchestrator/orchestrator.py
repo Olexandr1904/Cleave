@@ -1194,7 +1194,14 @@ class Orchestrator:
             if outputs:
                 report_content = outputs[0].read_text(encoding="utf-8").strip()
 
-        hint = f"\n\n{'─' * 30}\n↩️ Reply to THIS message to answer for {state.ticket_id}."
+        sep = "─" * 30
+        hint = (
+            f"\n\n{sep}\n"
+            f"↩️ Reply to THIS message for {state.ticket_id}:\n"
+            f"  • provide answer/instructions\n"
+            f"  • 'skip' = advance to next stage anyway\n"
+            f"  • 'retry' = re-run this stage"
+        )
         if report_content:
             budget = 4000 - len(header) - len(hint)
             if len(report_content) > budget:

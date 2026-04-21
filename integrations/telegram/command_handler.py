@@ -493,12 +493,50 @@ class CommandHandler:
                 logger.info("PR review signal for %s via reply to msg %d", ws.state.ticket_id, reply_to_msg_id)
                 return True
 
-            # BLOCKED: resume from previous stage
-            if ws.state.current_state == "BLOCKED":
+            # BLOCKED: resume or skip
+            if ws.state.current_state == Stage.BLOCKED:
+                reply_lower = text.strip().lower()
+
+                if reply_lower == "skip":
+                    # Advance past the blocked stage to the next one
+                    _NEXT = {
+                        Stage.ANALYSIS: Stage.DEV, Stage.DEV: Stage.SCOPE_CHECK,
+                        Stage.SCOPE_CHECK: Stage.QA, Stage.QA: Stage.PUSHED,
+                        Stage.PUSHED: Stage.PR_REVIEW, Stage.PR_REVIEW: Stage.DONE,
+                    }
+                    prev = ws.state.previous_state or Stage.ANALYSIS
+                    resume_state = _NEXT.get(prev, Stage.DONE)
+                    ws.state.human_input_pending = False
+                    ws.state.error = None
+                    ws.transition(resume_state)
+                    ws.save_state()
+                    await self._notifier.send_message(
+                        chat_id,
+                        f"Skipped {prev} for {ws.state.ticket_id}. Advanced to {resume_state}.",
+                    )
+                    if hasattr(self, '_wake_fn') and self._wake_fn:
+                        self._wake_fn()
+                    return True
+
+                if reply_lower == "retry":
+                    resume_state = ws.state.previous_state or Stage.ANALYSIS
+                    ws.state.human_input_pending = False
+                    ws.state.error = None
+                    ws.transition(resume_state)
+                    ws.save_state()
+                    await self._notifier.send_message(
+                        chat_id,
+                        f"Retrying {resume_state} for {ws.state.ticket_id}.",
+                    )
+                    if hasattr(self, '_wake_fn') and self._wake_fn:
+                        self._wake_fn()
+                    return True
+
+                # Default: provide input and resume
                 ws.state.human_input_reply = text
                 ws.state.human_input_pending = False
                 _write_human_input(ws, text)
-                resume_state = ws.state.previous_state or "ANALYSIS"
+                resume_state = ws.state.previous_state or Stage.ANALYSIS
                 ws.transition(resume_state)
                 ws.save_state()
                 self._recently_unblocked[ws.state.ticket_id] = (time.time(), resume_state)

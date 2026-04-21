@@ -1195,13 +1195,7 @@ class Orchestrator:
                 report_content = outputs[0].read_text(encoding="utf-8").strip()
 
         sep = "─" * 30
-        hint = (
-            f"\n\n{sep}\n"
-            f"↩️ Reply to THIS message for {state.ticket_id}:\n"
-            f"  • provide answer/instructions\n"
-            f"  • 'skip' = advance to next stage anyway\n"
-            f"  • 'retry' = re-run this stage"
-        )
+        hint = f"\n\n{sep}\n↩️ Reply with answer, or use buttons below."
         if report_content:
             budget = 4000 - len(header) - len(hint)
             if len(report_content) > budget:
@@ -1210,8 +1204,13 @@ class Orchestrator:
         else:
             message = header + "Pipeline needs input. Check the workspace for details." + hint
 
+        buttons = [
+            Button(label="Skip Stage", action=f"skip:{state.ticket_id}"),
+            Button(label="Retry", action=f"retry:{state.ticket_id}"),
+        ]
+
         try:
-            msg_id = await self._notifier.send_message(chat_id, message)
+            msg_id = await self._notifier.send_message(chat_id, message, buttons=buttons)
             workspace.transition(Stage.BLOCKED)
             workspace.update_state(
                 human_input_question=message,

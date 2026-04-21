@@ -883,7 +883,7 @@ def _make_workspace(tmp_path, ticket_id: str, state: str = "DEV") -> Workspace:
     ws_state = WorkspaceState(
         ticket_id=ticket_id,
         company_id="acme",
-        repo_id="acme-mobile",
+        repo_id="acme-app",
         workspace_root=str(ws_root),
         current_state=state,
         stage_iterations={"dev": 1},
@@ -1989,7 +1989,7 @@ def _seed_ws(tmp_path, ticket_id: str, state: str = "DEV", retry_at: str | None 
     ws_state = WorkspaceState(
         ticket_id=ticket_id,
         company_id="acme",
-        repo_id="acme-mobile",
+        repo_id="acme-app",
         workspace_root=str(ws_root),
         current_state=state,
         previous_state="DEV" if state == "DEFERRED" else None,
@@ -2101,14 +2101,14 @@ async def test_restart_picks_up_deferred_from_disk(tmp_path):
     from workspace.workspace_manager import WorkspaceManager
 
     base = tmp_path / "sickle"
-    ws_root = base / "acme" / "acme-mobile" / "tickets" / "T-R"
+    ws_root = base / "acme" / "acme-app" / "tickets" / "T-R"
     ws_root.mkdir(parents=True)
     (ws_root / "meta").mkdir()
     (ws_root / "source").mkdir()
 
     retry_at = (datetime.now(timezone.utc) + timedelta(hours=2)).isoformat()
     state = WorkspaceState(
-        ticket_id="T-R", company_id="acme", repo_id="acme-mobile",
+        ticket_id="T-R", company_id="acme", repo_id="acme-app",
         workspace_root=str(ws_root), current_state="DEFERRED",
         previous_state="QA", retry_at=retry_at,
     )

@@ -118,7 +118,7 @@ config-live/
     acme/
       project.yaml               # Jira config, parallelism, defaults
       repos/
-        acme-mobile.yaml            # VCS (GitHub), CI, git, architecture, helpers
+        acme-app.yaml             # VCS (GitHub), CI, git, architecture, helpers
 ```
 
 Secrets via `${ENV_VAR}` references resolved at load time.
@@ -161,7 +161,7 @@ Secrets via `${ENV_VAR}` references resolved at load time.
 - Agent runtime with tool_use loop (API) and CLI subprocess paths
 - Orchestrator: Jira polling, workspace creation, agent dispatch, push/PR, Telegram escalation
 - All 8 agent prompt files with v2 metadata
-- Real config for Acme/Acme Mobile (acme-org/acme-mobile)
+- Real config for Acme/Acme App (acme/acme-app)
 - 239 passing unit tests
 
 ### Not Yet Implemented (Phases 5-6)
@@ -175,7 +175,7 @@ Secrets via `${ENV_VAR}` references resolved at load time.
 
 ### Integration Endpoints
 - **Jira:** acme.atlassian.net, project ACME, trigger label `ai-pipeline`
-- **GitHub:** acme-org/acme-mobile
+- **GitHub:** acme/acme-app
 - **Telegram:** bot configured, chat_id set
 - **Claude:** via Claude Code CLI (no API key)
 

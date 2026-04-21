@@ -113,7 +113,7 @@ class ValidatorResult:
     Attributes:
         ok: True if the check passed.
         name: Validator identifier (e.g. "jira", "github", "git_identity").
-        target: What was checked (e.g. "ACME project", "/ws/acme/acme-mobile").
+        target: What was checked (e.g. "ACME project", "/ws/acme/acme-app").
         reason: Human-readable error if ok=False, empty string otherwise.
         fix_hint: Copyable command or instruction to resolve the failure,
             empty string if ok or no actionable fix.
@@ -584,12 +584,12 @@ from health.validators import ValidatorResult
 
 def _make_project(company_id="acme", vcs_provider="github"):
     jira = SimpleNamespace(url="https://acme.atlassian.net", email="a@b", token="t", project_key="ACME")
-    github = SimpleNamespace(token="gh_tok", owner="acme", repo="acme-mobile")
+    github = SimpleNamespace(token="gh_tok", owner="acme", repo="acme-app")
     gitlab = SimpleNamespace(token="", url="", project_id="")
     vcs = SimpleNamespace(provider=vcs_provider, github=github, gitlab=gitlab)
     repo_cfg = SimpleNamespace(vcs=vcs)
     config = SimpleNamespace(jira=jira)
-    return SimpleNamespace(config=config, repos={"acme-mobile": repo_cfg})
+    return SimpleNamespace(config=config, repos={"acme-app": repo_cfg})
 
 
 class TestProjectHealthAggregation:
@@ -598,7 +598,7 @@ class TestProjectHealthAggregation:
             project_id="acme",
             checks=[
                 ValidatorResult(True, "jira", "ACME", "", ""),
-                ValidatorResult(True, "github", "acme/acme-mobile", "", ""),
+                ValidatorResult(True, "github", "acme/acme-app", "", ""),
                 ValidatorResult(True, "git_identity", "/ws", "", ""),
             ],
             checked_at=datetime.now(timezone.utc),
@@ -642,7 +642,7 @@ class TestCheckProject:
     async def test_runs_jira_and_github(self):
         proj = _make_project(vcs_provider="github")
         with patch("health.runner.check_jira", new=AsyncMock(return_value=ValidatorResult(True, "jira", "ACME", "", ""))), \
-             patch("health.runner.check_github", new=AsyncMock(return_value=ValidatorResult(True, "github", "acme/acme-mobile", "", ""))):
+             patch("health.runner.check_github", new=AsyncMock(return_value=ValidatorResult(True, "github", "acme/acme-app", "", ""))):
             ph = await check_project("acme", proj)
         assert ph.project_id == "acme"
         names = {c.name for c in ph.checks}
@@ -652,7 +652,7 @@ class TestCheckProject:
     @pytest.mark.asyncio
     async def test_runs_gitlab_when_provider_is_gitlab(self):
         proj = _make_project(vcs_provider="gitlab")
-        proj.repos["acme-mobile"].vcs.gitlab = SimpleNamespace(token="gl", url="https://gl", project_id="42")
+        proj.repos["acme-app"].vcs.gitlab = SimpleNamespace(token="gl", url="https://gl", project_id="42")
         with patch("health.runner.check_jira", new=AsyncMock(return_value=ValidatorResult(True, "jira", "ACME", "", ""))), \
              patch("health.runner.check_gitlab", new=AsyncMock(return_value=ValidatorResult(True, "gitlab", "42", "", ""))):
             ph = await check_project("acme", proj)
@@ -1281,7 +1281,7 @@ async def test_dev_stage_without_new_commit_goes_to_blocked(tmp_path):
     ws.state = SimpleNamespace(
         ticket_id="T-1",
         company_id="acme",
-        repo_id="acme-mobile",
+        repo_id="acme-app",
         current_state="DEV",
         previous_state="ANALYSIS",
         stage_iterations={},
@@ -1349,7 +1349,7 @@ async def test_dev_stage_with_new_commit_advances_normally(tmp_path):
     ws.reports_dir = tmp_path / "reports"
     ws.reports_dir.mkdir()
     ws.state = SimpleNamespace(
-        ticket_id="T-1", company_id="acme", repo_id="acme-mobile",
+        ticket_id="T-1", company_id="acme", repo_id="acme-app",
         current_state="DEV", previous_state="ANALYSIS",
         stage_iterations={}, branch="feature/t-1", error=None,
     )
@@ -1689,7 +1689,7 @@ def _fake_projects():
     gitlab = SimpleNamespace(token="", url="", project_id="")
     vcs = SimpleNamespace(provider="github", github=github, gitlab=gitlab)
     repo_cfg = SimpleNamespace(vcs=vcs)
-    return {"acme": SimpleNamespace(config=SimpleNamespace(jira=jira), repos={"acme-mobile": repo_cfg})}
+    return {"acme": SimpleNamespace(config=SimpleNamespace(jira=jira), repos={"acme-app": repo_cfg})}
 
 
 class TestProjectsHealthEndpoint:
@@ -1906,7 +1906,7 @@ class TestDashboardHealthStrip:
                 project_id="acme",
                 checks=[
                     ValidatorResult(True, "jira", "ACME", "", ""),
-                    ValidatorResult(True, "github", "acme/acme-mobile", "", ""),
+                    ValidatorResult(True, "github", "acme/acme-app", "", ""),
                 ],
                 checked_at=datetime.now(timezone.utc),
             )]

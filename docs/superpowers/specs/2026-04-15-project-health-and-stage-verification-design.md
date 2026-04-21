@@ -109,7 +109,7 @@ if not result.ok:
 class ValidatorResult:
     ok: bool
     name: str             # "jira" | "github" | "gitlab" | "git_identity" | "git_remote"
-    target: str           # "ACME project" | "acme/acme-mobile" | "/ws/acme/acme-mobile"
+    target: str           # "ACME project" | "acme/acme-app" | "/ws/acme/acme-app"
     reason: str           # empty if ok; human-readable error otherwise
     fix_hint: str         # empty if ok; e.g. "git config --global user.email ..."
 ```
@@ -162,8 +162,8 @@ Runs: `jira` once per project, then per-repo either `github` or `gitlab` based o
       "status": "red",
       "checks": [
         {"name": "jira", "target": "ACME", "ok": true, "reason": "", "fix_hint": ""},
-        {"name": "github", "target": "acme/acme-mobile", "ok": true, "reason": "", "fix_hint": ""},
-        {"name": "git_identity", "target": "/ws/acme/acme-mobile", "ok": false,
+        {"name": "github", "target": "acme/acme-app", "ok": true, "reason": "", "fix_hint": ""},
+        {"name": "git_identity", "target": "/ws/acme/acme-app", "ok": false,
          "reason": "user.email not set", "fix_hint": "git config --global user.email ..."}
       ],
       "checked_at": "2026-04-15T11:30:00Z"

@@ -11,6 +11,7 @@ How to install, configure, and run Sickle — the autonomous AI development pipe
 | Python | 3.10+ | Runtime for Sickle |
 | Git | 2.x+ | Used for workspace cloning |
 | Node.js | 18+ | Required to install Claude Code CLI via npm |
+| JDK | 17+ | Required for Android/Kotlin projects (QA agent runs gradlew) |
 | OS | Ubuntu 22.04+ (production), macOS/Linux (dev) | systemd needed for daemon deployment |
 
 Verify:
@@ -18,8 +19,30 @@ Verify:
 ```bash
 python3 --version   # 3.10+
 git --version        # 2.x+
+java -version        # 17+
 node --version       # 18+
 ```
+
+### JDK (for Android/Kotlin projects)
+
+The QA agent runs `./gradlew` to execute lint, test, and build gates.
+Without a JDK, these commands fail silently and the QA agent can only
+do static analysis.
+
+```bash
+# Ubuntu/Debian
+sudo apt install openjdk-17-jdk
+
+# macOS
+brew install openjdk@17
+
+# Set JAVA_HOME
+export JAVA_HOME=$(dirname $(dirname $(readlink -f $(which java))))
+echo "export JAVA_HOME=$JAVA_HOME" >> ~/.bashrc
+```
+
+Verify: `./gradlew --version` in any Android workspace should print
+the Gradle version without errors.
 
 ### Host configuration
 

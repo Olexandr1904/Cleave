@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 import time
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any, Callable
 
 from integrations.telegram.handlers.approval import ApprovalHandler
@@ -13,6 +14,18 @@ from integrations.telegram.handlers.status import StatusHandler
 from integrations.telegram.intent_parser import IntentParser, ParsedIntent
 
 logger = logging.getLogger(__name__)
+
+
+def _write_human_input(workspace: Any, text: str) -> None:
+    """Write human reply to meta/human-input.md so the agent sees it on next run."""
+    meta = Path(workspace.meta_dir) if hasattr(workspace, 'meta_dir') else Path(workspace.state.workspace_root) / "meta"
+    meta.mkdir(parents=True, exist_ok=True)
+    path = meta / "human-input.md"
+    # Append to preserve history of multiple replies
+    existing = path.read_text(encoding="utf-8") if path.exists() else ""
+    timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+    entry = f"\n## Human input ({timestamp})\n\n{text}\n"
+    path.write_text(existing + entry, encoding="utf-8")
 
 
 class CommandHandler:
@@ -119,9 +132,11 @@ class CommandHandler:
             await self._handle_provide_input(intent, chat_id, workspaces, processing_msg_id)
         elif intent.intent == "error":
             await self._reply(chat_id, intent.reply, processing_msg_id)
+        elif intent.intent == "reviewed":
+            await self._handle_reviewed(intent, chat_id, workspaces, processing_msg_id)
         else:
             await self._reply(chat_id, intent.reply or
-                "I didn't understand that. I can do: status, analyze, approve, reject, retry, set_mode.", processing_msg_id)
+                "I didn't understand that. I can do: status, analyze, approve, reject, retry, set_mode, reviewed.", processing_msg_id)
 
     def _build_context(self, workspaces: list[Any]) -> dict[str, Any]:
         awaiting = [
@@ -265,6 +280,38 @@ class CommandHandler:
         "push": "PUSHED",
     }
 
+    async def _handle_reviewed(self, intent: ParsedIntent, chat_id: str, workspaces: list[Any], processing_msg_id: int | None = None) -> None:
+        """Signal that code review is complete for a PR_REVIEW workspace."""
+        pr_workspaces = [ws for ws in workspaces if ws.state.current_state == "PR_REVIEW"]
+        if not pr_workspaces:
+            await self._reply(chat_id, "No workspaces in PR_REVIEW state.", processing_msg_id)
+            return
+
+        ticket_id = intent.params.get("ticket_id")
+        if ticket_id:
+            target = next((ws for ws in pr_workspaces if ws.state.ticket_id == ticket_id), None)
+        elif len(pr_workspaces) == 1:
+            target = pr_workspaces[0]
+        else:
+            ids = ", ".join(ws.state.ticket_id for ws in pr_workspaces)
+            await self._reply(chat_id, f"Multiple PRs in review: {ids}. Specify: 'reviewed TICKET-ID'", processing_msg_id)
+            return
+
+        if not target:
+            await self._reply(chat_id, f"Workspace {ticket_id} not found in PR_REVIEW.", processing_msg_id)
+            return
+
+        target.state.human_input_reply = "reviewed"
+        target.save_state()
+        await self._reply(
+            chat_id,
+            f"Got it. Fetching PR comments for {target.state.ticket_id} now.",
+            processing_msg_id,
+        )
+        # Wake the orchestrator immediately
+        if hasattr(self, '_wake_fn') and self._wake_fn:
+            self._wake_fn()
+
     async def _handle_retry(self, intent: ParsedIntent, chat_id: str, workspaces: list[Any], processing_msg_id: int | None = None) -> None:
         ticket_id = intent.params.get("ticket_id")
         if not ticket_id:
@@ -289,11 +336,17 @@ class CommandHandler:
                 )
                 return
         else:
-            # Default: re-run from the stage where it got stuck
-            prev = ws.state.previous_state or ws.state.current_state
-            target_state = self._VALID_RETRY_STATES.get(prev.lower(), prev)
-            # If blocked/failed/deferred, use previous_state
-            if ws.state.current_state in ("BLOCKED", "FAILED", "DEFERRED"):
+            # Smart retry: detect furthest completed stage from artifacts
+            reports = Path(ws.reports_dir) if hasattr(ws, 'reports_dir') else Path(ws.state.workspace_root) / "reports"
+            if (reports / "qa-agent-output.md").exists():
+                target_state = "PUSHED"
+            elif (reports / "scope-guard-agent-output.md").exists():
+                target_state = "QA"
+            elif (reports / "dev-agent-output.md").exists():
+                target_state = "SCOPE_CHECK"
+            elif (reports / "ba.md").exists() or (reports / "ba-agent-output.md").exists():
+                target_state = "DEV"
+            else:
                 target_state = ws.state.previous_state or "ANALYSIS"
 
         ws.state.human_input_pending = False
@@ -361,6 +414,7 @@ class CommandHandler:
 
         target.state.human_input_reply = input_text
         target.state.human_input_pending = False
+        _write_human_input(target, input_text)
         resume_state = target.state.previous_state or "ANALYSIS"
         target.transition(resume_state)
         target.save_state()
@@ -396,13 +450,53 @@ class CommandHandler:
         if self._allowed_chat_ids is not None and chat_id not in self._allowed_chat_ids:
             return False
         workspaces = self._active_workspaces_fn()
+
+        # Check escalated PR comment replies first (pending_review_comments)
         for ws in workspaces:
-            if (
-                ws.state.current_state == "BLOCKED"
-                and ws.state.escalation_msg_id == reply_to_msg_id
-            ):
+            if ws.state.current_state != "PR_REVIEW":
+                continue
+            pending = ws.state.pending_review_comments or []
+            for c in pending:
+                if c.get("msg_id") == reply_to_msg_id:
+                    c["decision"] = text.strip()
+                    ws.save_state()
+                    undecided = [x for x in pending if x.get("decision") is None]
+                    if undecided:
+                        await self._notifier.send_message(
+                            chat_id,
+                            f"Got it ({text.strip()}). {len(undecided)} comment(s) remaining.",
+                        )
+                    else:
+                        await self._notifier.send_message(
+                            chat_id,
+                            f"All decisions in for {ws.state.ticket_id}. Executing now.",
+                        )
+                        if hasattr(self, '_wake_fn') and self._wake_fn:
+                            self._wake_fn()
+                    return True
+
+        for ws in workspaces:
+            if ws.state.escalation_msg_id != reply_to_msg_id:
+                continue
+
+            # PR_REVIEW: user signals review is done — store reply and wake immediately
+            if ws.state.current_state == "PR_REVIEW":
+                ws.state.human_input_reply = text
+                ws.save_state()
+                await self._notifier.send_message(
+                    chat_id,
+                    f"Got it. Fetching PR comments for {ws.state.ticket_id} now.",
+                )
+                if hasattr(self, '_wake_fn') and self._wake_fn:
+                    self._wake_fn()
+                logger.info("PR review signal for %s via reply to msg %d", ws.state.ticket_id, reply_to_msg_id)
+                return True
+
+            # BLOCKED: resume from previous stage
+            if ws.state.current_state == "BLOCKED":
                 ws.state.human_input_reply = text
                 ws.state.human_input_pending = False
+                _write_human_input(ws, text)
                 resume_state = ws.state.previous_state or "ANALYSIS"
                 ws.transition(resume_state)
                 ws.save_state()

@@ -49,11 +49,10 @@ class Orchestrator:
     # represents the "happy path" past the gate. Gating should ONLY fire when
     # the workflow would move forward past the gate — not on failure loops
     # (QA fail → dev) or escalation (analysis unclear → escalate).
-    _APPROVAL_GATE_STATES = {"ANALYSIS", "QA", "PR_REVIEW"}
+    _APPROVAL_GATE_STATES = {"ANALYSIS", "QA"}
     _GATE_HAPPY_PATH_NEXT_STAGE = {
         "ANALYSIS": "dev",
         "QA": "push",
-        "PR_REVIEW": "done",
     }
 
     def __init__(
@@ -833,6 +832,19 @@ class Orchestrator:
             data={"from_state": current_state, "to_state": result.next_state},
         )
         workspace.transition(result.next_state)
+
+        # Notify when ticket is DONE — human merges manually
+        if result.next_state == "DONE" and self._notifier:
+            chat_id = self._get_chat_id(workspace)
+            if chat_id:
+                sep = "─" * 30
+                await self._notifier.send_message(chat_id, (
+                    f"✅ [{state.company_id}/{state.repo_id}] {state.ticket_id}\n"
+                    f"{sep}\n"
+                    f"Pipeline complete. PR ready for merge:\n"
+                    f"{state.pr_url or 'N/A'}\n"
+                    f"{sep}"
+                ))
 
         self._emit(
             "action_completed",

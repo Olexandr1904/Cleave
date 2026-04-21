@@ -99,8 +99,9 @@ class TestApprovalGates:
     def test_should_gate_returns_true_for_qa_in_manual(self):
         assert self._manual()._should_approval_gate("QA") is True
 
-    def test_should_gate_returns_true_for_pr_review_in_manual(self):
-        assert self._manual()._should_approval_gate("PR_REVIEW") is True
+    def test_pr_review_not_gated(self):
+        """PR_REVIEW goes straight to DONE — no approval gate."""
+        assert self._manual()._should_approval_gate("PR_REVIEW") is False
 
     def test_should_gate_returns_false_in_auto(self):
         assert self._auto()._should_approval_gate("ANALYSIS") is False
@@ -123,8 +124,9 @@ class TestApprovalGates:
         """QA fail loops back to dev — gate must NOT fire."""
         assert self._manual()._should_approval_gate("QA", "dev") is False
 
-    def test_gate_pr_review_to_done_happy_path_fires(self):
-        assert self._manual()._should_approval_gate("PR_REVIEW", "done") is True
+    def test_gate_pr_review_to_done_does_not_fire(self):
+        """PR_REVIEW → DONE is not gated — comments handled = done."""
+        assert self._manual()._should_approval_gate("PR_REVIEW", "done") is False
 
     def test_gate_pr_review_to_dev_bypasses(self):
         """PR review fix-required goes back to dev — gate must NOT fire."""

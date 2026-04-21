@@ -37,7 +37,7 @@ class VCSInterface(ABC):
         """Create and checkout a new branch."""
 
     @abstractmethod
-    async def push(self, repo_dir: str, branch_name: str) -> None:
+    async def push(self, repo_dir: str, branch_name: str, force: bool = False) -> None:
         """Push the current branch to origin."""
 
     @abstractmethod

@@ -900,7 +900,7 @@ class Orchestrator:
                 try:
                     branch = state.branch
                     if branch:
-                        await vcs.push(str(workspace.source_dir), branch)
+                        await vcs.push(str(workspace.source_dir), branch, force=True)
                         logger.info("Pushed updates to existing PR #%d for %s", state.pr_number, state.ticket_id)
                 except Exception as e:
                     logger.warning("Failed to push to existing PR: %s", e)

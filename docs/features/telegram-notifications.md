@@ -2,7 +2,7 @@
 
 **Status:** In Progress
 **Created:** 2026-04-07
-**Updated:** 2026-04-12
+**Updated:** 2026-04-21
 **Author:** Oleksandr Brazhenko
 
 ## Description
@@ -25,6 +25,9 @@ Telegram bot adapter behind the NotifierInterface. Sends formatted notifications
 - FR12: `/status` command returns pipeline summary (mode, uptime, active workspaces) formatted by `StatusHandler`
 - FR13: Drill-down view shows per-workspace detail: stage, branch, Jira URL, PR URL, iteration counts
 - FR14: TelegramAdapter polling loop routes non-reply text messages to the `CommandHandler` while continuing to match replies back to `wait_for_reply` futures
+- FR15: Inline action buttons on messages that expect discrete choices (approve/reject gates, PR review complete, retry on failure/deferral); escalation messages stay text-reply only
+- FR16: `Button` dataclass in `NotifierInterface` — adapter-agnostic; `TelegramAdapter` translates to `InlineKeyboardMarkup`, routes `CallbackQuery` presses to `CommandHandler.handle_callback()`
+- FR17: Button confirmations sent as Telegram replies to the original button message (`reply_to_message_id`)
 
 ## Technical Approach
 
@@ -38,7 +41,7 @@ Telegram bot adapter behind the NotifierInterface. Sends formatted notifications
 - `ModeHandler` (`integrations/telegram/handlers/mode.py`) manages auto/manual pipeline mode with JSON file persistence; `get_mode()` returns current mode, `set_mode()` validates, switches, and persists including a `mode_changed_at` timestamp; the orchestrator calls `get_mode()` to decide whether to poll Jira and whether to insert approval gates
 - `ApprovalHandler` (`integrations/telegram/handlers/approval.py`) manages approve/reject operations for workspaces in AWAITING_APPROVAL state; `find_awaiting()` locates workspaces waiting for approval (optionally filtered by ticket ID); `resolve_next_state()` maps previous gate to the next pipeline state (ANALYSIS→DEV, QA→PUSHED, PR_REVIEW→DONE)
 - `AnalyzeHandler` (`integrations/telegram/handlers/analyze.py`) validates ticket IDs against Jira before creating workspaces in manual mode; `validate_tickets()` fetches each ticket and splits results into valid/invalid lists; `is_already_active()` checks whether a ticket already has a running workspace
-- `CommandHandler` (`integrations/telegram/command_handler.py`) is the central dispatcher; it receives raw text from the TelegramAdapter, calls `IntentParser.parse()` with live pipeline context, then routes to the appropriate handler based on intent (status, set_mode, approve, reject, analyze, error, unknown)
+- `CommandHandler` (`integrations/telegram/command_handler.py`) is the central dispatcher; it receives raw text from the TelegramAdapter, calls `IntentParser.parse()` with live pipeline context, then routes to the appropriate handler based on intent (status, set_mode, approve, reject, analyze, error, unknown). Also exposes `handle_callback(action, ticket_id, chat_id, message_id)` for inline button presses — bypasses LLM parsing, reuses existing handler logic, sends confirmations as Telegram replies to the button's message
 
 ## Dependencies
 
@@ -79,3 +82,4 @@ Telegram bot adapter behind the NotifierInterface. Sends formatted notifications
 | 2026-04-12 | Added retry command: retries a ticket from a specified or inferred stage; added escalation reply handler to unblock BLOCKED workspaces via Telegram reply-to; added typing indicator during intent parsing |
 | 2026-04-14 | Extended retry/resume to DEFERRED tickets: `_handle_retry` treats DEFERRED like BLOCKED/FAILED (transitions to `previous_state`); IntentParser system prompt now lists deferred workspaces and advertises retry for DEFERRED tickets; `_build_context` exposes `deferred_workspaces`. |
 | 2026-04-16 | Added `set_tracker` and `add_allowed_chat_id` mutators to CommandHandler for wizard hot-reload: tracker can be attached post-init; allowlist extended per-project (no-op when None/'admit all'). |
+| 2026-04-21 | Added inline action buttons: `Button` dataclass in `NotifierInterface`; `TelegramAdapter` translates to `InlineKeyboardMarkup` and routes `CallbackQuery` to `CommandHandler.handle_callback()`; approval gates get Approve/Reject buttons, PR review gets Review Complete, failed/deferred get Retry; escalation messages stay text-reply only. |

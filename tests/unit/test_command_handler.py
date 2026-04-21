@@ -331,3 +331,84 @@ def test_add_allowed_chat_id_noop_when_allowlist_is_none():
     )
     handler.add_allowed_chat_id("2002")
     assert handler._allowed_chat_ids is None
+
+
+class TestHandleCallback:
+    @pytest.fixture
+    def mock_notifier(self):
+        notifier = AsyncMock()
+        notifier.send_message = AsyncMock(return_value=1)
+        notifier.edit_message = AsyncMock()
+        return notifier
+
+    @pytest.fixture
+    def mock_mode_handler(self):
+        handler = MagicMock()
+        handler.get_mode.return_value = "manual"
+        return handler
+
+    async def test_callback_approve(self, mock_notifier, mock_mode_handler):
+        ws = _make_workspace("T-1", "AWAITING_APPROVAL", previous_state="ANALYSIS")
+        handler = CommandHandler(
+            intent_parser=AsyncMock(),
+            notifier=mock_notifier,
+            mode_handler=mock_mode_handler,
+            active_workspaces_fn=lambda: [ws],
+        )
+        await handler.handle_callback("approve", "T-1", "12345", 42)
+        ws.transition.assert_called_once_with("DEV")
+        call_kwargs = mock_notifier.send_message.call_args
+        assert call_kwargs.kwargs.get("reply_to_message_id") == 42
+
+    async def test_callback_reject(self, mock_notifier, mock_mode_handler):
+        ws = _make_workspace("T-1", "AWAITING_APPROVAL", previous_state="ANALYSIS")
+        handler = CommandHandler(
+            intent_parser=AsyncMock(),
+            notifier=mock_notifier,
+            mode_handler=mock_mode_handler,
+            active_workspaces_fn=lambda: [ws],
+        )
+        await handler.handle_callback("reject", "T-1", "12345", 42)
+        ws.transition.assert_called_once_with("FAILED")
+        call_kwargs = mock_notifier.send_message.call_args
+        assert call_kwargs.kwargs.get("reply_to_message_id") == 42
+
+    async def test_callback_reviewed(self, mock_notifier, mock_mode_handler):
+        ws = _make_workspace("T-1", "PR_REVIEW")
+        handler = CommandHandler(
+            intent_parser=AsyncMock(),
+            notifier=mock_notifier,
+            mode_handler=mock_mode_handler,
+            active_workspaces_fn=lambda: [ws],
+        )
+        handler._wake_fn = MagicMock()
+        await handler.handle_callback("reviewed", "T-1", "12345", 42)
+        assert ws.state.human_input_reply == "reviewed"
+        ws.save_state.assert_called_once()
+        handler._wake_fn.assert_called_once()
+        call_kwargs = mock_notifier.send_message.call_args
+        assert call_kwargs.kwargs.get("reply_to_message_id") == 42
+
+    async def test_callback_retry(self, mock_notifier, mock_mode_handler):
+        ws = _make_workspace("T-1", "FAILED", previous_state="QA")
+        handler = CommandHandler(
+            intent_parser=AsyncMock(),
+            notifier=mock_notifier,
+            mode_handler=mock_mode_handler,
+            active_workspaces_fn=lambda: [ws],
+        )
+        await handler.handle_callback("retry", "T-1", "12345", 42)
+        ws.transition.assert_called_once()
+        call_kwargs = mock_notifier.send_message.call_args
+        assert call_kwargs.kwargs.get("reply_to_message_id") == 42
+
+    async def test_callback_unknown_action_sends_error(self, mock_notifier, mock_mode_handler):
+        handler = CommandHandler(
+            intent_parser=AsyncMock(),
+            notifier=mock_notifier,
+            mode_handler=mock_mode_handler,
+            active_workspaces_fn=lambda: [],
+        )
+        await handler.handle_callback("bogus", "T-1", "12345", 42)
+        call_args = mock_notifier.send_message.call_args[0]
+        assert "Unknown" in call_args[1] or "unknown" in call_args[1]

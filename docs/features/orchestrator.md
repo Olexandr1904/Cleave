@@ -71,3 +71,4 @@ Central daemon process that continuously polls for work, manages isolated worksp
 | 2026-04-17 | Wired `stage_verifier` into `_handle_action_stage`: action stages (`push`, `pr_review`, `finalize`) now follow the same capture → execute → verify → transition → emit flow as agent stages. Action methods return `ActionResult` instead of transitioning state internally. Fixes regression where push/pr_review bypassed verification (ACME-14595). |
 | 2026-04-21 | PR review comment resolution: VCS `resolve_comment` via GitHub GraphQL, comment classifier with extreme skepticism, auto-fix/reject/escalate flow, TG integration for ambiguous comments, resolution report, review cycle loop. |
 
+

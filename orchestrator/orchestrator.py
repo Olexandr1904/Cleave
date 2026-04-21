@@ -26,7 +26,7 @@ from orchestrator.agent_runtime import AgentRuntime
 from orchestrator.pr_creation import create_pr
 from orchestrator import stage_verifier
 from orchestrator.stage_verifier import ActionResult
-from orchestrator.ticket_prioritizer import PrioritizedTicket, prioritize_tickets
+from orchestrator.ticket_prioritizer import PrioritizedTicket, filter_tickets, prioritize_tickets, route_tickets
 from orchestrator.workflow_router import (
     WorkflowDefinition,
     get_next_stage,
@@ -98,6 +98,7 @@ class Orchestrator:
         self._quota_window_end: datetime | None = None
         self._config_dir = config_dir
         self._on_project_added = on_project_added
+        self._wake_event = asyncio.Event()
 
     def register_repo_vcs(
         self, repo_id: str, vcs: VCSInterface, repo_config: RepoConfig,
@@ -115,7 +116,12 @@ class Orchestrator:
         Returns the list of newly-added project ids. Public entry point called
         from the wizard route for instant kick.
         """
-        return await self._rescan_projects_from_disk()
+        added = await self._rescan_projects_from_disk()
+        # Force an immediate ticket poll for newly added projects so the user
+        # sees tickets right away, even in manual mode.
+        if added and self._tracker:
+            await self._poll_and_create_workspaces()
+        return added
 
     async def _rescan_projects_from_disk(self) -> list[str]:
         """Internal: re-read config and merge new projects into _projects.
@@ -147,6 +153,7 @@ class Orchestrator:
                     logger.exception("on_project_added hook failed for %s", pid)
         if added:
             logger.info("Rescan added projects: %s", added)
+            self._wake_event.set()
         return added
 
     def set_mode_handler(self, handler: ModeHandler) -> None:
@@ -307,9 +314,17 @@ class Orchestrator:
                 logger.error("Poll cycle error: %s", e, exc_info=True)
 
             try:
-                await asyncio.wait_for(
-                    self._shutdown_event.wait(), timeout=poll_interval,
+                self._wake_event.clear()
+                done, _ = await asyncio.wait(
+                    [
+                        asyncio.create_task(self._shutdown_event.wait()),
+                        asyncio.create_task(self._wake_event.wait()),
+                    ],
+                    timeout=poll_interval,
+                    return_when=asyncio.FIRST_COMPLETED,
                 )
+                for t in done:
+                    t.result()  # suppress unhandled-task warnings
             except asyncio.TimeoutError:
                 pass
 
@@ -322,11 +337,8 @@ class Orchestrator:
         self._emit("poll_cycle", "Poll cycle started")
         # 0. Resume any DEFERRED workspaces whose retry_at has passed
         await self._sweep_deferred()
-        # 1. Poll for new tickets and create workspaces (skip in manual mode)
-        is_manual = bool(
-            self._mode_handler and self._mode_handler.get_mode() == "manual"
-        )
-        if self._tracker and not is_manual:
+        # 1. Poll for new tickets and create workspaces
+        if self._tracker:
             await self._poll_and_create_workspaces()
 
         # 2. Advance active workspaces
@@ -380,8 +392,14 @@ class Orchestrator:
             if not tickets:
                 continue
 
-            # Prioritize and route tickets to repos
-            prioritized = prioritize_tickets(tickets, project)
+            # Filter, route to repos, then prioritize
+            filtered = filter_tickets(
+                tickets,
+                trigger_labels=jira_config.trigger_labels,
+                ignore_labels=jira_config.ignore_labels,
+            )
+            routed = route_tickets(filtered, project)
+            prioritized = prioritize_tickets(routed)
             max_parallel = project.config.parallelism.max_concurrent_tickets
 
             # Count active workspaces for this project
@@ -822,6 +840,25 @@ class Orchestrator:
             data={"stage": stage_id, **result.metadata},
         )
 
+        # Notify when PR is created — user needs to review and reply
+        if action == "push_and_open_pr" and result.metadata.get("pr_url") and self._notifier:
+            chat_id = self._get_chat_id(workspace)
+            if chat_id:
+                sep = "─" * 30
+                pr_url = result.metadata["pr_url"]
+                msg = (
+                    f"🔗 [{state.company_id}/{state.repo_id}] {state.ticket_id}\n"
+                    f"{sep}\n"
+                    f"PR created: {pr_url}\n\n"
+                    f"Please review the code. When the review is complete,\n"
+                    f"reply to THIS message with 'reviewed'.\n"
+                    f"{sep}"
+                )
+                msg_id = await self._notifier.send_message(chat_id, msg)
+                workspace.state.escalation_msg_id = msg_id
+                workspace.state.escalation_chat_id = chat_id
+                workspace.save_state()
+
     async def _action_push_and_open_pr(self, workspace: Workspace) -> ActionResult:
         """Push branch and open PR. Returns ActionResult — caller transitions."""
         vcs, repo_config = self._get_vcs_for_workspace(workspace)
@@ -845,56 +882,50 @@ class Orchestrator:
     async def _action_fetch_pr_comments(
         self, workspace: Workspace, stage_def: Any,
     ) -> ActionResult:
-        """Fetch PR comments and decide if fixes are needed. Returns ActionResult."""
+        """PR review comment resolution flow."""
+        from orchestrator.comment_classifier import classify_comments
+
         state = workspace.state
         pr_number = state.pr_number
 
         if not pr_number:
-            return ActionResult(
-                success=True, next_state="DONE", error="", metadata={},
-            )
+            return ActionResult(success=True, next_state="DONE", error="", metadata={})
 
-        delay_minutes = stage_def.delay_minutes
-        if delay_minutes > 0:
-            last_updated = state.last_updated_at
-            if last_updated:
-                from datetime import datetime, timezone
-                try:
-                    updated_time = datetime.fromisoformat(last_updated)
-                    elapsed = (datetime.now(timezone.utc) - updated_time).total_seconds() / 60
-                    if elapsed < delay_minutes:
-                        logger.debug(
-                            "%s: PR review delay not met (%.0f/%.0f min)",
-                            state.ticket_id, elapsed, delay_minutes,
-                        )
-                        return ActionResult(
-                            success=False, next_state="", error="", metadata={},
-                            skipped=True,
-                        )
-                except (ValueError, TypeError):
-                    pass
+        # Phase 1: Check pending escalated decisions
+        pending = state.pending_review_comments or []
+        undecided = [c for c in pending if c.get("decision") is None]
 
+        if pending and not undecided:
+            return await self._execute_review_decisions(workspace)
+
+        if undecided:
+            return ActionResult(success=False, next_state="", error="", metadata={}, skipped=True)
+
+        # Phase 2: Wait for 'reviewed' signal
+        reply = (state.human_input_reply or "").lower()
+        if "reviewed" not in reply and "proceed" not in reply:
+            return ActionResult(success=False, next_state="", error="", metadata={}, skipped=True)
+
+        state.human_input_reply = None
+        state.review_cycle = (state.review_cycle or 0) + 1
+        state.stage_iterations["pr_review"] = 0
+        workspace.save_state()
+
+        # Phase 3: Fetch comments
         vcs, repo_config = self._get_vcs_for_workspace(workspace)
         if not vcs:
-            return ActionResult(
-                success=True, next_state="DONE", error="", metadata={},
-            )
+            return ActionResult(success=True, next_state="DONE", error="", metadata={})
 
         try:
             comments = await vcs.get_pr_comments(pr_number)
         except Exception as e:
             logger.error("Failed to fetch PR comments for %s: %s", state.ticket_id, e)
-            return ActionResult(
-                success=False, next_state="", error=f"Failed to fetch PR comments: {e}",
-                metadata={},
-            )
+            return ActionResult(success=False, next_state="", error=f"Failed to fetch: {e}", metadata={})
 
         if not comments:
-            return ActionResult(
-                success=True, next_state="DONE", error="", metadata={},
-            )
+            return ActionResult(success=True, next_state="DONE", error="", metadata={})
 
-        # Write comments to reports for PR Comment Responder agent
+        # Write comments for reference
         comment_md = "# PR Review Comments\n\n"
         for c in comments:
             comment_md += f"## Comment by {c.author}\n"
@@ -904,26 +935,130 @@ class Orchestrator:
                     comment_md += f" (line {c.line})"
                 comment_md += "\n"
             comment_md += f"\n{c.body}\n\n---\n\n"
-        (workspace.reports_dir / "pr-review-comments.md").write_text(
-            comment_md, encoding="utf-8",
-        )
+        (workspace.reports_dir / "pr-review-comments.md").write_text(comment_md, encoding="utf-8")
 
-        # Run PR Comment Responder agent if available
-        pr_agent = self._registry.get_agent("pr-comment-responder-agent")
-        if pr_agent:
-            result = await self._agent_runtime.execute(
-                "pr-comment-responder-agent", workspace,
-            )
-            if result.success and "fix_required" in result.output.lower():
-                return ActionResult(
-                    success=True, next_state="DEV", error="",
-                    metadata={"comments_count": len(comments)},
-                )
+        # Phase 4: Classify
+        classified = await classify_comments(comments, workspace, self._agent_runtime)
 
-        return ActionResult(
-            success=True, next_state="DEV", error="",
-            metadata={"comments_count": len(comments)},
+        # Phase 5: Auto-handle
+        auto_fixed, auto_rejected, escalated = [], [], []
+        for cc in classified:
+            if cc.classification == "AUTO_FIX":
+                auto_fixed.append(cc)
+                try:
+                    await vcs.resolve_comment(pr_number, cc.comment_id)
+                except Exception as e:
+                    logger.warning("Failed to resolve comment %d: %s", cc.comment_id, e)
+            elif cc.classification == "AUTO_REJECT":
+                try:
+                    await vcs.reply_to_comment(pr_number, cc.comment_id, f"Won't fix: {cc.reason}")
+                    await vcs.resolve_comment(pr_number, cc.comment_id)
+                except Exception as e:
+                    logger.warning("Failed to reply/resolve comment %d: %s", cc.comment_id, e)
+                auto_rejected.append(cc)
+            else:
+                escalated.append(cc)
+
+        # Phase 6: TG summary for auto-handled
+        if (auto_fixed or auto_rejected) and self._notifier:
+            chat_id = self._get_chat_id(workspace)
+            if chat_id:
+                sep = "─" * 30
+                lines = [f"🤖 [{state.company_id}/{state.repo_id}] {state.ticket_id} — PR #{pr_number}"]
+                lines.append(f"Auto-processed {len(auto_fixed) + len(auto_rejected)} comment(s):")
+                lines.append(sep)
+                for af in auto_fixed:
+                    lines.append(f"✅ FIX: {af.reason} ({af.file}:{af.line or '?'})")
+                for ar in auto_rejected:
+                    lines.append(f"❌ REJECT: {ar.body[:60]} — {ar.reason}")
+                lines.append(sep)
+                if escalated:
+                    lines.append(f"Waiting for your decisions on {len(escalated)} escalated comment(s).")
+                await self._notifier.send_message(chat_id, "\n".join(lines))
+
+        # Phase 7: Handle escalated or finish
+        if not escalated:
+            _write_resolution_report(workspace, auto_fixed, auto_rejected, [], state.review_cycle)
+            if auto_fixed:
+                return ActionResult(success=True, next_state="DEV", error="", metadata={})
+            return ActionResult(success=True, next_state="DONE", error="", metadata={})
+
+        # Store escalated with TG msg_ids
+        pending_comments = []
+        for cc in escalated:
+            msg_id = await self._send_escalated_comment_tg(workspace, cc, pr_number)
+            pending_comments.append({
+                "comment_id": cc.comment_id, "msg_id": msg_id, "decision": None,
+                "author": cc.author, "file": cc.file, "line": cc.line,
+                "body": cc.body, "reason": cc.reason,
+            })
+
+        state.pending_review_comments = pending_comments
+        workspace.save_state()
+        return ActionResult(success=False, next_state="", error="", metadata={}, skipped=True)
+
+    async def _send_escalated_comment_tg(self, workspace: Workspace, cc: Any, pr_number: int) -> int:
+        """Send a single escalated comment to TG. Returns the message ID."""
+        state = workspace.state
+        sep = "─" * 30
+        msg = (
+            f"💬 [{state.company_id}/{state.repo_id}] {state.ticket_id} — PR #{pr_number}\n"
+            f"Comment by @{cc.author} on {cc.file}:{cc.line or '?'}\n"
+            f"{sep}\n"
+            f"Suggestion:\n  {cc.body[:300]}\n\n"
+            f"Agent assessment:\n  {cc.reason}\n"
+            f"{sep}\n"
+            f"↩️ Reply: fix / skip / won't fix [reason]"
         )
+        chat_id = self._get_chat_id(workspace)
+        if chat_id and self._notifier:
+            return await self._notifier.send_message(chat_id, msg)
+        return 0
+
+    async def _execute_review_decisions(self, workspace: Workspace) -> ActionResult:
+        """Execute all pending review decisions."""
+        state = workspace.state
+        pending = state.pending_review_comments or []
+        pr_number = state.pr_number
+
+        vcs, _ = self._get_vcs_for_workspace(workspace)
+        fixes_needed = []
+        wont_fix = []
+        skipped_comments = []
+
+        for c in pending:
+            decision = (c.get("decision") or "").lower().strip()
+            if decision == "fix":
+                fixes_needed.append(c)
+            elif decision.startswith("won't fix") or decision.startswith("wont fix"):
+                reason = decision.split(":", 1)[1].strip() if ":" in decision else "Operator decision"
+                wont_fix.append({**c, "wont_fix_reason": reason})
+                if vcs and pr_number:
+                    try:
+                        await vcs.reply_to_comment(pr_number, c["comment_id"], f"Won't fix: {reason}")
+                        await vcs.resolve_comment(pr_number, c["comment_id"])
+                    except Exception as e:
+                        logger.warning("Failed to reply/resolve %d: %s", c["comment_id"], e)
+            else:
+                skipped_comments.append(c)
+
+        if fixes_needed:
+            fix_md = "# PR Comment Fixes Required\n\n"
+            for f in fixes_needed:
+                fix_md += f"## Fix: {f['file']}:{f.get('line', '?')}\n"
+                fix_md += f"Comment by @{f['author']}: {f['body'][:200]}\n"
+                fix_md += f"Reason: {f['reason']}\n\n"
+            (workspace.reports_dir / "pr-comment-fixes.md").write_text(fix_md, encoding="utf-8")
+
+        _write_resolution_report(workspace, [], wont_fix, pending, state.review_cycle)
+
+        state.pending_review_comments = None
+        workspace.save_state()
+
+        if fixes_needed:
+            return ActionResult(success=True, next_state="DEV", error="", metadata={})
+        return ActionResult(success=True, next_state="DONE", error="", metadata={})
+
 
     async def _handle_escalate(self, workspace: Workspace) -> None:
         """Send escalation notification and block workspace."""
@@ -944,7 +1079,7 @@ class Orchestrator:
 
         # Build a human-readable escalation message from the latest agent output
         stage = state.previous_state or state.current_state
-        message = f"{state.ticket_id} — needs your input after {stage}\n\n"
+        header = f"🔔 [{state.company_id}/{state.repo_id}] {state.ticket_id}\nStage: {stage}\n{'─' * 30}\n\n"
 
         # Find the most recent agent output report
         report_content = None
@@ -957,18 +1092,14 @@ class Orchestrator:
             if outputs:
                 report_content = outputs[0].read_text(encoding="utf-8").strip()
 
+        hint = f"\n\n{'─' * 30}\n↩️ Reply to THIS message to answer for {state.ticket_id}."
         if report_content:
-            # Telegram has a 4096 char limit; reserve room for the hint footer
-            hint = "\n\n— Just type your answer in this chat to resume the pipeline."
-            budget = 4000 - len(message) - len(hint)
+            budget = 4000 - len(header) - len(hint)
             if len(report_content) > budget:
                 report_content = report_content[:budget] + "\n..."
-            message += report_content + hint
+            message = header + report_content + hint
         else:
-            message += (
-                "The pipeline could not proceed automatically. Please check the workspace for details.\n\n"
-                "— Just type your answer in this chat to resume the pipeline."
-            )
+            message = header + "Pipeline needs input. Check the workspace for details." + hint
 
         try:
             msg_id = await self._notifier.send_message(chat_id, message)
@@ -1028,40 +1159,45 @@ class Orchestrator:
     def _build_gate_summary(self, workspace: Workspace, gate_state: str) -> str:
         """Build a summary message for an approval gate notification."""
         state = workspace.state
-        ticket_id = state.ticket_id
-
-        if gate_state == "ANALYSIS":
-            ba_report = workspace.reports_dir / "ba-agent-output.md"
-            summary = ""
-            if ba_report.exists():
-                content = ba_report.read_text(encoding="utf-8")
-                summary = content[:500]
-            return (
-                f"[{state.company_id}/{state.repo_id}] {ticket_id}\n\n"
-                f"Analysis complete. Here's the plan:\n{summary}\n\n"
-                f"Proceed to development?"
-            )
-
-        if gate_state == "QA":
-            qa_report = workspace.reports_dir / "qa-agent-output.md"
-            summary = ""
-            if qa_report.exists():
-                content = qa_report.read_text(encoding="utf-8")
-                summary = content[:500]
-            return (
-                f"[{state.company_id}/{state.repo_id}] {ticket_id}\n\n"
-                f"Tests pass.\n{summary}\n\n"
-                f"Push and open PR?"
-            )
+        tid = state.ticket_id
+        sep = "─" * 30
 
         if gate_state == "PR_REVIEW":
+            # Include PR comment summary if available
+            comments_file = workspace.reports_dir / "pr-review-comments.md"
+            responder_file = workspace.reports_dir / "pr-comment-responder-agent-output.md"
+            summary = ""
+            if comments_file.exists():
+                content = comments_file.read_text(encoding="utf-8").strip()
+                comment_count = content.count("## Comment by")
+                summary += f"\n{comment_count} PR comment(s) found."
+            else:
+                summary += "\nNo PR comments."
+            if responder_file.exists():
+                resp = responder_file.read_text(encoding="utf-8").strip()
+                summary += f"\n\nAgent response:\n{resp[:500]}"
             return (
-                f"[{state.company_id}/{state.repo_id}] {ticket_id}\n\n"
-                f"PR review complete. PR: {state.pr_url or 'N/A'}\n\n"
-                f"Finalize and merge?"
+                f"⏸ [{state.company_id}/{state.repo_id}] {tid}\n"
+                f"{sep}\n"
+                f"PR: {state.pr_url or 'N/A'}\n"
+                f"{summary}\n"
+                f"{sep}\n"
+                f"↩️ Reply: proceed = finalize, reject = back to dev"
             )
 
-        return f"{ticket_id}: Awaiting approval at {gate_state}."
+        actions = {
+            "ANALYSIS": ("Analysis done → ready for development", "proceed = start coding, reject = back to analysis"),
+            "QA": ("QA passed → ready to push & open PR", "proceed = push code, reject = back to dev"),
+        }
+        title, options = actions.get(gate_state, (f"Awaiting approval at {gate_state}", "proceed or reject"))
+
+        return (
+            f"⏸ [{state.company_id}/{state.repo_id}] {tid}\n"
+            f"{sep}\n"
+            f"{title}\n"
+            f"{sep}\n"
+            f"↩️ Reply: {options}"
+        )
 
     def _parse_agent_outcome(
         self, stage_id: str, output: str, workspace: Workspace,
@@ -1070,9 +1206,18 @@ class Orchestrator:
         output_lower = output.lower()
 
         if stage_id == "analysis":
+            ba_plan = workspace.reports_dir / "ba.md"
+            # If ba.md exists, analysis is done — proceed regardless of keywords
+            if ba_plan.exists():
+                return "default"
+            # No ba.md — check if agent is asking questions
             if "unclear" in output_lower or "questions" in output_lower:
                 return "unclear"
-            return "default"
+            logger.warning(
+                "%s: BA completed but reports/ba.md missing — treating as unclear",
+                workspace.state.ticket_id,
+            )
+            return "unclear"
 
         if stage_id == "scope_check":
             # Check for scope guard report
@@ -1164,3 +1309,54 @@ def _ticket_to_markdown(ticket: TicketData) -> str:
             lines.append(f"- {link.get('type', 'related')}: {link.get('key', '')}")
 
     return "\n".join(lines)
+
+
+def _write_resolution_report(
+    workspace: Any, auto_fixed: list, auto_rejected: list,
+    escalated_decisions: list, cycle: int,
+) -> None:
+    """Write or append to reports/pr-review-resolution.md."""
+    report_path = workspace.reports_dir / "pr-review-resolution.md"
+    existing = report_path.read_text(encoding="utf-8") if report_path.exists() else ""
+
+    lines: list[str] = []
+    if not existing:
+        lines.append(f"# PR Review Resolution — {workspace.state.ticket_id}\n")
+        lines.append(f"PR: #{workspace.state.pr_number}\n")
+
+    total = len(auto_fixed) + len(auto_rejected) + len(escalated_decisions)
+    lines.append(f"\n## Review Cycle {cycle}")
+    lines.append(f"Comments this cycle: {total}\n")
+
+    for af in auto_fixed:
+        cid = af.comment_id if hasattr(af, "comment_id") else af.get("comment_id", "?")
+        reason = af.reason if hasattr(af, "reason") else af.get("reason", "")
+        lines.append(f"### Comment #{cid} — AUTO_FIX")
+        lines.append(f"Reason: {reason}")
+        lines.append("Status: FIXED\nMark as Resolved: YES\n")
+
+    for ar in auto_rejected:
+        cid = ar.comment_id if hasattr(ar, "comment_id") else ar.get("comment_id", "?")
+        reason = ar.reason if hasattr(ar, "reason") else ar.get("reason", "")
+        lines.append(f"### Comment #{cid} — AUTO_REJECT")
+        lines.append(f"Reason: {reason}")
+        lines.append("Status: WON'T_FIX\nGitHub reply: Posted\nMark as Resolved: YES\n")
+
+    for ed in escalated_decisions:
+        decision = (ed.get("decision") or "skip").lower()
+        status = "FIXED" if decision == "fix" else "WON'T_FIX" if "won't fix" in decision else "SKIPPED"
+        lines.append(f"### Comment #{ed.get('comment_id', '?')} — ESCALATED")
+        lines.append(f"By: @{ed.get('author', '?')} on {ed.get('file', '?')}:{ed.get('line', '?')}")
+        lines.append(f"Decision: {ed.get('decision', 'skip')}")
+        lines.append(f"Status: {status}")
+        commented = "YES" if "won't fix" in decision else "NO"
+        lines.append(f"GitHub reply: {'Posted' if commented == 'YES' else 'N/A'}")
+        lines.append(f"Mark as Resolved: {'YES' if status != 'SKIPPED' else 'NO'}\n")
+
+    fixed = len(auto_fixed) + sum(1 for e in escalated_decisions if (e.get("decision") or "").lower() == "fix")
+    wf = len(auto_rejected) + sum(1 for e in escalated_decisions if "won't fix" in (e.get("decision") or "").lower())
+    skip = total - fixed - wf
+    lines.append(f"## Resolution Summary — Cycle {cycle}")
+    lines.append(f"Fixed: {fixed} | Won't Fix: {wf} | Commented: {wf} | Skipped: {skip}\n")
+
+    report_path.write_text(existing + "\n".join(lines), encoding="utf-8")

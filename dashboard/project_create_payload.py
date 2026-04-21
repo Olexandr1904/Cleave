@@ -111,9 +111,10 @@ def redact_to_input_md(payload: dict[str, Any]) -> str:
     lines.append(f"- project_key: {jira['project_key']}")
     lines.append(f"- email: {jira['email']}")
     lines.append(f"- token_var: {prefix}_JIRA_TOKEN")
-    lines.append(
-        "- trigger_labels: [" + ", ".join(jira["trigger_labels"]) + "]"
-    )
+    labels = jira["trigger_labels"]
+    lines.append("- trigger_labels: [" + ", ".join(labels) + "]")
+    repo_label = labels[-1] if len(labels) > 1 else labels[0] if labels else ""
+    lines.append(f"- jira_repo_label: {repo_label}  # use this as jira_repo_label in repo YAML")
     lines.append(
         "- ignore_labels: [" + ", ".join(jira.get("ignore_labels") or []) + "]"
     )

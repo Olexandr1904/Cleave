@@ -5,6 +5,7 @@ import { esc, stateBadgeHtml } from './helpers.js';
 import { renderBoard } from './board.js';
 import { renderDetail } from './detail.js';
 import { renderEventsHtml } from './events.js';
+import { setMode, showConfirmDialog } from './actions.js';
 
 const state = {
   view: 'board',
@@ -139,10 +140,64 @@ async function updateDaemonStatus() {
         <div class="daemon-status"><span class="status-dot online"></span>Mode: <span style="color:#e3b341;">${esc(data.mode)}</span></div>
         <div class="daemon-status" style="color:#6e7681;">Active: ${data.active} &middot; Blocked: ${data.blocked}</div>`;
     }
+    renderModeIndicator(data.mode);
   } catch (e) {
     const el = document.getElementById('daemon-status');
     if (el) el.innerHTML = '<div class="daemon-status"><span class="status-dot offline"></span>Offline</div>';
+    renderModeIndicator(null);
   }
+}
+
+// ── Mode indicator in toolbar ──
+function renderModeIndicator(mode) {
+  const container = document.getElementById('mode-indicator');
+  if (!container) return;
+
+  if (!mode) {
+    container.innerHTML = '<span class="mode-pill mode-offline">Offline</span>';
+    return;
+  }
+
+  const isAuto = mode === 'auto';
+  const pillClass = isAuto ? 'mode-auto' : 'mode-manual';
+  const label = isAuto ? 'Auto' : 'Manual';
+  const targetMode = isAuto ? 'manual' : 'auto';
+  const targetLabel = isAuto ? 'Manual' : 'Auto';
+
+  container.innerHTML = `
+    <span class="mode-pill ${pillClass}" id="mode-toggle" title="Click to switch mode">
+      <span class="mode-dot"></span>
+      ${esc(label)}
+    </span>
+    <span class="mode-hint" id="mode-hint">
+      <span class="mode-hint-icon">?</span>
+      <span class="mode-hint-tooltip">
+        <strong>Auto mode</strong><br>
+        Jira is polled for new tickets. Approval gates are skipped — tickets flow through stages automatically.<br><br>
+        <strong>Manual mode</strong><br>
+        Jira polling is paused. Tickets stop at approval gates (Analysis, QA, PR Review) and wait for your approval in the dashboard.
+      </span>
+    </span>`;
+
+  container.querySelector('#mode-toggle').addEventListener('click', () => {
+    const warn = isAuto
+      ? 'Switching to <strong>Manual</strong> will pause Jira polling and enable approval gates. Tickets will wait for your approval at each stage.'
+      : 'Switching to <strong>Auto</strong> will resume Jira polling and skip approval gates. Pending approvals will be auto-approved.';
+
+    showConfirmDialog(
+      `Switch to ${targetLabel} mode?`,
+      `<div style="font-size:12px;color:#c9d1d9;line-height:1.5;">${warn}</div>`,
+      `Switch to ${targetLabel}`,
+      async () => {
+        try {
+          await setMode(targetMode);
+          await updateDaemonStatus();
+        } catch (err) {
+          alert('Failed to change mode: ' + err.message);
+        }
+      }
+    );
+  });
 }
 
 // ── Auto-refresh ──
@@ -158,7 +213,7 @@ function scheduleAutoRefresh() {
       if (state.view === 'board') doRenderBoard();
       else if (state.view === 'eventlog') doRenderEventLog();
       updateDaemonStatus();
-    }, 5000);
+    }, 30000);
   }
 }
 

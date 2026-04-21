@@ -13,7 +13,7 @@ import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 
-_ASSIGN_RE = re.compile(r"^([A-Za-z_][A-Za-z0-9_]*)=")
+_ASSIGN_RE = re.compile(r"^(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)=")
 
 
 @dataclass
@@ -65,7 +65,7 @@ def append_vars(env_path: Path, vars: dict[str, str]) -> None:
     prefix = env_path.read_text(encoding="utf-8") if env_path.exists() else ""
     if prefix and not prefix.endswith("\n"):
         prefix += "\n"
-    addition = "".join(f"{name}={value}\n" for name, value in vars.items())
+    addition = "".join(f"export {name}={value}\n" for name, value in vars.items())
     _atomic_write(env_path, prefix + addition)
 
 

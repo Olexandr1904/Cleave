@@ -1,11 +1,10 @@
-import { createProject } from './api.js';
+import { createProject, validateStep } from './api.js';
 
 const stepDefs = [
-  { id: 'identity', title: 'Identity' },
+  { id: 'identity', title: 'Project' },
   { id: 'jira',     title: 'Jira' },
-  { id: 'vcs',      title: 'VCS' },
-  { id: 'quality',  title: 'Quality' },
-  { id: 'extras',   title: 'Extras' },
+  { id: 'vcs',      title: 'Repository' },
+  { id: 'extras',   title: 'Notifications' },
   { id: 'review',   title: 'Review' },
 ];
 
@@ -20,6 +19,7 @@ const state = {
   },
   errors: {},
   running: null,
+  validated: { jira: false, vcs: false, telegram: false },
 };
 
 let els;
@@ -51,6 +51,22 @@ function render() {
   const renderer = renderers[def.id];
   els.body.innerHTML = '';
   renderer(els.body);
+  if (state.errors._check) {
+    const msg = document.createElement('div');
+    msg.className = 'check-gate-msg';
+    msg.textContent = state.errors._check;
+    els.body.appendChild(msg);
+  }
+  // Enter key: focus next input, or click Next if last
+  const inputs = [...els.body.querySelectorAll('input:not([type=checkbox]), select')];
+  inputs.forEach((inp, i) => {
+    inp.addEventListener('keydown', (ev) => {
+      if (ev.key !== 'Enter') return;
+      ev.preventDefault();
+      if (i < inputs.length - 1) inputs[i + 1].focus();
+      else els.next.click();
+    });
+  });
   els.back.disabled = state.step === 0;
   els.next.textContent = state.step === stepDefs.length - 1 ? 'Create project' : 'Next';
 }
@@ -78,6 +94,22 @@ async function onNext() {
   const errors = validator(state.data[def.id]);
   if (Object.keys(errors).length > 0) {
     state.errors = errors;
+    render();
+    return;
+  }
+  // Block steps that require live validation
+  if (def.id === 'jira' && !state.validated.jira) {
+    state.errors = { _check: 'Click "Check Jira connection" and fix any errors before proceeding' };
+    render();
+    return;
+  }
+  if (def.id === 'vcs' && !state.validated.vcs) {
+    state.errors = { _check: 'Click "Check repository access" before proceeding' };
+    render();
+    return;
+  }
+  if (def.id === 'extras' && !state.validated.telegram) {
+    state.errors = { _check: 'Click "Test Telegram" before proceeding' };
     render();
     return;
   }
@@ -133,111 +165,197 @@ const renderers = {
   identity(body) {
     const d = state.data.identity;
     const e = state.errors;
+    const slugify = (s) => s.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 63);
     body.innerHTML = `
-      <h3>Identity</h3>
+      <h3>Project</h3>
       <div class="form-field">
-        <label>Project ID (slug)</label>
-        <input id="f-project-id" value="${d.project_id || ''}" placeholder="acme" />
-        ${e.project_id ? `<span class="error">${e.project_id}</span>` : ''}
-      </div>
-      <div class="form-field">
-        <label>Display name</label>
-        <input id="f-display-name" value="${d.display_name || ''}" placeholder="Acme Corp" />
+        <label>Project name</label>
+        <input id="f-display-name" value="${d.display_name || ''}" placeholder="e.g. Acme Corp, Globex Inc" autofocus />
         ${e.display_name ? `<span class="error">${e.display_name}</span>` : ''}
       </div>
-      <div class="form-field">
-        <label>Repo ID (slug)</label>
-        <input id="f-repo-id" value="${d.repo_id || ''}" placeholder="acme-app" />
-        ${e.repo_id ? `<span class="error">${e.repo_id}</span>` : ''}
-      </div>
-      <div class="form-field">
-        <label>Repo display name</label>
-        <input id="f-repo-display-name" value="${d.repo_display_name || ''}" />
-        ${e.repo_display_name ? `<span class="error">${e.repo_display_name}</span>` : ''}
-      </div>
     `;
-    body.querySelector('#f-project-id').oninput = (ev) => d.project_id = ev.target.value;
-    body.querySelector('#f-display-name').oninput = (ev) => d.display_name = ev.target.value;
-    body.querySelector('#f-repo-id').oninput = (ev) => d.repo_id = ev.target.value;
-    body.querySelector('#f-repo-display-name').oninput = (ev) => d.repo_display_name = ev.target.value;
+    body.querySelector('#f-display-name').oninput = (ev) => {
+      d.display_name = ev.target.value;
+      d.project_id = slugify(ev.target.value);
+    };
   },
   jira(body) {
     const d = state.data.jira;
     const e = state.errors;
+    const urlClean = (v) => { const m = v.match(/^(https?:\/\/[^/]+)/); return m ? m[1] : v; };
     body.innerHTML = `
       <h3>Jira</h3>
-      <div class="form-field"><label>URL</label><input id="f-jira-url" value="${d.url || ''}" placeholder="https://acme.atlassian.net" />${e.url ? `<span class="error">${e.url}</span>` : ''}</div>
-      <div class="form-field"><label>Project key</label><input id="f-jira-key" value="${d.project_key || ''}" placeholder="ACME" />${e.project_key ? `<span class="error">${e.project_key}</span>` : ''}</div>
-      <div class="form-field"><label>Email</label><input id="f-jira-email" value="${d.email || ''}" /></div>
-      <div class="form-field"><label>API token</label><input type="password" id="f-jira-token" value="${d.token || ''}" />${e.token ? `<span class="error">${e.token}</span>` : ''}</div>
-      <div class="form-field"><label>Trigger labels (all required on ticket)</label><div id="f-jira-labels"></div>${e.trigger_labels ? `<span class="error">${e.trigger_labels}</span>` : ''}</div>
-      <div class="form-field"><label>Ignore labels</label><div id="f-jira-ignore"></div></div>
-      <h4>Status mappings</h4>
-      <div class="form-field"><label>To-Do</label><input id="f-jira-todo" value="${d.statuses.todo}" /></div>
-      <div class="form-field"><label>In Progress</label><input id="f-jira-inprog" value="${d.statuses.in_progress}" /></div>
-      <div class="form-field"><label>In Review</label><input id="f-jira-inrev" value="${d.statuses.in_review}" /></div>
-      <div class="form-field"><label>Done</label><input id="f-jira-done" value="${d.statuses.done}" /></div>
+      <div class="form-field">
+        <label>Jira URL</label>
+        <input id="f-jira-url" value="${d.url || ''}" placeholder="https://yourteam.atlassian.net" />
+        <small class="hint">Just the base URL — board/project path is stripped automatically</small>
+        ${e.url ? `<span class="error">${e.url}</span>` : ''}
+      </div>
+      <div class="form-field"><label>Project key</label><input id="f-jira-key" value="${d.project_key || ''}" placeholder="e.g. PROJ, ACME" />${e.project_key ? `<span class="error">${e.project_key}</span>` : ''}</div>
+      <div class="form-field"><label>Email</label><input id="f-jira-email" value="${d.email || ''}" placeholder="your-bot@company.com" /></div>
+      <div class="form-field"><label>API token</label><input type="password" id="f-jira-token" value="${d.token || ''}" placeholder="From id.atlassian.com/manage/api-tokens" />${e.token ? `<span class="error">${e.token}</span>` : ''}</div>
+      <div class="form-field">
+        <label>Trigger labels <small class="hint">comma-separated — ticket must have ALL of these</small></label>
+        <input id="f-jira-labels" value="${(d.trigger_labels || []).join(', ')}" placeholder="ai-pipeline, your-repo-label" />
+        ${e.trigger_labels ? `<span class="error">${e.trigger_labels}</span>` : ''}
+      </div>
+      <div class="form-field">
+        <label>Ignore labels <small class="hint">comma-separated — tickets with any of these are skipped</small></label>
+        <input id="f-jira-ignore" value="${(d.ignore_labels || []).join(', ')}" placeholder="on-hold, manual-only" />
+      </div>
+      <div class="form-field">
+        <button id="f-jira-check" class="btn-check" type="button">Check Jira connection</button>
+        <div id="f-jira-check-result"></div>
+      </div>
     `;
-    body.querySelector('#f-jira-url').oninput = (ev) => d.url = ev.target.value;
-    body.querySelector('#f-jira-key').oninput = (ev) => d.project_key = ev.target.value;
+    body.querySelector('#f-jira-url').oninput = (ev) => d.url = urlClean(ev.target.value);
+    body.querySelector('#f-jira-url').onblur = (ev) => { d.url = urlClean(ev.target.value); ev.target.value = d.url; };
+    body.querySelector('#f-jira-key').oninput = (ev) => d.project_key = ev.target.value.toUpperCase();
     body.querySelector('#f-jira-email').oninput = (ev) => d.email = ev.target.value;
     body.querySelector('#f-jira-token').oninput = (ev) => d.token = ev.target.value;
-    body.querySelector('#f-jira-todo').oninput = (ev) => d.statuses.todo = ev.target.value;
-    body.querySelector('#f-jira-inprog').oninput = (ev) => d.statuses.in_progress = ev.target.value;
-    body.querySelector('#f-jira-inrev').oninput = (ev) => d.statuses.in_review = ev.target.value;
-    body.querySelector('#f-jira-done').oninput = (ev) => d.statuses.done = ev.target.value;
-    mountChipInput(body.querySelector('#f-jira-labels'), d.trigger_labels, () => {});
-    mountChipInput(body.querySelector('#f-jira-ignore'), d.ignore_labels, () => {});
+    body.querySelector('#f-jira-labels').oninput = (ev) => d.trigger_labels = ev.target.value.split(',').map(s => s.trim()).filter(Boolean);
+    body.querySelector('#f-jira-ignore').oninput = (ev) => d.ignore_labels = ev.target.value.split(',').map(s => s.trim()).filter(Boolean);
+    const jiraInvalidate = () => { state.validated.jira = false; };
+    for (const id of ['#f-jira-url','#f-jira-key','#f-jira-email','#f-jira-token']) {
+      const el = body.querySelector(id);
+      if (el) el.addEventListener('input', jiraInvalidate);
+    }
+    body.querySelector('#f-jira-check').onclick = async () => {
+      const btn = body.querySelector('#f-jira-check');
+      const res_el = body.querySelector('#f-jira-check-result');
+      btn.disabled = true; btn.textContent = 'Checking…';
+      res_el.innerHTML = '';
+      const r = await validateStep('jira', {
+        url: d.url, email: d.email, token: d.token, project_key: d.project_key,
+      });
+      btn.disabled = false; btn.textContent = 'Check Jira connection';
+      if (r.ok) {
+        state.validated.jira = true;
+        res_el.innerHTML = '<span class="check-pass">Connected — credentials valid</span>';
+      } else {
+        state.validated.jira = false;
+        const c = (r.checks || [])[0] || {};
+        res_el.innerHTML = `<span class="check-fail">${escapeHtml(c.reason || r.error || 'Check failed')}</span>`
+          + (c.fix_hint ? `<br><small class="hint">${escapeHtml(c.fix_hint)}</small>` : '');
+      }
+    };
   },
   vcs(body) {
     const d = state.data.vcs;
     const e = state.errors;
-    const common = `
+
+    const parseRepoUrl = (url) => {
+      url = url.trim().replace(/\.git$/, '').replace(/\/$/, '');
+      const ghMatch = url.match(/github\.com[/:]([^/]+)\/([^/]+)/);
+      if (ghMatch) return { provider: 'github', owner: ghMatch[1], repo: ghMatch[2] };
+      const glMatch = url.match(/^(https?:\/\/[^/]+)\/(.+?)(?:\/)?$/);
+      if (glMatch && !url.includes('github.com')) return { provider: 'gitlab', url: glMatch[1], path: glMatch[2] };
+      return null;
+    };
+
+    const currentUrl = d.provider === 'github' && d.github.owner
+      ? `https://github.com/${d.github.owner}/${d.github.repo || ''}`
+      : d.provider === 'gitlab' && d.gitlab.url && d.gitlab.project_id
+        ? `${d.gitlab.url}/${d.gitlab.project_id}`
+        : '';
+
+    const detected = d.provider === 'github' && d.github.owner
+      ? `<span class="hint">GitHub — ${d.github.owner}/${d.github.repo || '?'}</span>`
+      : d.provider === 'gitlab' && d.gitlab.project_id
+        ? `<span class="hint">GitLab — ${d.gitlab.project_id}</span>`
+        : '';
+
+    const githubFields = `
+      <div class="form-field"><label>Token (PAT with repo scope)</label><input type="password" id="f-gh-token" value="${d.github.token || ''}" placeholder="ghp_..." />${e.token ? `<span class="error">${e.token}</span>` : ''}</div>
+      <details class="advanced-toggle"><summary>Advanced settings</summary>
+        <div class="form-field"><label>Default branch</label><input id="f-gh-branch" value="${d.github.default_branch}" placeholder="develop" /></div>
+        <div class="form-field"><label>Branch prefix</label><input id="f-gh-prefix" value="${d.github.branch_prefix}" placeholder="feature" /></div>
+        <div class="form-field"><label>Merge method</label>
+          <select id="f-gh-merge">
+            <option value="squash" ${d.github.merge_method === 'squash' ? 'selected' : ''}>squash</option>
+            <option value="merge" ${d.github.merge_method === 'merge' ? 'selected' : ''}>merge</option>
+            <option value="rebase" ${d.github.merge_method === 'rebase' ? 'selected' : ''}>rebase</option>
+          </select>
+        </div>
+      </details>
+    `;
+    const gitlabFields = `
+      <div class="form-field"><label>Token</label><input type="password" id="f-gl-token" value="${d.gitlab.token || ''}" />${e.token ? `<span class="error">${e.token}</span>` : ''}</div>
+      <details class="advanced-toggle"><summary>Advanced settings</summary>
+        <div class="form-field"><label>Default branch</label><input id="f-gl-branch" value="${d.gitlab.default_branch || 'develop'}" /></div>
+        <div class="form-field"><label>Branch prefix</label><input id="f-gl-prefix" value="${d.gitlab.branch_prefix || 'feature'}" /></div>
+      </details>
+    `;
+    const providerFields = d.provider === 'github' ? githubFields : d.provider === 'gitlab' ? gitlabFields : '';
+
+    body.innerHTML = `
+      <h3>Repository</h3>
       <div class="form-field">
-        <label>Provider</label>
-        <select id="f-vcs-provider">
-          <option value="github" ${d.provider === 'github' ? 'selected' : ''}>GitHub</option>
-          <option value="gitlab" ${d.provider === 'gitlab' ? 'selected' : ''}>GitLab</option>
-        </select>
+        <label>Repository URL</label>
+        <input id="f-repo-url" value="${currentUrl}" placeholder="https://github.com/owner/repo" />
+        ${detected}
+        ${e.repo_url ? `<span class="error">${e.repo_url}</span>` : ''}
       </div>
+      <div id="vcs-provider-fields">${providerFields}</div>
+      ${d.provider ? `<div class="form-field">
+        <button id="f-vcs-check" class="btn-check" type="button">Check repository access</button>
+        <div id="f-vcs-check-result"></div>
+      </div>` : ''}
     `;
-    const github = `
-      <div class="form-field"><label>Owner</label><input id="f-gh-owner" value="${d.github.owner || ''}" />${e.owner ? `<span class="error">${e.owner}</span>` : ''}</div>
-      <div class="form-field"><label>Repo</label><input id="f-gh-repo" value="${d.github.repo || ''}" />${e.repo ? `<span class="error">${e.repo}</span>` : ''}</div>
-      <div class="form-field"><label>Token</label><input type="password" id="f-gh-token" value="${d.github.token || ''}" />${e.token ? `<span class="error">${e.token}</span>` : ''}</div>
-      <div class="form-field"><label>Default branch</label><input id="f-gh-branch" value="${d.github.default_branch}" /></div>
-      <div class="form-field"><label>Branch prefix</label><input id="f-gh-prefix" value="${d.github.branch_prefix}" /></div>
-      <div class="form-field"><label>Merge method</label>
-        <select id="f-gh-merge">
-          <option value="squash" ${d.github.merge_method === 'squash' ? 'selected' : ''}>squash</option>
-          <option value="merge" ${d.github.merge_method === 'merge' ? 'selected' : ''}>merge</option>
-          <option value="rebase" ${d.github.merge_method === 'rebase' ? 'selected' : ''}>rebase</option>
-        </select>
-      </div>
-    `;
-    const gitlab = `
-      <div class="form-field"><label>GitLab URL</label><input id="f-gl-url" value="${d.gitlab.url || 'https://gitlab.com'}" /></div>
-      <div class="form-field"><label>Project ID (numeric)</label><input id="f-gl-pid" value="${d.gitlab.project_id || ''}" /></div>
-      <div class="form-field"><label>Token</label><input type="password" id="f-gl-token" value="${d.gitlab.token || ''}" /></div>
-      <div class="form-field"><label>Default branch</label><input id="f-gl-branch" value="${d.gitlab.default_branch || 'develop'}" /></div>
-      <div class="form-field"><label>Branch prefix</label><input id="f-gl-prefix" value="${d.gitlab.branch_prefix || 'feature'}" /></div>
-    `;
-    body.innerHTML = `<h3>VCS</h3>${common}<div id="vcs-provider-fields">${d.provider === 'github' ? github : gitlab}</div>`;
-    const rerender = () => renderers.vcs(body);
-    body.querySelector('#f-vcs-provider').onchange = (ev) => { d.provider = ev.target.value; rerender(); };
+
+    body.querySelector('#f-repo-url').oninput = (ev) => {
+      const parsed = parseRepoUrl(ev.target.value);
+      if (parsed) {
+        d.provider = parsed.provider;
+        const id = state.data.identity;
+        if (parsed.provider === 'github') {
+          d.github.owner = parsed.owner;
+          d.github.repo = parsed.repo;
+          id.repo_id = id.repo_id || parsed.repo;
+          id.repo_display_name = id.repo_display_name || parsed.repo;
+        } else {
+          d.gitlab.url = parsed.url;
+          d.gitlab.project_id = parsed.path;
+          const slug = parsed.path.split('/').pop();
+          id.repo_id = id.repo_id || slug;
+          id.repo_display_name = id.repo_display_name || slug;
+        }
+        renderers.vcs(body);
+        body.querySelector('#f-repo-url').value = ev.target.value;
+      }
+    };
+
     if (d.provider === 'github') {
-      body.querySelector('#f-gh-owner').oninput = (ev) => d.github.owner = ev.target.value;
-      body.querySelector('#f-gh-repo').oninput = (ev) => d.github.repo = ev.target.value;
       body.querySelector('#f-gh-token').oninput = (ev) => d.github.token = ev.target.value;
       body.querySelector('#f-gh-branch').oninput = (ev) => d.github.default_branch = ev.target.value;
       body.querySelector('#f-gh-prefix').oninput = (ev) => d.github.branch_prefix = ev.target.value;
       body.querySelector('#f-gh-merge').onchange = (ev) => d.github.merge_method = ev.target.value;
-    } else {
-      body.querySelector('#f-gl-url').oninput = (ev) => d.gitlab.url = ev.target.value;
-      body.querySelector('#f-gl-pid').oninput = (ev) => d.gitlab.project_id = ev.target.value;
+    } else if (d.provider === 'gitlab') {
       body.querySelector('#f-gl-token').oninput = (ev) => d.gitlab.token = ev.target.value;
       body.querySelector('#f-gl-branch').oninput = (ev) => d.gitlab.default_branch = ev.target.value;
       body.querySelector('#f-gl-prefix').oninput = (ev) => d.gitlab.branch_prefix = ev.target.value;
+    }
+    const vcsCheckBtn = body.querySelector('#f-vcs-check');
+    if (vcsCheckBtn) {
+      vcsCheckBtn.onclick = async () => {
+        const res_el = body.querySelector('#f-vcs-check-result');
+        vcsCheckBtn.disabled = true; vcsCheckBtn.textContent = 'Checking…';
+        res_el.innerHTML = '';
+        const checkData = d.provider === 'github'
+          ? { provider: 'github', token: d.github.token, owner: d.github.owner, repo: d.github.repo }
+          : { provider: 'gitlab', token: d.gitlab.token, project_id: d.gitlab.project_id, url: d.gitlab.url };
+        const r = await validateStep('vcs', checkData);
+        vcsCheckBtn.disabled = false; vcsCheckBtn.textContent = 'Check repository access';
+        if (r.ok) {
+          state.validated.vcs = true;
+          res_el.innerHTML = '<span class="check-pass">Repository accessible — credentials valid</span>';
+        } else {
+          state.validated.vcs = false;
+          const c = (r.checks || [])[0] || {};
+          res_el.innerHTML = `<span class="check-fail">${escapeHtml(c.reason || r.error || 'Check failed')}</span>`
+            + (c.fix_hint ? `<br><small class="hint">${escapeHtml(c.fix_hint)}</small>` : '');
+        }
+      };
     }
   },
   quality(body) {
@@ -249,62 +367,94 @@ const renderers = {
         <label><input type="checkbox" id="f-q-${key}-gate" ${d[key].hard_gate ? 'checked' : ''}/> Hard gate</label>
       </div>
     `;
-    body.innerHTML = `<h3>Quality gates</h3>${row('lint', 'Lint')}${row('test', 'Test')}${row('build', 'Build')}`;
+    body.innerHTML = `
+      <h3>Quality gates</h3>
+      <p class="hint">Commands the pipeline runs after code changes to verify quality. Leave blank to skip a gate. "Hard gate" means the pipeline stops if the command fails.</p>
+      ${row('lint', 'Lint')}${row('test', 'Test')}${row('build', 'Build')}`;
     for (const key of ['lint', 'test', 'build']) {
       body.querySelector(`#f-q-${key}-cmd`).oninput = (ev) => d[key].command = ev.target.value;
       body.querySelector(`#f-q-${key}-gate`).onchange = (ev) => d[key].hard_gate = ev.target.checked;
     }
   },
-  extras(body) {
+  async extras(body) {
     const d = state.data.extras;
+    const e = state.errors;
+    let hasGlobal = false;
+    try { const r = await (await fetch('/api/projects/telegram-globals')).json(); hasGlobal = r.has_global; } catch {}
+    const tgRequired = !hasGlobal;
+    state._tgRequired = tgRequired;
+    const tgHint = hasGlobal
+      ? 'Global Telegram bot configured — leave blank to use it.'
+      : 'No global Telegram config. Enter bot token and chat ID.';
     body.innerHTML = `
-      <h3>Extras</h3>
-      <div class="form-field"><label>Telegram bot token (optional)</label><input type="password" id="f-ex-tg-token" value="${d.telegram_bot_token || ''}" placeholder="blank = inherit global" /></div>
-      <div class="form-field"><label>Telegram chat ID (optional)</label><input id="f-ex-tg-chat" value="${d.telegram_chat_id || ''}" /></div>
-      <div class="form-field"><label>Architecture rules file</label><input id="f-ex-arch" value="${d.arch_rules_file || ''}" placeholder="docs/arch-rules.md" /></div>
-      <div class="form-field"><label>Protected files (comma-separated)</label><input id="f-ex-protected" value="${(d.protected_files || []).join(', ')}" /></div>
-      <div class="form-field"><label>Max concurrent tickets (optional)</label><input id="f-ex-max" type="number" value="${d.max_concurrent_tickets || ''}" /></div>
+      <h3>Notifications</h3>
+      <p class="hint">${tgHint}</p>
+      <div class="form-field">
+        <label>Telegram bot token ${tgRequired ? '' : '<small class="hint">optional</small>'}</label>
+        <input type="password" id="f-ex-tg-token" value="${d.telegram_bot_token || ''}" placeholder="From @BotFather" />
+        ${e.telegram_bot_token ? `<span class="error">${e.telegram_bot_token}</span>` : ''}
+      </div>
+      <div class="form-field">
+        <label>Telegram chat ID ${tgRequired ? '' : '<small class="hint">optional</small>'}</label>
+        <input id="f-ex-tg-chat" value="${d.telegram_chat_id || ''}" placeholder="From @userinfobot" />
+        ${e.telegram_chat_id ? `<span class="error">${e.telegram_chat_id}</span>` : ''}
+      </div>
+      <div class="form-field">
+        <button id="f-tg-check" class="btn-check" type="button">Test Telegram</button>
+        <div id="f-tg-check-result"></div>
+      </div>
     `;
-    body.querySelector('#f-ex-tg-token').oninput = (ev) => d.telegram_bot_token = ev.target.value || null;
-    body.querySelector('#f-ex-tg-chat').oninput = (ev) => d.telegram_chat_id = ev.target.value || null;
-    body.querySelector('#f-ex-arch').oninput = (ev) => d.arch_rules_file = ev.target.value || null;
-    body.querySelector('#f-ex-protected').oninput = (ev) => d.protected_files = ev.target.value.split(',').map(s => s.trim()).filter(Boolean);
-    body.querySelector('#f-ex-max').oninput = (ev) => d.max_concurrent_tickets = ev.target.value ? parseInt(ev.target.value, 10) : null;
+    body.querySelector('#f-ex-tg-token').oninput = (ev) => { d.telegram_bot_token = ev.target.value || null; state.validated.telegram = false; };
+    body.querySelector('#f-ex-tg-chat').oninput = (ev) => { d.telegram_chat_id = ev.target.value || null; state.validated.telegram = false; };
+    body.querySelector('#f-tg-check').onclick = async () => {
+      const btn = body.querySelector('#f-tg-check');
+      const res_el = body.querySelector('#f-tg-check-result');
+      btn.disabled = true; btn.textContent = 'Sending…';
+      res_el.innerHTML = '';
+      const r = await validateStep('telegram', { token: d.telegram_bot_token || '', chat_id: d.telegram_chat_id || '' });
+      btn.disabled = false; btn.textContent = 'Test Telegram';
+      if (r.ok) {
+        state.validated.telegram = true;
+        res_el.innerHTML = '<span class="check-pass">Message sent — check your Telegram</span>';
+      } else {
+        state.validated.telegram = false;
+        const c = (r.checks || [])[0] || {};
+        res_el.innerHTML = `<span class="check-fail">${escapeHtml(c.reason || r.error || 'Failed')}</span>`
+          + (c.fix_hint ? `<br><small class="hint">${escapeHtml(c.fix_hint)}</small>` : '');
+      }
+    };
   },
   review(body) {
     const d = state.data;
     const prefix = (d.identity.project_id || '').toUpperCase().replace(/-/g, '_');
-    const tokenHint = (name) => `<code>${prefix}_${name}</code>`;
-    const vcsProvider = d.vcs.provider;
-    const vcsBlock = vcsProvider === 'github'
-      ? `<li>Owner/repo: ${d.vcs.github.owner}/${d.vcs.github.repo}</li>
-         <li>Token: •••• → will be saved to ${tokenHint('GITHUB_TOKEN')}</li>`
-      : `<li>URL: ${d.vcs.gitlab.url}</li>
-         <li>Project ID: ${d.vcs.gitlab.project_id}</li>
-         <li>Token: •••• → will be saved to ${tokenHint('GITLAB_TOKEN')}</li>`;
+    const env = (name) => `<code>${prefix}_${name}</code>`;
+    const vp = d.vcs.provider;
+    const repo = vp === 'github'
+      ? `${d.vcs.github.owner}/${d.vcs.github.repo}`
+      : d.vcs.gitlab.project_id || '';
+    const tg = d.extras.telegram_bot_token
+      ? 'Project-specific bot configured'
+      : 'Using global bot from .env';
     body.innerHTML = `
-      <h3>Review</h3>
-      <h4>Identity</h4>
-      <ul>
-        <li>project_id: ${d.identity.project_id}</li>
-        <li>display_name: ${d.identity.display_name}</li>
-        <li>repo_id: ${d.identity.repo_id}</li>
-      </ul>
-      <h4>Jira</h4>
-      <ul>
-        <li>URL: ${d.jira.url}</li>
-        <li>Project key: ${d.jira.project_key}</li>
-        <li>Trigger labels: ${d.jira.trigger_labels.join(', ')}</li>
-        <li>Token: •••• → will be saved to ${tokenHint('JIRA_TOKEN')}</li>
-      </ul>
-      <h4>VCS (${vcsProvider})</h4>
-      <ul>${vcsBlock}</ul>
-      <h4>Quality</h4>
-      <ul>
-        <li>lint: ${d.quality.lint.command || '—'}</li>
-        <li>test: ${d.quality.test.command || '—'}</li>
-        <li>build: ${d.quality.build.command || '—'}</li>
-      </ul>
+      <h3>Review before creating</h3>
+      <table class="review-table">
+        <tr><th colspan="2">Project</th></tr>
+        <tr><td>Name</td><td><strong>${escapeHtml(d.identity.display_name)}</strong> <small class="hint">(${d.identity.project_id})</small></td></tr>
+        <tr><td>Repository</td><td>${escapeHtml(d.identity.repo_display_name || d.identity.repo_id || '—')} <small class="hint">(${d.identity.repo_id || '—'})</small></td></tr>
+        <tr><th colspan="2">Jira</th></tr>
+        <tr><td>URL</td><td>${escapeHtml(d.jira.url)}</td></tr>
+        <tr><td>Project</td><td>${escapeHtml(d.jira.project_key)}</td></tr>
+        <tr><td>Email</td><td>${escapeHtml(d.jira.email || '—')}</td></tr>
+        <tr><td>Labels</td><td>${d.jira.trigger_labels.map(l => `<span class="review-label">${escapeHtml(l)}</span>`).join(' ')}</td></tr>
+        <tr><td>Token</td><td>•••• → ${env('JIRA_TOKEN')}</td></tr>
+        <tr><th colspan="2">Repository (${vp})</th></tr>
+        <tr><td>Repo</td><td>${escapeHtml(repo)}</td></tr>
+        <tr><td>Branch</td><td>${escapeHtml(vp === 'github' ? d.vcs.github.default_branch : d.vcs.gitlab.default_branch || 'develop')}</td></tr>
+        <tr><td>Token</td><td>•••• → ${env(vp === 'github' ? 'GITHUB_TOKEN' : 'GITLAB_TOKEN')}</td></tr>
+        <tr><th colspan="2">Notifications</th></tr>
+        <tr><td>Telegram</td><td>${tg}</td></tr>
+      </table>
+      <p class="hint" style="margin-top:12px;">Quality gates and advanced settings can be configured later in the project YAML.</p>
     `;
   },
 };
@@ -312,12 +462,7 @@ const renderers = {
 const validators = {
   identity(d) {
     const errors = {};
-    if (!d.project_id) errors.project_id = 'required';
-    else if (!SLUG_RE.test(d.project_id)) errors.project_id = 'must be a lowercase slug';
     if (!d.display_name) errors.display_name = 'required';
-    if (!d.repo_id) errors.repo_id = 'required';
-    else if (!SLUG_RE.test(d.repo_id)) errors.repo_id = 'must be a lowercase slug';
-    if (!d.repo_display_name) errors.repo_display_name = 'required';
     return errors;
   },
   jira(d) {
@@ -330,30 +475,39 @@ const validators = {
   },
   vcs(d) {
     const errors = {};
+    if (!d.provider) { errors.repo_url = 'Paste a GitHub or GitLab repo URL'; return errors; }
     if (d.provider === 'github') {
-      if (!d.github.owner) errors.owner = 'required';
-      if (!d.github.repo) errors.repo = 'required';
+      if (!d.github.owner || !d.github.repo) errors.repo_url = 'Could not parse owner/repo from URL';
       if (!d.github.token) errors.token = 'required';
     } else {
-      if (!d.gitlab.url) errors.url = 'required';
-      if (!d.gitlab.project_id) errors.project_id = 'required';
+      if (!d.gitlab.url || !d.gitlab.project_id) errors.repo_url = 'Could not parse GitLab project from URL';
       if (!d.gitlab.token) errors.token = 'required';
     }
     return errors;
   },
   quality() { return {}; },
-  extras() { return {}; },
+  extras(d) {
+    const errors = {};
+    if (state._tgRequired) {
+      const ex = state.data.extras;
+      if (!ex.telegram_bot_token) errors.telegram_bot_token = 'required — no global Telegram config';
+      if (!ex.telegram_chat_id) errors.telegram_chat_id = 'required — no global Telegram config';
+    }
+    return errors;
+  },
   review() { return {}; },
 };
 
 async function submit() {
   const payload = buildPayload();
   els.body.innerHTML = '<div class="status-panel"><p>Submitting…</p></div>';
-  els.back.disabled = true;
-  els.next.disabled = true;
+  els.back.style.display = 'none';
+  els.next.style.display = 'none';
   const { status, body } = await createProject(payload);
   if (status !== 202) {
     renderSubmitError(status, body);
+    els.back.style.display = '';
+    els.next.style.display = '';
     els.next.disabled = false;
     return;
   }
@@ -381,10 +535,20 @@ async function renderFailure(entry) {
     const res = await fetch(`/api/workspaces/${encodeURIComponent(entry.ticket_id)}/report/project-setup-output.md`);
     report = await res.text();
   } catch {}
+  // Extract fix hints from agent output (lines starting with digits or "Fix hint")
+  const hints = report.split('\n')
+    .filter(l => /^\d+\.\s|^-\s\*\*FAIL|fix hint/i.test(l.trim()))
+    .map(l => `<li>${escapeHtml(l.trim().replace(/^\d+\.\s*/, ''))}</li>`)
+    .join('');
   els.body.innerHTML = `
     <div class="status-panel failed">
       <h3>Setup failed</h3>
-      <pre style="text-align:left;white-space:pre-wrap;max-height:300px;overflow:auto;">${escapeHtml(report)}</pre>
+      ${hints ? `<div style="text-align:left;margin-bottom:12px;"><strong>What to fix:</strong><ul>${hints}</ul></div>` : ''}
+      <details style="text-align:left;margin-bottom:12px;">
+        <summary>Full agent report</summary>
+        <pre style="white-space:pre-wrap;max-height:300px;overflow:auto;font-size:12px;">${escapeHtml(report)}</pre>
+      </details>
+      <p class="hint">Fix the issues above, then click retry. Secrets are cleared — you'll re-enter tokens.</p>
       <button id="retry-btn" class="btn-primary">Edit & retry</button>
     </div>
   `;
@@ -398,6 +562,51 @@ async function renderFailure(entry) {
     els.next.disabled = false;
     render();
   };
+}
+
+async function renderSuccess() {
+  const d = state.data;
+  const pid = d.identity.project_id;
+  const vcs = d.vcs.provider === 'github'
+    ? `${d.vcs.github.owner}/${d.vcs.github.repo}`
+    : d.vcs.gitlab.project_id;
+
+  let mode = 'unknown';
+  try { const r = await (await fetch('/api/daemon/status')).json(); mode = r.mode; } catch {}
+
+  const modeMsg = mode === 'manual'
+    ? `<div class="mode-notice warning">
+        <strong>Daemon is in manual mode.</strong> Tickets won't be fetched automatically.
+        Switch to auto mode to start processing:
+        <button id="success-switch-auto" class="btn-check" style="margin-left:8px;">Switch to auto</button>
+       </div>`
+    : `<div class="mode-notice ok">Daemon is in auto mode — tickets will be fetched on the next poll cycle.</div>`;
+
+  els.body.innerHTML = `
+    <div class="status-panel success">
+      <h3>Project created</h3>
+      <ul style="text-align:left;">
+        <li><strong>${d.identity.display_name}</strong> (${pid})</li>
+        <li>Jira: ${d.jira.project_key} — ${d.jira.trigger_labels.join(', ')}</li>
+        <li>VCS: ${d.vcs.provider} — ${vcs}</li>
+      </ul>
+      ${modeMsg}
+      <div style="display:flex;gap:8px;justify-content:center;margin-top:16px;">
+        <button id="success-close" class="btn-primary">Go to board</button>
+      </div>
+    </div>
+  `;
+  document.getElementById('success-close').onclick = () => { closeWizard(); };
+  const switchBtn = document.getElementById('success-switch-auto');
+  if (switchBtn) {
+    switchBtn.onclick = async () => {
+      await fetch('/api/daemon/mode', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({mode:'auto'}) });
+      switchBtn.textContent = 'Switched to auto';
+      switchBtn.disabled = true;
+    };
+  }
+  els.back.style.display = 'none';
+  els.next.style.display = 'none';
 }
 
 function renderSubmitError(status, body) {
@@ -458,7 +667,7 @@ async function pollStatus() {
     if (st === 'SETUP_DONE') {
       done('st-validating', true); done('st-writing', true); done('st-done', true);
       clearInterval(poll);
-      setTimeout(closeWizard, 3000);
+      renderSuccess();
       window.dispatchEvent(new CustomEvent('sickle:projects-changed'));
     }
     if (st === 'SETUP_FAILED') {

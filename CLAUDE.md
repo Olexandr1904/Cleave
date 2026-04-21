@@ -60,6 +60,30 @@ For multi-step tasks, state a brief plan:
 
 Strong success criteria let you loop independently. Weak criteria ("make it work") require constant clarification.
 
+## 5. Pipeline Agent Permissions
+
+Sickle dispatches Claude Code agents via `claude -p` as automated subprocesses.
+These agents need tool access to read/write code, run git, and execute build commands.
+
+**Permission setup:** `.claude/settings.json` pre-approves tools for the pipeline:
+
+- **File access:** Read, Write, Edit, Glob, Grep, LS
+- **Git:** all git subcommands (add, commit, checkout, push, etc.)
+- **Build tools:** gradlew, npm, yarn, python, pytest
+- **Shell basics:** ls, find, cat, grep, mkdir, cp, mv
+
+**Denied:** `rm -rf /`, `sudo`, `curl`, `wget` (agents must not reach external
+services or escalate privileges — API calls go through Sickle's own adapters).
+
+**How agents get their tools:**
+1. Each agent's `.md` frontmatter lists allowed tools (e.g., `tools: [read_file, write_file, git_operation]`)
+2. `AgentRuntime` maps these to Claude Code tool names via `TOOL_MAP`
+3. The CLI is invoked with `--allowedTools Read,Write,Edit,Bash,Glob,Grep,LS`
+4. `.claude/settings.json` pre-approves these so `claude -p` runs non-interactively
+
+**Adding new agents:** List only the tools the agent needs in its frontmatter.
+Don't give write access to read-only agents (BA, scope-guard, PR-comment-responder).
+
 ---
 
 **These guidelines are working if:** fewer unnecessary changes in diffs, fewer rewrites due to overcomplication, and clarifying questions come before implementation rather than after mistakes.

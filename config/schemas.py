@@ -37,7 +37,7 @@ class MaxIterationsConfig:
 class DefaultsConfig:
     poll_interval_seconds: int = 300
     max_iterations: MaxIterationsConfig = field(default_factory=MaxIterationsConfig)
-    max_parallel_tickets: int = 5
+    max_parallel_tickets: int = 7
     pr_comment_fetch_delay_minutes: int = 30
 
 
@@ -119,7 +119,7 @@ class JiraConfig:
 
 @dataclass
 class ParallelismConfig:
-    max_concurrent_tickets: int = 5
+    max_concurrent_tickets: int = 7
 
 
 # --- VCS config (repo-level) ---

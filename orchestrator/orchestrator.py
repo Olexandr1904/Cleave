@@ -16,7 +16,7 @@ from config.config_loader import ConfigError, load_config
 
 from config.schemas import GlobalConfig, LoadedProject, RepoConfig
 from config.resource_registry import ResourceRegistry
-from integrations.base.notifier import NotifierInterface
+from integrations.base.notifier import Button, NotifierInterface
 from integrations.base.tracker import TicketData, TrackerInterface
 from integrations.base.vcs import VCSInterface
 from integrations.telegram.handlers.analyze import AnalyzeHandler
@@ -646,8 +646,8 @@ class Orchestrator:
                 self._emit("approval_requested", f"Awaiting approval for {state.ticket_id} after {current_state}", project_id=state.company_id, ticket_id=state.ticket_id, data={"gate": current_state})
                 if self._notifier:
                     chat_id = self._get_chat_id(workspace)
-                    summary = self._build_gate_summary(workspace, current_state)
-                    await self._notifier.send_message(chat_id, summary)
+                    summary, buttons = self._build_gate_summary(workspace, current_state)
+                    await self._notifier.send_message(chat_id, summary, buttons=buttons)
             elif next_stage == "escalate":
                 await self._handle_escalate(workspace)
             else:
@@ -692,8 +692,9 @@ class Orchestrator:
             f"will retry at {retry_at.strftime('%Y-%m-%d %H:%M')} UTC. "
             f"Other tickets hitting the same quota will defer silently until then."
         )
+        buttons = [Button(label="Retry Now", action=f"retry:{state.ticket_id}")]
         try:
-            await self._notifier.send_message(chat_id, msg)
+            await self._notifier.send_message(chat_id, msg, buttons=buttons)
             self._quota_window_end = retry_at
         except Exception as e:
             logger.warning("Failed to send deferred notification: %s", e)
@@ -710,8 +711,9 @@ class Orchestrator:
             f"FAILED at {state.previous_state or '?'}. Error: {first_line}. "
             f"Reply 'retry {state.ticket_id}' or use the dashboard."
         )
+        buttons = [Button(label="Retry", action=f"retry:{state.ticket_id}")]
         try:
-            await self._notifier.send_message(chat_id, msg)
+            await self._notifier.send_message(chat_id, msg, buttons=buttons)
         except Exception as e:
             logger.warning("Failed to send failure notification: %s", e)
 
@@ -828,8 +830,8 @@ class Orchestrator:
             )
             if self._notifier:
                 chat_id = self._get_chat_id(workspace)
-                summary = self._build_gate_summary(workspace, current_state)
-                await self._notifier.send_message(chat_id, summary)
+                summary, buttons = self._build_gate_summary(workspace, current_state)
+                await self._notifier.send_message(chat_id, summary, buttons=buttons)
             return
 
         self._emit(
@@ -1195,11 +1197,15 @@ class Orchestrator:
         else:
             logger.warning("Cannot map stage '%s' to state", stage_id)
 
-    def _build_gate_summary(self, workspace: Workspace, gate_state: str) -> str:
-        """Build a summary message for an approval gate notification."""
+    def _build_gate_summary(self, workspace: Workspace, gate_state: str) -> tuple[str, list[Button]]:
+        """Build a summary message and buttons for an approval gate notification."""
         state = workspace.state
         tid = state.ticket_id
         sep = "─" * 30
+        buttons = [
+            Button(label="Approve", action=f"approve:{tid}"),
+            Button(label="Reject", action=f"reject:{tid}"),
+        ]
 
         if gate_state == Stage.PR_REVIEW:
             resolution_file = workspace.reports_dir / "pr-review-resolution.md"
@@ -1220,7 +1226,7 @@ class Orchestrator:
                     summary = f"{count} comment(s) processed."
                 else:
                     summary = "No PR comments found."
-            return (
+            text = (
                 f"⏸ [{state.company_id}/{state.repo_id}] {tid}\n"
                 f"{sep}\n"
                 f"PR: {state.pr_url or 'N/A'}\n"
@@ -1228,6 +1234,7 @@ class Orchestrator:
                 f"{sep}\n"
                 f"↩️ Reply: proceed = finalize, reject = back to dev"
             )
+            return text, buttons
 
         actions = {
             Stage.ANALYSIS: ("Analysis done → ready for development", "proceed = start coding, reject = back to analysis"),
@@ -1235,13 +1242,14 @@ class Orchestrator:
         }
         title, options = actions.get(gate_state, (f"Awaiting approval at {gate_state}", "proceed or reject"))
 
-        return (
+        text = (
             f"⏸ [{state.company_id}/{state.repo_id}] {tid}\n"
             f"{sep}\n"
             f"{title}\n"
             f"{sep}\n"
             f"↩️ Reply: {options}"
         )
+        return text, buttons
 
     def _parse_agent_outcome(
         self, stage_id: str, output: str, workspace: Workspace,

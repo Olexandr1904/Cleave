@@ -30,6 +30,10 @@ def _fake_workspace(
         pr_number=pr_number,
         stage_iterations={},
         error=None,
+        human_input_reply=None,
+        last_updated_at=None,
+        pending_review_comments=None,
+        review_cycle=0,
     )
     ws.source_dir = "/tmp/fake/source"
     ws.reports_dir = MagicMock()
@@ -94,15 +98,12 @@ class TestActionFetchPrComments:
         return SimpleNamespace(delay_minutes=delay_minutes)
 
     @pytest.mark.asyncio
-    async def test_returns_skipped_when_delay_not_met(self):
-        from datetime import datetime, timezone
-
+    async def test_returns_skipped_when_no_reviewed_signal(self):
         from orchestrator.orchestrator import Orchestrator
 
         orch = MagicMock(spec=Orchestrator)
         ws = _fake_workspace(state="PR_REVIEW", pr_number=10)
-        ws.state.last_updated_at = datetime.now(timezone.utc).isoformat()
-        stage_def = self._make_stage_def(delay_minutes=30)
+        stage_def = self._make_stage_def()
 
         result = await Orchestrator._action_fetch_pr_comments(orch, ws, stage_def)
 
@@ -133,6 +134,7 @@ class TestActionFetchPrComments:
         orch._registry.get_agent = MagicMock(return_value=None)
 
         ws = _fake_workspace(state="PR_REVIEW", pr_number=10)
+        ws.state.human_input_reply = "reviewed"
         result = await Orchestrator._action_fetch_pr_comments(orch, ws, self._make_stage_def())
 
         assert result.success is True
@@ -190,6 +192,7 @@ class TestHandleActionStage:
         orch._mode_handler = None
         orch._should_approval_gate = MagicMock(return_value=False)
         orch._rollback_iteration = MagicMock()
+        orch._notifier = None
         return orch
 
     def _make_stage_def(self, action: str) -> SimpleNamespace:

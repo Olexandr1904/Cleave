@@ -25,6 +25,9 @@ Telegram bot adapter behind the NotifierInterface. Sends formatted notifications
 - FR12: `/status` command returns pipeline summary (mode, uptime, active workspaces) formatted by `StatusHandler`
 - FR13: Drill-down view shows per-workspace detail: stage, branch, Jira URL, PR URL, iteration counts
 - FR14: TelegramAdapter polling loop routes non-reply text messages to the `CommandHandler` while continuing to match replies back to `wait_for_reply` futures
+- FR15: Inline action buttons on messages that expect discrete choices (approve/reject gates, PR review complete, retry on failure/deferral); escalation messages stay text-reply only
+- FR16: `Button` dataclass in `NotifierInterface` — adapter-agnostic; `TelegramAdapter` translates to `InlineKeyboardMarkup`, routes `CallbackQuery` presses to `CommandHandler.handle_callback()`
+- FR17: Button confirmations sent as Telegram replies to the original button message (`reply_to_message_id`)
 
 ## Technical Approach
 
@@ -79,3 +82,4 @@ Telegram bot adapter behind the NotifierInterface. Sends formatted notifications
 | 2026-04-12 | Added retry command: retries a ticket from a specified or inferred stage; added escalation reply handler to unblock BLOCKED workspaces via Telegram reply-to; added typing indicator during intent parsing |
 | 2026-04-14 | Extended retry/resume to DEFERRED tickets: `_handle_retry` treats DEFERRED like BLOCKED/FAILED (transitions to `previous_state`); IntentParser system prompt now lists deferred workspaces and advertises retry for DEFERRED tickets; `_build_context` exposes `deferred_workspaces`. |
 | 2026-04-16 | Added `set_tracker` and `add_allowed_chat_id` mutators to CommandHandler for wizard hot-reload: tracker can be attached post-init; allowlist extended per-project (no-op when None/'admit all'). |
+| 2026-04-21 | Added inline action buttons: `Button` dataclass in `NotifierInterface`; `TelegramAdapter` translates to `InlineKeyboardMarkup` and routes `CallbackQuery` to `CommandHandler.handle_callback()`; approval gates get Approve/Reject buttons, PR review gets Review Complete, failed/deferred get Retry; escalation messages stay text-reply only. |

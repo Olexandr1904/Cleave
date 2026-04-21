@@ -3,14 +3,34 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+from dataclasses import dataclass
+
+
+@dataclass
+class Button:
+    """A labeled action button for inline display."""
+    label: str   # User-visible text, e.g. "Approve"
+    action: str  # Encoded action, e.g. "approve:ACME-14595"
 
 
 class NotifierInterface(ABC):
     """Abstract interface for notification systems (Telegram, Slack, etc.)."""
 
     @abstractmethod
-    async def send_message(self, chat_id: str, message: str) -> int:
+    async def send_message(
+        self,
+        chat_id: str,
+        message: str,
+        buttons: list[Button] | None = None,
+        reply_to_message_id: int | None = None,
+    ) -> int:
         """Send a message to the operator.
+
+        Args:
+            chat_id: Target chat.
+            message: Text content.
+            buttons: Optional inline action buttons.
+            reply_to_message_id: If set, send as a reply to this message.
 
         Returns the message ID for reply tracking.
         """

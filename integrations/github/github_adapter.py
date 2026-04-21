@@ -121,6 +121,20 @@ class GitHubAdapter(VCSInterface):
         logger.info("Opened PR #%d: %s", pr_number, pr_url)
         return pr_number, pr_url
 
+    async def find_pr_by_branch(self, branch: str) -> tuple[int, str] | None:
+        """Find an open PR for the given head branch."""
+        try:
+            data = await self._request(
+                "GET", f"{self._repo_path}/pulls",
+                params={"head": f"{self._owner}:{branch}", "state": "open"},
+            )
+            if data and isinstance(data, list) and len(data) > 0:
+                pr = data[0]
+                return pr["number"], pr["html_url"]
+        except Exception as e:
+            logger.warning("Failed to find PR for branch %s: %s", branch, e)
+        return None
+
     async def get_pr_comments(self, pr_number: int) -> list[PRComment]:
         """Get all review comments on a PR."""
         data = await self._request(

@@ -34,8 +34,8 @@ inputs:
   - "meta/answers.md (orchestrator mode — human replies to questions)"
 
 outputs:
-  - "config-live/projects/{project_id}/project.yaml"
-  - "config-live/projects/{project_id}/repos/{repo_id}.yaml"
+  - "project.yaml (in workspace root — handler copies to config-live)"
+  - "repos/{repo_id}.yaml (in workspace root — handler copies to config-live)"
   - "reports/project-setup-output.md (orchestrator mode — summary)"
   - "reports/questions.md (orchestrator mode — pending questions)"
 
@@ -170,7 +170,7 @@ telegram:
   default_chat_id: "{telegram_chat_id_or_inherit}"
 
 parallelism:
-  max_concurrent_tickets: {max_concurrent}
+  max_concurrent_tickets: 7
 
 defaults:
   poll_interval_seconds: 300
@@ -189,6 +189,8 @@ repo:
   id: "{repo_id}"
   name: "{repo_display_name}"
   enabled: true
+
+jira_repo_label: "{repo_label}"  # one of the trigger_labels that identifies this repo
 
 vcs:
   provider: "github"
@@ -226,7 +228,7 @@ build:
   hard_gate: {build_hard_gate}
 
 parallelism:
-  max_concurrent_tickets: {max_concurrent}
+  max_concurrent_tickets: 7
 ```
 
 30. Call `write_project_config` and `write_repo_config`
@@ -248,10 +250,12 @@ questions. Instead:
    `validate_github` or `validate_gitlab`). On failure, write
    `reports/project-setup-output.md` with the validation error and raise —
    the supervising handler will transition state to `SETUP_FAILED`.
-4. Write `config-live/projects/{project_id}/project.yaml` and
-   `config-live/projects/{project_id}/repos/{repo_id}.yaml` using
-   `${TOKEN_VAR}` references (never raw values). Use `trigger_labels` (plural
-   list) in the Jira block.
+4. Write `project.yaml` and `repos/{repo_id}.yaml` in the current working
+   directory using `${TOKEN_VAR}` references (never raw values). Use
+   `trigger_labels` (plural list) in the Jira block. Set `jira_repo_label`
+   in the repo YAML to the second trigger label (the repo-specific one, not
+   `ai-pipeline`). The handler will copy these into the config directory
+   automatically.
 5. Do NOT write a `ci:` block (CI/CD is out of scope for the web flow).
 6. Write `reports/project-setup-output.md` with a summary of what was created,
    including the list of env var names that must remain set for the project

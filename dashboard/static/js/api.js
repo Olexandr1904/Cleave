@@ -57,6 +57,23 @@ export async function loadHealth(force = false) {
   return resp.json();
 }
 
+export async function validateStep(step, data) {
+  let res;
+  try {
+    res = await fetch('/api/projects/validate-step', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({ step, data }),
+    });
+  } catch (e) {
+    return { ok: false, error: `Cannot reach server: ${e.message}. Is the daemon running?` };
+  }
+  if (!res.ok) {
+    return { ok: false, error: `Server returned HTTP ${res.status}. Try restarting the daemon.` };
+  }
+  return res.json().catch(() => ({ ok: false, error: 'Invalid response from server' }));
+}
+
 export async function createProject(payload) {
   const res = await fetch('/api/projects/create', {
     method: 'POST',

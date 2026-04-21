@@ -10,8 +10,17 @@ export async function renderBoard(projectId, showDone = true) {
     const workspaces = await loadWorkspaces(projectId);
 
     if (workspaces.length === 0) {
-      content.innerHTML = `<div id="health-strip-container"></div><div class="state-msg">No workspaces found.</div>`;
+      content.innerHTML = `<div id="health-strip-container"></div>
+        <div class="empty-state">
+          <div class="empty-state-icon">📋</div>
+          <h2>No projects yet</h2>
+          <p>Add your first project to start the autonomous pipeline.</p>
+          <button id="empty-add-project" class="btn-primary">+ New Project</button>
+        </div>`;
       renderHealthStrip(document.getElementById('health-strip-container'));
+      document.getElementById('empty-add-project').onclick = () => {
+        import('./project-wizard.js').then(({ openWizard }) => openWizard());
+      };
       return { workspaces };
     }
 
@@ -89,13 +98,7 @@ async function renderHealthStrip(container) {
 
   const unhealthy = projects.filter(p => p.status !== 'green');
   if (unhealthy.length === 0) {
-    container.innerHTML = `
-      <div class="health-strip green">
-        <span class="health-dot green"></span>
-        <span>All projects healthy</span>
-        <button class="health-refresh" id="health-refresh">&#x21bb;</button>
-      </div>`;
-    bindHealthRefresh(container);
+    container.innerHTML = '';
     return;
   }
 

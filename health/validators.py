@@ -21,7 +21,7 @@ class ValidatorResult:
     Attributes:
         ok: True if the check passed.
         name: Validator identifier (e.g. "jira", "github", "git_identity").
-        target: What was checked (e.g. "ACME project", "/ws/acme/acme-mobile").
+        target: What was checked (e.g. "ACME project", "/ws/acme/acme-app").
         reason: Human-readable error if ok=False, empty string otherwise.
         fix_hint: Copyable command or instruction to resolve the failure,
             empty string if ok or no actionable fix.

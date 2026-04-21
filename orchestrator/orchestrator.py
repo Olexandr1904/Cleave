@@ -811,7 +811,8 @@ class Orchestrator:
             workspace.update_state(**result.metadata)
 
         current_state = workspace.state.current_state
-        if self._should_approval_gate(current_state):
+        # Only gate on forward transitions (DONE, PR_REVIEW, etc.), not fix loops back to DEV
+        if result.next_state != "DEV" and self._should_approval_gate(current_state):
             workspace.transition("AWAITING_APPROVAL")
             self._emit(
                 "approval_requested",

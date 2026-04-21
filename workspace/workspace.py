@@ -62,6 +62,8 @@ class WorkspaceState:
     manual_control_started_at: str | None = None
     manual_control_comment: str | None = None
     retry_at: str | None = None
+    pending_review_comments: list[dict] | None = None
+    review_cycle: int = 0
 
     def __post_init__(self) -> None:
         now = _now_iso()

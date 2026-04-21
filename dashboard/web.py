@@ -16,6 +16,7 @@ from starlette.staticfiles import StaticFiles
 from dashboard.event_store import EventStore
 from dashboard.events import EventBus
 from health.runner import check_all
+from workspace.workspace import Stage
 
 logger = logging.getLogger(__name__)
 
@@ -168,9 +169,9 @@ def create_app(
             workspaces = [w for w in workspaces if w["company_id"] == project_id]
         # Sort: active first (by state order), then by last_updated_at descending
         state_order = {
-            "BLOCKED": 0, "AWAITING_APPROVAL": 1, "DEV": 2, "ANALYSIS": 3,
-            "SCOPE_CHECK": 4, "QA": 5, "PR_REVIEW": 6, "PUSHED": 7,
-            "NEW": 8, "DONE": 9, "FAILED": 10, "ARCHIVED": 11,
+            Stage.BLOCKED: 0, Stage.AWAITING_APPROVAL: 1, Stage.DEV: 2, Stage.ANALYSIS: 3,
+            Stage.SCOPE_CHECK: 4, Stage.QA: 5, Stage.PR_REVIEW: 6, Stage.PUSHED: 7,
+            Stage.NEW: 8, Stage.DONE: 9, Stage.FAILED: 10, Stage.ARCHIVED: 11,
         }
         workspaces.sort(key=lambda w: (
             state_order.get(w["current_state"], 99),
@@ -261,6 +262,99 @@ def create_app(
         orchestrator=orchestrator,
     )
     routes.append(Route("/api/projects/create", create_route_handler, methods=["POST"]))
+
+    async def validate_step(request: Request) -> JSONResponse:
+        """Validate wizard step data against live APIs."""
+        try:
+            body = await request.json()
+        except Exception:
+            return JSONResponse({"ok": False, "error": "invalid JSON"}, status_code=400)
+        step = body.get("step")
+        data = body.get("data", {})
+
+        if step == "jira":
+            from health.validators import check_jira
+            url = data.get("url", "")
+            r = await check_jira(
+                url=url, email=data.get("email", ""),
+                token=data.get("token", ""), project_key=data.get("project_key", ""),
+            )
+            return JSONResponse({
+                "ok": r.ok,
+                "checks": [{"name": r.name, "ok": r.ok, "reason": r.reason, "fix_hint": r.fix_hint}],
+            })
+
+        if step == "vcs":
+            provider = data.get("provider")
+            if provider == "github":
+                from health.validators import check_github
+                r = await check_github(
+                    token=data.get("token", ""),
+                    owner=data.get("owner", ""), repo=data.get("repo", ""),
+                )
+            elif provider == "gitlab":
+                from health.validators import check_gitlab
+                r = await check_gitlab(
+                    token=data.get("token", ""),
+                    project_id=data.get("project_id", ""),
+                    url=data.get("url", "https://gitlab.com"),
+                )
+            else:
+                return JSONResponse({"ok": False, "error": "unknown provider"}, status_code=400)
+            return JSONResponse({
+                "ok": r.ok,
+                "checks": [{"name": r.name, "ok": r.ok, "reason": r.reason, "fix_hint": r.fix_hint}],
+            })
+
+        if step == "telegram":
+            import os
+            token = data.get("token") or os.environ.get("TELEGRAM_BOT_TOKEN", "")
+            chat_id = data.get("chat_id") or os.environ.get("TELEGRAM_CHAT_ID", "")
+            if not token or not chat_id:
+                return JSONResponse({
+                    "ok": False,
+                    "checks": [{"name": "telegram", "ok": False,
+                                "reason": "Bot token or chat ID missing",
+                                "fix_hint": "Provide values or set TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID in .env"}],
+                })
+            import httpx
+            try:
+                async with httpx.AsyncClient(timeout=10) as client:
+                    resp = await client.post(
+                        f"https://api.telegram.org/bot{token}/sendMessage",
+                        json={"chat_id": chat_id, "text": "Hello World"},
+                    )
+                    rj = resp.json()
+                    if rj.get("ok"):
+                        return JSONResponse({
+                            "ok": True,
+                            "checks": [{"name": "telegram", "ok": True, "reason": "", "fix_hint": ""}],
+                        })
+                    return JSONResponse({
+                        "ok": False,
+                        "checks": [{"name": "telegram", "ok": False,
+                                    "reason": rj.get("description", f"HTTP {resp.status_code}"),
+                                    "fix_hint": "Check bot token and chat ID"}],
+                    })
+            except Exception as e:
+                return JSONResponse({
+                    "ok": False,
+                    "checks": [{"name": "telegram", "ok": False,
+                                "reason": str(e), "fix_hint": "Check network and bot token"}],
+                })
+
+        return JSONResponse({"ok": True, "checks": []})
+
+    routes.append(Route("/api/projects/validate-step", validate_step, methods=["POST"]))
+
+    async def telegram_globals(request: Request) -> JSONResponse:
+        """Check if global Telegram config exists in env."""
+        import os
+        has_token = bool(os.environ.get("TELEGRAM_BOT_TOKEN", ""))
+        has_chat = bool(os.environ.get("TELEGRAM_CHAT_ID", ""))
+        return JSONResponse({"has_global": has_token and has_chat})
+
+    routes.append(Route("/api/projects/telegram-globals", telegram_globals))
 
     static_dir = str(Path(__file__).parent / "static")
     app = Starlette(routes=routes)

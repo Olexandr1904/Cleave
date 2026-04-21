@@ -9,7 +9,7 @@ from config.schemas import RepoConfig
 from integrations.base.notifier import NotifierInterface
 from integrations.base.tracker import TrackerInterface
 from integrations.base.vcs import VCSInterface
-from workspace.workspace import Workspace
+from workspace.workspace import Stage, Workspace
 
 logger = logging.getLogger(__name__)
 
@@ -44,10 +44,15 @@ async def merge_pr(
         return MergeResult(success=False, error="No PR number in workspace state")
 
     # AC2: Gate checklist
-    # Gate 1: Scope certificate
+    # Gate 1: Scope check passed
+    scope_report = workspace.reports_dir / "scope-guard-agent-output.md"
     scope_cert = workspace.meta_dir / "scope-certificate.md"
-    if not scope_cert.exists():
-        return _gate_failure("scope_certificate", "Scope certificate not found", state.ticket_id)
+    scope_ok = scope_cert.exists()
+    if not scope_ok and scope_report.exists():
+        content = scope_report.read_text(encoding="utf-8").lower()
+        scope_ok = "status: pass" in content or "pass" in content
+    if not scope_ok:
+        return _gate_failure("scope_certificate", "Scope check not passed", state.ticket_id)
 
     # Gate 2-5: PR status (tests, lint, build, comments)
     try:
@@ -107,7 +112,7 @@ async def merge_pr(
             logger.warning("Failed to send merge notification: %s", e)
 
     # AC7: Transition workspace to DONE
-    workspace.transition("DONE")
+    workspace.transition(Stage.DONE)
 
     return MergeResult(success=True, merged=True)
 

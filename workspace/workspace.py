@@ -7,34 +7,47 @@ import os
 import tempfile
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
+from enum import StrEnum
 from pathlib import Path
 from typing import Any
 
 
-# Valid pipeline states (architecture-v2 §3.3)
-VALID_STATES = {
-    "NEW", "ANALYSIS", "DEV", "SCOPE_CHECK", "QA",
-    "PUSHED", "PR_REVIEW", "DONE",
-    "BLOCKED", "FAILED", "ARCHIVED",
-    "AWAITING_APPROVAL", "MANUAL_CONTROL", "DEFERRED",
-}
+class Stage(StrEnum):
+    """Pipeline stages (architecture-v2 §3.3)."""
+    NEW = "NEW"
+    ANALYSIS = "ANALYSIS"
+    DEV = "DEV"
+    SCOPE_CHECK = "SCOPE_CHECK"
+    QA = "QA"
+    PUSHED = "PUSHED"
+    PR_REVIEW = "PR_REVIEW"
+    DONE = "DONE"
+    BLOCKED = "BLOCKED"
+    FAILED = "FAILED"
+    ARCHIVED = "ARCHIVED"
+    AWAITING_APPROVAL = "AWAITING_APPROVAL"
+    MANUAL_CONTROL = "MANUAL_CONTROL"
+    DEFERRED = "DEFERRED"
+
+
+VALID_STATES = set(Stage)
 
 # Valid state transitions (architecture-v2 §3.3)
-VALID_TRANSITIONS: dict[str, set[str]] = {
-    "NEW":                {"ANALYSIS", "FAILED"},
-    "ANALYSIS":           {"DEV", "BLOCKED", "FAILED", "DEFERRED", "AWAITING_APPROVAL", "MANUAL_CONTROL"},
-    "DEV":                {"SCOPE_CHECK", "BLOCKED", "FAILED", "DEFERRED", "MANUAL_CONTROL"},
-    "SCOPE_CHECK":        {"QA", "DEV", "BLOCKED", "FAILED", "DEFERRED", "MANUAL_CONTROL"},
-    "QA":                 {"PUSHED", "DEV", "BLOCKED", "FAILED", "DEFERRED", "AWAITING_APPROVAL", "MANUAL_CONTROL"},
-    "PUSHED":             {"PR_REVIEW", "BLOCKED", "FAILED", "DEFERRED", "MANUAL_CONTROL"},
-    "PR_REVIEW":          {"DEV", "DONE", "BLOCKED", "FAILED", "DEFERRED", "AWAITING_APPROVAL", "MANUAL_CONTROL"},
-    "DONE":               {"ARCHIVED"},
-    "BLOCKED":            {"ANALYSIS", "DEV", "SCOPE_CHECK", "QA", "PUSHED", "PR_REVIEW", "FAILED", "MANUAL_CONTROL"},
-    "FAILED":             {"ANALYSIS", "DEV", "SCOPE_CHECK", "QA", "PUSHED", "PR_REVIEW", "MANUAL_CONTROL", "ARCHIVED"},
-    "ARCHIVED":           set(),
-    "AWAITING_APPROVAL":  {"ANALYSIS", "DEV", "SCOPE_CHECK", "QA", "PUSHED", "PR_REVIEW", "DONE", "FAILED", "MANUAL_CONTROL"},
-    "MANUAL_CONTROL":     {"ANALYSIS"},
-    "DEFERRED":           {"ANALYSIS", "DEV", "SCOPE_CHECK", "QA", "PUSHED", "PR_REVIEW", "FAILED", "MANUAL_CONTROL"},
+VALID_TRANSITIONS: dict[Stage, set[Stage]] = {
+    Stage.NEW:                {Stage.ANALYSIS, Stage.FAILED},
+    Stage.ANALYSIS:           {Stage.DEV, Stage.BLOCKED, Stage.FAILED, Stage.DEFERRED, Stage.AWAITING_APPROVAL, Stage.MANUAL_CONTROL},
+    Stage.DEV:                {Stage.SCOPE_CHECK, Stage.BLOCKED, Stage.FAILED, Stage.DEFERRED, Stage.MANUAL_CONTROL},
+    Stage.SCOPE_CHECK:        {Stage.QA, Stage.DEV, Stage.BLOCKED, Stage.FAILED, Stage.DEFERRED, Stage.MANUAL_CONTROL},
+    Stage.QA:                 {Stage.PUSHED, Stage.DEV, Stage.BLOCKED, Stage.FAILED, Stage.DEFERRED, Stage.AWAITING_APPROVAL, Stage.MANUAL_CONTROL},
+    Stage.PUSHED:             {Stage.PR_REVIEW, Stage.BLOCKED, Stage.FAILED, Stage.DEFERRED, Stage.MANUAL_CONTROL},
+    Stage.PR_REVIEW:          {Stage.DEV, Stage.DONE, Stage.BLOCKED, Stage.FAILED, Stage.DEFERRED, Stage.AWAITING_APPROVAL, Stage.MANUAL_CONTROL},
+    Stage.DONE:               {Stage.ARCHIVED},
+    Stage.BLOCKED:            {Stage.ANALYSIS, Stage.DEV, Stage.SCOPE_CHECK, Stage.QA, Stage.PUSHED, Stage.PR_REVIEW, Stage.FAILED, Stage.MANUAL_CONTROL},
+    Stage.FAILED:             {Stage.ANALYSIS, Stage.DEV, Stage.SCOPE_CHECK, Stage.QA, Stage.PUSHED, Stage.PR_REVIEW, Stage.MANUAL_CONTROL, Stage.ARCHIVED},
+    Stage.ARCHIVED:           set(),
+    Stage.AWAITING_APPROVAL:  {Stage.ANALYSIS, Stage.DEV, Stage.SCOPE_CHECK, Stage.QA, Stage.PUSHED, Stage.PR_REVIEW, Stage.DONE, Stage.FAILED, Stage.MANUAL_CONTROL},
+    Stage.MANUAL_CONTROL:     {Stage.ANALYSIS},
+    Stage.DEFERRED:           {Stage.ANALYSIS, Stage.DEV, Stage.SCOPE_CHECK, Stage.QA, Stage.PUSHED, Stage.PR_REVIEW, Stage.FAILED, Stage.MANUAL_CONTROL},
 }
 
 
@@ -153,7 +166,7 @@ class Workspace:
             setattr(state, key, value)
         self.save_state()
 
-    def transition(self, new_state: str, **extra: Any) -> None:
+    def transition(self, new_state: Stage, **extra: Any) -> None:
         """Transition workspace to a new pipeline state with validation.
 
         For BLOCKED/AWAITING_APPROVAL/MANUAL_CONTROL/DEFERRED/FAILED: stores
@@ -179,7 +192,7 @@ class Workspace:
 
         updates: dict[str, Any] = {"current_state": new_state}
 
-        paused_states = {"BLOCKED", "AWAITING_APPROVAL", "MANUAL_CONTROL", "DEFERRED", "FAILED"}
+        paused_states = {Stage.BLOCKED, Stage.AWAITING_APPROVAL, Stage.MANUAL_CONTROL, Stage.DEFERRED, Stage.FAILED}
         if new_state in paused_states:
             updates["previous_state"] = current
             updates["human_input_pending"] = True
@@ -189,7 +202,7 @@ class Workspace:
             updates["human_input_pending"] = False
 
         # retry_at is meaningful only while in DEFERRED; clear on any other target
-        if new_state != "DEFERRED":
+        if new_state != Stage.DEFERRED:
             updates["retry_at"] = None
 
         updates.update(extra)

@@ -76,15 +76,11 @@ class JiraAdapter(TrackerInterface):
         raise last_error  # type: ignore[misc]
 
     def _build_todo_jql(self) -> str:
-        """Build JQL query from config."""
+        """Build JQL query — all tickets with trigger labels, any status."""
         label_clauses = " AND ".join(
             f'labels = "{l}"' for l in self._trigger_labels
         )
-        jql = (
-            f'project = {self._project_key} '
-            f'AND {label_clauses} '
-            f'AND status = "{self._statuses["todo"]}"'
-        )
+        jql = f'project = {self._project_key} AND {label_clauses}'
         ignore = ", ".join(f'"{l}"' for l in self._ignore_labels)
         if ignore:
             jql += f" AND labels NOT IN ({ignore})"
@@ -134,7 +130,7 @@ class JiraAdapter(TrackerInterface):
         jql = self._build_todo_jql()
         data = await self._request(
             "POST", "/search/jql",
-            json={"jql": jql, "maxResults": 50},
+            json={"jql": jql, "maxResults": 50, "fields": ["summary", "description", "status", "priority", "labels", "assignee", "reporter", "created", "issuetype", "customfield_10020", "issuelinks"]},
         )
         issues = data.get("issues", [])
         tickets = []

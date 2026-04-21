@@ -7,6 +7,7 @@ from unittest.mock import AsyncMock, MagicMock, PropertyMock, patch
 import pytest
 
 from orchestrator.orchestrator import Orchestrator
+from workspace.workspace import Stage
 
 
 def _make_workspace(ticket_id, state, previous_state=None):

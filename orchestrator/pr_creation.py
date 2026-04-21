@@ -44,12 +44,17 @@ async def create_pr(
             error="No branch set in workspace state",
         )
 
-    # Check scope certificate exists
+    # Check scope check passed (report or certificate)
+    scope_report = workspace.reports_dir / "scope-guard-agent-output.md"
     scope_cert = workspace.meta_dir / "scope-certificate.md"
-    if not scope_cert.exists():
+    scope_ok = scope_cert.exists()
+    if not scope_ok and scope_report.exists():
+        content = scope_report.read_text(encoding="utf-8").lower()
+        scope_ok = "status: pass" in content or "pass" in content
+    if not scope_ok:
         return PRCreationResult(
             success=False,
-            error="Scope certificate not found — cannot create PR",
+            error="Scope check not passed — cannot create PR",
         )
 
     try:

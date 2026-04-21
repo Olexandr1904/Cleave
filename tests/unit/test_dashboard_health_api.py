@@ -33,7 +33,7 @@ def _fake_projects():
     gitlab = SimpleNamespace(token="", url="", project_id="")
     vcs = SimpleNamespace(provider="github", github=github, gitlab=gitlab)
     repo_cfg = SimpleNamespace(vcs=vcs)
-    return {"acme": SimpleNamespace(config=SimpleNamespace(jira=jira), repos={"acme-mobile": repo_cfg})}
+    return {"acme": SimpleNamespace(config=SimpleNamespace(jira=jira), repos={"acme-app": repo_cfg})}
 
 
 class TestProjectsHealthEndpoint:

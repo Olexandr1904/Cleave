@@ -8,6 +8,7 @@ import json
 from playwright.sync_api import Page, expect
 
 from tests.e2e.conftest import goto_and_wait_for_board
+from workspace.workspace import Stage
 
 
 class TestDaemonSidebarStatus:

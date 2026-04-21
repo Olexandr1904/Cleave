@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 import time
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
@@ -236,6 +236,19 @@ class AgentRuntime:
                     error=str(e),
                     failure_kind="quota",
                     retry_at=e.retry_at,
+                )
+            # CLI errors with no meaningful output are likely transient
+            # (quota, network, timeout) — treat as deferrable, not permanent
+            error_str = str(e).lower()
+            if "cli exited" in error_str or "cli returned" in error_str or "timeout" in error_str:
+                logger.warning("Agent '%s' CLI error (transient): %s", agent_id, e)
+                return AgentResult(
+                    agent_id=agent_id,
+                    success=False,
+                    output="",
+                    error=str(e),
+                    failure_kind="quota",  # reuse quota path for auto-retry
+                    retry_at=datetime.now(timezone.utc) + timedelta(minutes=10),
                 )
             logger.error("Agent '%s' failed: %s", agent_id, e)
             return AgentResult(

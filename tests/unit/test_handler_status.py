@@ -8,6 +8,7 @@ from unittest.mock import MagicMock, PropertyMock
 import pytest
 
 from integrations.telegram.handlers.status import StatusHandler
+from workspace.workspace import Stage
 
 
 def _make_workspace(ticket_id, state, started_at=None, pr_url=None, company_id="test", repo_id="repo"):

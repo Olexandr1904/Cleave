@@ -9,7 +9,7 @@ import pytest
 from config.schemas import GitHubConfig, JiraConfig, JiraStatusesConfig, RepoConfig, RepoInfo, VCSConfig
 from integrations.base.vcs import PRStatus
 from orchestrator.merge_step import merge_pr
-from workspace.workspace import Workspace, WorkspaceState
+from workspace.workspace import Stage, Workspace, WorkspaceState
 
 
 @pytest.fixture

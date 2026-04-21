@@ -5,6 +5,7 @@ from datetime import datetime, timezone
 import pytest
 
 from tests.e2e.conftest import goto_and_wait_for_board, make_fake_projects
+from workspace.workspace import Stage
 
 
 class TestDashboardHealthStrip:
@@ -22,7 +23,7 @@ class TestDashboardHealthStrip:
                 project_id="acme",
                 checks=[
                     ValidatorResult(True, "jira", "ACME", "", ""),
-                    ValidatorResult(True, "github", "acme/acme-mobile", "", ""),
+                    ValidatorResult(True, "github", "acme/acme-app", "", ""),
                 ],
                 checked_at=datetime.now(timezone.utc),
             )]

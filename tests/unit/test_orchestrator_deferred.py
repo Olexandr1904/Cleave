@@ -8,10 +8,10 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from orchestrator.agent_runtime import AgentResult
-from workspace.workspace import Workspace, WorkspaceState
+from workspace.workspace import Stage, Workspace, WorkspaceState
 
 
-def _make_workspace(tmp_path, ticket_id: str, state: str = "DEV") -> Workspace:
+def _make_workspace(tmp_path, ticket_id: str, state: str = Stage.DEV) -> Workspace:
     ws_root = tmp_path / ticket_id
     ws_root.mkdir()
     (ws_root / "meta").mkdir()
@@ -21,7 +21,7 @@ def _make_workspace(tmp_path, ticket_id: str, state: str = "DEV") -> Workspace:
     ws_state = WorkspaceState(
         ticket_id=ticket_id,
         company_id="acme",
-        repo_id="acme-mobile",
+        repo_id="acme-app",
         workspace_root=str(ws_root),
         current_state=state,
         stage_iterations={"dev": 1},
@@ -71,7 +71,7 @@ class TestQuotaFailureRouting:
         self, orchestrator_with_stubs, tmp_path
     ):
         orch = orchestrator_with_stubs
-        ws = _make_workspace(tmp_path, "T-1", state="DEV")
+        ws = _make_workspace(tmp_path, "T-1", state=Stage.DEV)
         orch._active_workspaces.append(ws)
 
         retry_at = datetime.now(timezone.utc) + timedelta(hours=5)
@@ -87,15 +87,15 @@ class TestQuotaFailureRouting:
         stage_def.max_iterations = 0
         await orch._handle_agent_stage(ws, "dev", stage_def)
 
-        assert ws.state.current_state == "DEFERRED"
-        assert ws.state.previous_state == "DEV"
+        assert ws.state.current_state == Stage.DEFERRED
+        assert ws.state.previous_state == Stage.DEV
         assert ws.state.retry_at == retry_at.isoformat()
 
     async def test_quota_failure_rolls_back_iteration(
         self, orchestrator_with_stubs, tmp_path
     ):
         orch = orchestrator_with_stubs
-        ws = _make_workspace(tmp_path, "T-2", state="DEV")
+        ws = _make_workspace(tmp_path, "T-2", state=Stage.DEV)
         orch._active_workspaces.append(ws)
 
         orch._agent_runtime.execute = AsyncMock(
@@ -118,7 +118,7 @@ class TestQuotaFailureRouting:
         self, orchestrator_with_stubs, tmp_path
     ):
         orch = orchestrator_with_stubs
-        ws = _make_workspace(tmp_path, "T-3", state="DEV")
+        ws = _make_workspace(tmp_path, "T-3", state=Stage.DEV)
         orch._active_workspaces.append(ws)
 
         orch._agent_runtime.execute = AsyncMock(
@@ -142,7 +142,7 @@ class TestQuotaFailureRouting:
         self, orchestrator_with_stubs, tmp_path
     ):
         orch = orchestrator_with_stubs
-        ws = _make_workspace(tmp_path, "T-4", state="QA")
+        ws = _make_workspace(tmp_path, "T-4", state=Stage.QA)
         orch._active_workspaces.append(ws)
 
         orch._agent_runtime.execute = AsyncMock(
@@ -157,15 +157,15 @@ class TestQuotaFailureRouting:
         stage_def.max_iterations = 0
         await orch._handle_agent_stage(ws, "qa", stage_def)
 
-        assert ws.state.current_state == "FAILED"
-        assert ws.state.previous_state == "QA"
+        assert ws.state.current_state == Stage.FAILED
+        assert ws.state.previous_state == Stage.QA
         assert ws.state.error == "disk full"
 
 
 class TestQuotaNotificationDebounce:
     async def test_first_quota_notification_sent(self, orchestrator_with_stubs, tmp_path):
         orch = orchestrator_with_stubs
-        ws = _make_workspace(tmp_path, "T-1", state="DEV")
+        ws = _make_workspace(tmp_path, "T-1", state=Stage.DEV)
         orch._active_workspaces.append(ws)
 
         orch._agent_runtime.execute = AsyncMock(
@@ -187,8 +187,8 @@ class TestQuotaNotificationDebounce:
         self, orchestrator_with_stubs, tmp_path
     ):
         orch = orchestrator_with_stubs
-        ws1 = _make_workspace(tmp_path, "T-1", state="DEV")
-        ws2 = _make_workspace(tmp_path, "T-2", state="DEV")
+        ws1 = _make_workspace(tmp_path, "T-1", state=Stage.DEV)
+        ws2 = _make_workspace(tmp_path, "T-2", state=Stage.DEV)
         orch._active_workspaces.extend([ws1, ws2])
 
         retry_at = datetime.now(timezone.utc) + timedelta(hours=5)
@@ -206,14 +206,14 @@ class TestQuotaNotificationDebounce:
         await orch._handle_agent_stage(ws2, "dev", stage_def)
 
         assert orch._notifier.send_message.await_count == 1
-        assert ws1.state.current_state == "DEFERRED"
-        assert ws2.state.current_state == "DEFERRED"
+        assert ws1.state.current_state == Stage.DEFERRED
+        assert ws2.state.current_state == Stage.DEFERRED
 
     async def test_permanent_failure_notification_sent(
         self, orchestrator_with_stubs, tmp_path
     ):
         orch = orchestrator_with_stubs
-        ws = _make_workspace(tmp_path, "T-1", state="QA")
+        ws = _make_workspace(tmp_path, "T-1", state=Stage.QA)
         orch._active_workspaces.append(ws)
 
         orch._agent_runtime.execute = AsyncMock(
@@ -236,8 +236,8 @@ class TestQuotaNotificationDebounce:
         """If the first Telegram send raises, _quota_window_end stays None
         so the next quota hit retries the notification instead of silencing."""
         orch = orchestrator_with_stubs
-        ws1 = _make_workspace(tmp_path, "T-1", state="DEV")
-        ws2 = _make_workspace(tmp_path, "T-2", state="DEV")
+        ws1 = _make_workspace(tmp_path, "T-1", state=Stage.DEV)
+        ws2 = _make_workspace(tmp_path, "T-2", state=Stage.DEV)
         orch._active_workspaces.extend([ws1, ws2])
 
         # First send raises; second succeeds.
@@ -262,8 +262,8 @@ class TestQuotaNotificationDebounce:
         await orch._handle_agent_stage(ws2, "dev", stage_def)
         assert orch._notifier.send_message.await_count == 2
         assert orch._quota_window_end == retry_at
-        assert ws1.state.current_state == "DEFERRED"
-        assert ws2.state.current_state == "DEFERRED"
+        assert ws1.state.current_state == Stage.DEFERRED
+        assert ws2.state.current_state == Stage.DEFERRED
 
 
 class TestDeferredSweep:
@@ -271,16 +271,16 @@ class TestDeferredSweep:
         self, orchestrator_with_stubs, tmp_path, monkeypatch
     ):
         orch = orchestrator_with_stubs
-        ws = _make_workspace(tmp_path, "T-1", state="DEV")
+        ws = _make_workspace(tmp_path, "T-1", state=Stage.DEV)
         # Put it in DEFERRED with a retry_at in the past.
         past = datetime.now(timezone.utc) - timedelta(minutes=1)
-        ws.transition("DEFERRED", retry_at=past.isoformat())
+        ws.transition(Stage.DEFERRED, retry_at=past.isoformat())
         orch._active_workspaces.append(ws)
 
         # Make sweep-only: monkeypatch the rest of poll_cycle to no-op.
         await orch._sweep_deferred()
 
-        assert ws.state.current_state == "DEV"
+        assert ws.state.current_state == Stage.DEV
         assert ws.state.previous_state is None
         assert ws.state.retry_at is None
 
@@ -288,14 +288,14 @@ class TestDeferredSweep:
         self, orchestrator_with_stubs, tmp_path
     ):
         orch = orchestrator_with_stubs
-        ws = _make_workspace(tmp_path, "T-2", state="QA")
+        ws = _make_workspace(tmp_path, "T-2", state=Stage.QA)
         future = datetime.now(timezone.utc) + timedelta(hours=1)
-        ws.transition("DEFERRED", retry_at=future.isoformat())
+        ws.transition(Stage.DEFERRED, retry_at=future.isoformat())
         orch._active_workspaces.append(ws)
 
         await orch._sweep_deferred()
 
-        assert ws.state.current_state == "DEFERRED"
+        assert ws.state.current_state == Stage.DEFERRED
         assert ws.state.retry_at == future.isoformat()
 
     async def test_sweep_clears_quota_window_end_when_passed(

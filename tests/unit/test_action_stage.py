@@ -8,12 +8,13 @@ from unittest.mock import ANY, AsyncMock, MagicMock, patch
 import pytest
 
 from orchestrator.stage_verifier import ActionResult
+from workspace.workspace import Stage
 
 
 def _fake_workspace(
     ticket_id: str = "T-1",
-    state: str = "PUSHED",
-    previous: str | None = "QA",
+    state: str = Stage.PUSHED,
+    previous: str | None = Stage.QA,
     branch: str = "feature/t-1",
     pr_url: str | None = None,
     pr_number: int | None = None,
@@ -58,7 +59,7 @@ class TestActionPushAndOpenPr:
 
         assert isinstance(result, ActionResult)
         assert result.success is True
-        assert result.next_state == "PR_REVIEW"
+        assert result.next_state == Stage.PR_REVIEW
         assert result.metadata == {"pr_url": "https://github.com/x/1", "pr_number": 42}
 
     @pytest.mark.asyncio
@@ -102,7 +103,7 @@ class TestActionFetchPrComments:
         from orchestrator.orchestrator import Orchestrator
 
         orch = MagicMock(spec=Orchestrator)
-        ws = _fake_workspace(state="PR_REVIEW", pr_number=10)
+        ws = _fake_workspace(state=Stage.PR_REVIEW, pr_number=10)
         stage_def = self._make_stage_def()
 
         result = await Orchestrator._action_fetch_pr_comments(orch, ws, stage_def)
@@ -115,12 +116,12 @@ class TestActionFetchPrComments:
         from orchestrator.orchestrator import Orchestrator
 
         orch = MagicMock(spec=Orchestrator)
-        ws = _fake_workspace(state="PR_REVIEW", pr_number=None)
+        ws = _fake_workspace(state=Stage.PR_REVIEW, pr_number=None)
 
         result = await Orchestrator._action_fetch_pr_comments(orch, ws, self._make_stage_def())
 
         assert result.success is True
-        assert result.next_state == "DONE"
+        assert result.next_state == Stage.DONE
 
     @pytest.mark.asyncio
     async def test_returns_done_when_no_comments(self):
@@ -133,19 +134,19 @@ class TestActionFetchPrComments:
         orch._registry = MagicMock()
         orch._registry.get_agent = MagicMock(return_value=None)
 
-        ws = _fake_workspace(state="PR_REVIEW", pr_number=10)
+        ws = _fake_workspace(state=Stage.PR_REVIEW, pr_number=10)
         ws.state.human_input_reply = "reviewed"
         result = await Orchestrator._action_fetch_pr_comments(orch, ws, self._make_stage_def())
 
         assert result.success is True
-        assert result.next_state == "DONE"
+        assert result.next_state == Stage.DONE
 
     @pytest.mark.asyncio
     async def test_does_not_transition_state(self):
         from orchestrator.orchestrator import Orchestrator
 
         orch = MagicMock(spec=Orchestrator)
-        ws = _fake_workspace(state="PR_REVIEW", pr_number=None)
+        ws = _fake_workspace(state=Stage.PR_REVIEW, pr_number=None)
 
         await Orchestrator._action_fetch_pr_comments(orch, ws, self._make_stage_def())
 
@@ -160,13 +161,13 @@ class TestActionFinalize:
         orch = MagicMock(spec=Orchestrator)
         orch._notifier = None
         orch._tracker = None
-        ws = _fake_workspace(state="PR_REVIEW", pr_url="https://github.com/x/1")
+        ws = _fake_workspace(state=Stage.PR_REVIEW, pr_url="https://github.com/x/1")
 
         result = await Orchestrator._action_finalize(orch, ws)
 
         assert isinstance(result, ActionResult)
         assert result.success is True
-        assert result.next_state == "DONE"
+        assert result.next_state == Stage.DONE
 
     @pytest.mark.asyncio
     async def test_does_not_transition_state(self):
@@ -205,7 +206,7 @@ class TestHandleActionStage:
         orch = self._make_orchestrator()
         ws = _fake_workspace()
         orch._action_push_and_open_pr = AsyncMock(return_value=ActionResult(
-            success=True, next_state="PR_REVIEW", error="",
+            success=True, next_state=Stage.PR_REVIEW, error="",
             metadata={"pr_url": "https://github.com/x/1", "pr_number": 42},
         ))
 
@@ -215,7 +216,7 @@ class TestHandleActionStage:
             await Orchestrator._handle_action_stage(orch, ws, "push", self._make_stage_def("push_and_open_pr"))
 
         ws.update_state.assert_any_call(pr_url="https://github.com/x/1", pr_number=42)
-        ws.transition.assert_called_with("PR_REVIEW")
+        ws.transition.assert_called_with(Stage.PR_REVIEW)
         orch._emit.assert_any_call(
             "action_completed", ANY,
             project_id="test-co", ticket_id="T-1",
@@ -237,7 +238,7 @@ class TestHandleActionStage:
             await Orchestrator._handle_action_stage(orch, ws, "push", self._make_stage_def("push_and_open_pr"))
             sv.verify.assert_not_called()
 
-        ws.transition.assert_called_once_with("FAILED")
+        ws.transition.assert_called_once_with(Stage.FAILED)
         ws.update_state.assert_called_once_with(error="No VCS configured")
 
     @pytest.mark.asyncio
@@ -247,7 +248,7 @@ class TestHandleActionStage:
         orch = self._make_orchestrator()
         ws = _fake_workspace()
         orch._action_push_and_open_pr = AsyncMock(return_value=ActionResult(
-            success=True, next_state="PR_REVIEW", error="",
+            success=True, next_state=Stage.PR_REVIEW, error="",
             metadata={"pr_url": "https://github.com/x/1", "pr_number": 42},
         ))
 
@@ -259,7 +260,7 @@ class TestHandleActionStage:
             ))
             await Orchestrator._handle_action_stage(orch, ws, "push", self._make_stage_def("push_and_open_pr"))
 
-        ws.transition.assert_called_once_with("BLOCKED")
+        ws.transition.assert_called_once_with(Stage.BLOCKED)
         assert "branch not pushed" in ws.update_state.call_args[1]["error"]
         orch._emit.assert_any_call(
             "stage_verification_failed", ANY,
@@ -272,7 +273,7 @@ class TestHandleActionStage:
         from orchestrator.orchestrator import Orchestrator
 
         orch = self._make_orchestrator()
-        ws = _fake_workspace(state="PR_REVIEW", pr_number=10)
+        ws = _fake_workspace(state=Stage.PR_REVIEW, pr_number=10)
         orch._action_fetch_pr_comments = AsyncMock(return_value=ActionResult(
             success=False, next_state="", error="", metadata={}, skipped=True,
         ))
@@ -292,9 +293,9 @@ class TestHandleActionStage:
         orch = self._make_orchestrator()
         orch._should_approval_gate = MagicMock(return_value=True)
         orch._notifier = None
-        ws = _fake_workspace(state="PR_REVIEW", pr_number=10)
+        ws = _fake_workspace(state=Stage.PR_REVIEW, pr_number=10)
         orch._action_fetch_pr_comments = AsyncMock(return_value=ActionResult(
-            success=True, next_state="DONE", error="", metadata={},
+            success=True, next_state=Stage.DONE, error="", metadata={},
         ))
 
         with patch("orchestrator.orchestrator.stage_verifier") as sv:
@@ -302,7 +303,7 @@ class TestHandleActionStage:
             sv.verify = MagicMock(return_value=SimpleNamespace(ok=True, stage_id="pr_review", reason=""))
             await Orchestrator._handle_action_stage(orch, ws, "pr_review", self._make_stage_def("fetch_pr_comments"))
 
-        ws.transition.assert_called_once_with("AWAITING_APPROVAL")
+        ws.transition.assert_called_once_with(Stage.AWAITING_APPROVAL)
         orch._emit.assert_any_call(
             "approval_requested", ANY,
             project_id="test-co", ticket_id="T-1",

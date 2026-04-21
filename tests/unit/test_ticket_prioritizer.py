@@ -95,10 +95,11 @@ class TestFilterTickets:
         result = filter_tickets(tickets, trigger_labels=["ai-ready"], ignore_labels=[])
         assert len(result) == 1
 
-    def test_rejects_human_assigned(self):
+    def test_accepts_human_assigned(self):
+        """Labels are the signal — assignee doesn't affect filtering."""
         tickets = [_ticket(labels=["ai-ready"], assignee="John Doe")]
         result = filter_tickets(tickets, trigger_labels=["ai-ready"], ignore_labels=[])
-        assert len(result) == 0
+        assert len(result) == 1
 
     def test_multiple_tickets_mixed(self):
         tickets = [
@@ -108,8 +109,8 @@ class TestFilterTickets:
             _ticket(id="T-4", labels=["ai-ready"], assignee="Human"),
         ]
         result = filter_tickets(tickets, trigger_labels=["ai-ready"], ignore_labels=["manual"])
-        assert len(result) == 1
-        assert result[0].id == "T-1"
+        assert len(result) == 2
+        assert [t.id for t in result] == ["T-1", "T-4"]
 
 
 class TestRouteTickets:
@@ -283,13 +284,13 @@ class TestPrioritizeAndRoute:
 
 
 def test_filter_tickets_requires_all_trigger_labels():
-    t1 = _ticket(id="A-1", labels=["ai-pipeline", "acme-mobile-android"])
+    t1 = _ticket(id="A-1", labels=["ai-pipeline", "acme-mobile"])
     t2 = _ticket(id="A-2", labels=["ai-pipeline"])
-    t3 = _ticket(id="A-3", labels=["acme-mobile-android"])
+    t3 = _ticket(id="A-3", labels=["acme-mobile"])
 
     result = filter_tickets(
         [t1, t2, t3],
-        trigger_labels=["ai-pipeline", "acme-mobile-android"],
+        trigger_labels=["ai-pipeline", "acme-mobile"],
         ignore_labels=[],
     )
 

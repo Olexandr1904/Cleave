@@ -33,7 +33,7 @@ from orchestrator.workflow_router import (
     load_workflow,
     should_escalate,
 )
-from workspace.workspace import Workspace
+from workspace.workspace import Stage, Workspace
 from workspace.workspace_manager import WorkspaceManager
 
 logger = logging.getLogger(__name__)
@@ -49,10 +49,10 @@ class Orchestrator:
     # represents the "happy path" past the gate. Gating should ONLY fire when
     # the workflow would move forward past the gate — not on failure loops
     # (QA fail → dev) or escalation (analysis unclear → escalate).
-    _APPROVAL_GATE_STATES = {"ANALYSIS", "QA"}
+    _APPROVAL_GATE_STATES = {Stage.ANALYSIS, Stage.QA}
     _GATE_HAPPY_PATH_NEXT_STAGE = {
-        "ANALYSIS": "dev",
-        "QA": "push",
+        Stage.ANALYSIS: "dev",
+        Stage.QA: "push",
     }
 
     def __init__(
@@ -350,14 +350,14 @@ class Orchestrator:
                     ws.state.ticket_id, e, exc_info=True,
                 )
                 try:
-                    ws.transition("FAILED")
+                    ws.transition(Stage.FAILED)
                     ws.update_state(error=str(e))
                 except Exception:
                     pass
 
         # 3. Cleanup terminal workspaces from active list and record them for
         # /status to show recent completions even after they leave the list.
-        terminal = {"DONE", "ARCHIVED"}
+        terminal = {Stage.DONE, Stage.ARCHIVED}
         still_active: list[Workspace] = []
         now = time.time()
         for ws in self._active_workspaces:
@@ -505,7 +505,7 @@ class Orchestrator:
                 logger.warning("Failed to transition %s: %s", pt.ticket.id, e)
 
         # Transition workspace to ANALYSIS
-        ws.transition("ANALYSIS")
+        ws.transition(Stage.ANALYSIS)
         return ws
 
     async def advance_workspace(self, workspace: Workspace) -> None:
@@ -513,13 +513,13 @@ class Orchestrator:
         state = workspace.state
         current = state.current_state
 
-        if current == "BLOCKED":
+        if current == Stage.BLOCKED:
             return  # Waiting for human reply
 
-        if current == "MANUAL_CONTROL":
+        if current == Stage.MANUAL_CONTROL:
             return  # Under human control — skip entirely
 
-        if current == "AWAITING_APPROVAL":
+        if current == Stage.AWAITING_APPROVAL:
             # Manual→Auto mid-flight: if the operator switched to auto while
             # this workspace was parked at a gate, auto-approve and resume.
             # Otherwise keep waiting for an explicit approve/reject.
@@ -543,7 +543,7 @@ class Orchestrator:
             await self.advance_workspace(workspace)
             return
 
-        if current in ("DONE", "ARCHIVED"):
+        if current in (Stage.DONE, Stage.ARCHIVED):
             return  # Terminal
 
         # Map pipeline state to workflow stage
@@ -611,10 +611,10 @@ class Orchestrator:
                 retry_at = result.retry_at or (
                     datetime.now(timezone.utc) + DEFAULT_QUOTA_RETRY_DELAY
                 )
-                workspace.transition("DEFERRED", retry_at=retry_at.isoformat())
+                workspace.transition(Stage.DEFERRED, retry_at=retry_at.isoformat())
                 await self._notify_deferred(workspace, retry_at)
             else:
-                workspace.transition("FAILED")
+                workspace.transition(Stage.FAILED)
                 workspace.update_state(error=result.error)
                 await self._notify_failed(workspace, result.error or "")
             return
@@ -624,7 +624,7 @@ class Orchestrator:
         if not verify_result.ok:
             agent_snippet = (result.output or "")[:200].replace("\n", " ")
             error_msg = f"{stage_id}: {verify_result.reason} (agent said: {agent_snippet})"
-            workspace.transition("BLOCKED")
+            workspace.transition(Stage.BLOCKED)
             workspace.update_state(error=error_msg)
             self._emit(
                 "stage_verification_failed",
@@ -642,7 +642,7 @@ class Orchestrator:
             # transitions — failure loops and escalations bypass the gate.
             current_state = workspace.state.current_state
             if self._should_approval_gate(current_state, next_stage):
-                workspace.transition("AWAITING_APPROVAL")
+                workspace.transition(Stage.AWAITING_APPROVAL)
                 self._emit("approval_requested", f"Awaiting approval for {state.ticket_id} after {current_state}", project_id=state.company_id, ticket_id=state.ticket_id, data={"gate": current_state})
                 if self._notifier:
                     chat_id = self._get_chat_id(workspace)
@@ -653,7 +653,7 @@ class Orchestrator:
             else:
                 self._advance_to_stage(workspace, next_stage)
         else:
-            workspace.transition("DONE")
+            workspace.transition(Stage.DONE)
             await self._on_ticket_done(workspace)
 
     def _rollback_iteration(self, workspace: Workspace, stage_id: str) -> None:
@@ -727,7 +727,7 @@ class Orchestrator:
             self._quota_window_end = None
 
         for ws in list(self._active_workspaces):
-            if ws.state.current_state != "DEFERRED":
+            if ws.state.current_state != Stage.DEFERRED:
                 continue
             retry_at_str = ws.state.retry_at
             if not retry_at_str:
@@ -741,7 +741,7 @@ class Orchestrator:
                 )
                 continue
             if retry_at <= now:
-                target = ws.state.previous_state or "ANALYSIS"
+                target = ws.state.previous_state or Stage.ANALYSIS
                 ws.transition(target)
                 self._emit(
                     "deferred_resumed",
@@ -790,7 +790,7 @@ class Orchestrator:
             return
 
         if not result.success:
-            workspace.transition("FAILED")
+            workspace.transition(Stage.FAILED)
             workspace.update_state(error=result.error)
             self._emit(
                 "action_failed",
@@ -803,7 +803,7 @@ class Orchestrator:
         verify_result = stage_verifier.verify(stage_id, workspace, stage_start_commit)
         if not verify_result.ok:
             error_msg = f"{stage_id}: {verify_result.reason}"
-            workspace.transition("BLOCKED")
+            workspace.transition(Stage.BLOCKED)
             workspace.update_state(error=error_msg)
             self._emit(
                 "stage_verification_failed",
@@ -818,8 +818,8 @@ class Orchestrator:
 
         current_state = workspace.state.current_state
         # Only gate on forward transitions (DONE, PR_REVIEW, etc.), not fix loops back to DEV
-        if result.next_state != "DEV" and self._should_approval_gate(current_state):
-            workspace.transition("AWAITING_APPROVAL")
+        if result.next_state != Stage.DEV and self._should_approval_gate(current_state):
+            workspace.transition(Stage.AWAITING_APPROVAL)
             self._emit(
                 "approval_requested",
                 f"Awaiting approval for {state.ticket_id} after {current_state}",
@@ -840,7 +840,7 @@ class Orchestrator:
         )
         workspace.transition(result.next_state)
 
-        if result.next_state == "DONE":
+        if result.next_state == Stage.DONE:
             await self._on_ticket_done(workspace)
 
         self._emit(
@@ -882,7 +882,7 @@ class Orchestrator:
         result = await create_pr(workspace, vcs, self._tracker, repo_config)
         if result.success:
             return ActionResult(
-                success=True, next_state="PR_REVIEW", error="",
+                success=True, next_state=Stage.PR_REVIEW, error="",
                 metadata={"pr_url": result.pr_url, "pr_number": result.pr_number},
             )
         return ActionResult(
@@ -899,7 +899,7 @@ class Orchestrator:
         pr_number = state.pr_number
 
         if not pr_number:
-            return ActionResult(success=True, next_state="DONE", error="", metadata={})
+            return ActionResult(success=True, next_state=Stage.DONE, error="", metadata={})
 
         # Phase 1: Check pending escalated decisions
         pending = state.pending_review_comments or []
@@ -924,7 +924,7 @@ class Orchestrator:
         # Phase 3: Fetch comments
         vcs, repo_config = self._get_vcs_for_workspace(workspace)
         if not vcs:
-            return ActionResult(success=True, next_state="DONE", error="", metadata={})
+            return ActionResult(success=True, next_state=Stage.DONE, error="", metadata={})
 
         try:
             comments = await vcs.get_pr_comments(pr_number)
@@ -933,7 +933,7 @@ class Orchestrator:
             return ActionResult(success=False, next_state="", error=f"Failed to fetch: {e}", metadata={})
 
         if not comments:
-            return ActionResult(success=True, next_state="DONE", error="", metadata={})
+            return ActionResult(success=True, next_state=Stage.DONE, error="", metadata={})
 
         # Write comments for reference
         comment_md = "# PR Review Comments\n\n"
@@ -990,8 +990,8 @@ class Orchestrator:
         if not escalated:
             _write_resolution_report(workspace, auto_fixed, auto_rejected, [], state.review_cycle)
             if auto_fixed:
-                return ActionResult(success=True, next_state="DEV", error="", metadata={})
-            return ActionResult(success=True, next_state="DONE", error="", metadata={})
+                return ActionResult(success=True, next_state=Stage.DEV, error="", metadata={})
+            return ActionResult(success=True, next_state=Stage.DONE, error="", metadata={})
 
         # Store escalated with TG msg_ids
         pending_comments = []
@@ -1066,8 +1066,8 @@ class Orchestrator:
         workspace.save_state()
 
         if fixes_needed:
-            return ActionResult(success=True, next_state="DEV", error="", metadata={})
-        return ActionResult(success=True, next_state="DONE", error="", metadata={})
+            return ActionResult(success=True, next_state=Stage.DEV, error="", metadata={})
+        return ActionResult(success=True, next_state=Stage.DONE, error="", metadata={})
 
 
     async def _on_ticket_done(self, workspace: Workspace) -> None:
@@ -1105,14 +1105,14 @@ class Orchestrator:
 
         if not self._notifier:
             logger.warning("No notifier configured, cannot escalate %s", state.ticket_id)
-            workspace.transition("FAILED")
+            workspace.transition(Stage.FAILED)
             workspace.update_state(error="No notifier configured for escalation")
             return
 
         chat_id = self._get_chat_id(workspace)
         if not chat_id:
             logger.warning("No chat_id for escalation of %s", state.ticket_id)
-            workspace.transition("FAILED")
+            workspace.transition(Stage.FAILED)
             workspace.update_state(error="No Telegram chat_id configured")
             return
 
@@ -1142,7 +1142,7 @@ class Orchestrator:
 
         try:
             msg_id = await self._notifier.send_message(chat_id, message)
-            workspace.transition("BLOCKED")
+            workspace.transition(Stage.BLOCKED)
             workspace.update_state(
                 human_input_question=message,
             )
@@ -1153,7 +1153,7 @@ class Orchestrator:
             self._emit("escalation_sent", f"Escalated {workspace.state.ticket_id} to human", project_id=workspace.state.company_id, ticket_id=workspace.state.ticket_id, data={"reason": workspace.state.human_input_question or "unknown"})
         except Exception as e:
             logger.error("Telegram send failed for %s: %s", state.ticket_id, e)
-            workspace.transition("FAILED")
+            workspace.transition(Stage.FAILED)
             workspace.update_state(error=f"Telegram notification failed: {e}")
 
     async def _action_finalize(self, workspace: Workspace) -> ActionResult:
@@ -1183,7 +1183,7 @@ class Orchestrator:
                 logger.warning("Finalize Jira comment failed: %s", e)
 
         return ActionResult(
-            success=True, next_state="DONE", error="", metadata={},
+            success=True, next_state=Stage.DONE, error="", metadata={},
         )
 
     def _advance_to_stage(self, workspace: Workspace, stage_id: str) -> None:
@@ -1201,7 +1201,7 @@ class Orchestrator:
         tid = state.ticket_id
         sep = "─" * 30
 
-        if gate_state == "PR_REVIEW":
+        if gate_state == Stage.PR_REVIEW:
             resolution_file = workspace.reports_dir / "pr-review-resolution.md"
             summary = ""
             if resolution_file.exists():
@@ -1230,8 +1230,8 @@ class Orchestrator:
             )
 
         actions = {
-            "ANALYSIS": ("Analysis done → ready for development", "proceed = start coding, reject = back to analysis"),
-            "QA": ("QA passed → ready to push & open PR", "proceed = push code, reject = back to dev"),
+            Stage.ANALYSIS: ("Analysis done → ready for development", "proceed = start coding, reject = back to analysis"),
+            Stage.QA: ("QA passed → ready to push & open PR", "proceed = push code, reject = back to dev"),
         }
         title, options = actions.get(gate_state, (f"Awaiting approval at {gate_state}", "proceed or reject"))
 
@@ -1305,14 +1305,14 @@ class Orchestrator:
 # --- Mapping helpers ---
 
 _STAGE_TO_STATE = {
-    "analysis": "ANALYSIS",
-    "dev": "DEV",
-    "scope_check": "SCOPE_CHECK",
-    "qa": "QA",
-    "push": "PUSHED",
-    "pr_review": "PR_REVIEW",
-    "done": "DONE",
-    "escalate": "BLOCKED",
+    "analysis": Stage.ANALYSIS,
+    "dev": Stage.DEV,
+    "scope_check": Stage.SCOPE_CHECK,
+    "qa": Stage.QA,
+    "push": Stage.PUSHED,
+    "pr_review": Stage.PR_REVIEW,
+    "done": Stage.DONE,
+    "escalate": Stage.BLOCKED,
 }
 
 _STATE_TO_STAGE = {v: k for k, v in _STAGE_TO_STATE.items()}

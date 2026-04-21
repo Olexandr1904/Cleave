@@ -12,6 +12,7 @@ from integrations.telegram.handlers.approval import ApprovalHandler
 from integrations.telegram.handlers.mode import ModeHandler
 from integrations.telegram.handlers.status import StatusHandler
 from integrations.telegram.intent_parser import IntentParser, ParsedIntent
+from workspace.workspace import Stage
 
 logger = logging.getLogger(__name__)
 
@@ -142,22 +143,22 @@ class CommandHandler:
         awaiting = [
             f"{ws.state.ticket_id} ({ws.state.previous_state})"
             for ws in workspaces
-            if ws.state.current_state == "AWAITING_APPROVAL"
+            if ws.state.current_state == Stage.AWAITING_APPROVAL
         ]
         blocked = [
             f"{ws.state.ticket_id} ({ws.state.previous_state or 'unknown'})"
             for ws in workspaces
-            if ws.state.current_state == "BLOCKED"
+            if ws.state.current_state == Stage.BLOCKED
         ]
         deferred = [
             f"{ws.state.ticket_id} ({ws.state.previous_state or 'unknown'}, retry at {ws.state.retry_at or '?'})"
             for ws in workspaces
-            if ws.state.current_state == "DEFERRED"
+            if ws.state.current_state == Stage.DEFERRED
         ]
         active = [
             f"{ws.state.ticket_id} — {ws.state.current_state}"
             for ws in workspaces
-            if ws.state.current_state not in ("DONE", "FAILED", "ARCHIVED")
+            if ws.state.current_state not in (Stage.DONE, Stage.FAILED, Stage.ARCHIVED)
         ]
         return {
             "mode": self._mode_handler.get_mode(),
@@ -185,7 +186,7 @@ class CommandHandler:
                 except (ValueError, TypeError):
                     pass
             poll_ago = now - self._last_poll_time
-            active = [ws for ws in workspaces if ws.state.current_state not in ("DONE", "FAILED", "ARCHIVED")]
+            active = [ws for ws in workspaces if ws.state.current_state not in (Stage.DONE, Stage.FAILED, Stage.ARCHIVED)]
             recent = self._recent_completions_fn() if self._recent_completions_fn else []
             msg = self._status_handler.format_summary(
                 mode=self._mode_handler.get_mode(),
@@ -234,7 +235,7 @@ class CommandHandler:
             )
             return
         ws = awaiting[0]
-        ws.transition("FAILED")
+        ws.transition(Stage.FAILED)
         ws.update_state(error="Rejected by operator via Telegram")
         await self._reply(chat_id, intent.reply or f"Rejected {ws.state.ticket_id}. Marked as FAILED.", processing_msg_id)
 
@@ -273,16 +274,16 @@ class CommandHandler:
         await self._reply(chat_id, "\n".join(lines), processing_msg_id)
 
     _VALID_RETRY_STATES = {
-        "analysis": "ANALYSIS",
-        "dev": "DEV",
-        "scope_check": "SCOPE_CHECK",
-        "qa": "QA",
-        "push": "PUSHED",
+        "analysis": Stage.ANALYSIS,
+        "dev": Stage.DEV,
+        "scope_check": Stage.SCOPE_CHECK,
+        "qa": Stage.QA,
+        "push": Stage.PUSHED,
     }
 
     async def _handle_reviewed(self, intent: ParsedIntent, chat_id: str, workspaces: list[Any], processing_msg_id: int | None = None) -> None:
         """Signal that code review is complete for a PR_REVIEW workspace."""
-        pr_workspaces = [ws for ws in workspaces if ws.state.current_state == "PR_REVIEW"]
+        pr_workspaces = [ws for ws in workspaces if ws.state.current_state == Stage.PR_REVIEW]
         if not pr_workspaces:
             await self._reply(chat_id, "No workspaces in PR_REVIEW state.", processing_msg_id)
             return
@@ -339,15 +340,15 @@ class CommandHandler:
             # Smart retry: detect furthest completed stage from artifacts
             reports = Path(ws.reports_dir) if hasattr(ws, 'reports_dir') else Path(ws.state.workspace_root) / "reports"
             if (reports / "qa-agent-output.md").exists():
-                target_state = "PUSHED"
+                target_state = Stage.PUSHED
             elif (reports / "scope-guard-agent-output.md").exists():
-                target_state = "QA"
+                target_state = Stage.QA
             elif (reports / "dev-agent-output.md").exists():
-                target_state = "SCOPE_CHECK"
+                target_state = Stage.SCOPE_CHECK
             elif (reports / "ba.md").exists() or (reports / "ba-agent-output.md").exists():
-                target_state = "DEV"
+                target_state = Stage.DEV
             else:
-                target_state = ws.state.previous_state or "ANALYSIS"
+                target_state = ws.state.previous_state or Stage.ANALYSIS
 
         ws.state.human_input_pending = False
         ws.state.error = None

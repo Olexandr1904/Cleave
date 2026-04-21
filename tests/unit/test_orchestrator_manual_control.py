@@ -1,6 +1,6 @@
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
-from workspace.workspace import Workspace, WorkspaceState
+from workspace.workspace import Stage, Workspace, WorkspaceState
 
 
 class TestManualControlSkip:

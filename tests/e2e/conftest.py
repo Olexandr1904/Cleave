@@ -17,7 +17,7 @@ import uvicorn
 from dashboard.event_store import EventStore
 from dashboard.events import Event, EventBus
 from dashboard.web import create_app
-from workspace.workspace import Workspace, WorkspaceState
+from workspace.workspace import Stage, Workspace, WorkspaceState
 
 
 def _now_iso() -> str:
@@ -36,7 +36,7 @@ def _seed_workspace(
     state: str,
     *,
     company: str = "acme",
-    repo: str = "acme-mobile",
+    repo: str = "acme-app",
     previous_state: str | None = None,
     reports: list[str] | None = None,
     meta: list[str] | None = None,
@@ -141,10 +141,10 @@ class FakeDashboardConfig:
 
 def make_fake_projects(
     company_id: str = "acme",
-    repo_id: str = "acme-mobile",
+    repo_id: str = "acme-app",
     jira_url: str = "https://acme.atlassian.net",
     github_owner: str = "acme",
-    github_repo: str = "acme-mobile",
+    github_repo: str = "acme-app",
 ) -> dict[str, Any]:
     """Build a minimal LoadedProject-shaped dict for dashboard link tests."""
     from types import SimpleNamespace

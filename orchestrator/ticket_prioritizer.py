@@ -52,10 +52,8 @@ def filter_tickets(
             logger.debug("Skipping %s: has ignore label", ticket.id)
             continue
 
-        # Must be unassigned or bot-assigned
-        if ticket.assignee is not None and ticket.assignee != bot_name:
-            logger.debug("Skipping %s: assigned to '%s'", ticket.id, ticket.assignee)
-            continue
+        # Note: assignee check removed — labels are the signal for pipeline ownership.
+        # The pipeline picks up any ticket with the right labels regardless of assignee.
 
         result.append(ticket)
 

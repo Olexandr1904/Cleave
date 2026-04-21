@@ -94,12 +94,12 @@ class TestCreatePR:
         assert result.success is False
         assert "No branch" in result.error
 
-    async def test_no_scope_certificate_fails(self, workspace, mock_vcs, mock_tracker, repo_config):
-        # Don't create scope certificate
+    async def test_no_scope_check_fails(self, workspace, mock_vcs, mock_tracker, repo_config):
+        # Don't create scope certificate or report
         result = await create_pr(workspace, mock_vcs, mock_tracker, repo_config)
 
         assert result.success is False
-        assert "Scope certificate" in result.error
+        assert "Scope check" in result.error
 
     async def test_push_failure(self, workspace, mock_vcs, mock_tracker, repo_config):
         (workspace.meta_dir / "scope-certificate.md").write_text("PASS")

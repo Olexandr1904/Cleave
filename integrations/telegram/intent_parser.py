@@ -19,7 +19,7 @@ Current state:
 - Deferred (waiting for Claude quota reset): {deferred_workspaces}
 
 Classify the user message into one of these intents:
-  status, analyze, approve, reject, set_mode, retry, provide_input, unknown
+  status, analyze, approve, reject, set_mode, retry, provide_input, reviewed, unknown
 
 Return ONLY valid JSON (no markdown, no code fences):
 {{"intent": "...", "params": {{...}}, "reply": "..."}}
@@ -32,6 +32,7 @@ Intent param schemas:
 - set_mode: params.mode (required, "auto" or "manual")
 - retry: params.ticket_id (required string), params.from_stage (optional: "analysis", "dev", "qa", "push" — defaults to current stage). Use for BLOCKED, FAILED, or DEFERRED tickets. "resume TICKET" and "retry TICKET" both map here.
 - provide_input: params.ticket_id (required if multiple blocked, infer from context if exactly one), params.input_text (the user's full answer/clarification verbatim)
+- reviewed: params.ticket_id (optional, infer if one PR_REVIEW workspace). User signals code review is done — "reviewed", "review done", "review complete".
 - unknown: params.raw_text (the original message)
 
 IMPORTANT: If there are blocked workspaces and the user's message looks like an answer/clarification/requirements (not a command), classify as "provide_input". Free-form text like "the bug is X", "we need to scroll Y", "yes, both screens", or descriptions of requirements should be "provide_input" when a workspace is blocked.

@@ -8,9 +8,10 @@ from pathlib import Path
 from playwright.sync_api import Page, expect
 
 from tests.e2e.conftest import goto_and_wait_for_board, wait_for_state_change
+from workspace.workspace import Stage
 
 
-def state_path(base: Path, ticket_id: str, company: str = "acme", repo: str = "acme-mobile") -> Path:
+def state_path(base: Path, ticket_id: str, company: str = "acme", repo: str = "acme-app") -> Path:
     return base / company / repo / "tickets" / ticket_id / "state.json"
 
 

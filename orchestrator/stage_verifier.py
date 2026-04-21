@@ -145,7 +145,8 @@ def _verify_pr_review(workspace: Any) -> VerifyResult:
 
 
 def _verify_dev(workspace: Any, stage_start_commit: str | None) -> VerifyResult:
-    current = _git_rev_parse(Path(workspace.source_dir))
+    source = Path(workspace.source_dir)
+    current = _git_rev_parse(source)
     if current is None:
         return VerifyResult(
             ok=False, stage_id="dev",
@@ -156,9 +157,28 @@ def _verify_dev(workspace: Any, stage_start_commit: str | None) -> VerifyResult:
             ok=False, stage_id="dev",
             reason="stage start commit was not captured",
         )
-    if current == stage_start_commit:
-        return VerifyResult(
-            ok=False, stage_id="dev",
-            reason=f"no new commit on feature branch (HEAD still at {current[:8]})",
-        )
-    return VerifyResult(ok=True, stage_id="dev", reason="")
+    if current != stage_start_commit:
+        return VerifyResult(ok=True, stage_id="dev", reason="")
+
+    # HEAD didn't change this run — but maybe the commit was made in a prior run.
+    # Check if the feature branch has commits ahead of the default branch.
+    branch = getattr(workspace.state, "branch", None)
+    if branch:
+        try:
+            # Find the fork point: how many commits on this branch that aren't
+            # on any remote branch (i.e., local work)
+            result = subprocess.run(
+                ["git", "-C", str(source), "log", "--oneline", f"origin/HEAD..HEAD"],
+                capture_output=True, text=True, timeout=5,
+            )
+            if result.returncode == 0:
+                local_commits = [l for l in result.stdout.strip().splitlines() if l]
+                if len(local_commits) > 0:
+                    return VerifyResult(ok=True, stage_id="dev", reason="")
+        except (subprocess.TimeoutExpired, OSError):
+            pass
+
+    return VerifyResult(
+        ok=False, stage_id="dev",
+        reason=f"no new commit on feature branch (HEAD still at {current[:8]})",
+    )

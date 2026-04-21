@@ -654,6 +654,7 @@ class Orchestrator:
                 self._advance_to_stage(workspace, next_stage)
         else:
             workspace.transition("DONE")
+            await self._on_ticket_done(workspace)
 
     def _rollback_iteration(self, workspace: Workspace, stage_id: str) -> None:
         """Undo the iteration counter increment for an aborted stage run.
@@ -839,18 +840,8 @@ class Orchestrator:
         )
         workspace.transition(result.next_state)
 
-        # Notify when ticket is DONE — human merges manually
-        if result.next_state == "DONE" and self._notifier:
-            chat_id = self._get_chat_id(workspace)
-            if chat_id:
-                sep = "─" * 30
-                await self._notifier.send_message(chat_id, (
-                    f"✅ [{state.company_id}/{state.repo_id}] {state.ticket_id}\n"
-                    f"{sep}\n"
-                    f"Pipeline complete. PR ready for merge:\n"
-                    f"{state.pr_url or 'N/A'}\n"
-                    f"{sep}"
-                ))
+        if result.next_state == "DONE":
+            await self._on_ticket_done(workspace)
 
         self._emit(
             "action_completed",
@@ -1078,6 +1069,35 @@ class Orchestrator:
             return ActionResult(success=True, next_state="DEV", error="", metadata={})
         return ActionResult(success=True, next_state="DONE", error="", metadata={})
 
+
+    async def _on_ticket_done(self, workspace: Workspace) -> None:
+        """Handle ticket completion: TG notification + Jira status transition."""
+        state = workspace.state
+
+        # TG notification
+        if self._notifier:
+            chat_id = self._get_chat_id(workspace)
+            if chat_id:
+                sep = "─" * 30
+                await self._notifier.send_message(chat_id, (
+                    f"✅ [{state.company_id}/{state.repo_id}] {state.ticket_id}\n"
+                    f"{sep}\n"
+                    f"Pipeline complete. PR ready for merge:\n"
+                    f"{state.pr_url or 'N/A'}\n"
+                    f"{sep}"
+                ))
+
+        # Transition Jira ticket to "In Review" (or project-specific equivalent)
+        if self._tracker:
+            project = self._projects.get(state.company_id)
+            if project:
+                target_status = project.config.jira.statuses.in_review
+                if target_status:
+                    try:
+                        await self._tracker.transition_ticket(state.ticket_id, target_status)
+                        logger.info("Transitioned %s to '%s' on Jira", state.ticket_id, target_status)
+                    except Exception as e:
+                        logger.warning("Failed to transition %s on Jira: %s", state.ticket_id, e)
 
     async def _handle_escalate(self, workspace: Workspace) -> None:
         """Send escalation notification and block workspace."""

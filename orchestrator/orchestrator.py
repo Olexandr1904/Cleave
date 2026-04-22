@@ -1487,15 +1487,14 @@ class Orchestrator:
             return "unclear"
 
         if stage_id == "scope_check":
-            # Check for scope guard report
             report = workspace.reports_dir / "scope-guard-agent-output.md"
             if report.exists():
                 content = report.read_text().lower()
-                if "status: pass" in content:
+                if _looks_like_pass(content):
                     return "pass"
-                if "status: fail" in content:
+                if _looks_like_fail(content):
                     return "fail"
-            if "pass" in output_lower and "fail" not in output_lower:
+            if _looks_like_pass(output_lower):
                 return "pass"
             return "fail"
 
@@ -1503,9 +1502,11 @@ class Orchestrator:
             report = workspace.reports_dir / "qa-agent-output.md"
             if report.exists():
                 content = report.read_text().lower()
-                if "all gates passed" in content or "status: pass" in content:
+                if _looks_like_pass(content):
                     return "pass"
-            if "pass" in output_lower and "fail" not in output_lower:
+                if _looks_like_fail(content):
+                    return "fail"
+            if _looks_like_pass(output_lower):
                 return "pass"
             return "fail"
 
@@ -1627,3 +1628,22 @@ def _write_resolution_report(
     lines.append(f"Fixed: {fixed} | Won't Fix: {wf} | Commented: {wf} | Skipped: {skip}\n")
 
     report_path.write_text(existing + "\n".join(lines), encoding="utf-8")
+
+
+def _looks_like_pass(text: str) -> bool:
+    """Check if agent output indicates a pass verdict."""
+    return any(m in text for m in (
+        "status: pass", "verdict: pass", "all gates passed",
+        "qa pass", "qa complete",
+        "scope audit complete. verdict: **pass",
+        "scope audit complete. **status: pass",
+        "advances to qa", "advances to",
+    ))
+
+
+def _looks_like_fail(text: str) -> bool:
+    """Check if agent output indicates a fail verdict."""
+    return any(m in text for m in (
+        "status: fail", "verdict: fail", "verdict: **fail",
+        "status: blocked",
+    ))

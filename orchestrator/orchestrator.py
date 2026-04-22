@@ -1121,10 +1121,18 @@ class Orchestrator:
             return ActionResult(success=True, next_state=Stage.DONE, error="", metadata={})
 
         try:
-            comments = await vcs.get_pr_comments(pr_number)
+            all_comments = await vcs.get_pr_comments(pr_number)
         except Exception as e:
             logger.error("Failed to fetch PR comments for %s: %s", state.ticket_id, e)
             return ActionResult(success=False, next_state="", error=f"Failed to fetch: {e}", metadata={})
+
+        # Filter: only root comments (not replies to other comments).
+        # Replies are our pipeline's "Won't fix" responses — not new review comments.
+        comments = [c for c in all_comments if not c.in_reply_to_id]
+        logger.info(
+            "PR #%d: %d total comments, %d root thread comments",
+            pr_number, len(all_comments), len(comments),
+        )
 
         if not comments:
             return ActionResult(success=True, next_state=Stage.DONE, error="", metadata={})

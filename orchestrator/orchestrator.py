@@ -1184,6 +1184,13 @@ class Orchestrator:
         if not escalated:
             _write_resolution_report(workspace, auto_fixed, auto_rejected, [], state.review_cycle)
             if auto_fixed:
+                # Write fix instructions for the dev agent
+                fix_md = "# PR Comment Fixes Required\n\n"
+                for af in auto_fixed:
+                    fix_md += f"## Fix: {af.file}:{af.line or '?'}\n"
+                    fix_md += f"Comment by @{af.author}: {af.body[:200]}\n"
+                    fix_md += f"What to do: {af.suggested_fix or af.reason}\n\n"
+                (workspace.reports_dir / "pr-comment-fixes.md").write_text(fix_md, encoding="utf-8")
                 return ActionResult(success=True, next_state=Stage.DEV, error="", metadata={})
             return ActionResult(success=True, next_state=Stage.DONE, error="", metadata={})
 

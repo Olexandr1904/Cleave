@@ -1651,10 +1651,11 @@ def _looks_like_pass(text: str) -> bool:
     """Check if agent output indicates a pass verdict."""
     return any(m in text for m in (
         "status: pass", "verdict: pass", "all gates passed",
-        "qa pass", "qa complete",
+        "qa pass", "qa complete", "verdict: hold",
         "scope audit complete. verdict: **pass",
         "scope audit complete. **status: pass",
         "advances to qa", "advances to",
+        "merge as-is",
     ))
 
 

@@ -482,6 +482,43 @@ class Orchestrator:
         ticket_md = _ticket_to_markdown(pt.ticket)
         (ws.meta_dir / "ticket.md").write_text(ticket_md, encoding="utf-8")
 
+        # Fetch Jira comments and status history for agent context
+        if self._tracker and hasattr(self._tracker, '_request'):
+            try:
+                data = await self._tracker._request(
+                    "GET", f"/issue/{pt.ticket.id}?expand=changelog&fields=comment",
+                )
+                # Comments
+                comments = data.get("fields", {}).get("comment", {}).get("comments", [])
+                if comments:
+                    lines = ["# Jira Comments\n"]
+                    for c in comments:
+                        author = c.get("author", {}).get("displayName", "?")
+                        created = c.get("created", "")[:10]
+                        body = c.get("body", "")
+                        if isinstance(body, dict):
+                            from integrations.jira.jira_adapter import _extract_adf_text
+                            body = _extract_adf_text(body)
+                        lines.append(f"## {author} ({created})\n\n{body}\n")
+                    (ws.meta_dir / "comments.md").write_text("\n".join(lines), encoding="utf-8")
+
+                # Status history
+                changelog = data.get("changelog", {}).get("histories", [])
+                status_changes = []
+                for h in changelog:
+                    for item in h.get("items", []):
+                        if item.get("field") == "status":
+                            status_changes.append(
+                                f"- {h.get('created','')[:10]}: "
+                                f"{item.get('fromString','?')} → {item.get('toString','?')} "
+                                f"by {h.get('author',{}).get('displayName','?')}"
+                            )
+                if status_changes:
+                    history = "# Status History\n\n" + "\n".join(status_changes) + "\n"
+                    (ws.meta_dir / "history.md").write_text(history, encoding="utf-8")
+            except Exception as e:
+                logger.warning("Failed to fetch comments/history for %s: %s", pt.ticket.id, e)
+
         # Download ticket attachments (screenshots, images)
         if pt.ticket.attachments:
             attachments_dir = ws.meta_dir / "attachments"

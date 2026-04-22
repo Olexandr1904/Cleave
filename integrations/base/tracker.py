@@ -22,6 +22,8 @@ class TicketData:
     assignee: str | None = None
     reporter: str = ""
     created: str = ""  # ISO 8601 timestamp
+    attachments: list[dict[str, str]] = field(default_factory=list)
+    # Each: {"filename": "...", "url": "...", "mime_type": "..."}
 
 
 class TrackerInterface(ABC):

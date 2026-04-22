@@ -814,15 +814,33 @@ class Orchestrator:
             logger.warning("Failed to send failure notification: %s", e)
 
     def _reconcile_disk_workspaces(self) -> None:
-        """Re-adopt workspaces on disk that are not in the active list."""
+        """Sync in-memory workspace state with disk.
+
+        - Re-adopt workspaces on disk that fell out of the active list
+        - Refresh state for active workspaces (picks up dashboard retries,
+          manual edits, TG replies that wrote to state.json)
+        """
+        disk_workspaces = {ws.state.ticket_id: ws for ws in self._workspace_manager.discover_workspaces()}
         active_ids = {ws.state.ticket_id for ws in self._active_workspaces}
-        for ws in self._workspace_manager.discover_workspaces():
-            if ws.state.ticket_id not in active_ids:
+
+        # Re-adopt orphans
+        for tid, ws in disk_workspaces.items():
+            if tid not in active_ids:
                 self._active_workspaces.append(ws)
                 logger.warning(
                     "Re-adopted orphaned workspace: %s (state=%s)",
-                    ws.state.ticket_id, ws.state.current_state,
+                    tid, ws.state.current_state,
                 )
+
+        # Refresh state from disk for all active workspaces
+        for i, ws in enumerate(self._active_workspaces):
+            disk_ws = disk_workspaces.get(ws.state.ticket_id)
+            if disk_ws and disk_ws.state.current_state != ws.state.current_state:
+                logger.info(
+                    "Refreshed %s state from disk: %s -> %s",
+                    ws.state.ticket_id, ws.state.current_state, disk_ws.state.current_state,
+                )
+                self._active_workspaces[i] = disk_ws
 
     async def _sweep_deferred(self) -> None:
         """Resume DEFERRED workspaces whose retry_at has passed.

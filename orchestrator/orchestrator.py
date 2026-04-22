@@ -342,20 +342,24 @@ class Orchestrator:
         if self._tracker:
             await self._poll_and_create_workspaces()
 
-        # 2. Advance active workspaces
+        # 2. Advance active workspaces — keep advancing until state stops changing
         for ws in list(self._active_workspaces):
-            try:
-                await self.advance_workspace(ws)
-            except Exception as e:
-                logger.error(
-                    "Workspace %s error: %s",
-                    ws.state.ticket_id, e, exc_info=True,
-                )
+            prev_state = None
+            while ws.state.current_state != prev_state:
+                prev_state = ws.state.current_state
                 try:
-                    ws.transition(Stage.FAILED)
-                    ws.update_state(error=str(e))
-                except Exception:
-                    pass
+                    await self.advance_workspace(ws)
+                except Exception as e:
+                    logger.error(
+                        "Workspace %s error: %s",
+                        ws.state.ticket_id, e, exc_info=True,
+                    )
+                    try:
+                        ws.transition(Stage.FAILED)
+                        ws.update_state(error=str(e))
+                    except Exception:
+                        pass
+                    break
 
         # 3. Cleanup terminal workspaces from active list and record them for
         # /status to show recent completions even after they leave the list.

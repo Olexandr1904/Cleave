@@ -123,6 +123,15 @@ class JiraAdapter(TrackerInterface):
             assignee=assignee.get("displayName", "") if assignee else None,
             reporter=reporter.get("displayName", "") if reporter else "",
             created=fields.get("created", ""),
+            attachments=[
+                {
+                    "filename": a.get("filename", ""),
+                    "url": a.get("content", ""),
+                    "mime_type": a.get("mimeType", ""),
+                }
+                for a in fields.get("attachment", [])
+                if a.get("content")
+            ],
         )
 
     async def poll_tickets(self) -> list[TicketData]:
@@ -130,7 +139,7 @@ class JiraAdapter(TrackerInterface):
         jql = self._build_todo_jql()
         data = await self._request(
             "POST", "/search/jql",
-            json={"jql": jql, "maxResults": 50, "fields": ["summary", "description", "status", "priority", "labels", "assignee", "reporter", "created", "issuetype", "customfield_10020", "issuelinks"]},
+            json={"jql": jql, "maxResults": 50, "fields": ["summary", "description", "status", "priority", "labels", "assignee", "reporter", "created", "issuetype", "customfield_10020", "issuelinks", "attachment"]},
         )
         issues = data.get("issues", [])
         tickets = []

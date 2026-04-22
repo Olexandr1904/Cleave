@@ -482,6 +482,35 @@ class Orchestrator:
         ticket_md = _ticket_to_markdown(pt.ticket)
         (ws.meta_dir / "ticket.md").write_text(ticket_md, encoding="utf-8")
 
+        # Download ticket attachments (screenshots, images)
+        if pt.ticket.attachments:
+            attachments_dir = ws.meta_dir / "attachments"
+            attachments_dir.mkdir(exist_ok=True)
+            for att in pt.ticket.attachments:
+                mime = att.get("mime_type", "")
+                if not mime.startswith("image/"):
+                    continue  # Only download images
+                filename = att.get("filename", "attachment")
+                try:
+                    import httpx
+                    async with httpx.AsyncClient(timeout=30) as client:
+                        # Jira requires auth for attachment downloads
+                        auth = None
+                        if self._tracker and hasattr(self._tracker, '_email') and hasattr(self._tracker, '_token'):
+                            import base64
+                            creds = base64.b64encode(f"{self._tracker._email}:{self._tracker._token}".encode()).decode()
+                            headers = {"Authorization": f"Basic {creds}"}
+                        else:
+                            headers = {}
+                        resp = await client.get(att["url"], headers=headers, follow_redirects=True)
+                        if resp.status_code == 200:
+                            (attachments_dir / filename).write_bytes(resp.content)
+                            logger.info("Downloaded attachment %s for %s", filename, pt.ticket.id)
+                        else:
+                            logger.warning("Failed to download %s: HTTP %d", filename, resp.status_code)
+                except Exception as e:
+                    logger.warning("Failed to download attachment %s: %s", filename, e)
+
         # Fetch and write parent ticket if linked
         if self._tracker and pt.ticket.linked_issues:
             for link in pt.ticket.linked_issues:
@@ -1216,12 +1245,13 @@ class Orchestrator:
             workspace.update_state(error="No Telegram chat_id configured")
             return
 
-        # Build a human-readable escalation message from the latest agent output
+        # Build a concise escalation message — NOT the full agent dump
         stage = state.previous_state or state.current_state
-        header = f"🔔 [{state.company_id}/{state.repo_id}] {state.ticket_id}\nStage: {stage}\n{'─' * 30}\n\n"
+        sep = "─" * 30
+        header = f"🔔 [{state.company_id}/{state.repo_id}] {state.ticket_id}\nStage: {stage}\n{sep}\n"
 
-        # Find the most recent agent output report
-        report_content = None
+        # Extract a short summary from the agent output (first 3 non-empty lines)
+        summary = "Pipeline needs your input."
         if workspace.reports_dir.exists():
             outputs = sorted(
                 workspace.reports_dir.glob("*-output.md"),
@@ -1229,17 +1259,23 @@ class Orchestrator:
                 reverse=True,
             )
             if outputs:
-                report_content = outputs[0].read_text(encoding="utf-8").strip()
+                raw = outputs[0].read_text(encoding="utf-8").strip()
+                # Take first 3 meaningful lines (skip blank, skip markdown headers)
+                lines = []
+                for line in raw.splitlines():
+                    stripped = line.strip()
+                    if not stripped:
+                        continue
+                    lines.append(stripped)
+                    if len(lines) >= 3:
+                        break
+                if lines:
+                    summary = "\n".join(lines)
+                    if len(summary) > 500:
+                        summary = summary[:500] + "..."
 
-        sep = "─" * 30
-        hint = f"\n\n{sep}\n↩️ Reply with answer, or use buttons below."
-        if report_content:
-            budget = 4000 - len(header) - len(hint)
-            if len(report_content) > budget:
-                report_content = report_content[:budget] + "\n..."
-            message = header + report_content + hint
-        else:
-            message = header + "Pipeline needs input. Check the workspace for details." + hint
+        hint = f"\n{sep}\n↩️ Reply with answer, or use buttons below."
+        message = f"{header}\n{summary}{hint}"
 
         buttons = [
             Button(label="Skip Stage", action=f"skip:{state.ticket_id}"),
@@ -1338,11 +1374,25 @@ class Orchestrator:
             )
             return text, buttons
 
-        actions = {
-            Stage.ANALYSIS: "Analysis done → ready for development",
-            Stage.QA: "QA passed → ready to push & open PR",
-        }
-        title = actions.get(gate_state, f"Awaiting approval at {gate_state}")
+        if gate_state == Stage.ANALYSIS:
+            # Include BA summary from ba.md
+            ba_file = workspace.reports_dir / "ba.md"
+            summary = ""
+            if ba_file.exists():
+                content = ba_file.read_text(encoding="utf-8")
+                # Extract first heading + summary paragraph
+                lines = content.strip().splitlines()
+                for line in lines:
+                    if line.startswith("## Summary") or line.startswith("## Fix") or line.startswith("## Root"):
+                        continue
+                    if line.strip() and not line.startswith("#"):
+                        summary = line.strip()[:200]
+                        break
+            title = f"Analysis complete.\n{summary}" if summary else "Analysis complete."
+        elif gate_state == Stage.QA:
+            title = "QA passed → ready to push & open PR"
+        else:
+            title = f"Awaiting approval at {gate_state}"
 
         text = (
             f"⏸ [{state.company_id}/{state.repo_id}] {tid}\n"

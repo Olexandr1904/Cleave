@@ -1454,8 +1454,9 @@ class Orchestrator:
                         summary = line.strip()[:200]
                         break
             title = f"Analysis complete.\n{summary}" if summary else "Analysis complete."
+            title += "\n\nApprove = start coding. Reject = back to analysis."
         elif gate_state == Stage.QA:
-            title = "QA passed → ready to push & open PR"
+            title = "QA passed.\n\nApprove = push code & open PR. Reject = back to dev."
         else:
             title = f"Awaiting approval at {gate_state}"
 

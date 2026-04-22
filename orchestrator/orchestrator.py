@@ -334,7 +334,9 @@ class Orchestrator:
         # Pick up any projects added to config-live/ since last cycle (wizard or hand-edit).
         await self._rescan_projects_from_disk()
         self._emit("poll_cycle", "Poll cycle started")
-        # 0. Resume any DEFERRED workspaces whose retry_at has passed
+        # 0. Re-adopt workspaces that exist on disk but fell out of the active list
+        self._reconcile_disk_workspaces()
+        # 0b. Resume any DEFERRED workspaces whose retry_at has passed
         await self._sweep_deferred()
         # 1. Poll for new tickets and create workspaces
         if self._tracker:
@@ -642,6 +644,16 @@ class Orchestrator:
             logger.warning("No stage definition for '%s'", stage_id)
             return
 
+        # Reset iteration counter when re-entering a stage from a later stage
+        # (e.g., PR review fix loop sends ticket back through DEV→SCOPE_CHECK→QA)
+        prev = state.previous_state
+        if prev and _state_to_stage(prev) != stage_id:
+            current_count = state.stage_iterations.get(stage_id, 0)
+            if current_count >= (stage_def.max_iterations or 999):
+                state.stage_iterations[stage_id] = 0
+                workspace.save_state()
+                logger.info("Reset %s iteration counter for %s (re-entry from %s)", stage_id, state.ticket_id, prev)
+
         # Check iteration cap -> escalate
         if stage_def.max_iterations > 0:
             iterations = state.stage_iterations.get(stage_id, 0)
@@ -801,6 +813,17 @@ class Orchestrator:
             await self._notifier.send_message(chat_id, msg, buttons=buttons)
         except Exception as e:
             logger.warning("Failed to send failure notification: %s", e)
+
+    def _reconcile_disk_workspaces(self) -> None:
+        """Re-adopt workspaces on disk that are not in the active list."""
+        active_ids = {ws.state.ticket_id for ws in self._active_workspaces}
+        for ws in self._workspace_manager.discover_workspaces():
+            if ws.state.ticket_id not in active_ids:
+                self._active_workspaces.append(ws)
+                logger.warning(
+                    "Re-adopted orphaned workspace: %s (state=%s)",
+                    ws.state.ticket_id, ws.state.current_state,
+                )
 
     async def _sweep_deferred(self) -> None:
         """Resume DEFERRED workspaces whose retry_at has passed.

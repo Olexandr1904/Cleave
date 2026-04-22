@@ -481,18 +481,19 @@ agent instructions, or any other context.
 
 
 def _write_agent_output(path: Path, content: str) -> None:
-    """Write agent output, preserving previous attempts with timestamps.
+    """Write agent output. Archive previous attempt if it exists.
 
-    The latest attempt is always at the top. Previous attempts are kept
-    below a separator for debugging pipeline loops (dev→qa→dev→qa).
+    Latest output is always clean in the main file.
+    Previous attempts go to logs/{agent}-history.md for debugging.
     """
-    timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
-    header = f"<!-- Attempt: {timestamp} -->\n"
-    new_content = header + content
-
     if path.exists():
+        # Archive previous output to history log
+        history_dir = path.parent.parent / "logs"
+        history_dir.mkdir(exist_ok=True)
+        history_path = history_dir / f"{path.stem}-history.md"
+        timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
         previous = path.read_text(encoding="utf-8")
-        # Keep previous attempts below a separator
-        new_content += f"\n\n---\n\n<details><summary>Previous attempt</summary>\n\n{previous}\n</details>\n"
+        with open(history_path, "a", encoding="utf-8") as f:
+            f.write(f"\n## {timestamp}\n\n{previous}\n")
 
-    path.write_text(new_content, encoding="utf-8")
+    path.write_text(content, encoding="utf-8")

@@ -644,20 +644,14 @@ class Orchestrator:
             logger.warning("No stage definition for '%s'", stage_id)
             return
 
-        # Reset iteration counter when re-entering a stage that was previously completed.
-        # Each pass through the pipeline gets fresh iteration budgets.
-        # Detect re-entry: if the stage already has iterations AND a later stage also has iterations,
-        # this is a second cycle (e.g., PR comment fix loop).
-        _STAGE_ORDER = {"analysis": 0, "dev": 1, "scope_check": 2, "qa": 3, "push": 4, "pr_review": 5}
-        current_order = _STAGE_ORDER.get(stage_id, -1)
-        has_later_stage = any(
-            _STAGE_ORDER.get(s, -1) > current_order and count > 0
-            for s, count in state.stage_iterations.items()
-        )
-        if has_later_stage and state.stage_iterations.get(stage_id, 0) > 0:
+        # If the stage was previously completed (ticket looped back from a later stage),
+        # reset iteration counter so it gets a fresh budget. Detect by checking if the
+        # counter already equals or exceeds max — that means it ran in a prior cycle.
+        max_iter = stage_def.max_iterations
+        if max_iter > 0 and state.stage_iterations.get(stage_id, 0) >= max_iter:
             state.stage_iterations[stage_id] = 0
             workspace.save_state()
-            logger.info("Reset %s iteration counter for %s (re-entry cycle)", stage_id, state.ticket_id)
+            logger.info("Reset %s iteration counter for %s (was at max %d)", stage_id, state.ticket_id, max_iter)
 
         # Check iteration cap -> escalate
         if stage_def.max_iterations > 0:

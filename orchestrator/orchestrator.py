@@ -999,6 +999,10 @@ class Orchestrator:
         """Push branch and open PR. Returns ActionResult — caller transitions."""
         state = workspace.state
 
+        # Squash all feature branch commits into one clean commit before pushing.
+        # This removes noise from dev/scope-guard/QA retry loops.
+        self._squash_feature_commits(workspace)
+
         # If PR already exists (from a previous cycle), just push new commits and skip to PR_REVIEW
         if state.pr_number and state.pr_url:
             vcs, repo_config = self._get_vcs_for_workspace(workspace)
@@ -1032,6 +1036,52 @@ class Orchestrator:
         return ActionResult(
             success=False, next_state="", error=result.error, metadata={},
         )
+
+    def _squash_feature_commits(self, workspace: Workspace) -> None:
+        """Squash all commits on the feature branch into one clean commit.
+
+        Keeps the first commit's message (the feat(...) one). This removes
+        noise from scope-guard fix cycles and QA retry loops.
+        """
+        import subprocess
+        source = str(workspace.source_dir)
+        state = workspace.state
+
+        try:
+            # Count commits ahead of origin/develop (or whatever the base is)
+            result = subprocess.run(
+                ["git", "-C", source, "rev-list", "--count", "HEAD", "--not", "--remotes"],
+                capture_output=True, text=True, timeout=10,
+            )
+            if result.returncode != 0:
+                return
+            count = int(result.stdout.strip() or "0")
+            if count <= 1:
+                return  # Nothing to squash
+
+            # Get the first (oldest) commit message on the branch
+            result = subprocess.run(
+                ["git", "-C", source, "log", "--reverse", "--format=%s", f"HEAD~{count}..HEAD"],
+                capture_output=True, text=True, timeout=10,
+            )
+            if result.returncode != 0:
+                return
+            messages = result.stdout.strip().splitlines()
+            # Use the first feat/fix commit message
+            commit_msg = messages[0] if messages else f"feat({state.ticket_id}): changes"
+
+            # Soft reset to squash
+            subprocess.run(
+                ["git", "-C", source, "reset", "--soft", f"HEAD~{count}"],
+                check=True, capture_output=True, timeout=10,
+            )
+            subprocess.run(
+                ["git", "-C", source, "commit", "-m", commit_msg],
+                check=True, capture_output=True, timeout=10,
+            )
+            logger.info("Squashed %d commits into one for %s: %s", count, state.ticket_id, commit_msg)
+        except Exception as e:
+            logger.warning("Failed to squash commits for %s: %s", state.ticket_id, e)
 
     async def _action_fetch_pr_comments(
         self, workspace: Workspace, stage_def: Any,

@@ -35,7 +35,7 @@ class MaxIterationsConfig:
 
 @dataclass
 class DefaultsConfig:
-    poll_interval_seconds: int = 300
+    poll_interval_seconds: int = 60
     max_iterations: MaxIterationsConfig = field(default_factory=MaxIterationsConfig)
     max_parallel_tickets: int = 7
     pr_comment_fetch_delay_minutes: int = 30

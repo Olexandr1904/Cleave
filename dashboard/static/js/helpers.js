@@ -67,11 +67,19 @@ export function badgeClass(type) {
   return BADGE_CLASS[type] || 'badge-gray';
 }
 
+const STATE_LABELS = {
+  SCOPE_CHECK: 'CODE CHECK',
+  AWAITING_APPROVAL: 'APPROVAL',
+  MANUAL_CONTROL: 'MANUAL',
+  PR_REVIEW: 'PR REVIEW',
+};
+
 export function stateBadgeHtml(stateVal) {
   const cls = 'state-' + (stateVal || 'NEW').replace(/[^A-Z_]/g, '');
   let pulseClass = '';
   if (stateVal === 'BLOCKED') pulseClass = ' badge-pulse-red';
   if (stateVal === 'AWAITING_APPROVAL') pulseClass = ' badge-pulse-yellow';
   if (stateVal === 'MANUAL_CONTROL') pulseClass = ' badge-pulse-purple';
-  return `<span class="state-badge ${cls}${pulseClass}">${esc(stateVal || 'NEW')}</span>`;
+  const label = STATE_LABELS[stateVal] || stateVal || 'NEW';
+  return `<span class="state-badge ${cls}${pulseClass}">${esc(label)}</span>`;
 }

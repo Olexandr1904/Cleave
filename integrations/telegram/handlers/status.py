@@ -7,6 +7,14 @@ from typing import Any
 
 logger = logging.getLogger(__name__)
 
+_FRIENDLY = {
+    "SCOPE_CHECK": "Code Check",
+    "AWAITING_APPROVAL": "Awaiting Approval",
+    "MANUAL_CONTROL": "Manual Control",
+    "PR_REVIEW": "PR Review",
+    "PUSHED": "Pushing",
+}
+
 
 def _format_duration(seconds: float) -> str:
     """Format seconds into human-readable duration."""
@@ -64,7 +72,8 @@ class StatusHandler:
                 elif iterations > 0:
                     max_iter = 2
                     suffix = f" (iteration {iterations}/{max_iter})"
-                lines.append(f"  {s.ticket_id} — {s.current_state}{suffix}")
+                display = _FRIENDLY.get(s.current_state, s.current_state)
+                lines.append(f"  {s.ticket_id} — {display}{suffix}")
         else:
             lines.append("  (none)")
 

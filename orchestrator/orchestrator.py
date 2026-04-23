@@ -734,6 +734,31 @@ class Orchestrator:
             return
         # Determine outcome from agent output
         outcome = self._parse_agent_outcome(stage_id, result.output, workspace)
+
+        # Warn if QA passed but couldn't compile/test
+        if stage_id == "qa" and outcome == "pass" and self._notifier:
+            output_lower = (result.output or "").lower()
+            warnings = []
+            if "sdk" in output_lower and "not found" in output_lower:
+                warnings.append("Android SDK not installed — build not verified")
+            if "java" in output_lower and ("not found" in output_lower or "command not found" in output_lower):
+                warnings.append("JDK not installed — tests not run")
+            if "hold" in output_lower or "could not" in output_lower:
+                if not warnings:
+                    warnings.append("Quality gates could not run locally")
+            if warnings:
+                chat_id = self._get_chat_id(workspace)
+                if chat_id:
+                    sep = "─" * 30
+                    await self._notifier.send_message(chat_id, (
+                        f"⚠️ [{state.company_id}/{state.repo_id}] {state.ticket_id}\n"
+                        f"{sep}\n"
+                        f"QA passed but with warnings:\n"
+                        + "\n".join(f"  • {w}" for w in warnings)
+                        + f"\n\nCI on GitHub will be the authoritative gate.\n"
+                        f"{sep}"
+                    ))
+
         next_stage = get_next_stage(stage_id, self._workflow, outcome)
 
         if next_stage:

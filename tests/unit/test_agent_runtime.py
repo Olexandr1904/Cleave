@@ -86,7 +86,7 @@ class TestAssemblePrompt:
         agent = registry.get_agent("dev-agent")
         prompt = runtime.assemble_prompt(agent, workspace)
 
-        assert '<context file="ticket.json">' in prompt
+        assert '<context file="meta/ticket.json">' in prompt
         assert '"TEST-42"' in prompt
 
     def test_includes_operator_profile(self, registry, mock_llm, workspace):

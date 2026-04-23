@@ -138,16 +138,23 @@ class AgentRuntime:
         for key, value in substitutions.items():
             prompt_body = prompt_body.replace(f"{{{key}}}", str(value))
 
-        # 3. Workspace context files (read from meta_dir)
+        # 3. Workspace context files (read from meta_dir AND reports_dir)
         context_sections: list[str] = []
-        context_dir = workspace.meta_dir
-        if context_dir.exists():
-            for ctx_file in sorted(context_dir.iterdir()):
-                if ctx_file.is_file():
-                    file_content = ctx_file.read_text(encoding="utf-8")
-                    context_sections.append(
-                        f"<context file=\"{ctx_file.name}\">\n{file_content}\n</context>"
-                    )
+        for ctx_dir_name, ctx_dir in [("meta", workspace.meta_dir), ("reports", workspace.reports_dir)]:
+            if not ctx_dir.exists():
+                continue
+            for ctx_file in sorted(ctx_dir.iterdir()):
+                if ctx_file.is_file() and not ctx_file.name.endswith("-history.md"):
+                    try:
+                        file_content = ctx_file.read_text(encoding="utf-8")
+                        # Limit large report files to avoid context overflow
+                        if len(file_content) > 5000:
+                            file_content = file_content[:5000] + "\n...(truncated)"
+                        context_sections.append(
+                            f"<context file=\"{ctx_dir_name}/{ctx_file.name}\">\n{file_content}\n</context>"
+                        )
+                    except (UnicodeDecodeError, OSError):
+                        pass  # skip binary files
 
         if context_sections:
             prompt_body += "\n\n## Workspace Context\n\n" + "\n\n".join(context_sections)

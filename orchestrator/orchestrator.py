@@ -285,6 +285,26 @@ class Orchestrator:
             return repo_config.telegram.default_chat_id
         return self._global_config.telegram.default_chat_id
 
+    @staticmethod
+    def _get_ticket_title(workspace: Workspace) -> str:
+        """Read ticket summary from meta/ticket.json, or return empty string."""
+        ticket_file = workspace.meta_dir / "ticket.json"
+        if ticket_file.exists():
+            try:
+                data = json.loads(ticket_file.read_text(encoding="utf-8"))
+                return data.get("summary", "")
+            except (json.JSONDecodeError, KeyError):
+                pass
+        return ""
+
+    @staticmethod
+    def _tg_header(emoji: str, state: Any, title: str) -> str:
+        """Build a standard TG message header line, including ticket title if available."""
+        header = f"{emoji} [{state.company_id}/{state.repo_id}] {state.ticket_id}"
+        if title:
+            header += f"\n{title}"
+        return header
+
     async def run(self) -> None:
         """Main async loop — poll and advance until shutdown."""
         loop = asyncio.get_event_loop()
@@ -342,8 +362,16 @@ class Orchestrator:
         if self._tracker:
             await self._poll_and_create_workspaces()
 
-        # 2. Advance active workspaces (one stage per poll cycle — safe and predictable)
-        for ws in list(self._active_workspaces):
+        # 2. Advance active workspaces — prioritize later stages (almost done > just started)
+        _PRIORITY = {
+            Stage.PR_REVIEW: 0, Stage.PUSHED: 1, Stage.QA: 2,
+            Stage.SCOPE_CHECK: 3, Stage.DEV: 4, Stage.ANALYSIS: 5,
+        }
+        sorted_ws = sorted(
+            self._active_workspaces,
+            key=lambda ws: _PRIORITY.get(ws.state.current_state, 99),
+        )
+        for ws in list(sorted_ws):
             try:
                 await self.advance_workspace(ws)
             except Exception as e:
@@ -750,8 +778,10 @@ class Orchestrator:
                 chat_id = self._get_chat_id(workspace)
                 if chat_id:
                     sep = "─" * 30
+                    title = self._get_ticket_title(workspace)
+                    hdr = self._tg_header("⚠️", state, title)
                     await self._notifier.send_message(chat_id, (
-                        f"⚠️ [{state.company_id}/{state.repo_id}] {state.ticket_id}\n"
+                        f"{hdr}\n"
                         f"{sep}\n"
                         f"QA passed but with warnings:\n"
                         + "\n".join(f"  • {w}" for w in warnings)
@@ -811,10 +841,12 @@ class Orchestrator:
 
         state = workspace.state
         chat_id = self._get_chat_id(workspace)
+        title = self._get_ticket_title(workspace)
+        hdr = self._tg_header("\u23f1", state, title)
         msg = (
-            f"\u23f1 [{state.company_id}/{state.repo_id}] Quota exhausted. "
-            f"{state.ticket_id} (at {state.previous_state or '?'}) deferred, "
-            f"will retry at {retry_at.strftime('%Y-%m-%d %H:%M')} UTC. "
+            f"{hdr}\n"
+            f"Quota exhausted (at {state.previous_state or '?'}), deferred until "
+            f"{retry_at.strftime('%Y-%m-%d %H:%M')} UTC. "
             f"Other tickets hitting the same quota will defer silently until then."
         )
         buttons = [Button(label="Retry Now", action=f"retry:{state.ticket_id}")]
@@ -830,9 +862,11 @@ class Orchestrator:
             return
         state = workspace.state
         chat_id = self._get_chat_id(workspace)
+        title = self._get_ticket_title(workspace)
+        hdr = self._tg_header("\u274c", state, title)
         first_line = (error or "").splitlines()[0] if error else ""
         msg = (
-            f"\u274c [{state.company_id}/{state.repo_id}] {state.ticket_id} "
+            f"{hdr}\n"
             f"FAILED at {state.previous_state or '?'}. Error: {first_line}."
         )
         buttons = [Button(label="Retry", action=f"retry:{state.ticket_id}")]
@@ -1015,8 +1049,10 @@ class Orchestrator:
             if chat_id:
                 sep = "─" * 30
                 pr_url = result.metadata["pr_url"]
+                title = self._get_ticket_title(workspace)
+                hdr = self._tg_header("🔗", state, title)
                 msg = (
-                    f"🔗 [{state.company_id}/{state.repo_id}] {state.ticket_id}\n"
+                    f"{hdr}\n"
                     f"{sep}\n"
                     f"PR created: {pr_url}\n\n"
                     f"Please review the code."
@@ -1261,8 +1297,10 @@ class Orchestrator:
         """Send a single escalated comment to TG. Returns the message ID."""
         state = workspace.state
         sep = "─" * 30
+        title = self._get_ticket_title(workspace)
+        hdr = self._tg_header("💬", state, title)
         msg = (
-            f"💬 [{state.company_id}/{state.repo_id}] {state.ticket_id} — PR #{pr_number}\n"
+            f"{hdr} — PR #{pr_number}\n"
             f"Comment by @{cc.author} on {cc.file}:{cc.line or '?'}\n"
             f"{sep}\n"
             f"Suggestion:\n  {cc.body[:300]}\n\n"
@@ -1437,7 +1475,9 @@ class Orchestrator:
         # Build a concise escalation message — NOT the full agent dump
         stage = state.previous_state or state.current_state
         sep = "─" * 30
-        header = f"🔔 [{state.company_id}/{state.repo_id}] {state.ticket_id}\nStage: {stage}\n{sep}\n"
+        title = self._get_ticket_title(workspace)
+        hdr = self._tg_header("🔔", state, title)
+        header = f"{hdr}\nStage: {stage}\n{sep}\n"
 
         # Extract a short summary from the agent output (first 3 non-empty lines)
         summary = "Pipeline needs your input."
@@ -1467,7 +1507,7 @@ class Orchestrator:
         message = f"{header}\n{summary}{hint}"
 
         buttons = [
-            Button(label="Skip Stage", action=f"skip:{state.ticket_id}"),
+            Button(label="Proceed", action=f"skip:{state.ticket_id}"),
             Button(label="Retry", action=f"retry:{state.ticket_id}"),
         ]
 
@@ -1495,8 +1535,10 @@ class Orchestrator:
             chat_id = self._get_chat_id(workspace)
             if chat_id:
                 pr_url = state.pr_url or "(no PR)"
+                title = self._get_ticket_title(workspace)
+                hdr = self._tg_header("✅", state, title)
                 message = (
-                    f"[{state.company_id}/{state.repo_id}] {state.ticket_id}\n\n"
+                    f"{hdr}\n\n"
                     f"PR ready for human merge: {pr_url}"
                 )
                 try:
@@ -1544,6 +1586,7 @@ class Orchestrator:
         state = workspace.state
         tid = state.ticket_id
         sep = "─" * 30
+        title = self._get_ticket_title(workspace)
         buttons = [
             Button(label="Approve", action=f"approve:{tid}"),
             Button(label="Reject", action=f"reject:{tid}"),
@@ -1568,8 +1611,9 @@ class Orchestrator:
                     summary = f"{count} comment(s) processed."
                 else:
                     summary = "No PR comments found."
+            hdr = self._tg_header("⏸", state, title)
             text = (
-                f"⏸ [{state.company_id}/{state.repo_id}] {tid}\n"
+                f"{hdr}\n"
                 f"{sep}\n"
                 f"PR: {state.pr_url or 'N/A'}\n"
                 f"{summary}"
@@ -1590,17 +1634,18 @@ class Orchestrator:
                     if line.strip() and not line.startswith("#"):
                         summary = line.strip()[:200]
                         break
-            title = f"Analysis complete.\n{summary}" if summary else "Analysis complete."
-            title += "\n\nApprove = start coding. Reject = back to analysis."
+            gate_title = f"Analysis complete.\n{summary}" if summary else "Analysis complete."
+            gate_title += "\n\nApprove = start coding. Reject = back to analysis."
         elif gate_state == Stage.QA:
-            title = "QA passed.\n\nApprove = push code & open PR. Reject = back to dev."
+            gate_title = "QA passed.\n\nApprove = push code & open PR. Reject = back to dev."
         else:
-            title = f"Awaiting approval at {gate_state}"
+            gate_title = f"Awaiting approval at {gate_state}"
 
+        hdr = self._tg_header("⏸", state, title)
         text = (
-            f"⏸ [{state.company_id}/{state.repo_id}] {tid}\n"
+            f"{hdr}\n"
             f"{sep}\n"
-            f"{title}"
+            f"{gate_title}"
         )
         return text, buttons
 

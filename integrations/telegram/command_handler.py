@@ -459,7 +459,16 @@ class CommandHandler:
             pending = ws.state.pending_review_comments or []
             for c in pending:
                 if c.get("msg_id") == reply_to_msg_id:
-                    c["decision"] = text.strip()
+                    raw = text.strip().lower()
+                    if raw in ("fix", "fxi", "fifx", "fixx", "fx", "fi", "yes", "fix it"):
+                        decision = "fix"
+                    elif raw.startswith("won't fix") or raw.startswith("wont fix"):
+                        decision = raw
+                    elif raw == "skip":
+                        decision = "skip"
+                    else:
+                        decision = raw  # store as-is, _execute_review_decisions handles it
+                    c["decision"] = decision
                     ws.save_state()
                     undecided = [x for x in pending if x.get("decision") is None]
                     if undecided:
@@ -620,6 +629,39 @@ class CommandHandler:
             await self._notifier.send_message(chat_id, f"Skipped {prev} for {ticket_id}. Advanced to {target}.", reply_to_message_id=message_id)
             if hasattr(self, '_wake_fn') and self._wake_fn:
                 self._wake_fn()
+
+        elif action in ("pr_fix", "pr_skip", "pr_wontfix"):
+            # PR comment decision via button — ticket_id is "TICKET:COMMENT_ID"
+            parts = ticket_id.split(":", 1)
+            tid = parts[0]
+            comment_id_str = parts[1] if len(parts) > 1 else ""
+            ws = next((w for w in workspaces if w.state.ticket_id == tid), None)
+            if not ws or not ws.state.pending_review_comments:
+                await self._notifier.send_message(chat_id, f"No pending comments for {tid}.", reply_to_message_id=message_id)
+                return
+
+            decision_map = {"pr_fix": "fix", "pr_skip": "skip", "pr_wontfix": "won't fix: operator decision"}
+            decision = decision_map[action]
+
+            matched = False
+            for c in ws.state.pending_review_comments:
+                if str(c.get("comment_id")) == comment_id_str:
+                    c["decision"] = decision
+                    matched = True
+                    break
+
+            if not matched:
+                await self._notifier.send_message(chat_id, f"Comment not found.", reply_to_message_id=message_id)
+                return
+
+            ws.save_state()
+            undecided = [x for x in ws.state.pending_review_comments if x.get("decision") is None]
+            if undecided:
+                await self._notifier.send_message(chat_id, f"Got it ({decision}). {len(undecided)} comment(s) remaining.", reply_to_message_id=message_id)
+            else:
+                await self._notifier.send_message(chat_id, f"All decisions in for {tid}. Executing now.", reply_to_message_id=message_id)
+                if hasattr(self, '_wake_fn') and self._wake_fn:
+                    self._wake_fn()
 
         else:
             await self._notifier.send_message(chat_id, f"Unknown action: {action}", reply_to_message_id=message_id)

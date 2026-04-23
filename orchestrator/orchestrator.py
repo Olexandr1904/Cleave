@@ -1226,12 +1226,18 @@ class Orchestrator:
             f"{sep}\n"
             f"Suggestion:\n  {cc.body[:300]}\n\n"
             f"Agent assessment:\n  {cc.reason}\n"
-            f"{sep}\n"
-            f"↩️ Reply: fix / skip / won't fix [reason]"
+            f"{sep}"
         )
+        # Use a unique action key so the callback handler can match this comment
+        comment_key = f"{state.ticket_id}:{cc.comment_id}"
+        buttons = [
+            Button(label="Fix", action=f"pr_fix:{comment_key}"),
+            Button(label="Skip", action=f"pr_skip:{comment_key}"),
+            Button(label="Won't Fix", action=f"pr_wontfix:{comment_key}"),
+        ]
         chat_id = self._get_chat_id(workspace)
         if chat_id and self._notifier:
-            return await self._notifier.send_message(chat_id, msg)
+            return await self._notifier.send_message(chat_id, msg, buttons=buttons)
         return 0
 
     async def _execute_review_decisions(self, workspace: Workspace) -> ActionResult:

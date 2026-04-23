@@ -1084,6 +1084,20 @@ class Orchestrator:
                         logger.info("Pushed updates to existing PR #%d for %s", state.pr_number, state.ticket_id)
                 except Exception as e:
                     logger.warning("Failed to push to existing PR: %s", e)
+
+            # Resolve comments that were fixed in this push
+            to_resolve = getattr(state, 'comments_to_resolve', None) or []
+            if to_resolve and vcs:
+                for cid in to_resolve:
+                    try:
+                        await vcs.reply_to_comment(state.pr_number, cid, "Fixed in latest push.")
+                        await vcs.resolve_comment(state.pr_number, cid)
+                        logger.info("Resolved comment %d after push", cid)
+                    except Exception as e:
+                        logger.warning("Failed to resolve comment %d: %s", cid, e)
+                state.comments_to_resolve = None
+                workspace.save_state()
+
             return ActionResult(
                 success=True, next_state=Stage.PR_REVIEW, error="",
                 metadata={"pr_url": state.pr_url, "pr_number": state.pr_number},
@@ -1233,16 +1247,13 @@ class Orchestrator:
         # Phase 4: Classify
         classified = await classify_comments(comments, workspace, self._agent_runtime)
 
-        # Phase 5: Auto-handle
+        # Phase 5: Classify into buckets (don't resolve yet — resolve after fix is pushed)
         auto_fixed, auto_rejected, escalated = [], [], []
         for cc in classified:
             if cc.classification == "AUTO_FIX":
                 auto_fixed.append(cc)
-                try:
-                    await vcs.resolve_comment(pr_number, cc.comment_id)
-                except Exception as e:
-                    logger.warning("Failed to resolve comment %d: %s", cc.comment_id, e)
             elif cc.classification == "AUTO_REJECT":
+                # Reply immediately — no code change needed
                 try:
                     await vcs.reply_to_comment(pr_number, cc.comment_id, f"Won't fix: {cc.reason}")
                     await vcs.resolve_comment(pr_number, cc.comment_id)
@@ -1286,6 +1297,9 @@ class Orchestrator:
                 source_reports = workspace.source_dir / "reports"
                 source_reports.mkdir(exist_ok=True)
                 (source_reports / "pr-comment-fixes.md").write_text(fix_md, encoding="utf-8")
+                # Store comment IDs to resolve after fix is pushed
+                state.comments_to_resolve = [af.comment_id for af in auto_fixed]
+                workspace.save_state()
                 return ActionResult(success=True, next_state=Stage.DEV, error="", metadata={})
             return ActionResult(success=True, next_state=Stage.DONE, error="", metadata={})
 
@@ -1376,6 +1390,8 @@ class Orchestrator:
         _write_resolution_report(workspace, [], wont_fix, pending, state.review_cycle)
 
         state.pending_review_comments = None
+        if fixes_needed:
+            state.comments_to_resolve = [f["comment_id"] for f in fixes_needed]
         workspace.save_state()
 
         if fixes_needed:

@@ -1126,12 +1126,20 @@ class Orchestrator:
             logger.error("Failed to fetch PR comments for %s: %s", state.ticket_id, e)
             return ActionResult(success=False, next_state="", error=f"Failed to fetch: {e}", metadata={})
 
-        # Filter: only root comments (not replies to other comments).
-        # Replies are our pipeline's "Won't fix" responses — not new review comments.
-        comments = [c for c in all_comments if not c.in_reply_to_id]
+        # Filter: only root comments that haven't been handled yet.
+        # A comment is "handled" if it has a reply starting with "Won't fix:" or "Fixed"
+        replied_to_ids = set()
+        for c in all_comments:
+            if c.in_reply_to_id and c.body.strip().lower().startswith(("won't fix", "wont fix", "fixed")):
+                replied_to_ids.add(c.in_reply_to_id)
+
+        comments = [
+            c for c in all_comments
+            if not c.in_reply_to_id and c.id not in replied_to_ids
+        ]
         logger.info(
-            "PR #%d: %d total comments, %d root thread comments",
-            pr_number, len(all_comments), len(comments),
+            "PR #%d: %d total, %d already handled, %d new to process",
+            pr_number, len(all_comments), len(replied_to_ids), len(comments),
         )
 
         if not comments:

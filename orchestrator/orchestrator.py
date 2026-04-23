@@ -717,12 +717,14 @@ class Orchestrator:
             return
 
         self._emit("agent_completed", f"{stage_def.agent} completed for {state.ticket_id}", project_id=state.company_id, ticket_id=state.ticket_id, agent_id=stage_def.agent, data={"stage": stage_id, "duration": result.duration_seconds, "input_tokens": result.input_tokens, "output_tokens": result.output_tokens})
+        self._log_pipeline(workspace, f"{stage_id} ({stage_def.agent}) completed. Output: `reports/{stage_def.agent}-output.md`")
         verify_result = stage_verifier.verify(stage_id, workspace, stage_start_commit)
         if not verify_result.ok:
             agent_snippet = (result.output or "")[:200].replace("\n", " ")
             error_msg = f"{stage_id}: {verify_result.reason} (agent said: {agent_snippet})"
             workspace.transition(Stage.BLOCKED)
             workspace.update_state(error=error_msg)
+            self._log_pipeline(workspace, f"BLOCKED — {stage_id} verification failed: {verify_result.reason}")
             self._emit(
                 "stage_verification_failed",
                 f"{stage_id} verification failed for {state.ticket_id}: {verify_result.reason}",
@@ -751,6 +753,7 @@ class Orchestrator:
                 self._advance_to_stage(workspace, next_stage)
         else:
             workspace.transition(Stage.DONE)
+            self._log_pipeline(workspace, f"✅ DONE. PR: {workspace.state.pr_url or 'N/A'}")
             await self._on_ticket_done(workspace)
 
     def _rollback_iteration(self, workspace: Workspace, stage_id: str) -> None:
@@ -970,6 +973,10 @@ class Orchestrator:
         if result.next_state == Stage.DONE:
             await self._on_ticket_done(workspace)
 
+        meta_summary = ""
+        if result.metadata.get("pr_url"):
+            meta_summary = f" PR: {result.metadata['pr_url']}"
+        self._log_pipeline(workspace, f"{action} completed.{meta_summary} → {result.next_state}")
         self._emit(
             "action_completed",
             f"Action {action} completed for {state.ticket_id}",
@@ -1198,6 +1205,8 @@ class Orchestrator:
 
         # Phase 7: Handle escalated or finish
         if not escalated:
+            summary = f"PR review cycle {state.review_cycle}: {len(auto_fixed)} fix, {len(auto_rejected)} rejected"
+            self._log_pipeline(workspace, f"{summary}. Report: `reports/pr-review-resolution.md`")
             _write_resolution_report(workspace, auto_fixed, auto_rejected, [], state.review_cycle)
             if auto_fixed:
                 # Write fix instructions for the dev agent
@@ -1484,10 +1493,23 @@ class Orchestrator:
             success=True, next_state=Stage.DONE, error="", metadata={},
         )
 
+    @staticmethod
+    def _log_pipeline(workspace: Workspace, entry: str) -> None:
+        """Append a timestamped entry to reports/pipeline-log.md."""
+        log_path = workspace.reports_dir / "pipeline-log.md"
+        timestamp = datetime.now(timezone.utc).strftime("%H:%M")
+        line = f"- **{timestamp}** {entry}\n"
+        if log_path.exists():
+            with open(log_path, "a", encoding="utf-8") as f:
+                f.write(line)
+        else:
+            log_path.write_text(f"# Pipeline Log — {workspace.state.ticket_id}\n\n{line}", encoding="utf-8")
+
     def _advance_to_stage(self, workspace: Workspace, stage_id: str) -> None:
         """Transition workspace to the state corresponding to a workflow stage."""
         state_name = _stage_to_state(stage_id)
         if state_name:
+            self._log_pipeline(workspace, f"→ {state_name}")
             self._emit("stage_transition", f"{workspace.state.ticket_id}: {workspace.state.current_state} -> {state_name}", project_id=workspace.state.company_id, ticket_id=workspace.state.ticket_id, data={"from_state": workspace.state.current_state, "to_state": state_name})
             workspace.transition(state_name)
         else:

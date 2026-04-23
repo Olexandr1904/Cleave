@@ -25,6 +25,7 @@ tools:
 
 inputs:
   - reports/ba.md
+  - reports/pr-comment-fixes.md
   - meta/ticket.md
   - meta/parent.md
   - rules/arch-rules.md
@@ -130,7 +131,14 @@ For each file in the plan:
 - Preserve existing functionality and formatting
 - Do not reformat untouched code
 
-### Step 4: Scope Violation Fixes (if re-invoked)
+### Step 4: PR Comment Fixes (if re-invoked from PR review)
+
+If `reports/pr-comment-fixes.md` exists:
+1. Read each fix listed — these are code review comments that need to be addressed
+2. Apply each fix exactly as described
+3. These take PRIORITY over everything else — they come from human code review
+
+### Step 5: Scope Violation Fixes (if re-invoked)
 
 If `reports/scope-guard.md` exists with violations:
 1. Read each violation listed

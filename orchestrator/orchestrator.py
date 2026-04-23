@@ -98,6 +98,12 @@ class Orchestrator:
         self._config_dir = config_dir
         self._on_project_added = on_project_added
         self._wake_event = asyncio.Event()
+        # Limit concurrent agent executions to avoid quota exhaustion
+        try:
+            max_parallel = int(global_config.defaults.max_parallel_tickets)
+        except (TypeError, ValueError, AttributeError):
+            max_parallel = 3
+        self._agent_semaphore = asyncio.Semaphore(max_parallel)
 
     def register_repo_vcs(
         self, repo_id: str, vcs: VCSInterface, repo_config: RepoConfig,
@@ -362,28 +368,28 @@ class Orchestrator:
         if self._tracker:
             await self._poll_and_create_workspaces()
 
-        # 2. Advance active workspaces — prioritize later stages (almost done > just started)
-        _PRIORITY = {
-            Stage.PR_REVIEW: 0, Stage.PUSHED: 1, Stage.QA: 2,
-            Stage.SCOPE_CHECK: 3, Stage.DEV: 4, Stage.ANALYSIS: 5,
-        }
-        sorted_ws = sorted(
-            self._active_workspaces,
-            key=lambda ws: _PRIORITY.get(ws.state.current_state, 99),
-        )
-        for ws in list(sorted_ws):
-            try:
-                await self.advance_workspace(ws)
-            except Exception as e:
-                logger.error(
-                    "Workspace %s error: %s",
-                    ws.state.ticket_id, e, exc_info=True,
-                )
+        # 2. Advance active workspaces in parallel (bounded by semaphore)
+        async def _safe_advance(ws: Workspace) -> None:
+            async with self._agent_semaphore:
                 try:
-                    ws.transition(Stage.FAILED)
-                    ws.update_state(error=str(e))
-                except Exception:
-                    pass
+                    await self.advance_workspace(ws)
+                except Exception as e:
+                    logger.error(
+                        "Workspace %s error: %s",
+                        ws.state.ticket_id, e, exc_info=True,
+                    )
+                    try:
+                        ws.transition(Stage.FAILED)
+                        ws.update_state(error=str(e))
+                    except Exception:
+                        pass
+
+        # Skip workspaces in terminal or clearly waiting states
+        _SKIP = {Stage.DONE, Stage.ARCHIVED, Stage.BLOCKED,
+                 Stage.MANUAL_CONTROL, Stage.DEFERRED, Stage.FAILED}
+        active = [ws for ws in self._active_workspaces if ws.state.current_state not in _SKIP]
+        if active:
+            await asyncio.gather(*[_safe_advance(ws) for ws in active])
 
         # 3. Cleanup terminal workspaces from active list and record them for
         # /status to show recent completions even after they leave the list.

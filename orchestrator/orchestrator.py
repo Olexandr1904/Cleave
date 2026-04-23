@@ -1006,11 +1006,7 @@ class Orchestrator:
         """Push branch and open PR. Returns ActionResult — caller transitions."""
         state = workspace.state
 
-        # Squash all feature branch commits into one clean commit before pushing.
-        # This removes noise from dev/scope-guard/QA retry loops.
-        self._squash_feature_commits(workspace)
-
-        # If PR already exists (from a previous cycle), just push new commits and skip to PR_REVIEW
+        # If PR already exists (from a previous cycle), just push new commits (no squash)
         if state.pr_number and state.pr_url:
             vcs, repo_config = self._get_vcs_for_workspace(workspace)
             if vcs:
@@ -1033,6 +1029,9 @@ class Orchestrator:
                 success=False, next_state="", error="No VCS adapter configured",
                 metadata={},
             )
+
+        # Squash commits into one clean commit before the first PR
+        self._squash_feature_commits(workspace)
 
         result = await create_pr(workspace, vcs, self._tracker, repo_config)
         if result.success:

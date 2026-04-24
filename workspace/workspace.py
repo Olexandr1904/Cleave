@@ -116,7 +116,7 @@ class Workspace:
 
     @property
     def reports_dir(self) -> Path:
-        return self._root / "reports"
+        return self._root / "source" / "reports"
 
     @property
     def logs_dir(self) -> Path:

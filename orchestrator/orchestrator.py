@@ -1293,10 +1293,6 @@ class Orchestrator:
                     fix_md += f"Comment by @{af.author}: {af.body[:200]}\n"
                     fix_md += f"What to do: {af.suggested_fix or af.reason}\n\n"
                 (workspace.reports_dir / "pr-comment-fixes.md").write_text(fix_md, encoding="utf-8")
-                # Also write to source/reports/ so the agent can read it from its cwd
-                source_reports = workspace.source_dir / "reports"
-                source_reports.mkdir(exist_ok=True)
-                (source_reports / "pr-comment-fixes.md").write_text(fix_md, encoding="utf-8")
                 # Store comment IDs to resolve after fix is pushed
                 state.comments_to_resolve = [af.comment_id for af in auto_fixed]
                 workspace.save_state()
@@ -1382,10 +1378,6 @@ class Orchestrator:
                 fix_md += f"Comment by @{f['author']}: {f['body'][:200]}\n"
                 fix_md += f"Reason: {f['reason']}\n\n"
             (workspace.reports_dir / "pr-comment-fixes.md").write_text(fix_md, encoding="utf-8")
-            # Also write to source/reports/ so the agent can read it from its cwd
-            source_reports = workspace.source_dir / "reports"
-            source_reports.mkdir(exist_ok=True)
-            (source_reports / "pr-comment-fixes.md").write_text(fix_md, encoding="utf-8")
 
         _write_resolution_report(workspace, [], wont_fix, pending, state.review_cycle)
 

@@ -1783,7 +1783,6 @@ class Orchestrator:
         try:
             msg_id = await self._notifier.send_message(chat_id, message)
             workspace.update_state(human_input_question=combined)
-            workspace.state.human_input_question = combined
             workspace.state.escalation_msg_id = msg_id
             workspace.state.escalation_chat_id = chat_id
             workspace.save_state()

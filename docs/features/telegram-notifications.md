@@ -28,6 +28,7 @@ Telegram bot adapter behind the NotifierInterface. Sends formatted notifications
 - FR15: Inline action buttons on messages that expect discrete choices (approve/reject gates, PR review complete, retry on failure/deferral); escalation messages stay text-reply only
 - FR16: `Button` dataclass in `NotifierInterface` — adapter-agnostic; `TelegramAdapter` translates to `InlineKeyboardMarkup`, routes `CallbackQuery` presses to `CommandHandler.handle_callback()`
 - FR17: Button confirmations sent as Telegram replies to the original button message (`reply_to_message_id`)
+- FR18: Messages with buttons MUST NOT contain redundant text reply hints for the same actions; text hints only for free-text inputs (escalation answers, PR comment decisions)
 
 ## Technical Approach
 
@@ -83,3 +84,4 @@ Telegram bot adapter behind the NotifierInterface. Sends formatted notifications
 | 2026-04-14 | Extended retry/resume to DEFERRED tickets: `_handle_retry` treats DEFERRED like BLOCKED/FAILED (transitions to `previous_state`); IntentParser system prompt now lists deferred workspaces and advertises retry for DEFERRED tickets; `_build_context` exposes `deferred_workspaces`. |
 | 2026-04-16 | Added `set_tracker` and `add_allowed_chat_id` mutators to CommandHandler for wizard hot-reload: tracker can be attached post-init; allowlist extended per-project (no-op when None/'admit all'). |
 | 2026-04-21 | Added inline action buttons: `Button` dataclass in `NotifierInterface`; `TelegramAdapter` translates to `InlineKeyboardMarkup` and routes `CallbackQuery` to `CommandHandler.handle_callback()`; approval gates get Approve/Reject buttons, PR review gets Review Complete, failed/deferred get Retry; escalation messages stay text-reply only. |
+| 2026-04-24 | `_handle_escalate` now uses `_build_blocked_reason` for the message body (prefers `ba-questions.md` for analysis-stage escalations); drops `[Proceed]/[Retry]` inline buttons; stores only the reason in `human_input_question` (no header, no hint). |

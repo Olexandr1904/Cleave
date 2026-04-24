@@ -115,7 +115,17 @@ class Workspace:
 
     @property
     def reports_dir(self) -> Path:
-        return self._root / "source" / "reports"
+        new_path = self._root / "source" / "reports"
+        old_path = self._root / "reports"
+        # Migrate any files from old location to new
+        if old_path.exists() and old_path.is_dir():
+            new_path.mkdir(parents=True, exist_ok=True)
+            for f in old_path.iterdir():
+                if f.is_file() and not (new_path / f.name).exists():
+                    (new_path / f.name).write_bytes(f.read_bytes())
+        elif not new_path.exists():
+            new_path.mkdir(parents=True, exist_ok=True)
+        return new_path
 
     @property
     def logs_dir(self) -> Path:

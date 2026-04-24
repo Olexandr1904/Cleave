@@ -185,9 +185,7 @@ function renderCard(ws) {
     ? `<button class="action-btn btn-approve" data-action="approve" data-ticket="${esc(ws.ticket_id)}" style="padding:1px 8px;font-size:10px;">Approve</button>`
     : '';
 
-  const deleteBtn = !['DONE', 'SETUP_DONE'].includes(stateVal)
-    ? `<button class="action-btn btn-delete" data-action="delete" data-ticket="${esc(ws.ticket_id)}" style="padding:1px 8px;font-size:10px;" onclick="event.stopPropagation()">✕</button>`
-    : '';
+  const deleteBtn = `<button class="action-btn btn-delete" data-action="delete" data-ticket="${esc(ws.ticket_id)}" style="padding:1px 8px;font-size:10px;" onclick="event.stopPropagation()">✕</button>`;
 
   const manualLabel = stateVal === 'MANUAL_CONTROL'
     ? `<div style="font-size:10px;color:#d2a8ff;">You have control</div>`

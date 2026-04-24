@@ -785,7 +785,12 @@ class Orchestrator:
             return
 
         self._emit("agent_completed", f"{stage_def.agent} completed for {state.ticket_id}", project_id=state.company_id, ticket_id=state.ticket_id, agent_id=stage_def.agent, data={"stage": stage_id, "duration": result.duration_seconds, "input_tokens": result.input_tokens, "output_tokens": result.output_tokens})
-        self._log_pipeline(workspace, f"{stage_id} ({stage_def.agent}) completed. Output: `reports/{stage_def.agent}-output.md`")
+        sha_info = ""
+        if stage_id == "dev":
+            sha = self._git_head_sha(workspace)
+            if sha != "unknown":
+                sha_info = f" Commit: {sha[:8]}."
+        self._log_pipeline(workspace, f"{stage_id} ({stage_def.agent}) completed.{sha_info} Output: `reports/{stage_def.agent}-output.md`")
         verify_result = stage_verifier.verify(stage_id, workspace, stage_start_commit)
         if not verify_result.ok:
             agent_snippet = (result.output or "")[:200].replace("\n", " ")

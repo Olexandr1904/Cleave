@@ -77,7 +77,6 @@ class WorkspaceState:
     retry_at: str | None = None
     pending_review_comments: list[dict] | None = None
     review_cycle: int = 0
-    comments_to_resolve: list[int] | None = None
 
     def __post_init__(self) -> None:
         now = _now_iso()
@@ -116,7 +115,7 @@ class Workspace:
 
     @property
     def reports_dir(self) -> Path:
-        return self._root / "reports"
+        return self._root / "source" / "reports"
 
     @property
     def logs_dir(self) -> Path:

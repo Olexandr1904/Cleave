@@ -51,3 +51,4 @@ Each ticket gets a fully isolated workspace via a fresh `git clone`. No ticket s
 |------|-------------|
 | 2026-04-07 | Initial draft — seeded from PRD and architecture docs |
 | 2026-04-16 | Fix signature drift in test_e2e_dry_run.py: align WorkspaceState construction and state assertions with current dataclass fields (company_id, current_state) and state names (ANALYSIS, DEV, SCOPE_CHECK) |
+| 2026-04-16 | Unify reports directory: `workspace.reports_dir` now points to `source/reports/` (inside the git clone) so orchestrator writes and agents read from the same location. Removed dual-write workarounds in orchestrator; simplified agent_runtime context injection to read only from `meta_dir`. |

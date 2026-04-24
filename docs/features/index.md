@@ -15,7 +15,7 @@
 | 8 | [QA Pipeline](qa-pipeline.md) | Planned | Lint, test, build gates with configurable hard/soft enforcement |
 | 9 | [Scope Guard](scope-guard.md) | Planned | Validate diff against plan and architecture rules, prevent scope creep |
 | 10 | [Tool Sandbox](tool-sandbox.md) | Planned | Sandboxed tool execution for agents with path restrictions and per-agent allowlists |
-| 11 | [PR Comment Responder](pr-comment-responder.md) | Planned | Classify and respond to PR review comments with extreme skepticism |
+| 11 | [PR Comment Responder](pr-comment-responder.md) | In Progress | Classify and respond to PR review comments with extreme skepticism; resolution report module implemented |
 | 12 | [GitLab Integration](gitlab-integration.md) | Planned | MR creation, comment fetching/resolving via GitLab API |
 | 13 | [Jenkins Integration](jenkins-integration.md) | Planned | Build status and failure log retrieval from Jenkins |
 | 14 | [CLI Entry Point](cli-entry-point.md) | Implemented | CLI argument parsing, startup diagnostics, and version logging |

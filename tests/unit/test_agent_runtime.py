@@ -37,9 +37,8 @@ def workspace(tmp_path):
     ws_root = tmp_path / "test-ws"
     ws_root.mkdir()
     (ws_root / "meta").mkdir()
-    (ws_root / "reports").mkdir()
     (ws_root / "logs").mkdir()
-    (ws_root / "source").mkdir()
+    (ws_root / "source" / "reports").mkdir(parents=True)
 
     state = WorkspaceState(
         ticket_id="TEST-42",
@@ -86,7 +85,7 @@ class TestAssemblePrompt:
         agent = registry.get_agent("dev-agent")
         prompt = runtime.assemble_prompt(agent, workspace)
 
-        assert '<context file="meta/ticket.json">' in prompt
+        assert '<context file="ticket.json">' in prompt
         assert '"TEST-42"' in prompt
 
     def test_includes_operator_profile(self, registry, mock_llm, workspace):

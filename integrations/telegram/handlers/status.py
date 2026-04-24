@@ -114,7 +114,12 @@ class StatusHandler:
         else:
             lines.append("  (none)")
 
-        if s.error:
+        if s.current_state == "BLOCKED" and getattr(s, "human_input_question", None):
+            reason = s.human_input_question.strip()
+            if len(reason) > 500:
+                reason = reason[:500] + "…"
+            lines.append(f"\nBlocked on: {reason}")
+        elif s.error:
             lines.append(f"\nLast error: {s.error}")
         else:
             lines.append(f"\nLast error: none")

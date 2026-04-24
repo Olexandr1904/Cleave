@@ -287,19 +287,35 @@ def build_action_routes(
     async def delete_workspace(request: Request) -> JSONResponse:
         """Delete a workspace entirely — removes from disk and active list."""
         import shutil
+        from workspace.workspace import Workspace
         ticket_id = request.path_params["ticket_id"]
-        ws = _find_workspace(orchestrator, ticket_id)
-        if ws is None:
-            return _error(f"Workspace not found: {ticket_id}", 404)
-        # Allow deleting any ticket — user's decision
 
-        ws_root = Path(ws.state.workspace_root)
+        # Find workspace — check active list first, then scan disk
+        ws = _find_workspace(orchestrator, ticket_id)
+        ws_root = None
+        if ws:
+            ws_root = Path(ws.state.workspace_root)
+        else:
+            # Not in active list — scan disk for it
+            base = Path(global_config.workspaces.base_dir) if global_config else None
+            if base:
+                for state_file in base.rglob("state.json"):
+                    try:
+                        w = Workspace(str(state_file.parent))
+                        if w.state.ticket_id == ticket_id:
+                            ws_root = state_file.parent
+                            break
+                    except Exception:
+                        pass
+        if not ws_root or not ws_root.exists():
+            return _error(f"Workspace not found: {ticket_id}", 404)
+
         try:
             shutil.rmtree(ws_root)
         except Exception as e:
             return _error(f"Failed to delete: {e}", 500)
 
-        # Remove from active list
+        # Remove from active list if present
         orchestrator._active_workspaces = [
             w for w in orchestrator._active_workspaces
             if w.state.ticket_id != ticket_id

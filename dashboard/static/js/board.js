@@ -26,14 +26,14 @@ export async function renderBoard(projectId, showDone = true) {
 
     let filtered = workspaces;
     if (!showDone) {
-      filtered = workspaces.filter(ws => !['DONE', 'FAILED', 'ARCHIVED'].includes(ws.current_state));
+      filtered = workspaces.filter(ws => !['DONE', 'ARCHIVED', 'SETUP_DONE'].includes(ws.current_state));
     }
 
     // Sort: BLOCKED first, AWAITING second, DEFERRED third, active by stage, DONE/ARCHIVED last
     const stateOrder = {
       BLOCKED: 0, AWAITING_APPROVAL: 1, DEFERRED: 2, MANUAL_CONTROL: 3,
       DEV: 4, ANALYSIS: 5, SCOPE_CHECK: 6, QA: 7, PR_REVIEW: 8, PUSHED: 9,
-      NEW: 10, DONE: 11, FAILED: 12, ARCHIVED: 13,
+      NEW: 10, DONE: 11, SETUP_DONE: 11, FAILED: 12, ARCHIVED: 13,
     };
     filtered.sort((a, b) => (stateOrder[a.current_state] ?? 99) - (stateOrder[b.current_state] ?? 99));
 
@@ -69,6 +69,22 @@ export async function renderBoard(projectId, showDone = true) {
           await renderBoard(projectId, showDone);
         } catch (err) {
           alert('Approve failed: ' + err.message);
+        }
+      });
+    });
+
+    // Bind inline delete buttons
+    content.querySelectorAll('[data-action="delete"]').forEach(btn => {
+      btn.addEventListener('click', async (e) => {
+        e.stopPropagation();
+        const tid = btn.dataset.ticket;
+        if (!confirm(`Delete workspace for ${tid}? This removes all local data. The ticket will be re-picked up on next poll.`)) return;
+        try {
+          const resp = await fetch(`/api/workspaces/${encodeURIComponent(tid)}/delete`, { method: 'POST' });
+          if (!resp.ok) { const d = await resp.json(); throw new Error(d.message || resp.statusText); }
+          await renderBoard(projectId, showDone);
+        } catch (err) {
+          alert('Delete failed: ' + err.message);
         }
       });
     });
@@ -151,10 +167,11 @@ function renderCard(ws) {
   const stateVal = ws.current_state || 'NEW';
   let cardClass = 'card';
   if (stateVal === 'BLOCKED') cardClass += ' card-blocked';
+  if (stateVal === 'FAILED') cardClass += ' card-blocked';
   if (stateVal === 'AWAITING_APPROVAL') cardClass += ' card-awaiting';
   if (stateVal === 'MANUAL_CONTROL') cardClass += ' card-manual';
 
-  const dimmed = ['DONE', 'FAILED', 'ARCHIVED'].includes(stateVal);
+  const dimmed = ['DONE', 'ARCHIVED', 'SETUP_DONE'].includes(stateVal);
 
   const prLink = ws.pr_url
     ? `<a class="card-pr-link" href="${esc(ws.pr_url)}" target="_blank" onclick="event.stopPropagation()">PR #${esc(String(ws.pr_number || ''))}</a>`
@@ -166,6 +183,10 @@ function renderCard(ws) {
 
   const approveBtn = stateVal === 'AWAITING_APPROVAL'
     ? `<button class="action-btn btn-approve" data-action="approve" data-ticket="${esc(ws.ticket_id)}" style="padding:1px 8px;font-size:10px;">Approve</button>`
+    : '';
+
+  const deleteBtn = !['DONE', 'SETUP_DONE'].includes(stateVal)
+    ? `<button class="action-btn btn-delete" data-action="delete" data-ticket="${esc(ws.ticket_id)}" style="padding:1px 8px;font-size:10px;" onclick="event.stopPropagation()">✕</button>`
     : '';
 
   const manualLabel = stateVal === 'MANUAL_CONTROL'
@@ -189,6 +210,7 @@ function renderCard(ws) {
       <span class="card-time">${esc(timeAgo(ws.started_at))}</span>
       ${iterLabel}
       ${approveBtn}
+      ${deleteBtn}
       ${prLink}
     </div>
   </div>`;

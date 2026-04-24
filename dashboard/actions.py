@@ -284,6 +284,36 @@ def build_action_routes(
             "manual_control": manual,
         })
 
+    async def delete_workspace(request: Request) -> JSONResponse:
+        """Delete a workspace entirely — removes from disk and active list."""
+        import shutil
+        ticket_id = request.path_params["ticket_id"]
+        ws = _find_workspace(orchestrator, ticket_id)
+        if ws is None:
+            return _error(f"Workspace not found: {ticket_id}", 404)
+        if ws.state.current_state == Stage.DONE and ws.state.pr_url:
+            return _error(f"Cannot delete: ticket has an open PR ({ws.state.pr_url}). Archive instead.")
+
+        ws_root = Path(ws.state.workspace_root)
+        try:
+            shutil.rmtree(ws_root)
+        except Exception as e:
+            return _error(f"Failed to delete: {e}", 500)
+
+        # Remove from active list
+        orchestrator._active_workspaces = [
+            w for w in orchestrator._active_workspaces
+            if w.state.ticket_id != ticket_id
+        ]
+
+        if event_bus:
+            event_bus.emit(
+                "workspace_deleted",
+                f"Deleted workspace for {ticket_id}",
+                ticket_id=ticket_id,
+            )
+        return JSONResponse({"status": "ok", "deleted": ticket_id})
+
     return [
         Route("/api/workspaces/{ticket_id:path}/approve", approve, methods=["POST"]),
         Route("/api/workspaces/{ticket_id:path}/reject", reject, methods=["POST"]),
@@ -292,6 +322,7 @@ def build_action_routes(
         Route("/api/workspaces/{ticket_id:path}/release-control", release_control, methods=["POST"]),
         Route("/api/workspaces/{ticket_id:path}/resume", resume, methods=["POST"]),
         Route("/api/workspaces/{ticket_id:path}/archive", archive, methods=["POST"]),
+        Route("/api/workspaces/{ticket_id:path}/delete", delete_workspace, methods=["POST"]),
         Route("/api/daemon/mode", set_mode, methods=["POST"]),
         Route("/api/daemon/status", daemon_status),
     ]

@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import re
 import signal
 import time
 from collections import deque
@@ -1642,6 +1643,68 @@ class Orchestrator:
                             )
                     except Exception as e:
                         logger.warning("Failed to transition %s on Jira: %s", state.ticket_id, e)
+
+    _BLOCKED_REASON_MAX_CHARS = 800
+
+    _BOILERPLATE_LINE_PATTERNS = (
+        re.compile(r"^-{3,}$"),
+        re.compile(r"^={3,}$"),
+        re.compile(r"^\*\*Attempt.*\*\*$"),
+        re.compile(r"^## Decision:"),
+    )
+
+    def _build_blocked_reason(self, workspace: Any, stage_id: str) -> str:
+        """Extract a human-readable reason for why a workspace is blocked.
+
+        For analysis: prefer reports/ba-questions.md (the BA agent's numbered
+        questions). For other stages (or if ba-questions.md is absent): read the
+        latest reports/*-output.md by mtime and strip header boilerplate.
+        Falls back to a generic message if nothing useful is found.
+        """
+        reports = workspace.reports_dir
+        if not reports.exists():
+            return f"Pipeline stuck at {stage_id}. Check reports/ for details."
+
+        if stage_id == "analysis":
+            questions = reports / "ba-questions.md"
+            if questions.exists():
+                text = questions.read_text(encoding="utf-8").strip()
+                if text:
+                    return self._truncate_reason(text)
+
+        outputs = sorted(
+            reports.glob("*-output.md"),
+            key=lambda p: p.stat().st_mtime,
+            reverse=True,
+        )
+        if not outputs:
+            return f"Pipeline stuck at {stage_id}. Check reports/ for details."
+
+        raw = outputs[0].read_text(encoding="utf-8")
+        # Strip leading boilerplate and blank lines.
+        lines = raw.splitlines()
+        start = 0
+        for i, line in enumerate(lines):
+            stripped = line.strip()
+            if not stripped:
+                continue
+            if any(p.match(stripped) for p in self._BOILERPLATE_LINE_PATTERNS):
+                continue
+            start = i
+            break
+        else:
+            return f"Pipeline stuck at {stage_id}. Check reports/ for details."
+
+        body = "\n".join(lines[start:]).strip()
+        if not body:
+            return f"Pipeline stuck at {stage_id}. Check reports/ for details."
+        return self._truncate_reason(body)
+
+    @classmethod
+    def _truncate_reason(cls, text: str) -> str:
+        if len(text) <= cls._BLOCKED_REASON_MAX_CHARS:
+            return text
+        return text[: cls._BLOCKED_REASON_MAX_CHARS] + "…"
 
     async def _handle_escalate(self, workspace: Workspace) -> None:
         """Send escalation notification and block workspace."""

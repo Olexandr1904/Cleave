@@ -27,6 +27,7 @@ def _make_workspace(ticket_id, state, started_at=None, pr_url=None, company_id="
     ws_state.error = None
     ws_state.previous_state = None
     ws_state.human_input_pending = False
+    ws_state.human_input_question = None
     type(ws).state = PropertyMock(return_value=ws_state)
     return ws
 
@@ -92,3 +93,48 @@ class TestStatusHandler:
         ws = _make_workspace("ACME-123", "DEV")
         result = handler.format_drill_down(ws)
         assert "PR:" not in result
+
+    def test_drill_down_blocked_shows_blocked_on(self, handler):
+        ws = _make_workspace("ACME-1", "BLOCKED")
+        ws.state.human_input_question = (
+            "## Questions for Human Review\n\n"
+            "1. [AC2] What error types must be handled?\n"
+        )
+        ws.state.error = None
+
+        result = handler.format_drill_down(ws)
+
+        assert "Blocked on:" in result
+        assert "[AC2]" in result
+        assert "Last error: none" not in result
+
+    def test_drill_down_blocked_truncates_long_reason(self, handler):
+        ws = _make_workspace("ACME-1", "BLOCKED")
+        ws.state.human_input_question = "x" * 2000
+        ws.state.error = None
+
+        result = handler.format_drill_down(ws)
+
+        assert "Blocked on:" in result
+        # 500 chars of x + ellipsis marker
+        assert "…" in result
+
+    def test_drill_down_blocked_without_question_falls_back_to_error(self, handler):
+        ws = _make_workspace("ACME-1", "BLOCKED")
+        ws.state.human_input_question = None
+        ws.state.error = "some error"
+
+        result = handler.format_drill_down(ws)
+
+        assert "Last error: some error" in result
+        assert "Blocked on:" not in result
+
+    def test_drill_down_non_blocked_with_error_still_shows_last_error(self, handler):
+        ws = _make_workspace("ACME-1", "FAILED")
+        ws.state.human_input_question = "should not appear"
+        ws.state.error = "timed out"
+
+        result = handler.format_drill_down(ws)
+
+        assert "Last error: timed out" in result
+        assert "Blocked on:" not in result

@@ -292,6 +292,40 @@ class Orchestrator:
         return self._global_config.telegram.default_chat_id
 
     @staticmethod
+    def _git_diff_files(workspace: Workspace) -> set[str]:
+        """Get set of files changed in the latest commit."""
+        import subprocess
+        try:
+            result = subprocess.run(
+                ["git", "-C", str(workspace.source_dir), "diff", "HEAD~1", "--name-only"],
+                capture_output=True, text=True, timeout=10,
+            )
+            if result.returncode == 0:
+                return set(result.stdout.strip().splitlines())
+        except Exception:
+            pass
+        return set()
+
+    @staticmethod
+    def _git_head_sha(workspace: Workspace) -> str:
+        """Get current HEAD sha."""
+        import subprocess
+        try:
+            result = subprocess.run(
+                ["git", "-C", str(workspace.source_dir), "rev-parse", "HEAD"],
+                capture_output=True, text=True, timeout=5,
+            )
+            if result.returncode == 0:
+                return result.stdout.strip()
+        except Exception:
+            pass
+        return "unknown"
+
+    @staticmethod
+    def _now() -> str:
+        return datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M")
+
+    @staticmethod
     def _get_ticket_title(workspace: Workspace) -> str:
         """Read ticket summary from meta/ticket.json, or return empty string."""
         ticket_file = workspace.meta_dir / "ticket.json"
@@ -751,7 +785,12 @@ class Orchestrator:
             return
 
         self._emit("agent_completed", f"{stage_def.agent} completed for {state.ticket_id}", project_id=state.company_id, ticket_id=state.ticket_id, agent_id=stage_def.agent, data={"stage": stage_id, "duration": result.duration_seconds, "input_tokens": result.input_tokens, "output_tokens": result.output_tokens})
-        self._log_pipeline(workspace, f"{stage_id} ({stage_def.agent}) completed. Output: `reports/{stage_def.agent}-output.md`")
+        sha_info = ""
+        if stage_id == "dev":
+            sha = self._git_head_sha(workspace)
+            if sha != "unknown":
+                sha_info = f" Commit: {sha[:8]}."
+        self._log_pipeline(workspace, f"{stage_id} ({stage_def.agent}) completed.{sha_info} Output: `reports/{stage_def.agent}-output.md`")
         verify_result = stage_verifier.verify(stage_id, workspace, stage_start_commit)
         if not verify_result.ok:
             agent_snippet = (result.output or "")[:200].replace("\n", " ")
@@ -1085,18 +1124,48 @@ class Orchestrator:
                 except Exception as e:
                     logger.warning("Failed to push to existing PR: %s", e)
 
-            # Resolve comments that were fixed in this push
-            to_resolve = getattr(state, 'comments_to_resolve', None) or []
-            if to_resolve and vcs:
-                for cid in to_resolve:
-                    try:
-                        await vcs.reply_to_comment(state.pr_number, cid, "Fixed in latest push.")
-                        await vcs.resolve_comment(state.pr_number, cid)
-                        logger.info("Resolved comment %d after push", cid)
-                    except Exception as e:
-                        logger.warning("Failed to resolve comment %d: %s", cid, e)
-                state.comments_to_resolve = None
-                workspace.save_state()
+            # Verify PENDING entries in resolution report after push
+            from orchestrator.resolution_report import read_entries, update_entry
+
+            report_path = workspace.reports_dir / "pr-review-resolution.md"
+            entries = read_entries(report_path)
+            changed_files = self._git_diff_files(workspace)
+            sha = self._git_head_sha(workspace)
+
+            for cid, entry in entries.items():
+                if entry.get("verified") != "PENDING":
+                    continue
+                file_path = entry.get("file", "")
+                if file_path in changed_files:
+                    # File was touched in this push — resolve
+                    if vcs:
+                        try:
+                            await vcs.reply_to_comment(state.pr_number, cid, f"Fixed in commit {sha[:8]}")
+                            await vcs.resolve_comment(state.pr_number, cid)
+                            logger.info("Resolved comment %d after push (commit %s)", cid, sha[:8])
+                        except Exception as e:
+                            logger.warning("Failed to resolve comment %d: %s", cid, e)
+                    update_entry(report_path, cid, {
+                        "verified": "YES",
+                        "fixed_in": sha[:8],
+                        "verified_at": self._now(),
+                    })
+                else:
+                    # File NOT in diff — increment fail count
+                    fail_count = int(entry.get("fail_count", "0")) + 1
+                    update_entry(report_path, cid, {
+                        "verified": "FAILED",
+                        "fail_count": str(fail_count),
+                    })
+                    if fail_count >= 2 and self._notifier:
+                        chat_id = self._get_chat_id(workspace)
+                        if chat_id:
+                            await self._notifier.send_message(
+                                chat_id,
+                                f"⚠️ [{state.company_id}/{state.repo_id}] {state.ticket_id}\n"
+                                f"Dev-agent failed to fix comment #{cid} twice "
+                                f"({entry.get('file', '?')}:{entry.get('line', '?')})",
+                            )
 
             return ActionResult(
                 success=True, next_state=Stage.PR_REVIEW, error="",
@@ -1173,16 +1242,62 @@ class Orchestrator:
     async def _action_fetch_pr_comments(
         self, workspace: Workspace, stage_def: Any,
     ) -> ActionResult:
-        """PR review comment resolution flow."""
+        """PR review comment resolution flow.
+
+        Uses resolution_report as the single source of truth for comment
+        decisions and verification state.
+        """
         from orchestrator.comment_classifier import classify_comments
+        from orchestrator.resolution_report import read_entries, add_entry, update_entry
 
         state = workspace.state
         pr_number = state.pr_number
+        report_path = workspace.reports_dir / "pr-review-resolution.md"
 
         if not pr_number:
             return ActionResult(success=True, next_state=Stage.DONE, error="", metadata={})
 
-        # Phase 1: Check pending escalated decisions
+        # Phase 1: Check PENDING verifications from previous cycle
+        entries = read_entries(report_path)
+        pending_verify = {
+            cid: e for cid, e in entries.items()
+            if e.get("verified") == "PENDING"
+        }
+        if pending_verify:
+            changed_files = self._git_diff_files(workspace)
+            sha = self._git_head_sha(workspace)
+            for cid, entry in pending_verify.items():
+                file_path = entry.get("file", "")
+                if file_path in changed_files:
+                    vcs, _ = self._get_vcs_for_workspace(workspace)
+                    if vcs:
+                        try:
+                            await vcs.reply_to_comment(pr_number, cid, f"Fixed in commit {sha[:8]}")
+                            await vcs.resolve_comment(pr_number, cid)
+                        except Exception as e:
+                            logger.warning("Failed to resolve comment %d: %s", cid, e)
+                    update_entry(report_path, cid, {
+                        "verified": "YES",
+                        "fixed_in": sha[:8],
+                        "verified_at": self._now(),
+                    })
+                else:
+                    fail_count = int(entry.get("fail_count", "0")) + 1
+                    update_entry(report_path, cid, {
+                        "verified": "FAILED",
+                        "fail_count": str(fail_count),
+                    })
+                    if fail_count >= 2 and self._notifier:
+                        chat_id = self._get_chat_id(workspace)
+                        if chat_id:
+                            await self._notifier.send_message(
+                                chat_id,
+                                f"⚠️ [{state.company_id}/{state.repo_id}] {state.ticket_id}\n"
+                                f"Dev-agent failed to fix comment #{cid} twice "
+                                f"({entry.get('file', '?')}:{entry.get('line', '?')})",
+                            )
+
+        # Phase 2: Check pending escalated decisions
         pending = state.pending_review_comments or []
         undecided = [c for c in pending if c.get("decision") is None]
 
@@ -1192,7 +1307,7 @@ class Orchestrator:
         if undecided:
             return ActionResult(success=False, next_state="", error="", metadata={}, skipped=True)
 
-        # Phase 2: Wait for 'reviewed' signal
+        # Phase 3: Wait for 'reviewed' signal
         reply = (state.human_input_reply or "").lower()
         if "reviewed" not in reply and "proceed" not in reply:
             return ActionResult(success=False, next_state="", error="", metadata={}, skipped=True)
@@ -1202,7 +1317,7 @@ class Orchestrator:
         state.stage_iterations["pr_review"] = 0
         workspace.save_state()
 
-        # Phase 3: Fetch comments
+        # Phase 4: Fetch comments, filter out already-decided (by comment ID in resolution report)
         vcs, repo_config = self._get_vcs_for_workspace(workspace)
         if not vcs:
             return ActionResult(success=True, next_state=Stage.DONE, error="", metadata={})
@@ -1213,8 +1328,8 @@ class Orchestrator:
             logger.error("Failed to fetch PR comments for %s: %s", state.ticket_id, e)
             return ActionResult(success=False, next_state="", error=f"Failed to fetch: {e}", metadata={})
 
-        # Filter: only root comments that haven't been handled yet.
-        # A comment is "handled" if it has a reply starting with "Won't fix:" or "Fixed"
+        # Filter: only root comments not already in the resolution report
+        decided_ids = set(entries.keys())
         replied_to_ids = set()
         for c in all_comments:
             if c.in_reply_to_id and c.body.strip().lower().startswith(("won't fix", "wont fix", "fixed")):
@@ -1222,11 +1337,13 @@ class Orchestrator:
 
         comments = [
             c for c in all_comments
-            if not c.in_reply_to_id and c.id not in replied_to_ids
+            if not c.in_reply_to_id
+            and c.id not in replied_to_ids
+            and c.id not in decided_ids
         ]
         logger.info(
-            "PR #%d: %d total, %d already handled, %d new to process",
-            pr_number, len(all_comments), len(replied_to_ids), len(comments),
+            "PR #%d: %d total, %d already decided, %d replied, %d new to process",
+            pr_number, len(all_comments), len(decided_ids), len(replied_to_ids), len(comments),
         )
 
         if not comments:
@@ -1244,26 +1361,47 @@ class Orchestrator:
             comment_md += f"\n{c.body}\n\n---\n\n"
         (workspace.reports_dir / "pr-review-comments.md").write_text(comment_md, encoding="utf-8")
 
-        # Phase 4: Classify
+        # Phase 5: Classify new comments, write to resolution report
         classified = await classify_comments(comments, workspace, self._agent_runtime)
 
-        # Phase 5: Classify into buckets (don't resolve yet — resolve after fix is pushed)
         auto_fixed, auto_rejected, escalated = [], [], []
         for cc in classified:
             if cc.classification == "AUTO_FIX":
+                add_entry(report_path, state.ticket_id, pr_number, cc.comment_id, {
+                    "classification": "AUTO_FIX",
+                    "file": cc.file or "",
+                    "line": str(cc.line or "?"),
+                    "author": cc.author or "",
+                    "reason": cc.reason or "",
+                    "verified": "PENDING",
+                    "fail_count": "0",
+                    "cycle": str(state.review_cycle),
+                })
                 auto_fixed.append(cc)
             elif cc.classification == "AUTO_REJECT":
-                # Reply immediately — no code change needed
+                # Phase 6: AUTO_REJECT replies + resolves immediately
                 try:
                     await vcs.reply_to_comment(pr_number, cc.comment_id, f"Won't fix: {cc.reason}")
                     await vcs.resolve_comment(pr_number, cc.comment_id)
                 except Exception as e:
                     logger.warning("Failed to reply/resolve comment %d: %s", cc.comment_id, e)
+                add_entry(report_path, state.ticket_id, pr_number, cc.comment_id, {
+                    "classification": "AUTO_REJECT",
+                    "file": cc.file or "",
+                    "line": str(cc.line or "?"),
+                    "author": cc.author or "",
+                    "reason": cc.reason or "",
+                    "verified": "N/A",
+                    "github_reply": "Posted",
+                    "resolved": "YES",
+                    "cycle": str(state.review_cycle),
+                })
                 auto_rejected.append(cc)
             else:
+                # ESCALATE goes to TG
                 escalated.append(cc)
 
-        # Phase 6: TG summary for auto-handled
+        # TG summary for auto-handled
         if (auto_fixed or auto_rejected) and self._notifier:
             chat_id = self._get_chat_id(workspace)
             if chat_id:
@@ -1280,11 +1418,10 @@ class Orchestrator:
                     lines.append(f"Waiting for your decisions on {len(escalated)} escalated comment(s).")
                 await self._notifier.send_message(chat_id, "\n".join(lines))
 
-        # Phase 7: Handle escalated or finish
+        # Phase 7: Handle escalated or collect FIX items
         if not escalated:
             summary = f"PR review cycle {state.review_cycle}: {len(auto_fixed)} fix, {len(auto_rejected)} rejected"
             self._log_pipeline(workspace, f"{summary}. Report: `reports/pr-review-resolution.md`")
-            _write_resolution_report(workspace, auto_fixed, auto_rejected, [], state.review_cycle)
             if auto_fixed:
                 # Write fix instructions for the dev agent
                 fix_md = "# PR Comment Fixes Required\n\n"
@@ -1293,13 +1430,6 @@ class Orchestrator:
                     fix_md += f"Comment by @{af.author}: {af.body[:200]}\n"
                     fix_md += f"What to do: {af.suggested_fix or af.reason}\n\n"
                 (workspace.reports_dir / "pr-comment-fixes.md").write_text(fix_md, encoding="utf-8")
-                # Also write to source/reports/ so the agent can read it from its cwd
-                source_reports = workspace.source_dir / "reports"
-                source_reports.mkdir(exist_ok=True)
-                (source_reports / "pr-comment-fixes.md").write_text(fix_md, encoding="utf-8")
-                # Store comment IDs to resolve after fix is pushed
-                state.comments_to_resolve = [af.comment_id for af in auto_fixed]
-                workspace.save_state()
                 return ActionResult(success=True, next_state=Stage.DEV, error="", metadata={})
             return ActionResult(success=True, next_state=Stage.DONE, error="", metadata={})
 
@@ -1311,6 +1441,16 @@ class Orchestrator:
                 "comment_id": cc.comment_id, "msg_id": msg_id, "decision": None,
                 "author": cc.author, "file": cc.file, "line": cc.line,
                 "body": cc.body, "reason": cc.reason,
+            })
+            add_entry(report_path, state.ticket_id, pr_number, cc.comment_id, {
+                "classification": "ESCALATE",
+                "file": cc.file or "",
+                "line": str(cc.line or "?"),
+                "author": cc.author or "",
+                "reason": cc.reason or "",
+                "verified": "N/A",
+                "decision": "PENDING_HUMAN",
+                "cycle": str(state.review_cycle),
             })
 
         state.pending_review_comments = pending_comments
@@ -1344,10 +1484,18 @@ class Orchestrator:
         return 0
 
     async def _execute_review_decisions(self, workspace: Workspace) -> ActionResult:
-        """Execute all pending review decisions."""
+        """Execute all pending review decisions.
+
+        Writes decisions to resolution report via add_entry/update_entry.
+        WON'T_FIX replies + resolves immediately. FIX gets PENDING entry.
+        SKIP gets recorded.
+        """
+        from orchestrator.resolution_report import update_entry
+
         state = workspace.state
         pending = state.pending_review_comments or []
         pr_number = state.pr_number
+        report_path = workspace.reports_dir / "pr-review-resolution.md"
 
         vcs, _ = self._get_vcs_for_workspace(workspace)
         fixes_needed = []
@@ -1361,19 +1509,37 @@ class Orchestrator:
 
         for c in pending:
             decision = (c.get("decision") or "").lower().strip()
+            cid = c["comment_id"]
             if _is_fix(decision):
                 fixes_needed.append(c)
+                update_entry(report_path, cid, {
+                    "decision": "FIX",
+                    "verified": "PENDING",
+                    "fail_count": "0",
+                    "decided_at": self._now(),
+                })
             elif decision.startswith("won't fix") or decision.startswith("wont fix"):
                 reason = decision.split(":", 1)[1].strip() if ":" in decision else "Operator decision"
                 wont_fix.append({**c, "wont_fix_reason": reason})
                 if vcs and pr_number:
                     try:
-                        await vcs.reply_to_comment(pr_number, c["comment_id"], f"Won't fix: {reason}")
-                        await vcs.resolve_comment(pr_number, c["comment_id"])
+                        await vcs.reply_to_comment(pr_number, cid, f"Won't fix: {reason}")
+                        await vcs.resolve_comment(pr_number, cid)
                     except Exception as e:
-                        logger.warning("Failed to reply/resolve %d: %s", c["comment_id"], e)
+                        logger.warning("Failed to reply/resolve %d: %s", cid, e)
+                update_entry(report_path, cid, {
+                    "decision": "WON'T_FIX",
+                    "verified": "N/A",
+                    "github_reply": "Posted",
+                    "resolved": "YES",
+                    "decided_at": self._now(),
+                })
             else:
                 skipped_comments.append(c)
+                update_entry(report_path, cid, {
+                    "decision": "SKIP",
+                    "decided_at": self._now(),
+                })
 
         if fixes_needed:
             fix_md = "# PR Comment Fixes Required\n\n"
@@ -1382,16 +1548,8 @@ class Orchestrator:
                 fix_md += f"Comment by @{f['author']}: {f['body'][:200]}\n"
                 fix_md += f"Reason: {f['reason']}\n\n"
             (workspace.reports_dir / "pr-comment-fixes.md").write_text(fix_md, encoding="utf-8")
-            # Also write to source/reports/ so the agent can read it from its cwd
-            source_reports = workspace.source_dir / "reports"
-            source_reports.mkdir(exist_ok=True)
-            (source_reports / "pr-comment-fixes.md").write_text(fix_md, encoding="utf-8")
-
-        _write_resolution_report(workspace, [], wont_fix, pending, state.review_cycle)
 
         state.pending_review_comments = None
-        if fixes_needed:
-            state.comments_to_resolve = [f["comment_id"] for f in fixes_needed]
         workspace.save_state()
 
         if fixes_needed:
@@ -1791,56 +1949,6 @@ def _ticket_to_markdown(ticket: TicketData) -> str:
 
     return "\n".join(lines)
 
-
-def _write_resolution_report(
-    workspace: Any, auto_fixed: list, auto_rejected: list,
-    escalated_decisions: list, cycle: int,
-) -> None:
-    """Write or append to reports/pr-review-resolution.md."""
-    report_path = workspace.reports_dir / "pr-review-resolution.md"
-    existing = report_path.read_text(encoding="utf-8") if report_path.exists() else ""
-
-    lines: list[str] = []
-    if not existing:
-        lines.append(f"# PR Review Resolution — {workspace.state.ticket_id}\n")
-        lines.append(f"PR: #{workspace.state.pr_number}\n")
-
-    total = len(auto_fixed) + len(auto_rejected) + len(escalated_decisions)
-    lines.append(f"\n## Review Cycle {cycle}")
-    lines.append(f"Comments this cycle: {total}\n")
-
-    for af in auto_fixed:
-        cid = af.comment_id if hasattr(af, "comment_id") else af.get("comment_id", "?")
-        reason = af.reason if hasattr(af, "reason") else af.get("reason", "")
-        lines.append(f"### Comment #{cid} — AUTO_FIX")
-        lines.append(f"Reason: {reason}")
-        lines.append("Status: FIXED\nMark as Resolved: YES\n")
-
-    for ar in auto_rejected:
-        cid = ar.comment_id if hasattr(ar, "comment_id") else ar.get("comment_id", "?")
-        reason = ar.reason if hasattr(ar, "reason") else ar.get("reason", "")
-        lines.append(f"### Comment #{cid} — AUTO_REJECT")
-        lines.append(f"Reason: {reason}")
-        lines.append("Status: WON'T_FIX\nGitHub reply: Posted\nMark as Resolved: YES\n")
-
-    for ed in escalated_decisions:
-        decision = (ed.get("decision") or "skip").lower()
-        status = "FIXED" if decision == "fix" else "WON'T_FIX" if "won't fix" in decision else "SKIPPED"
-        lines.append(f"### Comment #{ed.get('comment_id', '?')} — ESCALATED")
-        lines.append(f"By: @{ed.get('author', '?')} on {ed.get('file', '?')}:{ed.get('line', '?')}")
-        lines.append(f"Decision: {ed.get('decision', 'skip')}")
-        lines.append(f"Status: {status}")
-        commented = "YES" if "won't fix" in decision else "NO"
-        lines.append(f"GitHub reply: {'Posted' if commented == 'YES' else 'N/A'}")
-        lines.append(f"Mark as Resolved: {'YES' if status != 'SKIPPED' else 'NO'}\n")
-
-    fixed = len(auto_fixed) + sum(1 for e in escalated_decisions if (e.get("decision") or "").lower() == "fix")
-    wf = len(auto_rejected) + sum(1 for e in escalated_decisions if "won't fix" in (e.get("decision") or "").lower())
-    skip = total - fixed - wf
-    lines.append(f"## Resolution Summary — Cycle {cycle}")
-    lines.append(f"Fixed: {fixed} | Won't Fix: {wf} | Commented: {wf} | Skipped: {skip}\n")
-
-    report_path.write_text(existing + "\n".join(lines), encoding="utf-8")
 
 
 def _looks_like_pass(text: str) -> bool:

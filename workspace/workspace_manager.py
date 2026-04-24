@@ -82,7 +82,6 @@ class WorkspaceManager:
             # Create workspace directories
             workspace_root.mkdir(parents=True, exist_ok=True)
             (workspace_root / "meta").mkdir(exist_ok=True)
-            (workspace_root / "reports").mkdir(exist_ok=True)
             (workspace_root / "logs").mkdir(exist_ok=True)
 
             # Git clone into source/
@@ -103,6 +102,9 @@ class WorkspaceManager:
                 raise WorkspaceError(
                     f"Git clone failed: {result.stderr.strip()}"
                 )
+
+            # Create reports dir inside the cloned source/
+            (source_dir / "reports").mkdir(parents=True, exist_ok=True)
 
             # Checkout default branch and create feature branch
             slug = ticket_id.lower().replace(" ", "-")[:50]

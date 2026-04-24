@@ -1723,56 +1723,31 @@ class Orchestrator:
             workspace.update_state(error="No Telegram chat_id configured")
             return
 
-        # Build a concise escalation message — NOT the full agent dump
         stage = state.previous_state or state.current_state
         sep = "─" * 30
         title = self._get_ticket_title(workspace)
         hdr = self._tg_header("🔔", state, title)
         header = f"{hdr}\nStage: {stage}\n{sep}\n"
 
-        # Extract a short summary from the agent output (first 3 non-empty lines)
-        summary = "Pipeline needs your input."
-        if workspace.reports_dir.exists():
-            outputs = sorted(
-                workspace.reports_dir.glob("*-output.md"),
-                key=lambda p: p.stat().st_mtime,
-                reverse=True,
-            )
-            if outputs:
-                raw = outputs[0].read_text(encoding="utf-8").strip()
-                # Take first 3 meaningful lines (skip blank, skip markdown headers)
-                lines = []
-                for line in raw.splitlines():
-                    stripped = line.strip()
-                    if not stripped:
-                        continue
-                    lines.append(stripped)
-                    if len(lines) >= 3:
-                        break
-                if lines:
-                    summary = "\n".join(lines)
-                    if len(summary) > 500:
-                        summary = summary[:500] + "..."
-
-        hint = f"\n{sep}\n↩️ Reply with answer, or use buttons below."
-        message = f"{header}\n{summary}{hint}"
-
-        buttons = [
-            Button(label="Proceed", action=f"skip:{state.ticket_id}"),
-            Button(label="Retry", action=f"retry:{state.ticket_id}"),
-        ]
+        reason = self._build_blocked_reason(workspace, stage.lower() if isinstance(stage, str) else stage)
+        hint = f"\n{sep}\n↩️ Reply with your answer or additional context."
+        message = f"{header}\n{reason}{hint}"
 
         try:
-            msg_id = await self._notifier.send_message(chat_id, message, buttons=buttons)
+            msg_id = await self._notifier.send_message(chat_id, message)
             workspace.transition(Stage.BLOCKED)
-            workspace.update_state(
-                human_input_question=message,
-            )
+            workspace.update_state(human_input_question=reason)
             workspace.state.escalation_msg_id = msg_id
             workspace.state.escalation_chat_id = chat_id
             workspace.save_state()
             logger.info("Escalated %s via Telegram (msg_id=%d)", state.ticket_id, msg_id)
-            self._emit("escalation_sent", f"Escalated {workspace.state.ticket_id} to human", project_id=workspace.state.company_id, ticket_id=workspace.state.ticket_id, data={"reason": workspace.state.human_input_question or "unknown"})
+            self._emit(
+                "escalation_sent",
+                f"Escalated {workspace.state.ticket_id} to human",
+                project_id=workspace.state.company_id,
+                ticket_id=workspace.state.ticket_id,
+                data={"reason": reason},
+            )
         except Exception as e:
             logger.error("Telegram send failed for %s: %s", state.ticket_id, e)
             workspace.transition(Stage.FAILED)

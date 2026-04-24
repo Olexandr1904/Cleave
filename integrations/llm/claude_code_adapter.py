@@ -294,12 +294,16 @@ class ClaudeCodeAdapter(LLMInterface):
         stderr_str = stderr.decode("utf-8", errors="replace").strip()
 
         if proc.returncode != 0:
-            logger.error("Claude Code CLI failed (rc=%d): %s", proc.returncode, stderr_str)
+            logger.error(
+                "Claude Code CLI failed (rc=%d) stdout=%r stderr=%r",
+                proc.returncode, stdout_str[:1500], stderr_str[:1500],
+            )
             classified = _classify_cli_error(stdout_str, stderr_str)
             if classified is not None:
                 raise classified
             raise RuntimeError(
-                f"Claude Code CLI exited with code {proc.returncode}: {stderr_str}"
+                f"Claude Code CLI exited with code {proc.returncode}. "
+                f"stderr={stderr_str[:500]!r} stdout={stdout_str[:500]!r}"
             )
 
         # Parse JSON output

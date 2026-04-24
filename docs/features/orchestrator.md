@@ -71,6 +71,7 @@ Central daemon process that continuously polls for work, manages isolated worksp
 | 2026-04-17 | Wired `stage_verifier` into `_handle_action_stage`: action stages (`push`, `pr_review`, `finalize`) now follow the same capture → execute → verify → transition → emit flow as agent stages. Action methods return `ActionResult` instead of transitioning state internally. Fixes regression where push/pr_review bypassed verification (ACME-14595). |
 | 2026-04-21 | PR review comment resolution: VCS `resolve_comment` via GitHub GraphQL, comment classifier with extreme skepticism, auto-fix/reject/escalate flow, TG integration for ambiguous comments, resolution report, review cycle loop. |
 | 2026-04-24 | Rewrite PR review flow with `resolution_report` module as single source of truth. Push verification: PENDING entries verified via `git diff` after push, with fail_count tracking and TG warning on 2nd failure. Removed old `_write_resolution_report` function and `comments_to_resolve` field from WorkspaceState. Added `_git_diff_files`, `_git_head_sha`, `_now` helpers to Orchestrator. |
+| 2026-04-24 | Added `_build_blocked_reason` helper: reads reports/ba-questions.md for analysis stage or latest *-output.md for other stages, strips boilerplate headers, truncates to 800 chars. Used to surface real escalation context in Telegram notifications. |
 | 2026-04-16 | Enriched pipeline log: dev stage completion now includes the short commit SHA (first 8 chars) in the log entry so the log can be correlated with git history. |
 
 

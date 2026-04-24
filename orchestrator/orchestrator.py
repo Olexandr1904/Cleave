@@ -805,6 +805,7 @@ class Orchestrator:
                 project_id=state.company_id, ticket_id=state.ticket_id,
                 data={"stage": stage_id, "reason": verify_result.reason},
             )
+            await self._notify_verification_blocked(workspace, stage_id, verify_result.reason)
             return
         # Determine outcome from agent output
         outcome = self._parse_agent_outcome(stage_id, result.output, workspace)
@@ -1752,6 +1753,49 @@ class Orchestrator:
             logger.error("Telegram send failed for %s: %s", state.ticket_id, e)
             workspace.transition(Stage.FAILED)
             workspace.update_state(error=f"Telegram notification failed: {e}")
+
+    async def _notify_verification_blocked(
+        self, workspace: Workspace, stage_id: str, verify_reason: str,
+    ) -> None:
+        """Send a TG notification for a stage that just failed verification.
+
+        Mirrors _handle_escalate semantics (populates escalation_msg_id so the
+        reply flow in command_handler.handle_reply can unblock), but uses a
+        distinct header to flag that this is a mechanical verification failure
+        rather than an agent-requested escalation.
+        """
+        if not self._notifier:
+            return
+        chat_id = self._get_chat_id(workspace)
+        if not chat_id:
+            return
+
+        sep = "─" * 30
+        title = self._get_ticket_title(workspace)
+        hdr = self._tg_header("⚠️", workspace.state, title)
+        header = f"{hdr}\nStage: {stage_id} — verification failed\n{sep}\n"
+
+        agent_reason = self._build_blocked_reason(workspace, stage_id)
+        combined = f"Verification failed: {verify_reason}\n\n{agent_reason}"
+        hint = f"\n{sep}\n↩️ Reply with your answer or additional context."
+        message = f"{header}\n{combined}{hint}"
+
+        try:
+            msg_id = await self._notifier.send_message(chat_id, message)
+            workspace.update_state(human_input_question=combined)
+            workspace.state.human_input_question = combined
+            workspace.state.escalation_msg_id = msg_id
+            workspace.state.escalation_chat_id = chat_id
+            workspace.save_state()
+            logger.info(
+                "Verification-blocked %s via Telegram (msg_id=%d)",
+                workspace.state.ticket_id, msg_id,
+            )
+        except Exception as e:
+            logger.warning(
+                "Failed to send verification-blocked notification for %s: %s",
+                workspace.state.ticket_id, e,
+            )
 
     async def _action_finalize(self, workspace: Workspace) -> ActionResult:
         """Finalize a completed ticket. Returns ActionResult — caller transitions."""

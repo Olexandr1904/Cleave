@@ -291,8 +291,7 @@ def build_action_routes(
         ws = _find_workspace(orchestrator, ticket_id)
         if ws is None:
             return _error(f"Workspace not found: {ticket_id}", 404)
-        if ws.state.current_state == Stage.DONE and ws.state.pr_url:
-            return _error(f"Cannot delete: ticket has an open PR ({ws.state.pr_url}). Archive instead.")
+        # Allow deleting any ticket — user's decision
 
         ws_root = Path(ws.state.workspace_root)
         try:

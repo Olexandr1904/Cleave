@@ -218,5 +218,10 @@ async def test_verification_fail_notifies_telegram_and_sets_escalation_fields(tm
     # Escalation fields populated on the workspace for reply routing.
     assert ws.state.escalation_msg_id == 777
     assert ws.state.escalation_chat_id == "chat-1"
-    assert ws.state.human_input_question is not None
-    assert "verification failed" in ws.state.human_input_question.lower()
+    human_input_calls = [
+        c for c in ws.update_state.call_args_list
+        if "human_input_question" in c.kwargs
+    ]
+    assert human_input_calls, "update_state must set human_input_question"
+    stored = human_input_calls[-1].kwargs["human_input_question"]
+    assert "verification failed" in stored.lower()

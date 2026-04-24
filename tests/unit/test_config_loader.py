@@ -102,7 +102,7 @@ class TestLoadGlobalConfig:
         config = load_global_config(str(tmp_path))
         assert config.logging.level == "DEBUG"
         # Other sections get defaults
-        assert config.defaults.poll_interval_seconds == 300
+        assert config.defaults.poll_interval_seconds == 60
         assert config.telegram.bot_token == ""
         assert config.operator.role == ""
 

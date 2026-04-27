@@ -246,7 +246,6 @@ function renderCard(ws) {
   const dimmed = ['DONE', 'ARCHIVED', 'SETUP_DONE'].includes(stateVal);
 
   let cardClass = 'card';
-  if (stateVal === 'BLOCKED' || stateVal === 'FAILED') cardClass += ' card-blocked';
   if (stateVal === 'AWAITING_APPROVAL') cardClass += ' card-awaiting';
   if (stateVal === 'MANUAL_CONTROL') cardClass += ' card-manual';
   if (stateVal === 'PAUSED') cardClass += ' card-paused';

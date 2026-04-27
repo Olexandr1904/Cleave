@@ -299,7 +299,6 @@
   .state-AWAITING_APPROVAL { background: #3d3318; color: #e3b341; border: 1px solid #9e6a03; }
   .state-PAUSED    { background: #1a2d3d; color: #79c0ff; border: 1px solid #388bfd; }
 
-  .card-blocked { box-shadow: inset 3px 0 0 #f85149; }
   .card-awaiting { box-shadow: inset 3px 0 0 #e3b341; }
   .card-paused { box-shadow: inset 3px 0 0 #79c0ff; opacity: 0.85; }
   .badge-pulse-red { color: #f85149; font-weight: 700; }

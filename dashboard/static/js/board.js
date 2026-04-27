@@ -227,61 +227,64 @@ function renderCard(ws) {
   if (stateVal === 'PAUSED') cardClass += ' card-paused';
   if (dimmed) cardClass += ' card-dimmed';
 
+  // Line 1: ID + pause/resume + delete
+  const PAUSEABLE_STATES = ['ANALYSIS', 'DEV', 'SCOPE_CHECK', 'QA', 'PUSHED', 'PR_REVIEW'];
+  let pauseIcon = '';
+  if (PAUSEABLE_STATES.includes(stateVal)) {
+    pauseIcon = `<button class="card-icon-btn" data-action="pause" data-ticket="${esc(ws.ticket_id)}" title="Pause" onclick="event.stopPropagation()">⏸</button>`;
+  } else if (stateVal === 'PAUSED') {
+    pauseIcon = `<button class="card-icon-btn" data-action="unpause" data-ticket="${esc(ws.ticket_id)}" title="Resume" onclick="event.stopPropagation()">▶</button>`;
+  }
+  const deleteIcon = `<button class="card-icon-btn card-icon-delete" data-action="delete" data-ticket="${esc(ws.ticket_id)}" title="Delete" onclick="event.stopPropagation()">✕</button>`;
+
+  // Line 3: error > manual-control note > omitted
+  let noteHtml = '';
+  if (ws.error) {
+    noteHtml = `<div class="card-error" title="${esc(ws.error)}">${esc(ws.error)}</div>`;
+  } else if (stateVal === 'MANUAL_CONTROL') {
+    noteHtml = `<div class="card-manual-note">You have control</div>`;
+  }
+
+  // Line 4: meta — repo · time · iter
+  const iters = ws.stage_iterations || {};
+  const totalIters = Object.values(iters).reduce((a, b) => a + b, 0);
+  const metaParts = [];
+  if (ws.repo_id) metaParts.push(esc(ws.repo_id));
+  metaParts.push(esc(timeAgo(ws.started_at)));
+  if (totalIters > 0) metaParts.push(`iter ${totalIters}`);
+  const metaHtml = `<div class="card-meta">${metaParts.join(' <span class="card-meta-sep">·</span> ')}</div>`;
+
+  // Line 5: PR + contextual button (Approve / Clean) — omitted if both absent
   const prLink = ws.pr_url
     ? `<a class="card-pr-link" href="${esc(ws.pr_url)}" target="_blank" onclick="event.stopPropagation()">PR #${esc(String(ws.pr_number || ''))}</a>`
     : '';
-
-  const errorHtml = ws.error
-    ? `<div class="card-error" title="${esc(ws.error)}">${esc(ws.error)}</div>`
-    : '';
-
-  const approveBtn = stateVal === 'AWAITING_APPROVAL'
-    ? `<button class="action-btn btn-approve" data-action="approve" data-ticket="${esc(ws.ticket_id)}">Approve</button>`
-    : '';
-
-  const PAUSEABLE_STATES = ['ANALYSIS', 'DEV', 'SCOPE_CHECK', 'QA', 'PUSHED', 'PR_REVIEW'];
-  let pauseBtn = '';
-  if (PAUSEABLE_STATES.includes(stateVal)) {
-    pauseBtn = `<button class="action-btn btn-pause" data-action="pause" data-ticket="${esc(ws.ticket_id)}" onclick="event.stopPropagation()" title="Pause this ticket — agent (if running) will be stopped">Pause</button>`;
-  } else if (stateVal === 'PAUSED') {
-    pauseBtn = `<button class="action-btn btn-pause" data-action="unpause" data-ticket="${esc(ws.ticket_id)}" onclick="event.stopPropagation()" title="Resume work on this ticket">Unpause</button>`;
+  let contextualBtn = '';
+  if (stateVal === 'AWAITING_APPROVAL') {
+    contextualBtn = `<button class="action-btn btn-approve" data-action="approve" data-ticket="${esc(ws.ticket_id)}">Approve</button>`;
+  } else if (dimmed && ws.workspace_root) {
+    contextualBtn = `<button class="action-btn btn-clean" data-action="clean" data-ticket="${esc(ws.ticket_id)}" onclick="event.stopPropagation()" title="Remove source code to free disk space">Clean</button>`;
   }
-
-  const manualLabel = stateVal === 'MANUAL_CONTROL'
-    ? `<div class="card-manual-label">You have control</div>`
+  const footerHtml = (prLink || contextualBtn)
+    ? `<div class="card-footer">
+         ${prLink}
+         <span class="card-footer-spacer"></span>
+         ${contextualBtn}
+       </div>`
     : '';
-
-  // Iteration badge
-  const iters = ws.stage_iterations || {};
-  const totalIters = Object.values(iters).reduce((a, b) => a + b, 0);
-  const iterBadge = totalIters > 0 ? `<span class="card-iter">iter ${totalIters}</span>` : '';
-
-  // Clean-source button for DONE cards with a workspace on disk
-  const cleanBtn = dimmed && ws.workspace_root
-    ? `<button class="action-btn btn-clean" data-action="clean" data-ticket="${esc(ws.ticket_id)}" onclick="event.stopPropagation()" title="Remove source code to free disk space">Clean</button>`
-    : '';
-
-  const deleteBtn = `<button class="action-btn btn-delete" data-action="delete" data-ticket="${esc(ws.ticket_id)}" onclick="event.stopPropagation()">✕</button>`;
 
   return `<div class="${cardClass}" data-ticket="${esc(ws.ticket_id)}">
-    <div class="card-header">
-      <span class="card-ticket">${esc(ws.ticket_id)}</span>
+    <div class="card-line1">
+      <span class="card-id">${esc(ws.ticket_id)}</span>
+      <span class="card-line1-spacer"></span>
+      ${pauseIcon}
+      ${deleteIcon}
+    </div>
+    <div class="card-line2">
+      <div class="card-title" title="${esc(ws.title || '')}">${esc(ws.title || '')}</div>
       ${stateBadgeHtml(stateVal)}
     </div>
-    <div class="card-repo">${esc(ws.repo_id || '')}</div>
-    ${errorHtml}
-    ${manualLabel}
-    <div class="card-footer">
-      <span class="card-time">${esc(timeAgo(ws.started_at))}</span>
-      ${iterBadge}
-      <span class="card-footer-spacer"></span>
-      <span class="card-actions">
-        ${prLink}
-        ${approveBtn}
-        ${pauseBtn}
-        ${cleanBtn}
-        ${deleteBtn}
-      </span>
-    </div>
+    ${noteHtml}
+    ${metaHtml}
+    ${footerHtml}
   </div>`;
 }

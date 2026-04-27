@@ -27,6 +27,7 @@ Local web dashboard providing real-time visibility into the Sickle pipeline. Sho
 - FR14: URL hash routing so refresh preserves view (board/ticket/eventlog)
 - FR15: Pipeline bar highlights `previous_state` for off-pipeline states (BLOCKED, FAILED, MANUAL_CONTROL, AWAITING_APPROVAL)
 - FR16: Per-project health panel (Jira, vcs, git identity, git remote) with fix hints
+- FR17: Settings page with Claude model picker — single source of truth in dashboard SQLite, hot-reloaded by adapters on next dispatch
 
 ## Technical Approach
 
@@ -92,3 +93,4 @@ Local web dashboard providing real-time visibility into the Sickle pipeline. Sho
 | 2026-04-16 | Wire on_project_added closure into Orchestrator: hot-reload builds GitHub adapters, attaches Jira tracker, and extends Telegram allowlist when a new project is discovered at runtime |
 | 2026-04-16 | Wizard kicks orchestrator.rescan_projects() immediately after Atlas writes project.yaml, rather than waiting for the next poll tick |
 | 2026-04-16 | Integration test: wizard POST → stub Atlas writes YAML → orchestrator.rescan_projects called → project merged into live dict |
+| 2026-04-27 | Settings page (FR17): SQLite-backed settings table + GET/PUT /api/settings/model; init_settings runs on dashboard startup |

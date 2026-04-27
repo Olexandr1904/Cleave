@@ -7,6 +7,7 @@ import logging
 from pathlib import Path
 from typing import Any
 
+import aiosqlite
 from starlette.applications import Starlette
 from starlette.requests import Request
 from starlette.responses import HTMLResponse, JSONResponse, PlainTextResponse
@@ -221,6 +222,31 @@ def create_app(
             ]
         })
 
+    async def get_settings_model(request: Request) -> JSONResponse:
+        from dashboard.settings_store import ALLOWED_MODELS, get_model
+        async with aiosqlite.connect(store._db_path) as conn:
+            current = await get_model(conn)
+        return JSONResponse({
+            "model": current,
+            "options": list(ALLOWED_MODELS),
+        })
+
+    async def put_settings_model(request: Request) -> JSONResponse:
+        from dashboard.settings_store import set_model
+        try:
+            body = await request.json()
+        except Exception:
+            return JSONResponse({"error": "Invalid JSON body"}, status_code=400)
+        model = body.get("model")
+        if not model:
+            return JSONResponse({"error": "Missing 'model' field"}, status_code=400)
+        try:
+            async with aiosqlite.connect(store._db_path) as conn:
+                await set_model(conn, model)
+        except ValueError as e:
+            return JSONResponse({"error": str(e)}, status_code=400)
+        return JSONResponse({"model": model})
+
     async def index(request: Request) -> HTMLResponse:
         html_path = Path(__file__).parent / "static" / "index.html"
         return HTMLResponse(html_path.read_text(encoding="utf-8"))
@@ -235,6 +261,8 @@ def create_app(
         Route("/api/tickets/{ticket_id:path}/events", get_ticket_events),
         Route("/api/workspaces", get_workspaces),
         Route("/api/workspaces/{ticket_id}/report/{filename:path}", get_workspace_report),
+        Route("/api/settings/model", get_settings_model, methods=["GET"]),
+        Route("/api/settings/model", put_settings_model, methods=["PUT"]),
     ]
 
     # Action routes (only if orchestrator is available)

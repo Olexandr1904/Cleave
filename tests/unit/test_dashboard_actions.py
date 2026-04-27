@@ -468,3 +468,61 @@ class TestUnpauseEndpoint:
         orchestrator.get_active_workspaces.return_value = []
         resp = client.post("/api/workspaces/T-MISSING/unpause")
         assert resp.status_code == 404
+
+
+class TestPauseFallsBackToDiskScan:
+    """When a workspace exists on disk but isn't in the active list,
+    pause/unpause should still find it (and re-adopt it).
+    """
+
+    def _seed_disk_ws(self, tmp_path, ticket_id: str, state: str):
+        from dataclasses import asdict
+        ws_root = tmp_path / "co" / "repo" / "tickets" / ticket_id
+        ws_root.mkdir(parents=True)
+        (ws_root / "meta").mkdir()
+        (ws_root / "reports").mkdir()
+        (ws_root / "logs").mkdir()
+        (ws_root / "source").mkdir()
+        s = WorkspaceState(
+            ticket_id=ticket_id, company_id="co", repo_id="repo",
+            workspace_root=str(ws_root), current_state=state,
+        )
+        (ws_root / "state.json").write_text(json.dumps(asdict(s)))
+        return ws_root
+
+    @pytest.fixture
+    def disk_client(self, bus, store, orchestrator, mode_handler, tmp_path):
+        from types import SimpleNamespace
+        global_config = SimpleNamespace(
+            workspaces=SimpleNamespace(base_dir=str(tmp_path)),
+        )
+        orchestrator._active_workspaces = []
+        app = create_app(
+            bus, store,
+            orchestrator=orchestrator,
+            mode_handler=mode_handler,
+            global_config=global_config,
+        )
+        return TestClient(app)
+
+    def test_pause_finds_orphan_workspace_on_disk_and_readopts(
+        self, disk_client, orchestrator, tmp_path
+    ):
+        self._seed_disk_ws(tmp_path, "ORPHAN-1", "DEV")
+        orchestrator.get_active_workspaces.return_value = []  # not in active list
+        resp = disk_client.post("/api/workspaces/ORPHAN-1/pause",
+                                content=json.dumps({"confirm": True}))
+        assert resp.status_code == 200
+        # Re-adopted into the active list
+        assert any(
+            w.state.ticket_id == "ORPHAN-1"
+            for w in orchestrator._active_workspaces
+        )
+
+    def test_pause_returns_404_when_not_in_active_and_not_on_disk(
+        self, disk_client, orchestrator
+    ):
+        orchestrator.get_active_workspaces.return_value = []
+        resp = disk_client.post("/api/workspaces/GHOST-1/pause",
+                                content=json.dumps({"confirm": True}))
+        assert resp.status_code == 404

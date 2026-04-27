@@ -31,6 +31,7 @@ def test_create_setup_workspace_creates_tree(tmp_path: Path):
     assert state["ticket_id"] == "setup"
     assert state["company_id"] == "acme"
     assert state["repo_id"] == "acme-app"
+    assert state["title"] == "Workspace setup"
 
 
 def test_write_state_transitions(tmp_path: Path):

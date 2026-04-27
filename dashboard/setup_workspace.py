@@ -51,6 +51,7 @@ def create_setup_workspace(
         "started_at": now,
         "last_updated_at": now,
         "kind": "setup",
+        "title": "Workspace setup",
     }
     (setup_dir / "state.json").write_text(
         json.dumps(state, indent=2), encoding="utf-8"

@@ -389,6 +389,12 @@ def main(argv: list[str] | None = None) -> int:
         await event_store.initialize()
         event_bus.add_listener(lambda e: asyncio.ensure_future(event_store.insert(e)))
 
+        # Init runtime settings table (model picker).
+        import aiosqlite as _aiosqlite
+        from dashboard.settings_store import init_settings
+        async with _aiosqlite.connect(db_path) as _conn:
+            await init_settings(_conn)
+
         # Start dashboard web server
         dash_config = global_config.dashboard
         web_server = None

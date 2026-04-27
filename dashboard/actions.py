@@ -275,6 +275,26 @@ def build_action_routes(
             )
         return JSONResponse({"status": "ok", "new_state": Stage.PAUSED})
 
+    async def unpause(request: Request) -> JSONResponse:
+        ticket_id = request.path_params["ticket_id"]
+        ws = _find_workspace(orchestrator, ticket_id)
+        if ws is None:
+            return _error(f"Workspace not found: {ticket_id}", 404)
+        if ws.state.current_state != Stage.PAUSED:
+            return _error(f"Cannot unpause: state is {ws.state.current_state}")
+
+        target = ws.state.previous_state or Stage.ANALYSIS
+        ws.transition(target)
+
+        if event_bus:
+            event_bus.emit(
+                "workspace_unpaused",
+                f"Unpaused {ticket_id} via dashboard → {target}",
+                ticket_id=ticket_id,
+                data={"new_state": target},
+            )
+        return JSONResponse({"status": "ok", "new_state": target})
+
     async def archive(request: Request) -> JSONResponse:
         ticket_id = request.path_params["ticket_id"]
         ws = _find_workspace(orchestrator, ticket_id)
@@ -422,6 +442,7 @@ def build_action_routes(
         Route("/api/workspaces/{ticket_id:path}/release-control", release_control, methods=["POST"]),
         Route("/api/workspaces/{ticket_id:path}/resume", resume, methods=["POST"]),
         Route("/api/workspaces/{ticket_id:path}/pause", pause, methods=["POST"]),
+        Route("/api/workspaces/{ticket_id:path}/unpause", unpause, methods=["POST"]),
         Route("/api/workspaces/{ticket_id:path}/archive", archive, methods=["POST"]),
         Route("/api/workspaces/{ticket_id:path}/clean", clean_source, methods=["POST"]),
         Route("/api/workspaces/{ticket_id:path}/delete", delete_workspace, methods=["POST"]),

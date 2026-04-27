@@ -432,3 +432,39 @@ class TestPauseEndpoint:
         resp = client.post("/api/workspaces/T-MISSING/pause",
                            content=json.dumps({"confirm": True}))
         assert resp.status_code == 404
+
+
+class TestUnpauseEndpoint:
+    def test_unpause_paused_returns_to_previous(self, client, orchestrator):
+        ws = _make_workspace("T-U1", "PAUSED", previous="DEV")
+        orchestrator.get_active_workspaces.return_value = [ws]
+        resp = client.post("/api/workspaces/T-U1/unpause")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["status"] == "ok"
+        assert data["new_state"] == "DEV"
+        ws.transition.assert_called_with("DEV")
+
+    def test_unpause_falls_back_to_analysis_when_previous_null(self, client, orchestrator):
+        ws = _make_workspace("T-U2", "PAUSED", previous=None)
+        orchestrator.get_active_workspaces.return_value = [ws]
+        resp = client.post("/api/workspaces/T-U2/unpause")
+        assert resp.status_code == 200
+        assert resp.json()["new_state"] == "ANALYSIS"
+        ws.transition.assert_called_with("ANALYSIS")
+
+    @pytest.mark.parametrize("bad_state", [
+        "NEW", "ANALYSIS", "DEV", "BLOCKED", "AWAITING_APPROVAL",
+        "MANUAL_CONTROL", "DEFERRED", "DONE", "FAILED", "ARCHIVED",
+    ])
+    def test_unpause_from_non_paused_returns_400(self, client, orchestrator, bad_state):
+        ws = _make_workspace("T-UX", bad_state)
+        orchestrator.get_active_workspaces.return_value = [ws]
+        resp = client.post("/api/workspaces/T-UX/unpause")
+        assert resp.status_code == 400
+        ws.transition.assert_not_called()
+
+    def test_unpause_missing_workspace_returns_404(self, client, orchestrator):
+        orchestrator.get_active_workspaces.return_value = []
+        resp = client.post("/api/workspaces/T-MISSING/unpause")
+        assert resp.status_code == 404

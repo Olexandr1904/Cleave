@@ -232,6 +232,49 @@ def build_action_routes(
             )
         return JSONResponse({"status": "ok", "new_state": target})
 
+    async def pause(request: Request) -> JSONResponse:
+        ticket_id = request.path_params["ticket_id"]
+        ws = _find_workspace(orchestrator, ticket_id)
+        if ws is None:
+            return _error(f"Workspace not found: {ticket_id}", 404)
+
+        PAUSEABLE = {Stage.ANALYSIS, Stage.DEV, Stage.SCOPE_CHECK,
+                     Stage.QA, Stage.PUSHED, Stage.PR_REVIEW}
+        if ws.state.current_state not in PAUSEABLE:
+            return _error(f"Cannot pause: state is {ws.state.current_state}")
+
+        body = {}
+        try:
+            body = await request.json()
+        except Exception:
+            pass
+        confirm = body.get("confirm", False)
+
+        agent_runtime = orchestrator._agent_runtime
+        running = agent_runtime.get_running(ticket_id)
+        if running and not confirm:
+            elapsed = time.time() - running.get("started_at", time.time())
+            return JSONResponse({
+                "status": "agent_running",
+                "agent": running["agent_id"],
+                "started_ago": f"{int(elapsed)}s",
+            })
+
+        if running:
+            agent_runtime.cancel(ticket_id)
+
+        previous = ws.state.current_state
+        ws.transition(Stage.PAUSED)
+
+        if event_bus:
+            event_bus.emit(
+                "workspace_paused",
+                f"Paused {ticket_id} from {previous} via dashboard",
+                ticket_id=ticket_id,
+                data={"previous_state": previous},
+            )
+        return JSONResponse({"status": "ok", "new_state": Stage.PAUSED})
+
     async def archive(request: Request) -> JSONResponse:
         ticket_id = request.path_params["ticket_id"]
         ws = _find_workspace(orchestrator, ticket_id)
@@ -329,6 +372,48 @@ def build_action_routes(
             )
         return JSONResponse({"status": "ok", "deleted": ticket_id})
 
+    async def clean_source(request: Request) -> JSONResponse:
+        """Remove source/ dir from a DONE workspace to free disk space."""
+        import shutil
+        from workspace.workspace import Workspace
+        ticket_id = request.path_params["ticket_id"]
+
+        ws = _find_workspace(orchestrator, ticket_id)
+        if not ws:
+            # Scan disk
+            base = Path(global_config.workspaces.base_dir) if global_config else None
+            if base:
+                for state_file in base.rglob("state.json"):
+                    try:
+                        w = Workspace(str(state_file.parent))
+                        if w.state.ticket_id == ticket_id:
+                            ws = w
+                            break
+                    except Exception:
+                        pass
+        if not ws:
+            return _error(f"Workspace not found: {ticket_id}", 404)
+
+        if ws.state.current_state not in ("DONE", "ARCHIVED", "SETUP_DONE", "FAILED"):
+            return _error("Can only clean source for completed tickets", 400)
+
+        source_dir = ws.source_dir
+        if not source_dir.exists():
+            return JSONResponse({"status": "ok", "message": "Already clean"})
+
+        try:
+            shutil.rmtree(source_dir)
+        except Exception as e:
+            return _error(f"Failed to clean source: {e}", 500)
+
+        if event_bus:
+            event_bus.emit(
+                "workspace_cleaned",
+                f"Cleaned source for {ticket_id}",
+                ticket_id=ticket_id,
+            )
+        return JSONResponse({"status": "ok", "cleaned": ticket_id})
+
     return [
         Route("/api/workspaces/{ticket_id:path}/approve", approve, methods=["POST"]),
         Route("/api/workspaces/{ticket_id:path}/reject", reject, methods=["POST"]),
@@ -336,7 +421,9 @@ def build_action_routes(
         Route("/api/workspaces/{ticket_id:path}/take-control", take_control, methods=["POST"]),
         Route("/api/workspaces/{ticket_id:path}/release-control", release_control, methods=["POST"]),
         Route("/api/workspaces/{ticket_id:path}/resume", resume, methods=["POST"]),
+        Route("/api/workspaces/{ticket_id:path}/pause", pause, methods=["POST"]),
         Route("/api/workspaces/{ticket_id:path}/archive", archive, methods=["POST"]),
+        Route("/api/workspaces/{ticket_id:path}/clean", clean_source, methods=["POST"]),
         Route("/api/workspaces/{ticket_id:path}/delete", delete_workspace, methods=["POST"]),
         Route("/api/daemon/mode", set_mode, methods=["POST"]),
         Route("/api/daemon/status", daemon_status),

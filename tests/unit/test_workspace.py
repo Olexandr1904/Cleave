@@ -65,6 +65,12 @@ class TestWorkspaceState:
         )
         assert state.started_at == state.last_updated_at
 
+    def test_title_defaults_to_none(self):
+        state = WorkspaceState(
+            ticket_id="T-1", company_id="c", repo_id="r", workspace_root="/tmp"
+        )
+        assert state.title is None
+
 
 class TestWorkspace:
     def test_directory_properties(self, workspace):

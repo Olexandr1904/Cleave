@@ -225,12 +225,31 @@
     gap: 6px;
   }
   .card-footer-spacer { flex: 1; }
-  .card-pr-link {
-    font-size: 11px;
-    color: #58a6ff;
+  /* Tag chips (PR / Jira) on line 5 */
+  .card-tag {
+    display: inline-block;
+    font-size: 10px;
+    font-weight: 600;
+    line-height: 1.4;
+    padding: 1px 8px;
+    border-radius: 10px;
+    border: 1px solid;
     text-decoration: none;
+    white-space: nowrap;
+    letter-spacing: .02em;
   }
-  .card-pr-link:hover { text-decoration: underline; }
+  .card-tag-pr {
+    color: #58a6ff;
+    background: #1a2d3d;
+    border-color: #1f6feb44;
+  }
+  .card-tag-pr:hover { background: #1f6feb33; }
+  .card-tag-jira {
+    color: #e3b341;
+    background: #3d3318;
+    border-color: #9e6a0344;
+  }
+  .card-tag-jira:hover { background: #9e6a0333; }
 
   /* Icon buttons (line 1) */
   .card-icon-btn {

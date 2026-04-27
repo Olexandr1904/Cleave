@@ -33,7 +33,7 @@ export async function renderBoard(projectId, showDone = true) {
     const stateOrder = {
       BLOCKED: 0, AWAITING_APPROVAL: 1, DEFERRED: 2, MANUAL_CONTROL: 3, PAUSED: 4,
       DEV: 5, ANALYSIS: 6, SCOPE_CHECK: 7, QA: 8, PR_REVIEW: 9, PUSHED: 10,
-      NEW: 11, DONE: 12, SETUP_DONE: 12, FAILED: 13, ARCHIVED: 14,
+      NEW: 11, FAILED: 12, DONE: 13, SETUP_DONE: 13, ARCHIVED: 14,
     };
     filtered.sort((a, b) => (stateOrder[a.current_state] ?? 99) - (stateOrder[b.current_state] ?? 99));
 
@@ -283,9 +283,13 @@ function renderCard(ws) {
   if (totalIters > 0) metaParts.push(`iter ${totalIters}`);
   const metaHtml = `<div class="card-meta">${metaParts.join(' <span class="card-meta-sep">·</span> ')}</div>`;
 
-  // Line 5: PR + contextual button (Approve / Clean) — omitted if both absent
-  const prLink = ws.pr_url
-    ? `<a class="card-pr-link" href="${esc(ws.pr_url)}" target="_blank" onclick="event.stopPropagation()">PR #${esc(String(ws.pr_number || ''))}</a>`
+  // Footer: PR + Jira tags + contextual button (Approve/Clean)
+  const prTag = ws.pr_url
+    ? `<a class="card-tag card-tag-pr" href="${esc(ws.pr_url)}" target="_blank" rel="noopener" onclick="event.stopPropagation()">PR #${esc(String(ws.pr_number || ''))}</a>`
+    : '';
+  const jiraLink = (ws.links || []).find(l => l && l.type === 'jira');
+  const jiraTag = jiraLink
+    ? `<a class="card-tag card-tag-jira" href="${esc(jiraLink.url)}" target="_blank" rel="noopener" onclick="event.stopPropagation()">Jira</a>`
     : '';
   let contextualBtn = '';
   if (stateVal === 'AWAITING_APPROVAL') {
@@ -293,9 +297,10 @@ function renderCard(ws) {
   } else if (dimmed && ws.workspace_root) {
     contextualBtn = `<button class="action-btn btn-clean" data-action="clean" data-ticket="${esc(ws.ticket_id)}" onclick="event.stopPropagation()" title="Remove source code to free disk space">Clean</button>`;
   }
-  const footerHtml = (prLink || contextualBtn)
+  const footerHtml = (prTag || jiraTag || contextualBtn)
     ? `<div class="card-footer">
-         ${prLink}
+         ${prTag}
+         ${jiraTag}
          <span class="card-footer-spacer"></span>
          ${contextualBtn}
        </div>`

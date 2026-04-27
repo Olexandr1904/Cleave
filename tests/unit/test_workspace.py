@@ -533,3 +533,71 @@ class TestIterations:
         workspace.increment_iteration("QA")
         assert workspace.state.stage_iterations["SCOPE_CHECK"] == 2
         assert workspace.state.stage_iterations["QA"] == 1
+
+
+class TestPaused:
+    def test_paused_in_valid_states(self):
+        assert "PAUSED" in VALID_STATES
+
+    def test_dev_to_paused(self, workspace):
+        workspace.transition(Stage.ANALYSIS)
+        workspace.transition(Stage.DEV)
+        workspace.transition(Stage.PAUSED)
+        assert workspace.state.current_state == Stage.PAUSED
+        assert workspace.state.previous_state == Stage.DEV
+        assert workspace.state.human_input_pending is True
+
+    def test_paused_from_each_active_stage(self, workspace_dir):
+        active = ["ANALYSIS", "DEV", "SCOPE_CHECK", "QA", "PUSHED", "PR_REVIEW"]
+        for state in active:
+            s = WorkspaceState(
+                ticket_id="T-1", company_id="c", repo_id="r",
+                workspace_root=str(workspace_dir), current_state=state,
+            )
+            ws = Workspace(str(workspace_dir), s)
+            ws.save_state()
+            ws.transition(Stage.PAUSED)
+            assert ws.state.current_state == Stage.PAUSED
+            assert ws.state.previous_state == state
+
+    def test_paused_rejected_from_invalid_states(self, workspace_dir):
+        for state in ["NEW", "BLOCKED", "AWAITING_APPROVAL", "MANUAL_CONTROL",
+                      "DEFERRED", "DONE", "FAILED", "ARCHIVED"]:
+            s = WorkspaceState(
+                ticket_id="T-1", company_id="c", repo_id="r",
+                workspace_root=str(workspace_dir), current_state=state,
+            )
+            ws = Workspace(str(workspace_dir), s)
+            ws.save_state()
+            with pytest.raises(InvalidTransitionError):
+                ws.transition(Stage.PAUSED)
+
+    def test_unpause_returns_to_previous_active_stage(self, workspace):
+        workspace.transition(Stage.ANALYSIS)
+        workspace.transition(Stage.DEV)
+        workspace.transition(Stage.PAUSED)
+        workspace.transition(Stage.DEV)
+        assert workspace.state.current_state == Stage.DEV
+        assert workspace.state.previous_state is None
+        assert workspace.state.human_input_pending is False
+
+    def test_paused_to_failed_allowed(self, workspace):
+        workspace.transition(Stage.ANALYSIS)
+        workspace.transition(Stage.DEV)
+        workspace.transition(Stage.PAUSED)
+        workspace.transition(Stage.FAILED)
+        assert workspace.state.current_state == Stage.FAILED
+
+    def test_paused_to_manual_control_allowed(self, workspace):
+        workspace.transition(Stage.ANALYSIS)
+        workspace.transition(Stage.DEV)
+        workspace.transition(Stage.PAUSED)
+        workspace.transition(Stage.MANUAL_CONTROL)
+        assert workspace.state.current_state == Stage.MANUAL_CONTROL
+
+    def test_paused_to_done_rejected(self, workspace):
+        workspace.transition(Stage.ANALYSIS)
+        workspace.transition(Stage.DEV)
+        workspace.transition(Stage.PAUSED)
+        with pytest.raises(InvalidTransitionError):
+            workspace.transition(Stage.DONE)

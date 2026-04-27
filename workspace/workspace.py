@@ -28,6 +28,7 @@ class Stage(StrEnum):
     AWAITING_APPROVAL = "AWAITING_APPROVAL"
     MANUAL_CONTROL = "MANUAL_CONTROL"
     DEFERRED = "DEFERRED"
+    PAUSED = "PAUSED"
 
 
 VALID_STATES = set(Stage)
@@ -35,12 +36,12 @@ VALID_STATES = set(Stage)
 # Valid state transitions (architecture-v2 §3.3)
 VALID_TRANSITIONS: dict[Stage, set[Stage]] = {
     Stage.NEW:                {Stage.ANALYSIS, Stage.FAILED},
-    Stage.ANALYSIS:           {Stage.DEV, Stage.BLOCKED, Stage.FAILED, Stage.DEFERRED, Stage.AWAITING_APPROVAL, Stage.MANUAL_CONTROL},
-    Stage.DEV:                {Stage.SCOPE_CHECK, Stage.BLOCKED, Stage.FAILED, Stage.DEFERRED, Stage.MANUAL_CONTROL},
-    Stage.SCOPE_CHECK:        {Stage.QA, Stage.DEV, Stage.BLOCKED, Stage.FAILED, Stage.DEFERRED, Stage.MANUAL_CONTROL},
-    Stage.QA:                 {Stage.PUSHED, Stage.DEV, Stage.BLOCKED, Stage.FAILED, Stage.DEFERRED, Stage.AWAITING_APPROVAL, Stage.MANUAL_CONTROL},
-    Stage.PUSHED:             {Stage.PR_REVIEW, Stage.BLOCKED, Stage.FAILED, Stage.DEFERRED, Stage.MANUAL_CONTROL},
-    Stage.PR_REVIEW:          {Stage.DEV, Stage.DONE, Stage.BLOCKED, Stage.FAILED, Stage.DEFERRED, Stage.AWAITING_APPROVAL, Stage.MANUAL_CONTROL},
+    Stage.ANALYSIS:           {Stage.DEV, Stage.BLOCKED, Stage.FAILED, Stage.DEFERRED, Stage.AWAITING_APPROVAL, Stage.MANUAL_CONTROL, Stage.PAUSED},
+    Stage.DEV:                {Stage.SCOPE_CHECK, Stage.BLOCKED, Stage.FAILED, Stage.DEFERRED, Stage.MANUAL_CONTROL, Stage.PAUSED},
+    Stage.SCOPE_CHECK:        {Stage.QA, Stage.DEV, Stage.BLOCKED, Stage.FAILED, Stage.DEFERRED, Stage.MANUAL_CONTROL, Stage.PAUSED},
+    Stage.QA:                 {Stage.PUSHED, Stage.DEV, Stage.BLOCKED, Stage.FAILED, Stage.DEFERRED, Stage.AWAITING_APPROVAL, Stage.MANUAL_CONTROL, Stage.PAUSED},
+    Stage.PUSHED:             {Stage.PR_REVIEW, Stage.BLOCKED, Stage.FAILED, Stage.DEFERRED, Stage.MANUAL_CONTROL, Stage.PAUSED},
+    Stage.PR_REVIEW:          {Stage.DEV, Stage.DONE, Stage.BLOCKED, Stage.FAILED, Stage.DEFERRED, Stage.AWAITING_APPROVAL, Stage.MANUAL_CONTROL, Stage.PAUSED},
     Stage.DONE:               {Stage.ARCHIVED},
     Stage.BLOCKED:            {Stage.ANALYSIS, Stage.DEV, Stage.SCOPE_CHECK, Stage.QA, Stage.PUSHED, Stage.PR_REVIEW, Stage.FAILED, Stage.MANUAL_CONTROL},
     Stage.FAILED:             {Stage.ANALYSIS, Stage.DEV, Stage.SCOPE_CHECK, Stage.QA, Stage.PUSHED, Stage.PR_REVIEW, Stage.MANUAL_CONTROL, Stage.ARCHIVED},
@@ -48,6 +49,7 @@ VALID_TRANSITIONS: dict[Stage, set[Stage]] = {
     Stage.AWAITING_APPROVAL:  {Stage.ANALYSIS, Stage.DEV, Stage.SCOPE_CHECK, Stage.QA, Stage.PUSHED, Stage.PR_REVIEW, Stage.DONE, Stage.FAILED, Stage.MANUAL_CONTROL},
     Stage.MANUAL_CONTROL:     {Stage.ANALYSIS},
     Stage.DEFERRED:           {Stage.ANALYSIS, Stage.DEV, Stage.SCOPE_CHECK, Stage.QA, Stage.PUSHED, Stage.PR_REVIEW, Stage.FAILED, Stage.MANUAL_CONTROL},
+    Stage.PAUSED:             {Stage.ANALYSIS, Stage.DEV, Stage.SCOPE_CHECK, Stage.QA, Stage.PUSHED, Stage.PR_REVIEW, Stage.FAILED, Stage.MANUAL_CONTROL},
 }
 
 
@@ -194,7 +196,7 @@ class Workspace:
 
         updates: dict[str, Any] = {"current_state": new_state}
 
-        paused_states = {Stage.BLOCKED, Stage.AWAITING_APPROVAL, Stage.MANUAL_CONTROL, Stage.DEFERRED, Stage.FAILED}
+        paused_states = {Stage.BLOCKED, Stage.AWAITING_APPROVAL, Stage.MANUAL_CONTROL, Stage.DEFERRED, Stage.FAILED, Stage.PAUSED}
         if new_state in paused_states:
             updates["previous_state"] = current
             updates["human_input_pending"] = True

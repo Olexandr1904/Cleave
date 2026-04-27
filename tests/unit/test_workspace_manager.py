@@ -132,6 +132,26 @@ class TestWorkspaceCreation:
         workspace_dirs = list(base_dir.rglob("state.json"))
         assert len(workspace_dirs) == 0
 
+    @patch("workspace.workspace_manager.subprocess.run")
+    def test_persists_title(self, mock_run, manager):
+        """Title is persisted to in-memory state and state.json."""
+        mock_run.return_value = MagicMock(returncode=0, stderr="")
+
+        ws = manager.create(
+            company_id="acme",
+            repo_id="acme-app",
+            ticket_id="ACME-1",
+            clone_url="git@example.com:acme/acme-app.git",
+            title="Login screen flickers on cold start",
+        )
+        # title is on the in-memory state
+        assert ws.state.title == "Login screen flickers on cold start"
+
+        # title is on disk in state.json
+        import json
+        state = json.loads((ws.root / "state.json").read_text())
+        assert state["title"] == "Login screen flickers on cold start"
+
 
 class TestWorkspaceDiscovery:
     def test_discovers_active_states(self, manager, base_dir):

@@ -72,6 +72,7 @@ const STATE_LABELS = {
   AWAITING_APPROVAL: 'APPROVAL',
   MANUAL_CONTROL: 'MANUAL',
   PR_REVIEW: 'PR REVIEW',
+  SETUP_DONE: 'SETUP DONE',
 };
 
 export function stateBadgeHtml(stateVal) {
@@ -80,6 +81,7 @@ export function stateBadgeHtml(stateVal) {
   if (stateVal === 'BLOCKED') pulseClass = ' badge-pulse-red';
   if (stateVal === 'AWAITING_APPROVAL') pulseClass = ' badge-pulse-yellow';
   if (stateVal === 'MANUAL_CONTROL') pulseClass = ' badge-pulse-purple';
+  if (stateVal === 'PAUSED') pulseClass = ' badge-pulse-blue';
   const label = STATE_LABELS[stateVal] || stateVal || 'NEW';
   return `<span class="state-badge ${cls}${pulseClass}">${esc(label)}</span>`;
 }

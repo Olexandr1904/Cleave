@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import json
 import logging
+import os
+import tempfile
 from pathlib import Path
 from typing import Any
 
@@ -105,9 +107,17 @@ def _maybe_backfill_title(ws_root: Path, data: dict) -> str:
     if title:
         data["title"] = title
         try:
-            (ws_root / "state.json").write_text(
-                json.dumps(data, indent=2), encoding="utf-8"
+            fd, tmp_path = tempfile.mkstemp(
+                dir=str(ws_root), suffix=".tmp", prefix="state_"
             )
+            try:
+                with os.fdopen(fd, "w") as f:
+                    json.dump(data, f, indent=2)
+                os.replace(tmp_path, str(ws_root / "state.json"))
+            except Exception:
+                if os.path.exists(tmp_path):
+                    os.unlink(tmp_path)
+                raise
         except OSError as e:
             logger.warning("Failed to backfill title for %s: %s", ws_root, e)
     return title

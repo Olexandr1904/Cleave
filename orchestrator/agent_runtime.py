@@ -83,20 +83,38 @@ class AgentRuntime:
         """Get info about a running agent for a workspace, or None."""
         return self._running.get(ticket_id)
 
+    def update_pid(self, ticket_id: str, pid: int) -> None:
+        """Set the running subprocess's pid after it has been spawned."""
+        info = self._running.get(ticket_id)
+        if info is not None:
+            info["pid"] = pid
+
     def cancel(self, ticket_id: str) -> bool:
-        """Kill a running agent for a workspace. Returns True if was running."""
+        """Kill a running agent for a workspace. Returns True if was running.
+
+        Kills the entire process group so child processes spawned by the agent
+        (e.g. tools the Claude CLI invokes) are also terminated.
+        """
         info = self._running.pop(ticket_id, None)
         if info is None:
             return False
         pid = info.get("pid", 0)
         if pid > 0:
+            import os
+            import signal
             try:
-                import os
-                import signal
-                os.kill(pid, signal.SIGTERM)
-                logger.info("Killed agent %s (pid %d) for %s", info["agent_id"], pid, ticket_id)
+                pgid = os.getpgid(pid)
+                os.killpg(pgid, signal.SIGTERM)
+                logger.info("Killed agent %s (pgid %d) for %s", info["agent_id"], pgid, ticket_id)
             except ProcessLookupError:
                 logger.warning("Agent process %d already gone for %s", pid, ticket_id)
+            except PermissionError:
+                # Fall back to killing just the leader
+                try:
+                    os.kill(pid, signal.SIGTERM)
+                    logger.info("Killed agent %s (pid %d, no pgrp access) for %s", info["agent_id"], pid, ticket_id)
+                except ProcessLookupError:
+                    pass
         else:
             logger.info("Cancelled agent %s for %s (no PID, will stop on next check)", info["agent_id"], ticket_id)
         return True
@@ -313,6 +331,7 @@ class AgentRuntime:
                 cwd=str(workspace.source_dir),
                 allowed_tools=allowed_tools if allowed_tools else None,
                 model=model,
+                pid_callback=lambda pid: self.update_pid(ticket_id, pid),
             )
         finally:
             self.unregister_running(ticket_id)

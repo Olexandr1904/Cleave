@@ -76,6 +76,7 @@ Central daemon process that continuously polls for work, manages isolated worksp
 | 2026-04-16 | Enriched pipeline log: dev stage completion now includes the short commit SHA (first 8 chars) in the log entry so the log can be correlated with git history. |
 | 2026-04-27 | Added `Stage.PAUSED` to the poll-cycle `_SKIP` set so operator-paused workspaces are not advanced. PAUSED tickets stay frozen until manual unpause from the dashboard; `_sweep_deferred` is unchanged and only acts on DEFERRED. |
 | 2026-04-27 | `_handle_agent_stage` now captures `current_state` before agent execution and aborts post-agent transitions if the state changed mid-flight (operator paused / took control / etc.). Fixes a race where pausing a ticket while an agent was running would let the agent silently complete and auto-transition the workspace out of PAUSED. |
+| 2026-04-27 | Real subprocess kill on agent cancel: `ClaudeCodeAdapter._run_cli` now spawns the `claude` CLI with `start_new_session=True` and reports `proc.pid` to `agent_runtime` via a `pid_callback`. New `AgentRuntime.update_pid` writes the pid into `_running`. `AgentRuntime.cancel` uses `os.killpg(os.getpgid(pid), SIGTERM)` to terminate the whole process tree (CLI plus tools it spawned), with a fallback to `os.kill` on PermissionError. Previously `cancel` was a no-op for Claude Code agents because `pid` was hardcoded to 0. |
 
 
 

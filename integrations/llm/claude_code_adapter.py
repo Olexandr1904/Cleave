@@ -140,6 +140,7 @@ class ClaudeCodeAdapter(LLMInterface):
         model: str = "",
         system: str = "",
         max_turns: int | None = None,
+        pid_callback: Callable[[int], None] | None = None,
     ) -> LLMResponse:
         """Execute a prompt with Claude Code in a specific workspace directory.
 
@@ -168,6 +169,7 @@ class ClaudeCodeAdapter(LLMInterface):
             cwd=cwd,
             allowed_tools=allowed_tools,
             max_turns=max_turns,
+            pid_callback=pid_callback,
         )
 
     async def quick_query(
@@ -241,6 +243,7 @@ class ClaudeCodeAdapter(LLMInterface):
         cwd: str | None = None,
         allowed_tools: list[str] | None = None,
         max_turns: int | None = None,
+        pid_callback: Callable[[int], None] | None = None,
     ) -> LLMResponse:
         """Run claude CLI subprocess."""
         cmd = [self._claude_bin, "-p"]
@@ -273,13 +276,22 @@ class ClaudeCodeAdapter(LLMInterface):
         )
 
         try:
+            # start_new_session=True puts the child in its own process group so
+            # we can kill the whole tree (claude CLI plus any tools it spawns)
+            # via os.killpg on the pid.
             proc = await asyncio.create_subprocess_exec(
                 *cmd,
                 stdin=asyncio.subprocess.PIPE,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
                 cwd=cwd,
+                start_new_session=True,
             )
+            if pid_callback is not None and proc.pid:
+                try:
+                    pid_callback(proc.pid)
+                except Exception:
+                    logger.exception("pid_callback raised; ignoring")
             stdout, stderr = await asyncio.wait_for(
                 proc.communicate(input=full_prompt.encode("utf-8")),
                 timeout=self._timeout,

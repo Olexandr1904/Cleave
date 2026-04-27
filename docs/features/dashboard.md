@@ -94,3 +94,4 @@ Local web dashboard providing real-time visibility into the Sickle pipeline. Sho
 | 2026-04-16 | Wizard kicks orchestrator.rescan_projects() immediately after Atlas writes project.yaml, rather than waiting for the next poll tick |
 | 2026-04-16 | Integration test: wizard POST → stub Atlas writes YAML → orchestrator.rescan_projects called → project merged into live dict |
 | 2026-04-27 | Settings page (FR17): SQLite-backed settings table + GET/PUT /api/settings/model; init_settings runs on dashboard startup |
+| 2026-04-27 | Adapters take `model_provider: Callable[[], str]`; YAML `claude.model` field and hardcoded defaults dropped — runtime store is the sole source |

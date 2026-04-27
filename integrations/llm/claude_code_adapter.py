@@ -16,7 +16,7 @@ import logging
 import re
 import shutil
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, Callable
 
 from integrations.llm.llm_interface import LLMInterface, LLMResponse
 
@@ -90,12 +90,12 @@ class ClaudeCodeAdapter(LLMInterface):
 
     def __init__(
         self,
-        model: str = "",
+        model_provider: Callable[[], str] | None = None,
         max_turns: int = DEFAULT_MAX_TURNS,
         timeout: int = DEFAULT_TIMEOUT,
     ) -> None:
         self._claude_bin = shutil.which("claude") or "claude"
-        self._model = model
+        self._model_provider = model_provider or (lambda: "")
         self._max_turns = max_turns
         self._timeout = timeout
 
@@ -194,7 +194,7 @@ class ClaudeCodeAdapter(LLMInterface):
         if system:
             full_prompt = f"{system}\n\n---\n\n{full_prompt}"
 
-        use_model = self._model
+        use_model = self._model_provider()
         if use_model:
             cmd.extend(["--model", use_model])
 
@@ -251,7 +251,7 @@ class ClaudeCodeAdapter(LLMInterface):
             full_prompt = f"{system}\n\n---\n\n{full_prompt}"
 
         # Model
-        use_model = model or self._model
+        use_model = model or self._model_provider()
         if use_model:
             cmd.extend(["--model", use_model])
 

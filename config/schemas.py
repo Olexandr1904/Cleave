@@ -14,7 +14,6 @@ class TelegramConfig:
 @dataclass
 class ClaudeConfig:
     api_key: str = ""
-    model: str = "claude-sonnet-4-5"
 
 
 @dataclass

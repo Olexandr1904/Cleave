@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from typing import Any
+from typing import Any, Callable
 
 import anthropic
 
@@ -19,9 +19,13 @@ RETRY_BACKOFF = [1, 2, 4]
 class ClaudeAdapter(LLMInterface):
     """Claude API adapter via Anthropic SDK."""
 
-    def __init__(self, api_key: str, default_model: str = "claude-sonnet-4-5") -> None:
+    def __init__(
+        self,
+        api_key: str,
+        default_model_provider: Callable[[], str],
+    ) -> None:
         self._client = anthropic.AsyncAnthropic(api_key=api_key)
-        self._default_model = default_model
+        self._default_model_provider = default_model_provider
 
     async def send_message(
         self,
@@ -55,7 +59,7 @@ class ClaudeAdapter(LLMInterface):
         system: str = "",
     ) -> LLMResponse:
         """Make a single Claude API call with retries."""
-        use_model = model or self._default_model
+        use_model = model or self._default_model_provider()
         last_error = None
 
         kwargs: dict[str, Any] = {
@@ -139,15 +143,16 @@ class ClaudeAdapter(LLMInterface):
         Returns:
             The raw text response from Claude.
         """
+        model = self._default_model_provider()
         kwargs: dict[str, Any] = {
-            "model": self._default_model,
+            "model": model,
             "max_tokens": 200,
             "messages": [{"role": "user", "content": prompt}],
         }
         if system:
             kwargs["system"] = system
 
-        logger.info("Claude API quick_query: model=%s", self._default_model)
+        logger.info("Claude API quick_query: model=%s", model)
         try:
             response = await asyncio.wait_for(
                 self._client.messages.create(**kwargs),

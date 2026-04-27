@@ -50,7 +50,7 @@ class TestLoadGlobalConfig:
         assert config.claude.api_key == "test-api-key"
 
         # AC4: all fields parsed
-        assert config.claude.model == "claude-sonnet-4-5"
+        assert not hasattr(config.claude, "model")
         assert config.workspaces.base_dir == "/data"
         assert config.workspaces.max_age_days == 7
         assert config.defaults.poll_interval_seconds == 300

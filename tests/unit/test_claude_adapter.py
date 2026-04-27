@@ -22,7 +22,10 @@ def _mock_response(text: str) -> MagicMock:
 class TestClaudeAdapterQuickQuery:
     @pytest.fixture
     def adapter(self):
-        a = ClaudeAdapter(api_key="fake-key", default_model="claude-sonnet-4-5")
+        a = ClaudeAdapter(
+            api_key="fake-key",
+            default_model_provider=lambda: "claude-sonnet-4-5",
+        )
         a._client = MagicMock()
         a._client.messages = MagicMock()
         return a

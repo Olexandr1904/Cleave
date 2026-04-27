@@ -547,6 +547,7 @@ class Orchestrator:
             branch_prefix=repo_config.vcs.github.branch_prefix
             if repo_config.vcs.provider == "github"
             else repo_config.vcs.gitlab.branch_prefix,
+            title=pt.ticket.summary,
         )
 
         # Write ticket data as markdown

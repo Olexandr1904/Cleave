@@ -385,3 +385,25 @@ class TestQuotaFailureClassification:
         assert result.success is False
         assert result.failure_kind == "permanent"
         assert result.retry_at is None
+
+    async def test_cli_timed_out_sets_failure_kind_quota_for_retry(
+        self, registry, workspace
+    ):
+        """CLI 'timed out' errors must route to the auto-retry DEFERRED path,
+        not FAILED. The actual error message says 'timed out', not 'timeout'."""
+        from integrations.llm.claude_code_adapter import ClaudeCodeAdapter
+        from orchestrator.agent_runtime import AgentRuntime
+
+        class StubAdapter(ClaudeCodeAdapter):
+            def __init__(self):
+                pass
+
+            async def execute_in_workspace(self, *args, **kwargs):
+                raise RuntimeError("Claude Code CLI timed out after 2400s")
+
+        runtime = AgentRuntime(registry, StubAdapter())
+        result = await runtime.execute("dev-agent", workspace)
+
+        assert result.success is False
+        assert result.failure_kind == "quota"  # reused for auto-retry
+        assert result.retry_at is not None

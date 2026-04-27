@@ -156,18 +156,28 @@ def main(argv: list[str] | None = None) -> int:
     workflow_path = str(Path(__file__).parent / "workflows" / "default-workflow.yaml")
     workflow = load_workflow(workflow_path)
 
-    # Initialize LLM adapter
+    # Initialize LLM adapter (model read fresh from runtime store on every dispatch).
+    import sqlite3 as _sqlite3
+
+    def _read_model() -> str:
+        with _sqlite3.connect(db_path) as _conn:
+            row = _conn.execute(
+                "SELECT value FROM settings WHERE key='model'"
+            ).fetchone()
+        if row is None:
+            from dashboard.settings_store import DEFAULT_MODEL
+            return DEFAULT_MODEL
+        return row[0]
+
     if global_config.claude.api_key:
         llm = ClaudeAdapter(
             api_key=global_config.claude.api_key,
-            default_model=global_config.claude.model,
+            default_model_provider=_read_model,
         )
         print("  LLM: Anthropic API adapter")
     else:
         from integrations.llm.claude_code_adapter import ClaudeCodeAdapter
-        llm = ClaudeCodeAdapter(
-            model=global_config.claude.model if global_config.claude.model != "claude-sonnet-4-5" else "",
-        )
+        llm = ClaudeCodeAdapter(model_provider=_read_model)
         print("  LLM: Claude Code CLI adapter (using existing auth)")
 
     # Initialize workspace manager

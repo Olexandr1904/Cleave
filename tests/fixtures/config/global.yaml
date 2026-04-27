@@ -4,7 +4,6 @@ telegram:
 
 claude:
   api_key: "${CLAUDE_API_KEY}"
-  model: "claude-sonnet-4-5"
 
 workspaces:
   base_dir: "/data"

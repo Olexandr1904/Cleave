@@ -215,7 +215,6 @@ telegram:
   default_chat_id: ''
 claude:
   api_key: ''
-  model: claude-sonnet-4-5
 workspaces:
   base_dir: {ws}
   max_age_days: 14

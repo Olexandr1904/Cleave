@@ -15,7 +15,7 @@ from integrations.llm.claude_code_adapter import ClaudeCodeAdapter, QuotaExhaust
 class TestQuickQuery:
     @pytest.fixture
     def adapter(self):
-        return ClaudeCodeAdapter(model="claude-haiku-4-5-20251001")
+        return ClaudeCodeAdapter(model_provider=lambda: "claude-haiku-4-5-20251001")
 
     async def test_quick_query_returns_content(self, adapter):
         mock_result = json.dumps({
@@ -92,7 +92,7 @@ class TestQuickQuery:
 class TestRunCliQuotaRaises:
     @pytest.fixture
     def adapter(self):
-        return ClaudeCodeAdapter(model="claude-sonnet-4-5")
+        return ClaudeCodeAdapter(model_provider=lambda: "claude-sonnet-4-5")
 
     async def test_non_zero_rc_with_quota_marker_raises_quota(self, adapter):
         # epoch ms for 2026-04-14T20:00:00 UTC

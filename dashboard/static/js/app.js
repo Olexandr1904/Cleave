@@ -46,6 +46,17 @@ function showEventLog(fromHash) {
   if (!fromHash) setHash('#/eventlog');
 }
 
+function showSettings(fromHash) {
+  state.view = 'settings';
+  state.ticketId = null;
+  document.getElementById('view-title').textContent = 'Settings';
+  document.getElementById('toolbar-eventlog-controls').style.display = 'none';
+  updateActiveNav('nav-settings');
+  stopAutoRefresh();
+  import('./settings.js').then(({ renderSettings }) => renderSettings());
+  if (!fromHash) setHash('#/settings');
+}
+
 function showDetail(ticketId, fromHash) {
   state.view = 'detail';
   state.ticketId = ticketId;
@@ -58,11 +69,12 @@ function showDetail(ticketId, fromHash) {
 
 function routeFromHash() {
   const h = location.hash || '#/board';
-  const m = h.match(/^#\/(board|eventlog|ticket)(?:\/(.+))?$/);
+  const m = h.match(/^#\/(board|eventlog|settings|ticket)(?:\/(.+))?$/);
   if (!m) { showBoard(null, true); return; }
   const [, view, arg] = m;
   if (view === 'board') showBoard(arg || null, true);
   else if (view === 'eventlog') showEventLog(true);
+  else if (view === 'settings') showSettings(true);
   else if (view === 'ticket' && arg) showDetail(arg, true);
   else showBoard(null, true);
 }
@@ -118,7 +130,7 @@ function updateProjectSidebar(workspaces) {
 function updateToolbarStats(workspaces) {
   const stats = document.getElementById('toolbar-stats');
   if (!stats) return;
-  const active = workspaces.filter(ws => !['DONE', 'FAILED', 'ARCHIVED'].includes(ws.current_state)).length;
+  const active = workspaces.filter(ws => !['DONE', 'FAILED', 'ARCHIVED', 'SETUP_DONE'].includes(ws.current_state)).length;
   const blocked = workspaces.filter(ws => ws.current_state === 'BLOCKED').length;
   const awaiting = workspaces.filter(ws => ws.current_state === 'AWAITING_APPROVAL').length;
   const manual = workspaces.filter(ws => ws.current_state === 'MANUAL_CONTROL').length;
@@ -222,6 +234,7 @@ async function init() {
   // Bind nav
   document.getElementById('nav-board').addEventListener('click', () => showBoard(null));
   document.getElementById('nav-eventlog').addEventListener('click', () => showEventLog());
+  document.getElementById('nav-settings').addEventListener('click', () => showSettings());
 
   // Bind new project button
   document.getElementById('new-project-btn')?.addEventListener('click', () => {

@@ -333,6 +333,36 @@ class TestPausedSkipped:
         assert ws.state.current_state == Stage.PAUSED
         assert ws.state.previous_state == Stage.DEV
 
+    async def test_agent_finishing_while_paused_does_not_auto_advance(
+        self, orchestrator_with_stubs, tmp_path
+    ):
+        """If the user pauses a ticket while an agent is running, the agent's
+        eventual completion must NOT transition the ticket out of PAUSED.
+        Regression for: ACME-12053 going PAUSED -> PUSHED after qa-agent
+        finished.
+        """
+        orch = orchestrator_with_stubs
+        ws = _make_workspace(tmp_path, "T-RACE-1", state=Stage.QA)
+        orch._active_workspaces.append(ws)
+
+        # Simulate the user pausing the ticket while the agent runs.
+        async def execute_then_simulate_pause(*args, **kwargs):
+            ws.transition(Stage.PAUSED)
+            return AgentResult(
+                agent_id="qa-agent", success=True, output="status: pass", error=None,
+            )
+
+        orch._agent_runtime.execute = AsyncMock(side_effect=execute_then_simulate_pause)
+
+        stage_def = MagicMock()
+        stage_def.agent = "qa-agent"
+        stage_def.max_iterations = 0
+        await orch._handle_agent_stage(ws, "qa", stage_def)
+
+        # Ticket must stay PAUSED — no auto-advance to PUSHED.
+        assert ws.state.current_state == Stage.PAUSED
+        assert ws.state.previous_state == Stage.QA
+
     async def test_paused_in_skip_set(self):
         """The poll cycle's _SKIP set must include PAUSED so the
         orchestrator never advances paused workspaces. We verify by

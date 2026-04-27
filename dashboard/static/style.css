@@ -177,9 +177,16 @@
   .card-footer {
     display: flex;
     align-items: center;
-    justify-content: space-between;
     margin-top: 8px;
     gap: 6px;
+  }
+
+  .card-footer-spacer { flex: 1; }
+
+  .card-actions {
+    display: flex;
+    align-items: center;
+    gap: 4px;
   }
 
   .card-time {
@@ -203,6 +210,36 @@
     white-space: nowrap;
     max-width: 100%;
   }
+
+  /* Dimmed card (DONE / ARCHIVED / SETUP_DONE) */
+  .card-dimmed { opacity: 0.45; }
+  .card-dimmed:hover { opacity: 0.7; }
+
+  /* Manual-control inline label */
+  .card-manual-label {
+    font-size: 10px;
+    color: #d2a8ff;
+    margin-top: 2px;
+  }
+
+  /* Iteration badge */
+  .card-iter {
+    font-size: 10px;
+    color: #58a6ff;
+    background: #1a2d3d;
+    border: 1px solid #1f6feb44;
+    border-radius: 10px;
+    padding: 1px 8px;
+    white-space: nowrap;
+  }
+
+  /* Delete button — hidden until card hover */
+  .card .btn-delete {
+    opacity: 0;
+    transition: opacity .15s;
+  }
+  .card:hover .btn-delete { opacity: 0.6; }
+  .card .btn-delete:hover { opacity: 1; border-color: #da3633; }
 
   /* ── State badges ── */
   .state-badge {
@@ -228,11 +265,14 @@
   .state-DEFERRED   { background: #2d1f3d; color: #b392f0; border: 1px solid #8a63d2; }
   .state-BLOCKED    { background: #3d1a1a; color: #f85149; border: 1px solid #da3633; }
   .state-AWAITING_APPROVAL { background: #3d3318; color: #e3b341; border: 1px solid #9e6a03; }
+  .state-PAUSED    { background: #1a2d3d; color: #79c0ff; border: 1px solid #388bfd; }
 
   .card-blocked { box-shadow: inset 3px 0 0 #f85149; }
   .card-awaiting { box-shadow: inset 3px 0 0 #e3b341; }
+  .card-paused { box-shadow: inset 3px 0 0 #79c0ff; opacity: 0.85; }
   .badge-pulse-red { color: #f85149; font-weight: 700; }
   .badge-pulse-yellow { color: #e3b341; font-weight: 700; }
+  .badge-pulse-blue { color: #79c0ff; font-weight: 700; }
 
   /* ── Detail view ── */
   #detail-view {
@@ -576,8 +616,10 @@
   .btn-retry { background: #21262d; color: #c9d1d9; border-color: #30363d; }
   .btn-take-control { background: #1a2d3d; color: #79c0ff; border-color: #1f6feb; font-weight: 700; }
   .btn-finished { background: #1f6feb; color: #fff; border-color: #1f6feb; font-weight: 700; }
-  .btn-delete { background: #21262d; color: #f85149; border-color: #30363d; opacity: 0.6; }
-  .btn-delete:hover { opacity: 1; border-color: #da3633; }
+  .btn-delete { background: #21262d; color: #f85149; border-color: #30363d; }
+
+  .btn-clean { background: #21262d; color: #8b949e; border-color: #30363d; font-size: 10px; padding: 1px 8px; }
+  .btn-clean:hover { color: #e3b341; border-color: #9e6a03; }
 
   .action-links { margin-left: auto; font-size: 11px; }
   .action-links a { color: #58a6ff; text-decoration: none; }

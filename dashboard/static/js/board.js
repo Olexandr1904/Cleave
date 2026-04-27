@@ -2,7 +2,7 @@
 
 import { loadWorkspaces, loadHealth } from './api.js';
 import { esc, timeAgo, stateBadgeHtml } from './helpers.js';
-import { approveWorkspace } from './actions.js';
+import { approveWorkspace, pauseWorkspace, unpauseWorkspace } from './actions.js';
 
 export async function renderBoard(projectId, showDone = true) {
   const content = document.getElementById('content');
@@ -31,9 +31,9 @@ export async function renderBoard(projectId, showDone = true) {
 
     // Sort: BLOCKED first, AWAITING second, DEFERRED third, active by stage, DONE/ARCHIVED last
     const stateOrder = {
-      BLOCKED: 0, AWAITING_APPROVAL: 1, DEFERRED: 2, MANUAL_CONTROL: 3,
-      DEV: 4, ANALYSIS: 5, SCOPE_CHECK: 6, QA: 7, PR_REVIEW: 8, PUSHED: 9,
-      NEW: 10, DONE: 11, SETUP_DONE: 11, FAILED: 12, ARCHIVED: 13,
+      BLOCKED: 0, AWAITING_APPROVAL: 1, DEFERRED: 2, MANUAL_CONTROL: 3, PAUSED: 4,
+      DEV: 5, ANALYSIS: 6, SCOPE_CHECK: 7, QA: 8, PR_REVIEW: 9, PUSHED: 10,
+      NEW: 11, DONE: 12, SETUP_DONE: 12, FAILED: 13, ARCHIVED: 14,
     };
     filtered.sort((a, b) => (stateOrder[a.current_state] ?? 99) - (stateOrder[b.current_state] ?? 99));
 
@@ -73,6 +73,39 @@ export async function renderBoard(projectId, showDone = true) {
       });
     });
 
+    // Bind inline pause buttons
+    content.querySelectorAll('[data-action="pause"]').forEach(btn => {
+      btn.addEventListener('click', async (e) => {
+        e.stopPropagation();
+        const tid = btn.dataset.ticket;
+        try {
+          const result = await pauseWorkspace(tid, false);
+          if (result && result.status === 'agent_running') {
+            const ok = confirm(`Agent ${result.agent} is currently running for ${tid} (started ${result.started_ago} ago). Pausing will stop the agent. Continue?`);
+            if (!ok) return;
+            await pauseWorkspace(tid, true);
+          }
+          await renderBoard(projectId, showDone);
+        } catch (err) {
+          alert('Pause failed: ' + err.message);
+        }
+      });
+    });
+
+    // Bind inline unpause buttons
+    content.querySelectorAll('[data-action="unpause"]').forEach(btn => {
+      btn.addEventListener('click', async (e) => {
+        e.stopPropagation();
+        const tid = btn.dataset.ticket;
+        try {
+          await unpauseWorkspace(tid);
+          await renderBoard(projectId, showDone);
+        } catch (err) {
+          alert('Unpause failed: ' + err.message);
+        }
+      });
+    });
+
     // Bind inline delete buttons
     content.querySelectorAll('[data-action="delete"]').forEach(btn => {
       btn.addEventListener('click', async (e) => {
@@ -85,6 +118,26 @@ export async function renderBoard(projectId, showDone = true) {
           await renderBoard(projectId, showDone);
         } catch (err) {
           alert('Delete failed: ' + err.message);
+        }
+      });
+    });
+
+    // Bind inline clean-source buttons (DONE cards only)
+    content.querySelectorAll('[data-action="clean"]').forEach(btn => {
+      btn.addEventListener('click', async (e) => {
+        e.stopPropagation();
+        const tid = btn.dataset.ticket;
+        if (!confirm(`Remove source code for ${tid}? Reports and metadata are kept. Frees disk space.`)) return;
+        btn.disabled = true;
+        btn.textContent = '...';
+        try {
+          const resp = await fetch(`/api/workspaces/${encodeURIComponent(tid)}/clean`, { method: 'POST' });
+          if (!resp.ok) { const d = await resp.json(); throw new Error(d.message || resp.statusText); }
+          await renderBoard(projectId, showDone);
+        } catch (err) {
+          alert('Clean failed: ' + err.message);
+          btn.disabled = false;
+          btn.textContent = 'Clean';
         }
       });
     });
@@ -165,13 +218,14 @@ function bindHealthRefresh(container) {
 
 function renderCard(ws) {
   const stateVal = ws.current_state || 'NEW';
+  const dimmed = ['DONE', 'ARCHIVED', 'SETUP_DONE'].includes(stateVal);
+
   let cardClass = 'card';
-  if (stateVal === 'BLOCKED') cardClass += ' card-blocked';
-  if (stateVal === 'FAILED') cardClass += ' card-blocked';
+  if (stateVal === 'BLOCKED' || stateVal === 'FAILED') cardClass += ' card-blocked';
   if (stateVal === 'AWAITING_APPROVAL') cardClass += ' card-awaiting';
   if (stateVal === 'MANUAL_CONTROL') cardClass += ' card-manual';
-
-  const dimmed = ['DONE', 'ARCHIVED', 'SETUP_DONE'].includes(stateVal);
+  if (stateVal === 'PAUSED') cardClass += ' card-paused';
+  if (dimmed) cardClass += ' card-dimmed';
 
   const prLink = ws.pr_url
     ? `<a class="card-pr-link" href="${esc(ws.pr_url)}" target="_blank" onclick="event.stopPropagation()">PR #${esc(String(ws.pr_number || ''))}</a>`
@@ -182,21 +236,34 @@ function renderCard(ws) {
     : '';
 
   const approveBtn = stateVal === 'AWAITING_APPROVAL'
-    ? `<button class="action-btn btn-approve" data-action="approve" data-ticket="${esc(ws.ticket_id)}" style="padding:1px 8px;font-size:10px;">Approve</button>`
+    ? `<button class="action-btn btn-approve" data-action="approve" data-ticket="${esc(ws.ticket_id)}">Approve</button>`
     : '';
 
-  const deleteBtn = `<button class="action-btn btn-delete" data-action="delete" data-ticket="${esc(ws.ticket_id)}" style="padding:1px 8px;font-size:10px;" onclick="event.stopPropagation()">✕</button>`;
+  const PAUSEABLE_STATES = ['ANALYSIS', 'DEV', 'SCOPE_CHECK', 'QA', 'PUSHED', 'PR_REVIEW'];
+  let pauseBtn = '';
+  if (PAUSEABLE_STATES.includes(stateVal)) {
+    pauseBtn = `<button class="action-btn btn-pause" data-action="pause" data-ticket="${esc(ws.ticket_id)}" onclick="event.stopPropagation()" title="Pause this ticket — agent (if running) will be stopped">Pause</button>`;
+  } else if (stateVal === 'PAUSED') {
+    pauseBtn = `<button class="action-btn btn-pause" data-action="unpause" data-ticket="${esc(ws.ticket_id)}" onclick="event.stopPropagation()" title="Resume work on this ticket">Unpause</button>`;
+  }
 
   const manualLabel = stateVal === 'MANUAL_CONTROL'
-    ? `<div style="font-size:10px;color:#d2a8ff;">You have control</div>`
+    ? `<div class="card-manual-label">You have control</div>`
     : '';
 
-  // Iteration info
+  // Iteration badge
   const iters = ws.stage_iterations || {};
   const totalIters = Object.values(iters).reduce((a, b) => a + b, 0);
-  const iterLabel = totalIters > 0 ? `<span style="font-size:10px;color:#58a6ff;">iter ${totalIters}</span>` : '';
+  const iterBadge = totalIters > 0 ? `<span class="card-iter">iter ${totalIters}</span>` : '';
 
-  return `<div class="${cardClass}" data-ticket="${esc(ws.ticket_id)}" style="${dimmed ? 'opacity:0.5;' : ''}">
+  // Clean-source button for DONE cards with a workspace on disk
+  const cleanBtn = dimmed && ws.workspace_root
+    ? `<button class="action-btn btn-clean" data-action="clean" data-ticket="${esc(ws.ticket_id)}" onclick="event.stopPropagation()" title="Remove source code to free disk space">Clean</button>`
+    : '';
+
+  const deleteBtn = `<button class="action-btn btn-delete" data-action="delete" data-ticket="${esc(ws.ticket_id)}" onclick="event.stopPropagation()">✕</button>`;
+
+  return `<div class="${cardClass}" data-ticket="${esc(ws.ticket_id)}">
     <div class="card-header">
       <span class="card-ticket">${esc(ws.ticket_id)}</span>
       ${stateBadgeHtml(stateVal)}
@@ -206,10 +273,15 @@ function renderCard(ws) {
     ${manualLabel}
     <div class="card-footer">
       <span class="card-time">${esc(timeAgo(ws.started_at))}</span>
-      ${iterLabel}
-      ${approveBtn}
-      ${deleteBtn}
-      ${prLink}
+      ${iterBadge}
+      <span class="card-footer-spacer"></span>
+      <span class="card-actions">
+        ${prLink}
+        ${approveBtn}
+        ${pauseBtn}
+        ${cleanBtn}
+        ${deleteBtn}
+      </span>
     </div>
   </div>`;
 }

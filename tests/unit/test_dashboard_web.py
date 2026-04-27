@@ -1,11 +1,14 @@
 from __future__ import annotations
 
+import json
+from pathlib import Path
+
 import pytest
 from starlette.testclient import TestClient
 
 from dashboard.event_store import EventStore
 from dashboard.events import Event, EventBus
-from dashboard.web import create_app
+from dashboard.web import create_app, _scan_all_workspaces
 
 
 @pytest.fixture
@@ -119,3 +122,73 @@ class TestDashboardPage:
         resp = client.get("/")
         assert resp.status_code == 200
         assert "text/html" in resp.headers["content-type"]
+
+
+class TestTitleBackfill:
+    def _write_state(self, root: Path, **fields):
+        root.mkdir(parents=True, exist_ok=True)
+        defaults = {
+            "ticket_id": "T-1",
+            "company_id": "acme",
+            "repo_id": "acme-app",
+            "current_state": "ANALYSIS",
+            "started_at": "2026-04-27T00:00:00+00:00",
+            "last_updated_at": "2026-04-27T00:00:00+00:00",
+        }
+        defaults.update(fields)
+        (root / "state.json").write_text(json.dumps(defaults), encoding="utf-8")
+
+    def test_backfills_from_ticket_md(self, tmp_path):
+        ws = tmp_path / "acme" / "acme-app" / "tickets" / "T-1"
+        self._write_state(ws)
+        meta = ws / "meta"
+        meta.mkdir()
+        (meta / "ticket.md").write_text(
+            "# T-1: Login screen flickers on cold start\n\n## Description\n",
+            encoding="utf-8",
+        )
+
+        results = _scan_all_workspaces(str(tmp_path))
+
+        assert results[0]["title"] == "Login screen flickers on cold start"
+        # Disk was updated
+        on_disk = json.loads((ws / "state.json").read_text())
+        assert on_disk["title"] == "Login screen flickers on cold start"
+
+    def test_backfill_handles_missing_id_prefix(self, tmp_path):
+        ws = tmp_path / "acme" / "acme-app" / "tickets" / "T-2"
+        self._write_state(ws, ticket_id="T-2")
+        meta = ws / "meta"
+        meta.mkdir()
+        (meta / "ticket.md").write_text("# Just a plain title\n", encoding="utf-8")
+
+        results = _scan_all_workspaces(str(tmp_path))
+        assert results[0]["title"] == "Just a plain title"
+
+    def test_backfill_setup_workspace(self, tmp_path):
+        ws = tmp_path / "acme" / "acme-app" / "setup"
+        self._write_state(ws, ticket_id="setup")
+        # No meta/ticket.md
+
+        results = _scan_all_workspaces(str(tmp_path))
+        assert results[0]["title"] == "Workspace setup"
+        on_disk = json.loads((ws / "state.json").read_text())
+        assert on_disk["title"] == "Workspace setup"
+
+    def test_backfill_skipped_when_title_present(self, tmp_path):
+        ws = tmp_path / "acme" / "acme-app" / "tickets" / "T-3"
+        self._write_state(ws, ticket_id="T-3", title="Already set")
+        meta = ws / "meta"
+        meta.mkdir()
+        (meta / "ticket.md").write_text("# T-3: Different title\n", encoding="utf-8")
+
+        results = _scan_all_workspaces(str(tmp_path))
+        assert results[0]["title"] == "Already set"
+
+    def test_backfill_no_meta_no_setup(self, tmp_path):
+        ws = tmp_path / "acme" / "acme-app" / "tickets" / "T-4"
+        self._write_state(ws, ticket_id="T-4")
+        # No meta/ticket.md and not a setup dir
+
+        results = _scan_all_workspaces(str(tmp_path))
+        assert results[0]["title"] == ""

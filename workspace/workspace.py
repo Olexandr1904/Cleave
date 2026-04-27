@@ -123,7 +123,9 @@ class Workspace:
 
     @property
     def logs_dir(self) -> Path:
-        return self._root / "logs"
+        path = self._root / "logs"
+        path.mkdir(parents=True, exist_ok=True)
+        return path
 
     @property
     def state_path(self) -> Path:

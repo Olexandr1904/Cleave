@@ -317,3 +317,33 @@ class TestDeferredSweep:
 
         await orch._sweep_deferred()
         assert orch._quota_window_end == future
+
+
+class TestPausedSkipped:
+    async def test_sweep_deferred_does_not_touch_paused(
+        self, orchestrator_with_stubs, tmp_path
+    ):
+        orch = orchestrator_with_stubs
+        ws = _make_workspace(tmp_path, "T-PAUSED-1", state=Stage.DEV)
+        ws.transition(Stage.PAUSED)
+        orch._active_workspaces.append(ws)
+
+        await orch._sweep_deferred()
+
+        assert ws.state.current_state == Stage.PAUSED
+        assert ws.state.previous_state == Stage.DEV
+
+    async def test_paused_in_skip_set(self):
+        """The poll cycle's _SKIP set must include PAUSED so the
+        orchestrator never advances paused workspaces. We verify by
+        inspecting the source — the constant lives inline inside
+        _poll_cycle, so we read the file."""
+        from pathlib import Path
+        src = Path("orchestrator/orchestrator.py").read_text()
+        assert "Stage.PAUSED" in src, "Stage.PAUSED must appear in orchestrator.py"
+        import re
+        m = re.search(r"_SKIP\s*=\s*\{([^}]*)\}", src)
+        assert m, "Expected an _SKIP = {...} set literal"
+        assert "Stage.PAUSED" in m.group(1), (
+            f"Stage.PAUSED missing from _SKIP set: {m.group(1)}"
+        )

@@ -421,7 +421,7 @@ class Orchestrator:
 
         # Skip workspaces in terminal or clearly waiting states
         _SKIP = {Stage.DONE, Stage.ARCHIVED, Stage.BLOCKED,
-                 Stage.MANUAL_CONTROL, Stage.DEFERRED, Stage.FAILED}
+                 Stage.MANUAL_CONTROL, Stage.DEFERRED, Stage.FAILED, Stage.PAUSED}
         active = [ws for ws in self._active_workspaces if ws.state.current_state not in _SKIP]
         if active:
             await asyncio.gather(*[_safe_advance(ws) for ws in active])

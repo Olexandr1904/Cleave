@@ -365,3 +365,70 @@ class TestArchiveEndpoint:
         resp = client.post("/api/workspaces/T-A4/archive")
         assert resp.status_code == 200
         assert ws.transition.call_args_list == [call("FAILED"), call("ARCHIVED")]
+
+
+class TestPauseEndpoint:
+    def test_pause_active_workspace_transitions_to_paused(self, client, orchestrator):
+        ws = _make_workspace("T-P1", "DEV")
+        orchestrator.get_active_workspaces.return_value = [ws]
+        resp = client.post("/api/workspaces/T-P1/pause",
+                           content=json.dumps({"confirm": True}))
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["status"] == "ok"
+        assert data["new_state"] == "PAUSED"
+        ws.transition.assert_called_with(Stage.PAUSED)
+
+    def test_pause_no_agent_running_does_not_require_confirm(self, client, orchestrator):
+        ws = _make_workspace("T-P2", "DEV")
+        orchestrator.get_active_workspaces.return_value = [ws]
+        resp = client.post("/api/workspaces/T-P2/pause")
+        assert resp.status_code == 200
+        assert resp.json()["status"] == "ok"
+        ws.transition.assert_called_with(Stage.PAUSED)
+
+    def test_pause_agent_running_without_confirm_returns_agent_running(
+        self, client, orchestrator
+    ):
+        ws = _make_workspace("T-P3", "DEV")
+        orchestrator.get_active_workspaces.return_value = [ws]
+        orchestrator._agent_runtime.get_running.return_value = {
+            "agent_id": "dev-agent", "pid": 123, "started_at": 1000.0,
+        }
+        resp = client.post("/api/workspaces/T-P3/pause")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["status"] == "agent_running"
+        assert data["agent"] == "dev-agent"
+        ws.transition.assert_not_called()
+
+    def test_pause_agent_running_with_confirm_kills_and_pauses(self, client, orchestrator):
+        ws = _make_workspace("T-P4", "DEV")
+        orchestrator.get_active_workspaces.return_value = [ws]
+        orchestrator._agent_runtime.get_running.return_value = {
+            "agent_id": "dev-agent", "pid": 123, "started_at": 1000.0,
+        }
+        resp = client.post("/api/workspaces/T-P4/pause",
+                           content=json.dumps({"confirm": True}))
+        assert resp.status_code == 200
+        assert resp.json()["status"] == "ok"
+        orchestrator._agent_runtime.cancel.assert_called_with("T-P4")
+        ws.transition.assert_called_with(Stage.PAUSED)
+
+    @pytest.mark.parametrize("bad_state", [
+        "NEW", "BLOCKED", "AWAITING_APPROVAL", "MANUAL_CONTROL",
+        "DEFERRED", "PAUSED", "DONE", "FAILED", "ARCHIVED",
+    ])
+    def test_pause_from_invalid_state_returns_400(self, client, orchestrator, bad_state):
+        ws = _make_workspace("T-PX", bad_state)
+        orchestrator.get_active_workspaces.return_value = [ws]
+        resp = client.post("/api/workspaces/T-PX/pause",
+                           content=json.dumps({"confirm": True}))
+        assert resp.status_code == 400
+        ws.transition.assert_not_called()
+
+    def test_pause_missing_workspace_returns_404(self, client, orchestrator):
+        orchestrator.get_active_workspaces.return_value = []
+        resp = client.post("/api/workspaces/T-MISSING/pause",
+                           content=json.dumps({"confirm": True}))
+        assert resp.status_code == 404

@@ -133,3 +133,54 @@ class TestRetry:
         page.locator('.card[data-ticket="F-1"]').click()
         page.wait_for_selector("#detail-view", timeout=3000)
         expect(page.locator("#act-retry")).to_be_visible()
+
+
+class TestPause:
+    def test_pause_button_visible_for_active_state(
+        self, page: Page, dashboard_server: dict
+    ):
+        goto_and_wait_for_board(page, dashboard_server["base_url"])
+        page.locator('.card[data-ticket="SPIKE-1"]').click()  # DEV
+        page.wait_for_selector("#detail-view", timeout=3000)
+        expect(page.locator("#act-pause")).to_be_visible()
+
+    def test_pause_button_not_visible_for_blocked(
+        self, page: Page, dashboard_server: dict
+    ):
+        goto_and_wait_for_board(page, dashboard_server["base_url"])
+        page.locator('.card[data-ticket="SPIKE-3"]').click()  # BLOCKED
+        page.wait_for_selector("#detail-view", timeout=3000)
+        expect(page.locator("#act-pause")).to_have_count(0)
+
+    def test_pause_transitions_state_on_disk(
+        self, page: Page, dashboard_server: dict
+    ):
+        sp = state_path(dashboard_server["workspace_dir"], "SPIKE-1")
+        before = json.loads(sp.read_text())
+        assert before["current_state"] == "DEV"
+
+        goto_and_wait_for_board(page, dashboard_server["base_url"])
+        page.locator('.card[data-ticket="SPIKE-1"]').click()
+        page.wait_for_selector("#act-pause", timeout=3000)
+        page.locator("#act-pause").click()
+
+        after = wait_for_state_change(sp, "DEV")
+        assert after["current_state"] == "PAUSED"
+        assert after["previous_state"] == "DEV"
+
+    def test_unpause_returns_to_previous_state(
+        self, page: Page, workspace_seeder, dashboard_server_custom
+    ):
+        base, seed = workspace_seeder
+        seed("P-1", "PAUSED", previous_state="DEV")
+        ctx = dashboard_server_custom()
+        sp = state_path(base, "P-1")
+
+        goto_and_wait_for_board(page, ctx["base_url"])
+        page.locator('.card[data-ticket="P-1"]').click()
+        page.wait_for_selector("#act-unpause", timeout=3000)
+        page.locator("#act-unpause").click()
+
+        after = wait_for_state_change(sp, "PAUSED")
+        assert after["current_state"] == "DEV"
+        assert after["previous_state"] is None

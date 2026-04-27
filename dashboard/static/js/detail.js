@@ -4,7 +4,7 @@ import { loadWorkspaces, loadEvents } from './api.js';
 import { esc, timeAgo, fmtIso, stateBadgeHtml, PIPELINE_STAGES, STAGE_ORDER } from './helpers.js';
 import { renderEventsHtml } from './events.js';
 import { renderReportTabs, bindReportTabClicks } from './reports.js';
-import { approveWorkspace, rejectWorkspace, retryWorkspace, takeControl, releaseControl, resumeWorkspace, archiveWorkspace, showConfirmDialog } from './actions.js';
+import { approveWorkspace, rejectWorkspace, retryWorkspace, takeControl, releaseControl, resumeWorkspace, archiveWorkspace, pauseWorkspace, unpauseWorkspace, showConfirmDialog } from './actions.js';
 
 export async function renderDetail(ticketId, onBack) {
   const content = document.getElementById('content');
@@ -110,6 +110,15 @@ function buildActionBar(ws, stateVal) {
   }
   if (isDeferred) {
     buttons += `<button class="action-btn btn-retry" id="act-resume">Resume now</button>`;
+  }
+  const PAUSEABLE_STATES = ['ANALYSIS', 'DEV', 'SCOPE_CHECK', 'QA', 'PUSHED', 'PR_REVIEW'];
+  const canPause = PAUSEABLE_STATES.includes(stateVal);
+  const isPaused = stateVal === 'PAUSED';
+  if (canPause) {
+    buttons += `<button class="action-btn btn-pause" id="act-pause">Pause</button>`;
+  }
+  if (isPaused) {
+    buttons += `<button class="action-btn btn-pause" id="act-unpause">Unpause</button>`;
   }
   if (canArchive) {
     buttons += `<button class="action-btn btn-reject" id="act-archive">Archive</button>`;
@@ -360,6 +369,44 @@ function bindActionButtons(ticketId, ws, stateVal, onBack) {
           await renderDetail(ticketId, onBack);
         }
       } catch (e) { alert('Take control failed: ' + e.message); }
+    });
+  }
+
+  // Pause
+  const pauseBtn = document.getElementById('act-pause');
+  if (pauseBtn) {
+    pauseBtn.addEventListener('click', async () => {
+      try {
+        const result = await pauseWorkspace(ticketId, false);
+        if (result && result.status === 'agent_running') {
+          showConfirmDialog(
+            `Pause ${ticketId}?`,
+            `<div style="background:#3d1a1a22;border:1px solid #da363366;border-radius:6px;padding:10px 12px;margin-bottom:8px;">
+              <div style="font-size:12px;color:#f85149;font-weight:600;">Agent is currently running</div>
+              <div style="font-size:11px;color:#c9d1d9;">${esc(result.agent)} &mdash; started ${esc(result.started_ago)} ago</div>
+              <div style="font-size:11px;color:#8b949e;margin-top:4px;">Pausing will stop this agent.</div>
+            </div>`,
+            'Stop Agent & Pause',
+            async () => {
+              await pauseWorkspace(ticketId, true);
+              await renderDetail(ticketId, onBack);
+            }
+          );
+        } else {
+          await renderDetail(ticketId, onBack);
+        }
+      } catch (e) { alert('Pause failed: ' + e.message); }
+    });
+  }
+
+  // Unpause
+  const unpauseBtn = document.getElementById('act-unpause');
+  if (unpauseBtn) {
+    unpauseBtn.addEventListener('click', async () => {
+      try {
+        await unpauseWorkspace(ticketId);
+        await renderDetail(ticketId, onBack);
+      } catch (e) { alert('Unpause failed: ' + e.message); }
     });
   }
 

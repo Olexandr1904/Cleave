@@ -148,7 +148,7 @@
     border: 1px solid #30363d;
     border-radius: 8px;
     padding: 12px 14px;
-    width: 300px;
+    width: 340px;
     cursor: pointer;
     transition: border-color .15s, box-shadow .15s;
     position: relative;
@@ -190,11 +190,6 @@
     -webkit-box-orient: vertical;
     word-break: break-word;
   }
-  .card-line2 .state-badge {
-    flex-shrink: 0;
-    align-self: flex-start;
-    margin-top: 2px;
-  }
 
   /* Line 3 — error / manual-control note (conditional) */
   .card-error {
@@ -203,6 +198,10 @@
     line-height: 1.35;
     word-break: break-word;
     margin-bottom: 8px;
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
   }
   .card-manual-note {
     font-size: 11px;

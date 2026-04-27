@@ -20,11 +20,52 @@ logger = logging.getLogger(__name__)
 TERMINAL_STATES = {Stage.DONE, Stage.ARCHIVED}
 
 
-def _find_workspace(orchestrator: Any, ticket_id: str) -> Any | None:
-    """Find workspace by ticket_id in active workspaces."""
+def _find_workspace(
+    orchestrator: Any,
+    ticket_id: str,
+    global_config: Any | None = None,
+) -> Any | None:
+    """Find workspace by ticket_id, scanning disk if not in the active list.
+
+    Workspaces can fall out of `_active_workspaces` (e.g. after escalation,
+    before the next poll-cycle reconcile). The dashboard surfaces them via a
+    disk scan, so action endpoints must do the same — otherwise pause/unpause
+    on a re-listed but un-adopted workspace returns 404 even though the user
+    sees the card.
+
+    When found on disk, the workspace is re-adopted into the active list so
+    subsequent poll-cycle logic sees it.
+    """
     for ws in orchestrator.get_active_workspaces():
         if ws.state.ticket_id == ticket_id:
             return ws
+
+    base_dir = None
+    if global_config is not None:
+        try:
+            base_dir = Path(global_config.workspaces.base_dir)
+        except AttributeError:
+            base_dir = None
+    if base_dir is None or not base_dir.exists():
+        return None
+
+    from workspace.workspace import Workspace
+    for state_file in base_dir.rglob("state.json"):
+        try:
+            ws = Workspace(str(state_file.parent))
+            if ws.state.ticket_id == ticket_id:
+                # Re-adopt so the orchestrator's poll cycle sees it.
+                try:
+                    orchestrator._active_workspaces.append(ws)
+                    logger.info(
+                        "Re-adopted workspace %s from disk for action handler",
+                        ticket_id,
+                    )
+                except AttributeError:
+                    pass
+                return ws
+        except Exception:
+            continue
     return None
 
 
@@ -43,7 +84,7 @@ def build_action_routes(
 
     async def approve(request: Request) -> JSONResponse:
         ticket_id = request.path_params["ticket_id"]
-        ws = _find_workspace(orchestrator, ticket_id)
+        ws = _find_workspace(orchestrator, ticket_id, global_config)
         if ws is None:
             return _error(f"Workspace not found: {ticket_id}", 404)
         if ws.state.current_state != Stage.AWAITING_APPROVAL:
@@ -64,7 +105,7 @@ def build_action_routes(
 
     async def reject(request: Request) -> JSONResponse:
         ticket_id = request.path_params["ticket_id"]
-        ws = _find_workspace(orchestrator, ticket_id)
+        ws = _find_workspace(orchestrator, ticket_id, global_config)
         if ws is None:
             return _error(f"Workspace not found: {ticket_id}", 404)
         if ws.state.current_state != Stage.AWAITING_APPROVAL:
@@ -83,7 +124,7 @@ def build_action_routes(
 
     async def retry(request: Request) -> JSONResponse:
         ticket_id = request.path_params["ticket_id"]
-        ws = _find_workspace(orchestrator, ticket_id)
+        ws = _find_workspace(orchestrator, ticket_id, global_config)
         if ws is None:
             return _error(f"Workspace not found: {ticket_id}", 404)
         if ws.state.current_state not in (Stage.BLOCKED, Stage.FAILED):
@@ -116,7 +157,7 @@ def build_action_routes(
 
     async def take_control(request: Request) -> JSONResponse:
         ticket_id = request.path_params["ticket_id"]
-        ws = _find_workspace(orchestrator, ticket_id)
+        ws = _find_workspace(orchestrator, ticket_id, global_config)
         if ws is None:
             return _error(f"Workspace not found: {ticket_id}", 404)
         BLOCKS_TAKE_CONTROL = {Stage.DONE, Stage.ARCHIVED, Stage.MANUAL_CONTROL}
@@ -188,7 +229,7 @@ def build_action_routes(
 
     async def release_control(request: Request) -> JSONResponse:
         ticket_id = request.path_params["ticket_id"]
-        ws = _find_workspace(orchestrator, ticket_id)
+        ws = _find_workspace(orchestrator, ticket_id, global_config)
         if ws is None:
             return _error(f"Workspace not found: {ticket_id}", 404)
         if ws.state.current_state != Stage.MANUAL_CONTROL:
@@ -215,7 +256,7 @@ def build_action_routes(
 
     async def resume(request: Request) -> JSONResponse:
         ticket_id = request.path_params["ticket_id"]
-        ws = _find_workspace(orchestrator, ticket_id)
+        ws = _find_workspace(orchestrator, ticket_id, global_config)
         if ws is None:
             return _error(f"Workspace not found: {ticket_id}", 404)
         if ws.state.current_state != Stage.DEFERRED:
@@ -234,13 +275,18 @@ def build_action_routes(
 
     async def pause(request: Request) -> JSONResponse:
         ticket_id = request.path_params["ticket_id"]
-        ws = _find_workspace(orchestrator, ticket_id)
+        logger.info("pause: request for ticket_id=%r", ticket_id)
+        ws = _find_workspace(orchestrator, ticket_id, global_config)
         if ws is None:
+            active_ids = [w.state.ticket_id for w in orchestrator.get_active_workspaces()]
+            logger.warning("pause: workspace not found for %r (active=%s)", ticket_id, active_ids)
             return _error(f"Workspace not found: {ticket_id}", 404)
 
+        logger.info("pause: %s current_state=%s", ticket_id, ws.state.current_state)
         PAUSEABLE = {Stage.ANALYSIS, Stage.DEV, Stage.SCOPE_CHECK,
                      Stage.QA, Stage.PUSHED, Stage.PR_REVIEW}
         if ws.state.current_state not in PAUSEABLE:
+            logger.warning("pause: %s rejected, state %s not pauseable", ticket_id, ws.state.current_state)
             return _error(f"Cannot pause: state is {ws.state.current_state}")
 
         body = {}
@@ -277,10 +323,14 @@ def build_action_routes(
 
     async def unpause(request: Request) -> JSONResponse:
         ticket_id = request.path_params["ticket_id"]
-        ws = _find_workspace(orchestrator, ticket_id)
+        logger.info("unpause: request for ticket_id=%r", ticket_id)
+        ws = _find_workspace(orchestrator, ticket_id, global_config)
         if ws is None:
+            active_ids = [w.state.ticket_id for w in orchestrator.get_active_workspaces()]
+            logger.warning("unpause: workspace not found for %r (active=%s)", ticket_id, active_ids)
             return _error(f"Workspace not found: {ticket_id}", 404)
         if ws.state.current_state != Stage.PAUSED:
+            logger.warning("unpause: %s rejected, state is %s not PAUSED", ticket_id, ws.state.current_state)
             return _error(f"Cannot unpause: state is {ws.state.current_state}")
 
         target = ws.state.previous_state or Stage.ANALYSIS
@@ -297,7 +347,7 @@ def build_action_routes(
 
     async def archive(request: Request) -> JSONResponse:
         ticket_id = request.path_params["ticket_id"]
-        ws = _find_workspace(orchestrator, ticket_id)
+        ws = _find_workspace(orchestrator, ticket_id, global_config)
         if ws is None:
             return _error(f"Workspace not found: {ticket_id}", 404)
         if ws.state.current_state not in (Stage.FAILED, Stage.DONE, Stage.DEFERRED):
@@ -354,7 +404,7 @@ def build_action_routes(
         ticket_id = request.path_params["ticket_id"]
 
         # Find workspace — check active list first, then scan disk
-        ws = _find_workspace(orchestrator, ticket_id)
+        ws = _find_workspace(orchestrator, ticket_id, global_config)
         ws_root = None
         if ws:
             ws_root = Path(ws.state.workspace_root)
@@ -398,7 +448,7 @@ def build_action_routes(
         from workspace.workspace import Workspace
         ticket_id = request.path_params["ticket_id"]
 
-        ws = _find_workspace(orchestrator, ticket_id)
+        ws = _find_workspace(orchestrator, ticket_id, global_config)
         if not ws:
             # Scan disk
             base = Path(global_config.workspaces.base_dir) if global_config else None

@@ -74,6 +74,45 @@ def _build_external_links(
     return links
 
 
+def _maybe_backfill_title(ws_root: Path, data: dict) -> str:
+    """Return the title for this workspace, backfilling state.json if needed.
+
+    Reads ``meta/ticket.md`` first line for ticket workspaces, or assigns the
+    static "Workspace setup" title for the setup directory. The result is
+    written back to ``state.json`` so the parse only happens once per workspace.
+    """
+    title = data.get("title") or ""
+    if title:
+        return title
+
+    if ws_root.name == "setup":
+        title = "Workspace setup"
+    else:
+        ticket_md = ws_root / "meta" / "ticket.md"
+        if ticket_md.exists():
+            try:
+                first_line = ticket_md.read_text(encoding="utf-8").splitlines()[0]
+            except (OSError, IndexError):
+                first_line = ""
+            # First line shape: "# TICKET-ID: Title" or "# Title"
+            stripped = first_line.lstrip("# ").strip()
+            ticket_id = data.get("ticket_id", "")
+            if ticket_id and stripped.startswith(f"{ticket_id}:"):
+                title = stripped[len(ticket_id) + 1:].strip()
+            else:
+                title = stripped
+
+    if title:
+        data["title"] = title
+        try:
+            (ws_root / "state.json").write_text(
+                json.dumps(data, indent=2), encoding="utf-8"
+            )
+        except OSError as e:
+            logger.warning("Failed to backfill title for %s: %s", ws_root, e)
+    return title
+
+
 def _scan_all_workspaces(
     base_dir: str,
     projects: dict[str, Any] | None = None,
@@ -87,6 +126,7 @@ def _scan_all_workspaces(
         try:
             data = json.loads(state_file.read_text(encoding="utf-8"))
             ws_root = state_file.parent
+            title = _maybe_backfill_title(ws_root, data)
             # List available reports
             reports_dir = ws_root / "reports"
             reports = sorted(f.name for f in reports_dir.iterdir() if f.is_file()) if reports_dir.exists() else []
@@ -100,6 +140,7 @@ def _scan_all_workspaces(
                 "repo_id": data.get("repo_id", ""),
                 "current_state": data.get("current_state", "UNKNOWN"),
                 "previous_state": data.get("previous_state"),
+                "title": title,
                 "branch": data.get("branch"),
                 "pr_url": data.get("pr_url"),
                 "pr_number": data.get("pr_number"),

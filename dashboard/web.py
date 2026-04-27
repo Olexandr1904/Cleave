@@ -120,7 +120,11 @@ def _maybe_backfill_title(ws_root: Path, data: dict) -> str:
                 raise
         except OSError as e:
             logger.warning("Failed to backfill title for %s: %s", ws_root, e)
-    return title
+        return title
+
+    # No title from meta/ticket.md or setup fallback — soft-fallback to ticket_id
+    # for the API response only. Don't write ticket_id back to state.json.
+    return data.get("ticket_id", "")
 
 
 def _scan_all_workspaces(

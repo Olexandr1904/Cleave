@@ -82,6 +82,18 @@ class TestWorkspace:
         assert ws2.state.current_state == Stage.ANALYSIS
         assert ws2.state.ticket_id == "TEST-123"
 
+    def test_load_state_tolerates_unknown_fields(self, workspace):
+        """state.json files written before a field was removed must still load."""
+        import json as _json
+        data = _json.loads(workspace.state_path.read_text())
+        data["comments_to_resolve"] = ["legacy-1", "legacy-2"]
+        data["some_future_field"] = {"foo": "bar"}
+        workspace.state_path.write_text(_json.dumps(data))
+
+        ws2 = Workspace(str(workspace.root))
+        assert ws2.state.ticket_id == "TEST-123"
+        assert not hasattr(ws2.state, "comments_to_resolve")
+
     def test_state_json_format(self, workspace):
         """state.json has all required fields."""
         data = json.loads(workspace.state_path.read_text())

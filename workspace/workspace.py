@@ -136,10 +136,18 @@ class Workspace:
         return self._state
 
     def _load_state(self) -> WorkspaceState:
-        """Load state from state.json on disk."""
+        """Load state from state.json on disk.
+
+        Tolerates unknown/stale fields (e.g. fields that were renamed or
+        removed since the workspace was last written) so that long-lived
+        workspaces survive schema changes.
+        """
         with open(self.state_path) as f:
             data = json.load(f)
-        return WorkspaceState(**data)
+        from dataclasses import fields
+        known = {f.name for f in fields(WorkspaceState)}
+        filtered = {k: v for k, v in data.items() if k in known}
+        return WorkspaceState(**filtered)
 
     def save_state(self) -> None:
         """Atomically write state.json (temp file + rename)."""

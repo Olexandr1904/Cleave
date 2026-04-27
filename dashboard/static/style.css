@@ -982,3 +982,54 @@
   .status-panel .status-step.active { background: #2563eb; color: #fff; }
   .status-panel .status-step.done { background: #bbf7d0; }
   .status-panel.failed { color: #c00; }
+
+/* Settings view */
+.settings-view {
+  max-width: 760px;
+  padding: 24px;
+}
+.settings-section-title {
+  margin: 0 0 4px;
+  font-size: 18px;
+  color: #c9d1d9;
+}
+.settings-help {
+  margin: 0 0 16px;
+  font-size: 13px;
+  color: #8b949e;
+}
+.settings-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.settings-label {
+  min-width: 60px;
+  color: #c9d1d9;
+  font-size: 14px;
+}
+.settings-spinner {
+  background: #0d1117;
+  color: #c9d1d9;
+  border: 1px solid #30363d;
+  border-radius: 6px;
+  padding: 6px 10px;
+  font-size: 14px;
+  min-width: 280px;
+}
+.settings-spinner:focus {
+  outline: none;
+  border-color: #58a6ff;
+}
+.settings-pill {
+  font-size: 12px;
+  padding: 3px 10px;
+  border-radius: 999px;
+  min-height: 18px;
+  min-width: 72px;
+  text-align: center;
+}
+.pill-idle    { background: transparent; color: transparent; }
+.pill-saving  { background: #1f6feb33; color: #58a6ff; }
+.pill-saved   { background: #2ea04333; color: #3fb950; }
+.pill-error   { background: #f8514922; color: #f85149; }

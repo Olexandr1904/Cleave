@@ -56,6 +56,7 @@ class WorkspaceManager:
         clone_depth: int = 0,
         default_branch: str = "develop",
         branch_prefix: str = "feature",
+        title: str | None = None,
     ) -> Workspace:
         """Create a new isolated workspace with a fresh git clone.
 
@@ -67,6 +68,7 @@ class WorkspaceManager:
             clone_depth: Shallow clone depth (0 = full clone).
             default_branch: Branch to checkout after clone.
             branch_prefix: Prefix for feature branch.
+            title: Ticket summary/title (e.g. "Login screen flickers...").
 
         Returns:
             A Workspace object pointing to the new workspace.
@@ -133,6 +135,7 @@ class WorkspaceManager:
                 repo_id=repo_id,
                 workspace_root=str(workspace_root),
                 branch=branch_name,
+                title=title,
             )
 
             workspace = Workspace(str(workspace_root), state)

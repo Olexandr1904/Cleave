@@ -74,6 +74,7 @@ Central daemon process that continuously polls for work, manages isolated worksp
 | 2026-04-24 | Added `_build_blocked_reason` helper: reads reports/ba-questions.md for analysis stage or latest *-output.md for other stages, strips boilerplate headers, truncates to 800 chars. Used to surface real escalation context in Telegram notifications. |
 | 2026-04-24 | Removed redundant `workspace.state.human_input_question = combined` direct assignment from `_notify_verification_blocked`; `update_state` already sets the attribute. |
 | 2026-04-16 | Enriched pipeline log: dev stage completion now includes the short commit SHA (first 8 chars) in the log entry so the log can be correlated with git history. |
+| 2026-04-27 | Added `Stage.PAUSED` to the poll-cycle `_SKIP` set so operator-paused workspaces are not advanced. PAUSED tickets stay frozen until manual unpause from the dashboard; `_sweep_deferred` is unchanged and only acts on DEFERRED. |
 
 
 

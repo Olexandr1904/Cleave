@@ -2,7 +2,7 @@
 
 import { loadWorkspaces, loadHealth } from './api.js';
 import { esc, timeAgo, stateBadgeHtml } from './helpers.js';
-import { approveWorkspace, pauseWorkspace, unpauseWorkspace } from './actions.js';
+import { approveWorkspace, pauseWorkspace, unpauseWorkspace, retryWorkspace } from './actions.js';
 
 export async function renderBoard(projectId, showDone = true) {
   const content = document.getElementById('content');
@@ -74,34 +74,59 @@ export async function renderBoard(projectId, showDone = true) {
     });
 
     // Bind inline pause buttons
-    content.querySelectorAll('[data-action="pause"]').forEach(btn => {
+    const pauseBtns = content.querySelectorAll('[data-action="pause"]');
+    console.log('[pause] binding', pauseBtns.length, 'pause buttons');
+    pauseBtns.forEach(btn => {
       btn.addEventListener('click', async (e) => {
         e.stopPropagation();
         const tid = btn.dataset.ticket;
+        console.log('[pause] click on ticket', tid);
         try {
           const result = await pauseWorkspace(tid, false);
+          console.log('[pause] response', result);
           if (result && result.status === 'agent_running') {
             const ok = confirm(`Agent ${result.agent} is currently running for ${tid} (started ${result.started_ago} ago). Pausing will stop the agent. Continue?`);
             if (!ok) return;
-            await pauseWorkspace(tid, true);
+            const r2 = await pauseWorkspace(tid, true);
+            console.log('[pause] confirm response', r2);
           }
           await renderBoard(projectId, showDone);
         } catch (err) {
+          console.error('[pause] failed', err);
           alert('Pause failed: ' + err.message);
         }
       });
     });
 
     // Bind inline unpause buttons
-    content.querySelectorAll('[data-action="unpause"]').forEach(btn => {
+    const unpauseBtns = content.querySelectorAll('[data-action="unpause"]');
+    console.log('[unpause] binding', unpauseBtns.length, 'unpause buttons');
+    unpauseBtns.forEach(btn => {
+      btn.addEventListener('click', async (e) => {
+        e.stopPropagation();
+        const tid = btn.dataset.ticket;
+        console.log('[unpause] click on ticket', tid);
+        try {
+          const result = await unpauseWorkspace(tid);
+          console.log('[unpause] response', result);
+          await renderBoard(projectId, showDone);
+        } catch (err) {
+          console.error('[unpause] failed', err);
+          alert('Unpause failed: ' + err.message);
+        }
+      });
+    });
+
+    // Bind inline retry buttons
+    content.querySelectorAll('[data-action="retry"]').forEach(btn => {
       btn.addEventListener('click', async (e) => {
         e.stopPropagation();
         const tid = btn.dataset.ticket;
         try {
-          await unpauseWorkspace(tid);
+          await retryWorkspace(tid);
           await renderBoard(projectId, showDone);
         } catch (err) {
-          alert('Unpause failed: ' + err.message);
+          alert('Retry failed: ' + err.message);
         }
       });
     });
@@ -227,13 +252,17 @@ function renderCard(ws) {
   if (stateVal === 'PAUSED') cardClass += ' card-paused';
   if (dimmed) cardClass += ' card-dimmed';
 
-  // Line 1: ID + pause/resume + delete
+  // Line 1: ID + state badge + pause/resume + retry + delete
   const PAUSEABLE_STATES = ['ANALYSIS', 'DEV', 'SCOPE_CHECK', 'QA', 'PUSHED', 'PR_REVIEW'];
   let pauseIcon = '';
   if (PAUSEABLE_STATES.includes(stateVal)) {
     pauseIcon = `<button class="card-icon-btn" data-action="pause" data-ticket="${esc(ws.ticket_id)}" title="Pause" onclick="event.stopPropagation()">⏸</button>`;
   } else if (stateVal === 'PAUSED') {
     pauseIcon = `<button class="card-icon-btn" data-action="unpause" data-ticket="${esc(ws.ticket_id)}" title="Resume" onclick="event.stopPropagation()">▶</button>`;
+  }
+  let retryIcon = '';
+  if (stateVal === 'FAILED') {
+    retryIcon = `<button class="card-icon-btn" data-action="retry" data-ticket="${esc(ws.ticket_id)}" title="Retry" onclick="event.stopPropagation()">↻</button>`;
   }
   const deleteIcon = `<button class="card-icon-btn card-icon-delete" data-action="delete" data-ticket="${esc(ws.ticket_id)}" title="Delete" onclick="event.stopPropagation()">✕</button>`;
 
@@ -275,13 +304,14 @@ function renderCard(ws) {
   return `<div class="${cardClass}" data-ticket="${esc(ws.ticket_id)}">
     <div class="card-line1">
       <span class="card-id">${esc(ws.ticket_id)}</span>
+      ${stateBadgeHtml(stateVal)}
       <span class="card-line1-spacer"></span>
       ${pauseIcon}
+      ${retryIcon}
       ${deleteIcon}
     </div>
     <div class="card-line2">
       <div class="card-title" title="${esc(ws.title || '')}">${esc(ws.title || '')}</div>
-      ${stateBadgeHtml(stateVal)}
     </div>
     ${noteHtml}
     ${metaHtml}

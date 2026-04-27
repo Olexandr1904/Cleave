@@ -148,52 +148,84 @@
     border: 1px solid #30363d;
     border-radius: 8px;
     padding: 12px 14px;
-    width: 230px;
+    width: 300px;
     cursor: pointer;
     transition: border-color .15s, box-shadow .15s;
     position: relative;
   }
   .card:hover { border-color: #58a6ff; box-shadow: 0 0 0 1px #1f6feb33; }
 
-  .card-header {
+  /* Line 1 — ID + icon controls */
+  .card-line1 {
     display: flex;
     align-items: center;
-    justify-content: space-between;
-    margin-bottom: 6px;
+    gap: 6px;
+    margin-bottom: 10px;
   }
-
-  .card-ticket {
+  .card-id {
     font-weight: 700;
     font-size: 13px;
     color: #e6edf3;
   }
+  .card-line1-spacer { flex: 1; }
 
-  .card-repo {
-    font-size: 11px;
-    color: #8b949e;
-    margin-bottom: 6px;
+  /* Line 2 — title + state badge */
+  .card-line2 {
+    display: flex;
+    gap: 8px;
+    align-items: flex-start;
+    margin-bottom: 10px;
+  }
+  .card-title {
+    flex: 1;
+    font-weight: 600;
+    font-size: 14px;
+    color: #e6edf3;
+    line-height: 1.35;
+    max-height: 2.7em;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+    word-break: break-word;
+  }
+  .card-line2 .state-badge {
+    flex-shrink: 0;
+    align-self: flex-start;
+    margin-top: 2px;
   }
 
+  /* Line 3 — error / manual-control note (conditional) */
+  .card-error {
+    font-size: 11px;
+    color: #f85149;
+    line-height: 1.35;
+    word-break: break-word;
+    margin-bottom: 8px;
+  }
+  .card-manual-note {
+    font-size: 11px;
+    color: #d2a8ff;
+    line-height: 1.35;
+    margin-bottom: 8px;
+  }
+
+  /* Line 4 — meta */
+  .card-meta {
+    font-size: 11px;
+    color: #8b949e;
+    margin-bottom: 8px;
+  }
+  .card-meta-sep { color: #30363d; }
+
+  /* Line 5 — footer (conditional) */
   .card-footer {
     display: flex;
     align-items: center;
-    margin-top: 8px;
     gap: 6px;
   }
-
   .card-footer-spacer { flex: 1; }
-
-  .card-actions {
-    display: flex;
-    align-items: center;
-    gap: 4px;
-  }
-
-  .card-time {
-    font-size: 11px;
-    color: #6e7681;
-  }
-
   .card-pr-link {
     font-size: 11px;
     color: #58a6ff;
@@ -201,45 +233,27 @@
   }
   .card-pr-link:hover { text-decoration: underline; }
 
-  .card-error {
+  /* Icon buttons (line 1) */
+  .card-icon-btn {
+    width: 22px;
+    height: 22px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    background: transparent;
+    border: 1px solid #30363d;
+    color: #8b949e;
+    border-radius: 4px;
     font-size: 11px;
-    color: #f85149;
-    margin-top: 4px;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-    max-width: 100%;
+    cursor: pointer;
+    padding: 0;
   }
+  .card-icon-btn:hover { color: #e6edf3; border-color: #58a6ff; }
+  .card-icon-delete:hover { border-color: #da3633; }
 
   /* Dimmed card (DONE / ARCHIVED / SETUP_DONE) */
   .card-dimmed { opacity: 0.45; }
   .card-dimmed:hover { opacity: 0.7; }
-
-  /* Manual-control inline label */
-  .card-manual-label {
-    font-size: 10px;
-    color: #d2a8ff;
-    margin-top: 2px;
-  }
-
-  /* Iteration badge */
-  .card-iter {
-    font-size: 10px;
-    color: #58a6ff;
-    background: #1a2d3d;
-    border: 1px solid #1f6feb44;
-    border-radius: 10px;
-    padding: 1px 8px;
-    white-space: nowrap;
-  }
-
-  /* Delete button — hidden until card hover */
-  .card .btn-delete {
-    opacity: 0;
-    transition: opacity .15s;
-  }
-  .card:hover .btn-delete { opacity: 0.6; }
-  .card .btn-delete:hover { opacity: 1; border-color: #da3633; }
 
   /* ── State badges ── */
   .state-badge {

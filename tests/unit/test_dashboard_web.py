@@ -185,10 +185,14 @@ class TestTitleBackfill:
         results = _scan_all_workspaces(str(tmp_path))
         assert results[0]["title"] == "Already set"
 
-    def test_backfill_no_meta_no_setup(self, tmp_path):
+    def test_backfill_falls_back_to_ticket_id(self, tmp_path):
         ws = tmp_path / "acme" / "acme-app" / "tickets" / "T-4"
         self._write_state(ws, ticket_id="T-4")
         # No meta/ticket.md and not a setup dir
 
         results = _scan_all_workspaces(str(tmp_path))
-        assert results[0]["title"] == ""
+        # API exposes ticket_id as a soft fallback
+        assert results[0]["title"] == "T-4"
+        # But state.json on disk is NOT polluted with ticket_id-as-title
+        on_disk = json.loads((ws / "state.json").read_text())
+        assert "title" not in on_disk or on_disk["title"] == ""

@@ -75,6 +75,7 @@ Central daemon process that continuously polls for work, manages isolated worksp
 | 2026-04-24 | Removed redundant `workspace.state.human_input_question = combined` direct assignment from `_notify_verification_blocked`; `update_state` already sets the attribute. |
 | 2026-04-16 | Enriched pipeline log: dev stage completion now includes the short commit SHA (first 8 chars) in the log entry so the log can be correlated with git history. |
 | 2026-04-27 | Added `Stage.PAUSED` to the poll-cycle `_SKIP` set so operator-paused workspaces are not advanced. PAUSED tickets stay frozen until manual unpause from the dashboard; `_sweep_deferred` is unchanged and only acts on DEFERRED. |
+| 2026-04-27 | `_handle_agent_stage` now captures `current_state` before agent execution and aborts post-agent transitions if the state changed mid-flight (operator paused / took control / etc.). Fixes a race where pausing a ticket while an agent was running would let the agent silently complete and auto-transition the workspace out of PAUSED. |
 
 
 

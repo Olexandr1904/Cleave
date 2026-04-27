@@ -760,9 +760,21 @@ class Orchestrator:
         protected = repo_config.architecture.protected_files if repo_config else []
 
         self._emit("agent_dispatched", f"Dispatching {stage_def.agent} for {state.ticket_id}", project_id=state.company_id, ticket_id=state.ticket_id, agent_id=stage_def.agent, data={"stage": stage_id})
+        state_before = workspace.state.current_state
         result = await self._agent_runtime.execute(
             stage_def.agent, workspace, protected_files=protected,
         )
+
+        # Operator intervened mid-flight (Pause / Take Control / etc.).
+        # Discard the agent's transitions so we don't auto-advance out of the
+        # operator-chosen state.
+        state_after = workspace.state.current_state
+        if state_after != state_before:
+            logger.info(
+                "State changed during %s for %s: %s -> %s, discarding transitions",
+                stage_def.agent, state.ticket_id, state_before, state_after,
+            )
+            return
 
         if not result.success:
             self._emit(

@@ -82,7 +82,7 @@ TOOL_MAP = {
 }
 
 DEFAULT_MAX_TURNS = 50
-DEFAULT_TIMEOUT = 600  # 10 minutes
+DEFAULT_TIMEOUT = 2400  # 40 minutes — accommodates large QA suites (compile + tests + lint)
 
 
 class ClaudeCodeAdapter(LLMInterface):

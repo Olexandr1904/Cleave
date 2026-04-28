@@ -79,6 +79,44 @@ class TestWorkspace:
         assert workspace.reports_dir.name == "reports"
         assert workspace.logs_dir.name == "logs"
 
+    def test_reports_dir_appends_gitignore_entry(self, workspace):
+        """source/reports/ lives inside the git clone — accessing reports_dir
+        must register an exclude so `git add .` won't sweep it into a PR."""
+        info = workspace.source_dir / ".git" / "info"
+        info.mkdir(parents=True)
+        # Trigger the lazy property
+        _ = workspace.reports_dir
+        exclude = (info / "exclude").read_text(encoding="utf-8")
+        assert any(line.strip() == "reports/" for line in exclude.splitlines())
+
+    def test_reports_dir_exclude_is_idempotent(self, workspace):
+        """Multiple property accesses must not duplicate the exclude entry."""
+        info = workspace.source_dir / ".git" / "info"
+        info.mkdir(parents=True)
+        for _ in range(5):
+            _ = workspace.reports_dir
+        exclude = (info / "exclude").read_text(encoding="utf-8")
+        reports_lines = [l for l in exclude.splitlines() if l.strip() == "reports/"]
+        assert len(reports_lines) == 1
+
+    def test_reports_dir_preserves_existing_exclude_content(self, workspace):
+        """Existing exclude rules must survive the append."""
+        info = workspace.source_dir / ".git" / "info"
+        info.mkdir(parents=True)
+        (info / "exclude").write_text("# user comment\n*.log\n")
+        _ = workspace.reports_dir
+        exclude = (info / "exclude").read_text(encoding="utf-8")
+        assert "*.log" in exclude
+        assert "reports/" in exclude
+
+    def test_reports_dir_skips_exclude_when_no_git_dir(self, workspace):
+        """If source/ isn't a git checkout, reports_dir still works — the
+        exclude write is best-effort and can't make assumptions about layout."""
+        # No .git dir created
+        # Should not raise
+        path = workspace.reports_dir
+        assert path.is_dir()
+
     def test_save_and_load_state(self, workspace):
         """Atomic write via temp file + rename."""
         workspace.update_state(current_state=Stage.ANALYSIS)

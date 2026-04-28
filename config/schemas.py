@@ -149,6 +149,13 @@ class VCSConfig:
     provider: str = "github"  # "github" or "gitlab"
     github: GitHubConfig = field(default_factory=GitHubConfig)
     gitlab: GitLabConfig = field(default_factory=GitLabConfig)
+    # Pass `--no-verify` on `git push`. Use this when a project's local
+    # pre-push hook (often auto-installed by a Gradle task) runs work that
+    # the pipeline's QA stage already covers, or that fails for reasons
+    # unrelated to code (e.g. host-level toolchain incompatibility). Default
+    # off; set to true per-project only after confirming the hook is
+    # redundant with Sickle's own QA gate.
+    skip_pre_push_hook: bool = False
 
 
 # --- CI config (repo-level) ---

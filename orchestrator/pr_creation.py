@@ -59,8 +59,12 @@ async def create_pr(
 
     try:
         # AC1: Push the feature branch
-        await vcs.push(str(workspace.source_dir), branch)
-        logger.info("Pushed branch '%s' for %s", branch, state.ticket_id)
+        skip_hooks = bool(getattr(repo_config.vcs, "skip_pre_push_hook", False))
+        await vcs.push(str(workspace.source_dir), branch, skip_hooks=skip_hooks)
+        logger.info(
+            "Pushed branch '%s' for %s%s",
+            branch, state.ticket_id, " (--no-verify)" if skip_hooks else "",
+        )
 
         # Build PR title and body
         title = f"{state.ticket_id}: {_get_ticket_summary(workspace)}"

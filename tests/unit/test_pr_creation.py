@@ -110,6 +110,28 @@ class TestCreatePR:
         assert result.success is False
         assert "Push rejected" in result.error
 
+    async def test_skip_pre_push_hook_passes_through(self, workspace, mock_vcs, mock_tracker, repo_config):
+        """When the project sets vcs.skip_pre_push_hook=true, push() must
+        be called with skip_hooks=True so git push gets --no-verify."""
+        (workspace.meta_dir / "scope-certificate.md").write_text("PASS")
+        repo_config.vcs.skip_pre_push_hook = True
+
+        await create_pr(workspace, mock_vcs, mock_tracker, repo_config)
+
+        mock_vcs.push.assert_called_once()
+        assert mock_vcs.push.call_args.kwargs.get("skip_hooks") is True
+
+    async def test_default_does_not_skip_hooks(self, workspace, mock_vcs, mock_tracker, repo_config):
+        """Default config: push goes through with skip_hooks=False so any
+        project-installed pre-push hook still runs."""
+        (workspace.meta_dir / "scope-certificate.md").write_text("PASS")
+        # repo_config.vcs.skip_pre_push_hook is False by default
+
+        await create_pr(workspace, mock_vcs, mock_tracker, repo_config)
+
+        mock_vcs.push.assert_called_once()
+        assert mock_vcs.push.call_args.kwargs.get("skip_hooks") is False
+
     async def test_jira_failure_non_blocking(self, workspace, mock_vcs, mock_tracker, repo_config):
         """Jira transition failure should not block PR creation."""
         (workspace.meta_dir / "scope-certificate.md").write_text("PASS")

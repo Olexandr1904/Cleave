@@ -109,13 +109,23 @@ class GitHubAdapter(VCSInterface):
         self._run_git(repo_dir, "checkout", "-b", branch_name)
         logger.info("Created branch: %s", branch_name)
 
-    async def push(self, repo_dir: str, branch_name: str, force: bool = False) -> None:
+    async def push(
+        self, repo_dir: str, branch_name: str,
+        force: bool = False, skip_hooks: bool = False,
+    ) -> None:
         """Push branch to origin."""
         args = ["push", "-u", "origin", branch_name]
         if force:
             args.insert(1, "--force")
+        if skip_hooks:
+            args.insert(1, "--no-verify")
         self._run_git(repo_dir, *args)
-        logger.info("Pushed branch: %s%s", branch_name, " (force)" if force else "")
+        suffix = ""
+        if force:
+            suffix += " (force)"
+        if skip_hooks:
+            suffix += " (no-verify)"
+        logger.info("Pushed branch: %s%s", branch_name, suffix)
 
     async def open_pr(
         self, title: str, body: str, head_branch: str, base_branch: str

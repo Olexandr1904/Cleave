@@ -37,8 +37,16 @@ class VCSInterface(ABC):
         """Create and checkout a new branch."""
 
     @abstractmethod
-    async def push(self, repo_dir: str, branch_name: str, force: bool = False) -> None:
-        """Push the current branch to origin."""
+    async def push(
+        self, repo_dir: str, branch_name: str,
+        force: bool = False, skip_hooks: bool = False,
+    ) -> None:
+        """Push the current branch to origin.
+
+        skip_hooks: pass `--no-verify` to git push. Useful when a project's
+        local pre-push hook is incompatible with the pipeline host (e.g.
+        x86-64 binary on ARM) or duplicates work already done in the QA stage.
+        """
 
     @abstractmethod
     async def open_pr(

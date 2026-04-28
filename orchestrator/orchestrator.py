@@ -25,7 +25,9 @@ from integrations.telegram.handlers.approval import APPROVAL_NEXT_STATE
 from integrations.telegram.handlers.mode import ModeHandler
 from orchestrator.agent_runtime import AgentRuntime
 from orchestrator.gradle_remediation import (
+    ARCH_MISMATCH_HELP,
     clear_gradle_transforms,
+    looks_like_aapt2_arch_mismatch,
     looks_like_gradle_cache_corruption,
 )
 from orchestrator.pr_creation import create_pr
@@ -929,22 +931,35 @@ class Orchestrator:
         title = self._get_ticket_title(workspace)
         hdr = self._tg_header("\u274c", state, title)
         first_line = (error or "").splitlines()[0] if error else ""
-        msg = (
-            f"{hdr}\n"
-            f"FAILED at {state.previous_state or '?'}. Error: {first_line}."
-        )
         buttons = [Button(label="Retry", action=f"retry:{state.ticket_id}")]
-        # If the error matches the AAPT2 transforms-cache corruption signature,
-        # offer a one-click remediation. The button triggers a wipe of all
-        # `<gradle_home>/caches/*/transforms` dirs and a retry from the failed
-        # stage. Surface only on this signature \u2014 wiping the cache wholesale
-        # for unrelated failures would force a multi-minute rebuild.
-        if looks_like_gradle_cache_corruption(error):
+        # Architecture mismatch (x86-64 aapt2 on non-x86 host) is a host-setup
+        # issue \u2014 the pipeline cannot apt-install or rewrite gradle.properties.
+        # Surface a distinct message with concrete fix options and NO clear-
+        # cache button (which loops forever on this failure).
+        if looks_like_aapt2_arch_mismatch(error):
+            sep = "\u2500" * 30
+            msg = (
+                f"{hdr}\n"
+                f"FAILED at {state.previous_state or '?'}.\n"
+                f"\u26a0\ufe0f Architecture mismatch (x86-64 aapt2 on non-x86 host).\n"
+                f"{sep}\n"
+                f"{ARCH_MISMATCH_HELP}"
+            )
+        elif looks_like_gradle_cache_corruption(error):
+            msg = (
+                f"{hdr}\n"
+                f"FAILED at {state.previous_state or '?'}. Error: {first_line}.\n"
+                f"Detected Gradle cache corruption \u2014 tap below to clear it."
+            )
             buttons.insert(
                 0,
                 Button(label="🧹 Clear cache & retry", action=f"clear_gradle:{state.ticket_id}"),
             )
-            msg += "\nDetected AAPT2 cache corruption \u2014 tap below to clear it."
+        else:
+            msg = (
+                f"{hdr}\n"
+                f"FAILED at {state.previous_state or '?'}. Error: {first_line}."
+            )
         try:
             await self._notifier.send_message(chat_id, msg, buttons=buttons)
         except Exception as e:

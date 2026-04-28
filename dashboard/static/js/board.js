@@ -4,9 +4,8 @@ import { loadWorkspaces, loadHealth } from './api.js';
 import { esc, timeAgo, stateBadgeHtml } from './helpers.js';
 import { approveWorkspace, pauseWorkspace, unpauseWorkspace, retryWorkspace, clearGradleAndRetry } from './actions.js';
 
-// Mirrors orchestrator/gradle_remediation.py::looks_like_gradle_cache_corruption.
-// Keep these patterns in sync — both surfaces (TG button, dashboard button)
-// must trigger on the same failures.
+// Mirrors orchestrator/gradle_remediation.py. Keep these patterns in sync —
+// both surfaces (TG, dashboard) must classify the same failure the same way.
 const GRADLE_CORRUPTION_PATTERNS = [
   /aapt2[^\n]*Daemon[^\n]*startup failed/i,
   /aapt2[^\n]*Syntax error[^\n]*unexpected/i,
@@ -14,10 +13,35 @@ const GRADLE_CORRUPTION_PATTERNS = [
   /Failed to transform[^\n]*\.aar[\s\S]{0,400}?caches[/\\][^\s/\\]+[/\\]transforms[/\\]/i,
 ];
 
+// Architecture mismatch: x86-64 aapt2 binary on a non-x86 host. Gradle re-
+// extracts the same incompatible binary on every retry; the 🧹 button is
+// useless here. See ARCH_MISMATCH_HELP for operator guidance.
+const AAPT2_ARCH_MISMATCH_RE = /aapt2-[^/\s]+-linux\/aapt2:[^\n]*Syntax error[^\n]*unexpected/i;
+
+function looksLikeAapt2ArchMismatch(error) {
+  if (!error) return false;
+  return AAPT2_ARCH_MISMATCH_RE.test(error);
+}
+
 function looksLikeGradleCacheCorruption(error) {
   if (!error) return false;
+  if (looksLikeAapt2ArchMismatch(error)) return false;  // different problem
   return GRADLE_CORRUPTION_PATTERNS.some(re => re.test(error));
 }
+
+const ARCH_MISMATCH_HELP_HTML = `
+  <strong>Architecture mismatch</strong> — Gradle picked the x86-64 build of
+  aapt2 but the host can't run it. The pipeline can't auto-fix this. Options:
+  <ol style="margin:0.4em 0 0 1.2em;padding:0;font-size:0.9em;">
+    <li>Install x86-64 emulation:
+      <code>sudo apt install qemu-user-static binfmt-support</code></li>
+    <li>Or force AGP to use the aarch64 aapt2 by adding to
+      <code>~/.gradle/gradle.properties</code>:
+      <code>org.gradle.jvmargs=-Dos.arch=aarch64</code></li>
+    <li>Or run the build on an x86-64 host.</li>
+  </ol>
+  <div style="margin-top:0.4em;font-size:0.9em;">After fixing, click ↻ Retry.</div>
+`;
 
 export async function renderBoard(projectId, showDone = true) {
   const content = document.getElementById('content');
@@ -294,17 +318,25 @@ function renderCard(ws) {
   }
   let retryIcon = '';
   let gradleClearIcon = '';
+  let archMismatchHelp = '';
   if (stateVal === 'FAILED') {
     retryIcon = `<button class="card-icon-btn" data-action="retry" data-ticket="${esc(ws.ticket_id)}" title="Retry" onclick="event.stopPropagation()">↻</button>`;
-    if (looksLikeGradleCacheCorruption(ws.error)) {
+    if (looksLikeAapt2ArchMismatch(ws.error)) {
+      // Show help inline on the card; suppress the 🧹 button (would loop).
+      archMismatchHelp = `<div class="card-error" style="background:#3b2a14;border-left-color:#d29922;">${ARCH_MISMATCH_HELP_HTML}</div>`;
+    } else if (looksLikeGradleCacheCorruption(ws.error)) {
       gradleClearIcon = `<button class="card-icon-btn" data-action="clear-gradle" data-ticket="${esc(ws.ticket_id)}" title="Clear Gradle cache & retry" onclick="event.stopPropagation()">🧹</button>`;
     }
   }
   const deleteIcon = `<button class="card-icon-btn card-icon-delete" data-action="delete" data-ticket="${esc(ws.ticket_id)}" title="Delete" onclick="event.stopPropagation()">✕</button>`;
 
-  // Line 3: error > manual-control note > omitted
+  // Line 3: error > manual-control note > omitted.
+  // Arch mismatch gets the actionable help block instead of the truncated
+  // error string — operator can't usefully act on the raw build output.
   let noteHtml = '';
-  if (ws.error) {
+  if (archMismatchHelp) {
+    noteHtml = archMismatchHelp;
+  } else if (ws.error) {
     noteHtml = `<div class="card-error" title="${esc(ws.error)}">${esc(ws.error)}</div>`;
   } else if (stateVal === 'MANUAL_CONTROL') {
     noteHtml = `<div class="card-manual-note">You have control</div>`;

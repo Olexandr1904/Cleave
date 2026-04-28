@@ -66,12 +66,53 @@ _GRADLE_CACHE_CORRUPTION_PATTERNS = (
     ),
 )
 
+# Architecture mismatch: Gradle picked the x86-64 build of aapt2 (the directory
+# name `aapt2-<ver>-<build>-linux` is the convention for x86-64 Linux; the ARM
+# variant is `-linux_aarch64`). On a non-x86 host this binary cannot exec, the
+# kernel returns ENOEXEC, and the shell falls back to interpreting the file as
+# a script — which produces "Syntax error: '(' unexpected" on the binary's
+# header bytes. Cache wipes don't help here: the next download will produce an
+# equally-incompatible binary.
+_AAPT2_ARCH_MISMATCH_RE = re.compile(
+    r"aapt2-[^/\s]+-linux/aapt2:[^\n]*Syntax error[^\n]*unexpected",
+    re.IGNORECASE,
+)
 
-def looks_like_gradle_cache_corruption(error_message: str | None) -> bool:
-    """True if the error matches any known Gradle transforms-cache corruption signature."""
+
+def looks_like_aapt2_arch_mismatch(error_message: str | None) -> bool:
+    """True if the error indicates an x86-64 aapt2 binary on a non-x86 host."""
     if not error_message:
         return False
+    return bool(_AAPT2_ARCH_MISMATCH_RE.search(error_message))
+
+
+def looks_like_gradle_cache_corruption(error_message: str | None) -> bool:
+    """True if the error matches any known Gradle transforms-cache corruption signature.
+
+    Returns False for architecture-mismatch errors (handled separately by
+    `looks_like_aapt2_arch_mismatch`) — those textually look similar but
+    can't be remediated by clearing the cache.
+    """
+    if not error_message:
+        return False
+    if looks_like_aapt2_arch_mismatch(error_message):
+        return False
     return any(p.search(error_message) for p in _GRADLE_CACHE_CORRUPTION_PATTERNS)
+
+
+# Help text shown in TG / dashboard when the architecture mismatch is detected.
+# Kept here so the orchestrator and dashboard render the same guidance.
+ARCH_MISMATCH_HELP = (
+    "Gradle picked the x86-64 build of aapt2 but the host can't run it.\n"
+    "Pipeline can't auto-fix this. To unblock, choose one:\n"
+    "1. Install x86-64 emulation:\n"
+    "   sudo apt install qemu-user-static binfmt-support\n"
+    "2. Force AGP to use the aarch64 aapt2 build by adding to "
+    "~/.gradle/gradle.properties:\n"
+    "   org.gradle.jvmargs=-Dos.arch=aarch64\n"
+    "3. Run the build on an x86-64 host.\n"
+    "After fixing the host, click Retry."
+)
 
 
 _GRADLE_DAEMON_MAIN_CLASS = "org.gradle.launcher.daemon.bootstrap.GradleDaemon"

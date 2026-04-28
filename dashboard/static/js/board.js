@@ -7,11 +7,16 @@ import { approveWorkspace, pauseWorkspace, unpauseWorkspace, retryWorkspace, cle
 // Mirrors orchestrator/gradle_remediation.py::looks_like_gradle_cache_corruption.
 // Keep these patterns in sync — both surfaces (TG button, dashboard button)
 // must trigger on the same failures.
-const GRADLE_CORRUPTION_RE = /aapt2[^\n]*Daemon[^\n]*startup failed|aapt2[^\n]*Syntax error[^\n]*unexpected/i;
+const GRADLE_CORRUPTION_PATTERNS = [
+  /aapt2[^\n]*Daemon[^\n]*startup failed/i,
+  /aapt2[^\n]*Syntax error[^\n]*unexpected/i,
+  /Execution failed for AarResourcesCompilerTransform[^\n]*\n[^\n]*caches[^\n]*transforms[^\n]*/i,
+  /Failed to transform[^\n]*\.aar[\s\S]{0,400}?caches[/\\][^\s/\\]+[/\\]transforms[/\\]/i,
+];
 
 function looksLikeGradleCacheCorruption(error) {
   if (!error) return false;
-  return GRADLE_CORRUPTION_RE.test(error);
+  return GRADLE_CORRUPTION_PATTERNS.some(re => re.test(error));
 }
 
 export async function renderBoard(projectId, showDone = true) {

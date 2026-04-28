@@ -52,6 +52,38 @@ class TestLooksLikeGradleCacheCorruption:
         assert not looks_like_gradle_cache_corruption(None)
         assert not looks_like_gradle_cache_corruption("")
 
+    def test_matches_aar_resources_compiler_transform_failure(self):
+        # Real second-stage corruption signature observed on ACME-12058: after
+        # AAPT2 daemon starts working again, Gradle finds .aar transforms with
+        # missing AndroidManifest.xml inside. Same root cause (transforms tree
+        # in an inconsistent state), same fix.
+        msg = (
+            "FAILURE: Build failed with an exception.\n"
+            "* What went wrong:\n"
+            "Execution failed for task ':app:processDebugResources'.\n"
+            "> Could not resolve all files for configuration ':app:debugRuntimeClasspath'.\n"
+            "   > Failed to transform library-4.2.0.aar (com.github.chuckerteam.chucker:library:4.2.0) ...\n"
+            "      > Execution failed for AarResourcesCompilerTransform: "
+            "/home/admin0/.gradle/caches/8.14.1/transforms/5e7fcbe4e62ca53cf7a71fe52b9c2f26/transformed/jetified-library-4.2.0.\n"
+            "         > /home/admin0/.gradle/caches/8.14.1/transforms/5e7fcbe4e62ca53cf7a71fe52b9c2f26/transformed/jetified-library-4.2.0/AndroidManifest.xml"
+        )
+        assert looks_like_gradle_cache_corruption(msg)
+
+    def test_matches_failed_to_transform_aar_with_transforms_path_nearby(self):
+        msg = (
+            "Failed to transform foo-1.0.aar (com.example:foo:1.0) to match attributes ...\n"
+            "  > Inner cause referencing /home/user/.gradle/caches/8.14.1/transforms/abc/transformed"
+        )
+        assert looks_like_gradle_cache_corruption(msg)
+
+    def test_does_not_match_failed_to_transform_aar_unrelated_to_cache(self):
+        # `.aar` failure that doesn't point at the transforms cache must not match.
+        msg = (
+            "Failed to transform some.aar — incompatible architecture\n"
+            "Library only supports x86_64 but build target is armv8"
+        )
+        assert not looks_like_gradle_cache_corruption(msg)
+
 
 class TestClearGradleTransforms:
     def test_removes_transforms_under_each_version(self, tmp_path):

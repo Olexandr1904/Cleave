@@ -18,24 +18,46 @@ import re
 import shutil
 from pathlib import Path
 
-# Two markers, either of which is sufficient evidence that the transforms cache
-# is corrupt. The "Daemon startup failed" line follows the binary-execution
-# failure; the syntax-error line is the underlying cause (a shell trying to
-# interpret a binary file). Real failures observed in production usually emit
-# both, but matching either makes the detector resilient to log truncation.
-_AAPT2_CORRUPTION_RE = re.compile(
-    r"aapt2[^\n]*Daemon[^\n]*startup failed"
-    r"|"
-    r"aapt2[^\n]*Syntax error[^\n]*unexpected",
-    re.IGNORECASE,
+# Multiple symptoms point at the same root cause: the
+# `<gradle_home>/caches/*/transforms/` tree is in an inconsistent state and the
+# fix is identical (delete it, let Gradle re-extract). We match any of:
+#
+#   1. AAPT2 "Daemon startup failed" — the OS shell tried to exec the corrupt
+#      aapt2 binary and failed.
+#   2. AAPT2 syntax-error-on-binary — same root cause, different log line; the
+#      shell choked on a binary character.
+#   3. AarResourcesCompilerTransform / Failed-to-transform pointing at a path
+#      under `caches/.../transforms/` — the .aar extract directory exists but
+#      its contents (e.g. AndroidManifest.xml) are missing or unreadable.
+#
+# False positives need to stay rare: every match offers the operator a
+# destructive remediation. Keep the patterns specific to "transforms" to avoid
+# misclassifying generic build errors that happen to mention aapt2 or aar.
+_GRADLE_CACHE_CORRUPTION_PATTERNS = (
+    re.compile(r"aapt2[^\n]*Daemon[^\n]*startup failed", re.IGNORECASE),
+    re.compile(r"aapt2[^\n]*Syntax error[^\n]*unexpected", re.IGNORECASE),
+    # AarResourcesCompilerTransform failure with a transforms/-cache path on
+    # the next line, usually pointing at a missing AndroidManifest.xml.
+    re.compile(
+        r"Execution failed for AarResourcesCompilerTransform[^\n]*\n"
+        r"[^\n]*caches[^\n]*transforms[^\n]*",
+        re.IGNORECASE,
+    ),
+    # "Failed to transform <name>.aar" + transforms/ path within a few lines.
+    # Lighter-weight than the more specific patterns above, but constrained to
+    # paths inside transforms/ so non-cache .aar issues don't match.
+    re.compile(
+        r"Failed to transform[^\n]*\.aar[\s\S]{0,400}?caches[/\\][^\s/\\]+[/\\]transforms[/\\]",
+        re.IGNORECASE,
+    ),
 )
 
 
 def looks_like_gradle_cache_corruption(error_message: str | None) -> bool:
-    """True if the error matches the AAPT2 transforms-cache corruption signature."""
+    """True if the error matches any known Gradle transforms-cache corruption signature."""
     if not error_message:
         return False
-    return bool(_AAPT2_CORRUPTION_RE.search(error_message))
+    return any(p.search(error_message) for p in _GRADLE_CACHE_CORRUPTION_PATTERNS)
 
 
 def clear_gradle_transforms(gradle_home: Path | None = None) -> int:

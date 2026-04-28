@@ -65,6 +65,18 @@ class GitHubAdapter(VCSInterface):
                         "GitHub request retry %d/%d for %s %s: %s",
                         attempt + 1, MAX_RETRIES, method, path, e,
                     )
+        # All retries exhausted. For HTTP errors, surface the response body —
+        # the default httpx error message strips it, so callers see "422
+        # Unprocessable Entity" with no clue why GitHub rejected the request.
+        if isinstance(last_error, httpx.HTTPStatusError) and last_error.response is not None:
+            body = last_error.response.text[:1500]
+            logger.error(
+                "GitHub %s %s failed after %d retries → %d: %s",
+                method, path, MAX_RETRIES, last_error.response.status_code, body[:500],
+            )
+            raise RuntimeError(
+                f"GitHub {method} {path} → {last_error.response.status_code}: {body[:500]}"
+            ) from last_error
         raise last_error  # type: ignore[misc]
 
     @staticmethod

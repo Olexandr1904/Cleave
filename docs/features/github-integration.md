@@ -52,3 +52,4 @@ GitHub adapter behind the VCSInterface. Handles all git and GitHub operations: b
 | Date | Description |
 |------|-------------|
 | 2026-04-07 | Initial draft — seeded from PRD and architecture docs |
+| 2026-04-27 | `_request` now captures the GitHub response body when an HTTP 4xx/5xx fails after retries. httpx's default `HTTPStatusError` message includes only the status line ("Client error '422 Unprocessable Entity' for url '...'") which left operators no clue why GitHub rejected a PR creation. The diagnostic wrap reraises as `RuntimeError` with up to 500 chars of the response body so the reason (e.g. "A pull request already exists for ...", "No commits between base and head") surfaces in the workspace `error` field and the TG failure notification. |

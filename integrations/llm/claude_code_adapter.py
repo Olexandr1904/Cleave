@@ -43,12 +43,16 @@ class QuotaExhaustedError(RuntimeError):
 
 def _classify_cli_error(stdout: str, stderr: str) -> QuotaExhaustedError | None:
     """Return a QuotaExhaustedError if stdout/stderr look like a quota hit, else None."""
-    # Structured parse first: JSON stdout with is_error=true and a usage-limit marker.
+    # Structured parse first: JSON stdout with is_error=true.
     structured_text = ""
+    api_error_status: int | None = None
     try:
         data = json.loads(stdout)
         if isinstance(data, dict) and data.get("is_error"):
             structured_text = str(data.get("result") or data.get("content") or "")
+            raw_status = data.get("api_error_status")
+            if isinstance(raw_status, int):
+                api_error_status = raw_status
     except (json.JSONDecodeError, TypeError):
         pass
 
@@ -58,6 +62,16 @@ def _classify_cli_error(stdout: str, stderr: str) -> QuotaExhaustedError | None:
             epoch_ms = int(m.group(1))
             retry_at = datetime.fromtimestamp(epoch_ms / 1000, tz=timezone.utc)
             return QuotaExhaustedError(structured_text, retry_at=retry_at)
+
+    # HTTP 429 in the CLI's JSON response is the canonical quota-exhausted signal
+    # (e.g. result text "You've hit your limit · resets 5:50pm (UTC)"). The reset
+    # time is encoded in human-readable text and not always parseable, so leave
+    # retry_at unset and let agent_runtime apply the default delay.
+    if api_error_status == 429:
+        return QuotaExhaustedError(
+            structured_text or "Claude API returned 429 (quota exhausted)",
+            retry_at=None,
+        )
 
     # Substring fallback across combined stdout + stderr.
     combined = f"{stdout}\n{stderr}".lower()

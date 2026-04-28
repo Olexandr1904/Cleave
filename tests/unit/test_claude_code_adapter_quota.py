@@ -75,3 +75,40 @@ class TestClassifyCliError:
         err = _classify_cli_error(stdout, "")
         assert err is not None
         assert err.retry_at == datetime(2026, 4, 14, 20, 0, 0, tzinfo=timezone.utc)
+
+    def test_api_error_status_429(self):
+        # Real format observed when a Max-subscription session limit is hit:
+        # CLI exits non-zero, JSON has is_error=true and api_error_status=429,
+        # result text reads "You've hit your limit · resets <time>".
+        stdout = json.dumps({
+            "type": "result",
+            "subtype": "success",
+            "is_error": True,
+            "api_error_status": 429,
+            "result": "You've hit your limit · resets 5:50pm (UTC)",
+        })
+        err = _classify_cli_error(stdout, "")
+        assert err is not None
+        assert isinstance(err, QuotaExhaustedError)
+        # Reset time is human-readable text; we don't parse it. retry_at None
+        # means agent_runtime applies the default DEFAULT_QUOTA_RETRY_DELAY.
+        assert err.retry_at is None
+        assert "hit your limit" in str(err).lower()
+
+    def test_api_error_status_429_without_is_error_returns_none(self):
+        # Defensive: only treat as quota when is_error is also true.
+        stdout = json.dumps({
+            "is_error": False,
+            "api_error_status": 429,
+            "result": "transient retry handled internally",
+        })
+        assert _classify_cli_error(stdout, "") is None
+
+    def test_api_error_status_non_429_returns_none(self):
+        # A 500 from the backend is not a quota hit; let it surface as-is.
+        stdout = json.dumps({
+            "is_error": True,
+            "api_error_status": 500,
+            "result": "Internal server error",
+        })
+        assert _classify_cli_error(stdout, "") is None

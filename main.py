@@ -134,12 +134,34 @@ def main(argv: list[str] | None = None) -> int:
     from orchestrator.workflow_router import load_workflow
     from workspace.workspace_manager import WorkspaceManager
 
-    # Configure logging
+    # Configure logging — stderr (terminal) + rotating file (persistent).
+    # Without the file handler, all logger.warning/error/info calls vanish
+    # when the terminal running run.sh scrolls or closes, leaving us blind
+    # for post-mortem analysis of agent/CLI failures.
     log_level = getattr(logging, global_config.logging.level.upper(), logging.INFO)
-    logging.basicConfig(
-        level=log_level,
-        format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+    log_format = "%(asctime)s [%(levelname)s] %(name)s: %(message)s"
+    logging.basicConfig(level=log_level, format=log_format)
+
+    from logging.handlers import RotatingFileHandler
+
+    log_dir = Path(global_config.logging.dir)
+    try:
+        log_dir.mkdir(parents=True, exist_ok=True)
+        # Probe write access — Path.mkdir(exist_ok=True) succeeds even on
+        # an existing dir we can't write to.
+        (log_dir / ".write-probe").touch()
+        (log_dir / ".write-probe").unlink()
+    except (PermissionError, OSError):
+        log_dir = Path(__file__).parent / "data"
+        log_dir.mkdir(parents=True, exist_ok=True)
+    log_file = log_dir / "sickle-daemon.log"
+    file_handler = RotatingFileHandler(
+        str(log_file), maxBytes=10 * 1024 * 1024, backupCount=5,
     )
+    file_handler.setFormatter(logging.Formatter(log_format))
+    file_handler.setLevel(log_level)
+    logging.getLogger().addHandler(file_handler)
+    print(f"  Daemon logs: {log_file}")
 
     # Initialize event system
     from dashboard.events import EventBus

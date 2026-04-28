@@ -1232,7 +1232,7 @@ class Orchestrator:
         # Squash commits into one clean commit before the first PR
         self._squash_feature_commits(workspace)
 
-        result = await create_pr(workspace, vcs, self._tracker, repo_config)
+        result = await create_pr(workspace, vcs, self._tracker, repo_config, event_bus=self._events)
         if result.success:
             return ActionResult(
                 success=True, next_state=Stage.PR_REVIEW, error="",

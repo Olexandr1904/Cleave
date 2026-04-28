@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
+from typing import Any
 
 from config.schemas import RepoConfig
 from integrations.base.tracker import TrackerInterface
@@ -27,6 +28,7 @@ async def create_pr(
     vcs: VCSInterface,
     tracker: TrackerInterface,
     repo_config: RepoConfig,
+    event_bus: Any = None,
 ) -> PRCreationResult:
     """Push branch, open PR, transition Jira ticket.
 
@@ -34,7 +36,18 @@ async def create_pr(
     AC2: Open PR with pr_description_template.
     AC3: Store PR number/URL in state.json.
     AC4: Transition Jira to In Review + comment with PR URL.
+
+    Push policy is graceful: if the project has a pre-push hook that fails for
+    environmental reasons (e.g. Gradle/AAPT2 toolchain mismatch — see
+    `gradle_remediation.looks_like_pre_push_hook_environmental_failure`), the
+    push is automatically retried with `--no-verify` and a `push_hook_bypassed`
+    event is emitted. Real detekt/lint findings remain blocking — those are
+    the user's code being wrong and should not be silently skipped.
     """
+    from orchestrator.gradle_remediation import (
+        looks_like_pre_push_hook_environmental_failure,
+    )
+
     state = workspace.state
     branch = state.branch
 
@@ -58,9 +71,29 @@ async def create_pr(
         )
 
     try:
-        # AC1: Push the feature branch
+        # AC1: Push the feature branch.
         skip_hooks = bool(getattr(repo_config.vcs, "skip_pre_push_hook", False))
-        await vcs.push(str(workspace.source_dir), branch, skip_hooks=skip_hooks)
+        try:
+            await vcs.push(str(workspace.source_dir), branch, skip_hooks=skip_hooks)
+        except RuntimeError as push_err:
+            if skip_hooks or not looks_like_pre_push_hook_environmental_failure(str(push_err)):
+                raise  # real failure, or already bypassed — surface it
+            # Pre-push hook tripped on an environmental issue. Bypass it and
+            # note it as a warning rather than failing the workspace.
+            logger.warning(
+                "Pre-push hook environmental failure for %s; retrying with --no-verify",
+                state.ticket_id,
+            )
+            if event_bus is not None:
+                event_bus.emit(
+                    "push_hook_bypassed",
+                    f"Pre-push hook failed for {state.ticket_id}; retried with --no-verify",
+                    project_id=state.company_id,
+                    ticket_id=state.ticket_id,
+                    data={"reason": str(push_err)[:500]},
+                )
+            await vcs.push(str(workspace.source_dir), branch, skip_hooks=True)
+            skip_hooks = True
         logger.info(
             "Pushed branch '%s' for %s%s",
             branch, state.ticket_id, " (--no-verify)" if skip_hooks else "",

@@ -86,6 +86,24 @@ def looks_like_aapt2_arch_mismatch(error_message: str | None) -> bool:
     return bool(_AAPT2_ARCH_MISMATCH_RE.search(error_message))
 
 
+def looks_like_pre_push_hook_environmental_failure(error_message: str | None) -> bool:
+    """True if a `git push` failure looks like the project's local pre-push
+    hook tripping on environmental issues (Gradle/AAPT2 toolchain) rather
+    than real code-quality findings.
+
+    Used by `pr_creation.create_pr` to decide whether to retry the push with
+    `--no-verify`. Real detekt/lint findings won't match these patterns —
+    those are the user's code being wrong, and the pipeline should not
+    silently bypass them.
+    """
+    if not error_message:
+        return False
+    return (
+        looks_like_aapt2_arch_mismatch(error_message)
+        or looks_like_gradle_cache_corruption(error_message)
+    )
+
+
 def looks_like_gradle_cache_corruption(error_message: str | None) -> bool:
     """True if the error matches any known Gradle transforms-cache corruption signature.
 

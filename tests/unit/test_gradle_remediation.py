@@ -9,8 +9,10 @@ from unittest.mock import patch
 import pytest
 
 from orchestrator.gradle_remediation import (
+    ARCH_MISMATCH_HELP,
     _GRADLE_DAEMON_MAIN_CLASS,
     clear_gradle_transforms,
+    looks_like_aapt2_arch_mismatch,
     looks_like_gradle_cache_corruption,
 )
 
@@ -24,11 +26,14 @@ class TestLooksLikeGradleCacheCorruption:
         )
         assert looks_like_gradle_cache_corruption(msg)
 
-    def test_matches_syntax_error_unexpected(self):
+    def test_matches_syntax_error_unexpected_without_arch_path(self):
+        # AAPT2 + Syntax error without the `aapt2-<ver>-linux/aapt2:` path —
+        # could happen on x86_64 hosts where the cache content is genuinely
+        # corrupt but the architecture is right. The same signature with the
+        # canonical arch-mismatch path is handled by looks_like_aapt2_arch_mismatch
+        # (see tests below); cache-corruption defers to it for that case.
         msg = (
-            "AAPT2 aapt2-8.6.1-11315950-linux Daemon #2: Unexpected error output: "
-            "/home/admin0/.gradle/caches/8.14.1/transforms/abc/transformed/"
-            "aapt2-8.6.1-11315950-linux/aapt2: 2: Syntax error: \"(\" unexpected"
+            "AAPT2 Daemon #2: Unexpected error output: Syntax error: \"(\" unexpected"
         )
         assert looks_like_gradle_cache_corruption(msg)
 
@@ -86,6 +91,58 @@ class TestLooksLikeGradleCacheCorruption:
             "Library only supports x86_64 but build target is armv8"
         )
         assert not looks_like_gradle_cache_corruption(msg)
+
+    def test_arch_mismatch_does_not_classify_as_cache_corruption(self):
+        # The arch-mismatch error textually contains both AAPT2 + Syntax error
+        # patterns, but wiping the cache won't help — the next download will
+        # still produce an x86-64 binary on a non-x86 host. cache-corruption
+        # must defer to the more specific arch-mismatch detector.
+        msg = (
+            "AAPT2 aapt2-8.6.1-11315950-linux Daemon #0: Unexpected error output: "
+            "/home/admin0/.gradle/caches/8.14.1/transforms/abc/transformed/"
+            "aapt2-8.6.1-11315950-linux/aapt2: 2: Syntax error: \"(\" unexpected"
+        )
+        assert looks_like_aapt2_arch_mismatch(msg)
+        # Cache-corruption returns False so the 🧹 button doesn't fire on this
+        assert not looks_like_gradle_cache_corruption(msg)
+
+
+class TestLooksLikeAapt2ArchMismatch:
+    def test_matches_real_world_error(self):
+        msg = (
+            "/home/admin0/.gradle/caches/8.14.1/transforms/7abf4a41bf9deaace477b90ab915558d/"
+            "transformed/aapt2-8.6.1-11315950-linux/aapt2: 2: Syntax error: \"(\" unexpected"
+        )
+        assert looks_like_aapt2_arch_mismatch(msg)
+
+    def test_does_not_match_aarch64_path(self):
+        # When AGP picks the aarch64 build, the path has -linux_aarch64. That
+        # is the working configuration, not a mismatch.
+        msg = (
+            "AAPT2 aapt2-8.6.1-11315950-linux_aarch64 Daemon #0: "
+            "/home/admin0/.gradle/caches/8.14.1/transforms/abc/transformed/"
+            "aapt2-8.6.1-11315950-linux_aarch64/aapt2: 2: Syntax error: \"(\" unexpected"
+        )
+        assert not looks_like_aapt2_arch_mismatch(msg)
+
+    def test_does_not_match_daemon_startup_failed_alone(self):
+        # "Daemon startup failed" without the syntax-error path is the older
+        # cache-corruption symptom on x86_64 hosts. Should not be classified
+        # as arch mismatch.
+        msg = "AAPT2 aapt2-8.6.1-linux Daemon #0: Daemon startup failed"
+        assert not looks_like_aapt2_arch_mismatch(msg)
+
+    def test_handles_none_and_empty(self):
+        assert not looks_like_aapt2_arch_mismatch(None)
+        assert not looks_like_aapt2_arch_mismatch("")
+
+    def test_help_text_is_actionable(self):
+        # Sanity check that the operator-facing hint contains the two main
+        # remediation options. If we tweak the wording, this still asserts
+        # the operator can actually unblock themselves.
+        assert "qemu-user-static" in ARCH_MISMATCH_HELP
+        assert "aarch64" in ARCH_MISMATCH_HELP
+        assert "Retry" in ARCH_MISMATCH_HELP
 
 
 class TestClearGradleTransforms:

@@ -79,6 +79,61 @@ async def test_notify_failed_aapt2_corruption_adds_clear_cache_button():
 
 
 @pytest.mark.asyncio
+async def test_notify_failed_arch_mismatch_uses_help_message_no_clear_button():
+    """x86-64 aapt2 on non-x86 host: no clear-cache button, message shows
+    suggested host-level fixes."""
+    notifier = MagicMock()
+    notifier.send_message = AsyncMock()
+    orch = _make_orch(notifier)
+
+    error_msg = (
+        "Git command failed: git push -u origin feature/X\n"
+        "AAPT2 aapt2-8.6.1-11315950-linux Daemon #0: Unexpected error output: "
+        "/home/admin0/.gradle/caches/8.14.1/transforms/abc/transformed/"
+        "aapt2-8.6.1-11315950-linux/aapt2: 2: Syntax error: \"(\" unexpected"
+    )
+    await orch._notify_failed(_make_workspace(), error_msg)
+
+    notifier.send_message.assert_awaited_once()
+    args, kwargs = notifier.send_message.call_args
+    buttons = kwargs.get("buttons") or []
+    labels = [b.label for b in buttons]
+    # No clear-cache button — wiping won't help
+    assert "🧹 Clear cache & retry" not in labels
+    assert labels == ["Retry"]
+    body = args[1]
+    # Message must call out the host issue and offer concrete remediation paths
+    assert "Architecture mismatch" in body
+    assert "qemu-user-static" in body  # the install hint
+    assert "aarch64" in body  # the gradle.properties hint
+    assert "Retry" in body or "Click Retry" in body or "After fixing" in body
+
+
+@pytest.mark.asyncio
+async def test_notify_failed_arch_mismatch_takes_precedence_over_cache_corruption():
+    """The error contains both the AAPT2 corruption substring AND the
+    architecture-mismatch path. The arch path is the real diagnosis; the
+    cache-corruption branch must NOT fire (else operator gets a useless
+    🧹 button on a host-level problem)."""
+    notifier = MagicMock()
+    notifier.send_message = AsyncMock()
+    orch = _make_orch(notifier)
+
+    error_msg = (
+        "AAPT2 aapt2-8.6.1-11315950-linux Daemon #0: Daemon startup failed\n"
+        "AAPT2 aapt2-8.6.1-11315950-linux Daemon #1: Unexpected error output: "
+        "/home/admin0/.gradle/caches/8.14.1/transforms/abc/transformed/"
+        "aapt2-8.6.1-11315950-linux/aapt2: 2: Syntax error: \"(\" unexpected"
+    )
+    await orch._notify_failed(_make_workspace(), error_msg)
+
+    buttons = notifier.send_message.call_args.kwargs.get("buttons") or []
+    labels = [b.label for b in buttons]
+    assert "🧹 Clear cache & retry" not in labels
+    assert "Architecture mismatch" in notifier.send_message.call_args.args[1]
+
+
+@pytest.mark.asyncio
 async def test_notify_failed_no_notifier_returns_silently():
     orch = Orchestrator.__new__(Orchestrator)
     orch._notifier = None

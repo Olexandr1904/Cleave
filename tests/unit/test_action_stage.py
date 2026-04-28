@@ -51,6 +51,7 @@ class TestActionPushAndOpenPr:
             return_value=(MagicMock(), MagicMock()),
         )
         orch._tracker = MagicMock()
+        orch._events = None
         pr_result = SimpleNamespace(
             success=True, pr_url="https://github.com/x/1", pr_number=42, error="",
         )
@@ -84,6 +85,7 @@ class TestActionPushAndOpenPr:
             return_value=(MagicMock(), MagicMock()),
         )
         orch._tracker = MagicMock()
+        orch._events = None
         pr_result = SimpleNamespace(
             success=True, pr_url="https://github.com/x/1", pr_number=42, error="",
         )

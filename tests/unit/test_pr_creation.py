@@ -132,6 +132,80 @@ class TestCreatePR:
         mock_vcs.push.assert_called_once()
         assert mock_vcs.push.call_args.kwargs.get("skip_hooks") is False
 
+    async def test_environmental_hook_failure_retries_with_no_verify(
+        self, workspace, mock_vcs, mock_tracker, repo_config,
+    ):
+        """When push fails with a Gradle/AAPT2 toolchain signature, the
+        pipeline must retry with --no-verify rather than fail the workspace.
+        A warning event is emitted so the operator sees what happened."""
+        (workspace.meta_dir / "scope-certificate.md").write_text("PASS")
+        # Simulate the real-world AAPT2 architecture-mismatch failure
+        gradle_err = (
+            "Git command failed: git -C /tmp/repo push -u origin feature/X\n"
+            "AAPT2 aapt2-8.6.1-11315950-linux Daemon #0: Unexpected error output: "
+            "/home/admin0/.gradle/caches/8.14.1/transforms/abc/transformed/"
+            "aapt2-8.6.1-11315950-linux/aapt2: 2: Syntax error: \"(\" unexpected"
+        )
+        mock_vcs.push.side_effect = [
+            RuntimeError(gradle_err),  # first attempt — hook trips on AAPT2
+            None,                       # retry succeeds with --no-verify
+        ]
+        events_emitted: list[tuple[str, dict]] = []
+
+        class _Bus:
+            def emit(self, event_type: str, message: str, **kwargs):
+                events_emitted.append((event_type, kwargs.get("data", {})))
+
+        result = await create_pr(workspace, mock_vcs, mock_tracker, repo_config, event_bus=_Bus())
+
+        # Pipeline did NOT fail — PR creation succeeded after the bypass
+        assert result.success is True
+        # push was called twice: first without bypass, then with skip_hooks=True
+        assert mock_vcs.push.call_count == 2
+        assert mock_vcs.push.call_args_list[0].kwargs.get("skip_hooks") is False
+        assert mock_vcs.push.call_args_list[1].kwargs.get("skip_hooks") is True
+        # A push_hook_bypassed event was emitted carrying the original reason
+        bypass_events = [e for e in events_emitted if e[0] == "push_hook_bypassed"]
+        assert len(bypass_events) == 1
+        assert "AAPT2" in bypass_events[0][1].get("reason", "")
+
+    async def test_real_detekt_failure_does_not_silently_bypass(
+        self, workspace, mock_vcs, mock_tracker, repo_config,
+    ):
+        """A genuine detekt code-quality finding looks nothing like the
+        environmental signatures. The pipeline must surface it as a normal
+        push failure (not silently skip)."""
+        (workspace.meta_dir / "scope-certificate.md").write_text("PASS")
+        mock_vcs.push.side_effect = RuntimeError(
+            "detekt failed\n"
+            "MagicNumber - 5:14 - This expression contains a magic number"
+        )
+
+        result = await create_pr(workspace, mock_vcs, mock_tracker, repo_config)
+
+        assert result.success is False
+        # No bypass attempt — push only called once
+        assert mock_vcs.push.call_count == 1
+        assert "detekt failed" in result.error or "MagicNumber" in result.error
+
+    async def test_explicit_skip_hooks_does_not_double_bypass(
+        self, workspace, mock_vcs, mock_tracker, repo_config,
+    ):
+        """If the operator already configured skip_pre_push_hook=True and the
+        push STILL fails, do not retry — that's a real failure on top of the
+        bypass and the operator needs to see it."""
+        (workspace.meta_dir / "scope-certificate.md").write_text("PASS")
+        repo_config.vcs.skip_pre_push_hook = True
+        mock_vcs.push.side_effect = RuntimeError(
+            "AAPT2 aapt2-8.6.1-linux Daemon #0: Daemon startup failed"
+        )
+
+        result = await create_pr(workspace, mock_vcs, mock_tracker, repo_config)
+
+        assert result.success is False
+        # Single push attempt (no retry — already running with --no-verify)
+        assert mock_vcs.push.call_count == 1
+
     async def test_jira_failure_non_blocking(self, workspace, mock_vcs, mock_tracker, repo_config):
         """Jira transition failure should not block PR creation."""
         (workspace.meta_dir / "scope-certificate.md").write_text("PASS")

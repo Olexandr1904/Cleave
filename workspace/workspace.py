@@ -120,7 +120,34 @@ class Workspace:
     def reports_dir(self) -> Path:
         path = self._root / "source" / "reports"
         path.mkdir(parents=True, exist_ok=True)
+        # `reports/` lives inside the source clone so agents can read each
+        # other's outputs via the same path the user's repo uses. To prevent
+        # the directory from getting accidentally staged by `git add .` and
+        # ending up in PRs, register an exclude entry in this workspace's
+        # local-only git config (.git/info/exclude is per-clone and never
+        # committed). Idempotent.
+        self._ensure_reports_excluded_from_git()
         return path
+
+    def _ensure_reports_excluded_from_git(self) -> None:
+        """Append `reports/` to `.git/info/exclude` if not already present.
+
+        Best-effort: silently no-op if the source dir isn't a git checkout
+        (some test fixtures and edge cases) or if the file isn't writable.
+        """
+        exclude_path = self._root / "source" / ".git" / "info" / "exclude"
+        if not exclude_path.parent.is_dir():
+            return
+        try:
+            existing = exclude_path.read_text(encoding="utf-8") if exclude_path.exists() else ""
+            if any(line.strip() == "reports/" for line in existing.splitlines()):
+                return
+            with open(exclude_path, "a", encoding="utf-8") as f:
+                if existing and not existing.endswith("\n"):
+                    f.write("\n")
+                f.write("# Sickle pipeline artifacts — never commit\nreports/\n")
+        except OSError:
+            pass
 
     @property
     def logs_dir(self) -> Path:

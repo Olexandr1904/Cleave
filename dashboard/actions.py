@@ -484,10 +484,61 @@ def build_action_routes(
             )
         return JSONResponse({"status": "ok", "cleaned": ticket_id})
 
+    async def clear_gradle_and_retry(request: Request) -> JSONResponse:
+        """Wipe Gradle transforms cache and retry the ticket.
+
+        Surfaced only when the ticket's failure error matches the AAPT2 cache
+        corruption signature — see `orchestrator.gradle_remediation`. Same retry
+        logic as the regular retry endpoint, just with a cache wipe first.
+        """
+        from orchestrator.gradle_remediation import (
+            clear_gradle_transforms,
+            looks_like_gradle_cache_corruption,
+        )
+
+        ticket_id = request.path_params["ticket_id"]
+        ws = _find_workspace(orchestrator, ticket_id, global_config)
+        if ws is None:
+            return _error(f"Workspace not found: {ticket_id}", 404)
+        if ws.state.current_state != Stage.FAILED:
+            return _error(
+                f"Cannot clear-and-retry: state is {ws.state.current_state} (expected FAILED)"
+            )
+        if not looks_like_gradle_cache_corruption(ws.state.error or ""):
+            # Defensive: refuse to wipe the cache for unrelated failures even
+            # if the operator somehow hits this endpoint manually. The intent
+            # is "fix the AAPT2 corruption you just saw," not a generic reset.
+            return _error("Failure does not match Gradle cache corruption signature")
+
+        try:
+            freed = clear_gradle_transforms()
+        except Exception as e:
+            logger.exception("Gradle cache clear failed for %s", ticket_id)
+            return _error(f"Failed to clear Gradle cache: {e}", 500)
+
+        target = ws.state.previous_state or Stage.ANALYSIS
+        ws.state.human_input_pending = False
+        ws.state.error = None
+        ws.transition(target)
+        ws.save_state()
+        if event_bus:
+            event_bus.emit(
+                "gradle_cache_cleared",
+                f"Cleared Gradle cache for {ticket_id} ({freed} bytes)",
+                ticket_id=ticket_id,
+                data={"bytes_freed": freed, "new_state": target},
+            )
+        return JSONResponse({
+            "status": "ok",
+            "bytes_freed": freed,
+            "new_state": target,
+        })
+
     return [
         Route("/api/workspaces/{ticket_id:path}/approve", approve, methods=["POST"]),
         Route("/api/workspaces/{ticket_id:path}/reject", reject, methods=["POST"]),
         Route("/api/workspaces/{ticket_id:path}/retry", retry, methods=["POST"]),
+        Route("/api/workspaces/{ticket_id:path}/clear-gradle-and-retry", clear_gradle_and_retry, methods=["POST"]),
         Route("/api/workspaces/{ticket_id:path}/take-control", take_control, methods=["POST"]),
         Route("/api/workspaces/{ticket_id:path}/release-control", release_control, methods=["POST"]),
         Route("/api/workspaces/{ticket_id:path}/resume", resume, methods=["POST"]),

@@ -95,3 +95,4 @@ Local web dashboard providing real-time visibility into the Sickle pipeline. Sho
 | 2026-04-16 | Integration test: wizard POST → stub Atlas writes YAML → orchestrator.rescan_projects called → project merged into live dict |
 | 2026-04-27 | Settings page (FR17): SQLite-backed settings table + GET/PUT /api/settings/model; init_settings runs on dashboard startup |
 | 2026-04-27 | Adapters take `model_provider: Callable[[], str]`; YAML `claude.model` field and hardcoded defaults dropped — runtime store is the sole source |
+| 2026-04-28 | New `POST /api/workspaces/{ticket_id}/clear-gradle-and-retry` endpoint that pairs with the new "🧹" icon on FAILED ticket cards whose error matches the AAPT2 corruption signature. Server-side validation refuses the operation if the ticket isn't FAILED or the error doesn't match the signature, so wholesale cache wipes can't happen by accident. The board's `renderCard` mirrors the same regex client-side to decide when to show the icon. |

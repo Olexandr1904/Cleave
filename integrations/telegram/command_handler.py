@@ -630,6 +630,46 @@ class CommandHandler:
             if hasattr(self, '_wake_fn') and self._wake_fn:
                 self._wake_fn()
 
+        elif action == "clear_gradle":
+            from orchestrator.gradle_remediation import clear_gradle_transforms
+
+            ws = next((w for w in workspaces if w.state.ticket_id == ticket_id), None)
+            if not ws:
+                await self._notifier.send_message(
+                    chat_id, f"No active workspace found for {ticket_id}.",
+                    reply_to_message_id=message_id,
+                )
+                return
+            try:
+                freed = clear_gradle_transforms()
+            except Exception as e:
+                logger.exception("Gradle cache clear failed for %s", ticket_id)
+                await self._notifier.send_message(
+                    chat_id, f"Failed to clear Gradle cache: {e}",
+                    reply_to_message_id=message_id,
+                )
+                return
+            mb = freed / 1024 / 1024
+            target = ws.state.previous_state or Stage.ANALYSIS
+            ws.state.human_input_pending = False
+            ws.state.error = None
+            ws.transition(target)
+            ws.save_state()
+            if self._events is not None:
+                self._events.emit(
+                    "gradle_cache_cleared",
+                    f"Cleared Gradle cache for {ticket_id} ({freed} bytes)",
+                    ticket_id=ticket_id,
+                    data={"bytes_freed": freed, "new_state": target},
+                )
+            await self._notifier.send_message(
+                chat_id,
+                f"Cleared {mb:.0f} MB of Gradle transforms cache. Retrying {ticket_id} from {target}.",
+                reply_to_message_id=message_id,
+            )
+            if hasattr(self, '_wake_fn') and self._wake_fn:
+                self._wake_fn()
+
         elif action in ("pr_fix", "pr_skip", "pr_wontfix"):
             # PR comment decision via button — ticket_id is "TICKET:COMMENT_ID"
             parts = ticket_id.split(":", 1)

@@ -1164,7 +1164,11 @@ class Orchestrator:
                 try:
                     branch = state.branch
                     if branch:
-                        await vcs.push(str(workspace.source_dir), branch, force=True)
+                        skip_hooks = bool(getattr(repo_config.vcs, "skip_pre_push_hook", False))
+                        await vcs.push(
+                            str(workspace.source_dir), branch,
+                            force=True, skip_hooks=skip_hooks,
+                        )
                         logger.info("Pushed updates to existing PR #%d for %s", state.pr_number, state.ticket_id)
                 except Exception as e:
                     logger.warning("Failed to push to existing PR: %s", e)

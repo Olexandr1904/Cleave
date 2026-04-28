@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+import subprocess
 from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 
 from orchestrator.gradle_remediation import (
+    _GRADLE_DAEMON_MAIN_CLASS,
     clear_gradle_transforms,
     looks_like_gradle_cache_corruption,
 )
@@ -141,3 +144,84 @@ class TestClearGradleTransforms:
 
         assert freed >= 100
         assert not (explicit_home / "caches" / "8.14.1" / "transforms").exists()
+
+    def test_invokes_pkill_for_gradle_daemons(self, tmp_path):
+        """A stale Gradle daemon would otherwise reuse in-memory references to
+        the deleted transforms cache and reproduce the corruption symptom on
+        the next build. clear_gradle_transforms must signal pkill before
+        wiping anything."""
+        gradle_home = tmp_path / ".gradle"
+        gradle_home.mkdir()
+
+        with patch("orchestrator.gradle_remediation.subprocess.run") as mock_run:
+            mock_run.return_value = subprocess.CompletedProcess(
+                args=[], returncode=1, stdout=b"", stderr=b"",
+            )
+            clear_gradle_transforms(gradle_home)
+
+        assert mock_run.called
+        cmd = mock_run.call_args.args[0]
+        assert cmd[0] == "pkill"
+        # -TERM signal, -f match against full command line so we hit the JVM
+        # daemon (the matched class is on the cp arg, not argv[0])
+        assert "-TERM" in cmd
+        assert "-f" in cmd
+        assert _GRADLE_DAEMON_MAIN_CLASS in cmd
+
+    def test_pkill_failure_does_not_raise(self, tmp_path):
+        """If pkill is missing or errors out, we still proceed with cache wipe
+        — the kill is best-effort, the wipe is the must-have."""
+        gradle_home = tmp_path / ".gradle"
+        transforms = gradle_home / "caches" / "8.14.1" / "transforms"
+        transforms.mkdir(parents=True)
+        (transforms / "f").write_text("a" * 200)
+
+        with patch(
+            "orchestrator.gradle_remediation.subprocess.run",
+            side_effect=FileNotFoundError("no pkill"),
+        ):
+            freed = clear_gradle_transforms(gradle_home)
+
+        # Wipe still happened
+        assert freed >= 200
+        assert not transforms.exists()
+
+    def test_wipes_daemon_registry(self, tmp_path):
+        """Stale registry entries cause Gradle to wait on dead daemons.
+        clear_gradle_transforms must remove registry.bin (and its lock) under
+        every version subdir so the next invocation spawns a fresh daemon
+        cleanly."""
+        gradle_home = tmp_path / ".gradle"
+        for ver in ("8.14.1", "8.10"):
+            d = gradle_home / "daemon" / ver
+            d.mkdir(parents=True)
+            (d / "registry.bin").write_bytes(b"\x01" * 50)
+            (d / "registry.bin.lock").write_bytes(b"\x02")
+            (d / "daemon-1234.out.log").write_text("keep me")  # logs preserved
+        # No transforms to wipe — we're focused on the registry path here
+        with patch("orchestrator.gradle_remediation.subprocess.run") as m:
+            m.return_value = subprocess.CompletedProcess([], 1)
+            clear_gradle_transforms(gradle_home)
+
+        for ver in ("8.14.1", "8.10"):
+            d = gradle_home / "daemon" / ver
+            assert not (d / "registry.bin").exists()
+            assert not (d / "registry.bin.lock").exists()
+            # Logs left intact — they have post-mortem value
+            assert (d / "daemon-1234.out.log").read_text() == "keep me"
+
+    def test_handles_missing_daemon_dir_gracefully(self, tmp_path):
+        """If the daemon dir doesn't exist (fresh Gradle install) the registry
+        wipe is a no-op and the cache wipe still runs."""
+        gradle_home = tmp_path / ".gradle"
+        transforms = gradle_home / "caches" / "8.14.1" / "transforms"
+        transforms.mkdir(parents=True)
+        (transforms / "f").write_text("x" * 100)
+        # No daemon/ subtree
+
+        with patch("orchestrator.gradle_remediation.subprocess.run") as m:
+            m.return_value = subprocess.CompletedProcess([], 1)
+            freed = clear_gradle_transforms(gradle_home)
+
+        assert freed >= 100
+        assert not transforms.exists()

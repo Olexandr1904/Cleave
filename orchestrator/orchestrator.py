@@ -24,6 +24,10 @@ from integrations.telegram.handlers.analyze import AnalyzeHandler
 from integrations.telegram.handlers.approval import APPROVAL_NEXT_STATE
 from integrations.telegram.handlers.mode import ModeHandler
 from orchestrator.agent_runtime import AgentRuntime
+from orchestrator.gradle_remediation import (
+    clear_gradle_transforms,
+    looks_like_gradle_cache_corruption,
+)
 from orchestrator.pr_creation import create_pr
 from orchestrator import stage_verifier
 from orchestrator.stage_verifier import ActionResult
@@ -930,6 +934,17 @@ class Orchestrator:
             f"FAILED at {state.previous_state or '?'}. Error: {first_line}."
         )
         buttons = [Button(label="Retry", action=f"retry:{state.ticket_id}")]
+        # If the error matches the AAPT2 transforms-cache corruption signature,
+        # offer a one-click remediation. The button triggers a wipe of all
+        # `<gradle_home>/caches/*/transforms` dirs and a retry from the failed
+        # stage. Surface only on this signature \u2014 wiping the cache wholesale
+        # for unrelated failures would force a multi-minute rebuild.
+        if looks_like_gradle_cache_corruption(error):
+            buttons.insert(
+                0,
+                Button(label="🧹 Clear cache & retry", action=f"clear_gradle:{state.ticket_id}"),
+            )
+            msg += "\nDetected AAPT2 cache corruption \u2014 tap below to clear it."
         try:
             await self._notifier.send_message(chat_id, msg, buttons=buttons)
         except Exception as e:

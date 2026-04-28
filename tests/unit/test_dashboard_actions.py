@@ -123,6 +123,56 @@ class TestRetryEndpoint:
         assert resp.status_code == 400
 
 
+class TestClearGradleAndRetryEndpoint:
+    def test_clears_cache_and_retries_when_signature_matches(
+        self, client, orchestrator, tmp_path, monkeypatch,
+    ):
+        # Fake Gradle home with a transforms tree to wipe
+        fake_home = tmp_path / "g"
+        transforms = fake_home / "caches" / "8.14.1" / "transforms" / "abc"
+        transforms.mkdir(parents=True)
+        (transforms / "binary").write_bytes(b"\x00" * 2048)
+        monkeypatch.setenv("GRADLE_USER_HOME", str(fake_home))
+
+        ws = _make_workspace(
+            "T-1", "FAILED", previous="PUSHED",
+            error="AAPT2 aapt2-8.6.1-linux Daemon #2: Daemon startup failed",
+        )
+        orchestrator.get_active_workspaces.return_value = [ws]
+
+        resp = client.post("/api/workspaces/T-1/clear-gradle-and-retry")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["status"] == "ok"
+        assert data["bytes_freed"] >= 2048
+        assert data["new_state"] == "PUSHED"
+        assert not (fake_home / "caches" / "8.14.1" / "transforms").exists()
+        ws.transition.assert_called_once_with("PUSHED")
+
+    def test_refuses_when_error_does_not_match_signature(self, client, orchestrator):
+        # Defensive: even if the operator hits the endpoint manually for an
+        # unrelated failure, we don't wipe the cache.
+        ws = _make_workspace(
+            "T-1", "FAILED", previous="DEV",
+            error="some unrelated build error with no AAPT2 signal",
+        )
+        orchestrator.get_active_workspaces.return_value = [ws]
+        resp = client.post("/api/workspaces/T-1/clear-gradle-and-retry")
+        assert resp.status_code == 400
+        ws.transition.assert_not_called()
+
+    def test_refuses_when_state_not_failed(self, client, orchestrator):
+        ws = _make_workspace("T-1", "DEV")
+        orchestrator.get_active_workspaces.return_value = [ws]
+        resp = client.post("/api/workspaces/T-1/clear-gradle-and-retry")
+        assert resp.status_code == 400
+
+    def test_returns_404_when_workspace_not_found(self, client, orchestrator):
+        orchestrator.get_active_workspaces.return_value = []
+        resp = client.post("/api/workspaces/MISSING/clear-gradle-and-retry")
+        assert resp.status_code == 404
+
+
 class TestTakeControlEndpoint:
     def test_take_control_no_agent_running(self, client, orchestrator):
         ws = _make_workspace("T-1", "DEV")

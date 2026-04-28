@@ -402,6 +402,45 @@ class TestHandleCallback:
         call_kwargs = mock_notifier.send_message.call_args
         assert call_kwargs.kwargs.get("reply_to_message_id") == 42
 
+    async def test_callback_clear_gradle_clears_and_retries(self, mock_notifier, mock_mode_handler, tmp_path, monkeypatch):
+        # Set up a fake Gradle home with a transforms dir we'll wipe
+        fake_home = tmp_path / "gradle-home"
+        transforms = fake_home / "caches" / "8.14.1" / "transforms" / "abc"
+        transforms.mkdir(parents=True)
+        (transforms / "binary").write_bytes(b"\x00" * 4096)
+        monkeypatch.setenv("GRADLE_USER_HOME", str(fake_home))
+
+        ws = _make_workspace("T-1", "FAILED", previous_state="PUSHED")
+        handler = CommandHandler(
+            intent_parser=AsyncMock(),
+            notifier=mock_notifier,
+            mode_handler=mock_mode_handler,
+            active_workspaces_fn=lambda: [ws],
+        )
+
+        await handler.handle_callback("clear_gradle", "T-1", "12345", 42)
+
+        # Cache wiped
+        assert not (fake_home / "caches" / "8.14.1" / "transforms").exists()
+        # Workspace transitioned back to previous_state for retry
+        ws.transition.assert_called_once_with(Stage.PUSHED)
+        # Confirmation sent via reply
+        sent = mock_notifier.send_message.call_args
+        assert "Cleared" in sent[0][1]
+        assert "T-1" in sent[0][1]
+        assert sent.kwargs.get("reply_to_message_id") == 42
+
+    async def test_callback_clear_gradle_unknown_ticket(self, mock_notifier, mock_mode_handler):
+        handler = CommandHandler(
+            intent_parser=AsyncMock(),
+            notifier=mock_notifier,
+            mode_handler=mock_mode_handler,
+            active_workspaces_fn=lambda: [],
+        )
+        await handler.handle_callback("clear_gradle", "MISSING-1", "12345", 42)
+        sent = mock_notifier.send_message.call_args[0]
+        assert "No active workspace" in sent[1]
+
     async def test_callback_unknown_action_sends_error(self, mock_notifier, mock_mode_handler):
         handler = CommandHandler(
             intent_parser=AsyncMock(),

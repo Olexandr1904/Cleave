@@ -15,6 +15,10 @@ export async function retryWorkspace(ticketId) {
   return postJSON(`/api/workspaces/${encodeURIComponent(ticketId)}/retry`);
 }
 
+export async function clearGradleAndRetry(ticketId) {
+  return postJSON(`/api/workspaces/${encodeURIComponent(ticketId)}/clear-gradle-and-retry`);
+}
+
 export async function takeControl(ticketId, confirm = false) {
   return postJSON(`/api/workspaces/${encodeURIComponent(ticketId)}/take-control`, { confirm });
 }

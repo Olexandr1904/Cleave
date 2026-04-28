@@ -2,7 +2,17 @@
 
 import { loadWorkspaces, loadHealth } from './api.js';
 import { esc, timeAgo, stateBadgeHtml } from './helpers.js';
-import { approveWorkspace, pauseWorkspace, unpauseWorkspace, retryWorkspace } from './actions.js';
+import { approveWorkspace, pauseWorkspace, unpauseWorkspace, retryWorkspace, clearGradleAndRetry } from './actions.js';
+
+// Mirrors orchestrator/gradle_remediation.py::looks_like_gradle_cache_corruption.
+// Keep these patterns in sync — both surfaces (TG button, dashboard button)
+// must trigger on the same failures.
+const GRADLE_CORRUPTION_RE = /aapt2[^\n]*Daemon[^\n]*startup failed|aapt2[^\n]*Syntax error[^\n]*unexpected/i;
+
+function looksLikeGradleCacheCorruption(error) {
+  if (!error) return false;
+  return GRADLE_CORRUPTION_RE.test(error);
+}
 
 export async function renderBoard(projectId, showDone = true) {
   const content = document.getElementById('content');
@@ -127,6 +137,24 @@ export async function renderBoard(projectId, showDone = true) {
           await renderBoard(projectId, showDone);
         } catch (err) {
           alert('Retry failed: ' + err.message);
+        }
+      });
+    });
+
+    // Bind inline Gradle-cache-clear buttons (only present on FAILED cards
+    // whose error matches the AAPT2 corruption signature)
+    content.querySelectorAll('[data-action="clear-gradle"]').forEach(btn => {
+      btn.addEventListener('click', async (e) => {
+        e.stopPropagation();
+        const tid = btn.dataset.ticket;
+        if (!confirm(`Clear Gradle transforms cache and retry ${tid}?\n\nThis wipes ~/.gradle/caches/*/transforms — Gradle re-extracts on next build (a few minutes).`)) return;
+        try {
+          const resp = await clearGradleAndRetry(tid);
+          const mb = Math.round((resp.bytes_freed || 0) / 1024 / 1024);
+          alert(`Cleared ${mb} MB. Retrying from ${resp.new_state}.`);
+          await renderBoard(projectId, showDone);
+        } catch (err) {
+          alert('Clear & retry failed: ' + err.message);
         }
       });
     });
@@ -260,8 +288,12 @@ function renderCard(ws) {
     pauseIcon = `<button class="card-icon-btn" data-action="unpause" data-ticket="${esc(ws.ticket_id)}" title="Resume" onclick="event.stopPropagation()">▶</button>`;
   }
   let retryIcon = '';
+  let gradleClearIcon = '';
   if (stateVal === 'FAILED') {
     retryIcon = `<button class="card-icon-btn" data-action="retry" data-ticket="${esc(ws.ticket_id)}" title="Retry" onclick="event.stopPropagation()">↻</button>`;
+    if (looksLikeGradleCacheCorruption(ws.error)) {
+      gradleClearIcon = `<button class="card-icon-btn" data-action="clear-gradle" data-ticket="${esc(ws.ticket_id)}" title="Clear Gradle cache & retry" onclick="event.stopPropagation()">🧹</button>`;
+    }
   }
   const deleteIcon = `<button class="card-icon-btn card-icon-delete" data-action="delete" data-ticket="${esc(ws.ticket_id)}" title="Delete" onclick="event.stopPropagation()">✕</button>`;
 
@@ -311,6 +343,7 @@ function renderCard(ws) {
       ${stateBadgeHtml(stateVal)}
       <span class="card-line1-spacer"></span>
       ${pauseIcon}
+      ${gradleClearIcon}
       ${retryIcon}
       ${deleteIcon}
     </div>

@@ -43,9 +43,10 @@ def _make_orch(notifier=None):
 
 
 @pytest.mark.asyncio
-async def test_skip_advances_to_done_not_nag_loop(tmp_path):
-    """Pressing Skip on the only pending comment must advance the workspace
-    to DONE, NOT re-escalate it as 'still unresolved' on the next cycle."""
+async def test_skip_routes_to_awaiting_approval_not_done(tmp_path):
+    """Skip must NOT silently mark DONE — that hides unresolved review work.
+    Goes to AWAITING_APPROVAL so the operator explicitly decides whether to
+    merge as-is or send back for a fix."""
     notifier = MagicMock()
     notifier.send_message = AsyncMock()
     orch = _make_orch(notifier)
@@ -58,17 +59,19 @@ async def test_skip_advances_to_done_not_nag_loop(tmp_path):
     result = await orch._execute_review_decisions(ws)
 
     assert result.success is True
-    assert result.next_state == Stage.DONE
-    assert getattr(result, "skipped", False) is False or result.skipped is False
-    # pending_review_comments cleared so next pr_review cycle doesn't see them
-    assert ws.state.pending_review_comments is None or ws.state.pending_review_comments == []
+    assert result.next_state == Stage.AWAITING_APPROVAL
+    # Approve/Reject buttons attached so operator can decide via TG
+    buttons = notifier.send_message.call_args.kwargs.get("buttons") or []
+    labels = [b.label for b in buttons]
+    assert "Approve" in labels
+    assert "Reject" in labels
 
 
 @pytest.mark.asyncio
-async def test_skip_sends_summary_message_not_unresolved_nag(tmp_path):
-    """The TG message for skipped comments must read as a one-shot summary
-    (the operator already saw the comment and chose to drop it), not as an
-    'unresolved' escalation that asks them to reply again."""
+async def test_skip_sends_one_shot_summary_not_nag_loop(tmp_path):
+    """Send one summary listing the skipped comments. No 'still unresolved'
+    wording (the old prompt that told operators to reply again — which
+    triggered the original nag loop they complained about)."""
     notifier = MagicMock()
     notifier.send_message = AsyncMock()
     orch = _make_orch(notifier)
@@ -82,13 +85,11 @@ async def test_skip_sends_summary_message_not_unresolved_nag(tmp_path):
 
     notifier.send_message.assert_awaited_once()
     msg = notifier.send_message.call_args.args[1]
-    # NOT the old "still unresolved" wording (which implied re-asking)
     assert "still unresolved" not in msg.lower()
-    # Contains the new explicit "left unresolved on GitHub" framing
-    assert "Skipped" in msg
-    assert "GitHub" in msg
-    # No prompt asking the operator to reply with fix / won't fix again
-    assert "Reply" not in msg or "Resolve" in msg  # informational, not a prompt
+    assert "Frag.kt:96" in msg
+    # Operator-facing language about the choice
+    assert "Approve" in msg
+    assert "Reject" in msg
 
 
 @pytest.mark.asyncio

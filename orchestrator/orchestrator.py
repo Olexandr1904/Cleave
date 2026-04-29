@@ -1702,32 +1702,41 @@ class Orchestrator:
         if fixes_needed:
             return ActionResult(success=True, next_state=Stage.DEV, error="", metadata={})
 
-        # Skipped comments are intentionally NOT re-escalated. The Skip button
-        # is the operator's "drop this, move on" exit — they have already seen
-        # the comment and chosen not to act, so a 30-min nag loop is the wrong
-        # default. Send one summary note (so the operator has a record) and
-        # advance to DONE. The PR comments stay open on GitHub for human
-        # follow-up if needed.
-        if skipped_comments and self._notifier:
-            chat_id = self._get_chat_id(workspace)
-            if chat_id:
-                sep = "─" * 30
-                lines = [f"ℹ️ [{state.company_id}/{state.repo_id}] {state.ticket_id}"]
-                lines.append(sep)
-                lines.append(
-                    f"Skipped {len(skipped_comments)} PR comment(s) — left unresolved on GitHub:"
-                )
-                for sc in skipped_comments:
-                    lines.append(f"  • @{sc.get('author','?')} on {sc.get('file','?')}:{sc.get('line','?')}")
-                lines.append(sep)
-                lines.append(
-                    "These comments are still open on the PR. Resolve them on GitHub "
-                    "directly if you want to address them later."
-                )
-                try:
-                    await self._notifier.send_message(chat_id, "\n".join(lines))
-                except Exception as e:
-                    logger.warning("Failed to send PR-review skip summary: %s", e)
+        # Skipped comments → AWAITING_APPROVAL, NOT silent DONE. Marking a
+        # ticket DONE while review comments are still open on the PR hides
+        # incomplete work. Instead we hand the decision back to the operator
+        # explicitly: Approve to merge as-is (comments stay open on the PR
+        # for manual follow-up) or Reject to send the workspace back so the
+        # dev agent can re-engage. One TG message, then silence — no
+        # 30-minute re-escalation loop.
+        if skipped_comments:
+            if self._notifier:
+                chat_id = self._get_chat_id(workspace)
+                if chat_id:
+                    sep = "─" * 30
+                    lines = [f"⏸ [{state.company_id}/{state.repo_id}] {state.ticket_id} — PR review pause"]
+                    lines.append(sep)
+                    lines.append(f"{len(skipped_comments)} comment(s) marked Skip — still open on the PR:")
+                    for sc in skipped_comments:
+                        lines.append(f"  • @{sc.get('author','?')} on {sc.get('file','?')}:{sc.get('line','?')}")
+                    lines.append(sep)
+                    lines.append(
+                        "Approve → mark DONE, leave comments open on GitHub for manual follow-up.\n"
+                        "Reject → reopen for dev-agent to address the comments."
+                    )
+                    buttons = [
+                        Button(label="Approve", action=f"approve:{state.ticket_id}"),
+                        Button(label="Reject", action=f"reject:{state.ticket_id}"),
+                    ]
+                    try:
+                        await self._notifier.send_message(
+                            chat_id, "\n".join(lines), buttons=buttons,
+                        )
+                    except Exception as e:
+                        logger.warning("Failed to send PR-review pause: %s", e)
+            return ActionResult(
+                success=True, next_state=Stage.AWAITING_APPROVAL, error="", metadata={},
+            )
 
         return ActionResult(success=True, next_state=Stage.DONE, error="", metadata={})
 

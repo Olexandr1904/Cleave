@@ -467,19 +467,49 @@ class CommandHandler:
                     elif raw == "skip":
                         decision = "skip"
                     else:
-                        decision = raw  # store as-is, _execute_review_decisions handles it
+                        # Free-text reply that doesn't match a recognized prefix.
+                        # Stored verbatim; _execute_review_decisions falls
+                        # through to "skip" semantics for these. Confirm
+                        # explicitly so operators don't assume the bot
+                        # interpreted their prose as fix/won't-fix.
+                        decision = raw
                     c["decision"] = decision
                     ws.save_state()
+                    file_line = f"{c.get('file','?')}:{c.get('line','?')}"
+                    decision_label = {
+                        "fix": "FIX (dev-agent will re-engage)",
+                        "skip": "SKIP (drop, no action)",
+                    }.get(decision)
+                    if decision_label is None:
+                        if decision.startswith("won't fix") or decision.startswith("wont fix"):
+                            wf_prefix_len = len("won't fix") if decision.startswith("won't fix") else len("wont fix")
+                            wf_reason = decision[wf_prefix_len:].lstrip(": ").strip() or "operator decision"
+                            decision_label = f"WON'T FIX (will reply on GitHub: {wf_reason})"
+                        else:
+                            decision_label = f"SKIP (free-text reply, dropped: {decision[:60]!r})"
+                    confirm = f"✓ Recorded {decision_label} for @{c.get('author','?')} on {file_line}"
+                    if self._events is not None:
+                        self._events.emit(
+                            "pr_comment_decision_recorded",
+                            f"{ws.state.ticket_id}: {decision} for comment {c.get('comment_id')}",
+                            ticket_id=ws.state.ticket_id,
+                            data={
+                                "comment_id": c.get("comment_id"),
+                                "decision": decision,
+                                "via": "reply",
+                                "raw_text": text.strip()[:200],
+                            },
+                        )
                     undecided = [x for x in pending if x.get("decision") is None]
                     if undecided:
                         await self._notifier.send_message(
                             chat_id,
-                            f"Got it ({text.strip()}). {len(undecided)} comment(s) remaining.",
+                            f"{confirm}\n{len(undecided)} comment(s) remaining.",
                         )
                     else:
                         await self._notifier.send_message(
                             chat_id,
-                            f"All decisions in for {ws.state.ticket_id}. Executing now.",
+                            f"{confirm}\nAll decisions in for {ws.state.ticket_id}. Executing now.",
                         )
                         if hasattr(self, '_wake_fn') and self._wake_fn:
                             self._wake_fn()
@@ -683,25 +713,47 @@ class CommandHandler:
             decision_map = {"pr_fix": "fix", "pr_skip": "skip", "pr_wontfix": "won't fix: operator decision"}
             decision = decision_map[action]
 
-            matched = False
+            matched_comment = None
             for c in ws.state.pending_review_comments:
                 if str(c.get("comment_id")) == comment_id_str:
                     c["decision"] = decision
-                    matched = True
+                    matched_comment = c
                     break
 
-            if not matched:
+            if matched_comment is None:
                 await self._notifier.send_message(chat_id, f"Comment not found.", reply_to_message_id=message_id)
                 return
 
             ws.save_state()
+            # Echo what got recorded so operators see exactly what happened —
+            # button taps in TG are silent unless we explicitly confirm.
+            file_line = f"{matched_comment.get('file','?')}:{matched_comment.get('line','?')}"
+            decision_label = {
+                "fix": "FIX (dev-agent will re-engage)",
+                "won't fix: operator decision": "WON'T FIX (will reply on GitHub)",
+                "skip": "SKIP (drop, no action)",
+            }.get(decision, decision.upper())
+            confirm = f"✓ Recorded {decision_label} for @{matched_comment.get('author','?')} on {file_line}"
+            if self._events is not None:
+                self._events.emit(
+                    "pr_comment_decision_recorded",
+                    f"{tid}: {decision} for comment {comment_id_str}",
+                    ticket_id=tid,
+                    data={
+                        "comment_id": comment_id_str,
+                        "decision": decision,
+                        "via": "button",
+                    },
+                )
+
             undecided = [x for x in ws.state.pending_review_comments if x.get("decision") is None]
             if undecided:
-                await self._notifier.send_message(chat_id, f"Got it ({decision}). {len(undecided)} comment(s) remaining.", reply_to_message_id=message_id)
+                msg_text = f"{confirm}\n{len(undecided)} comment(s) remaining."
             else:
-                await self._notifier.send_message(chat_id, f"All decisions in for {tid}. Executing now.", reply_to_message_id=message_id)
+                msg_text = f"{confirm}\nAll decisions in for {tid}. Executing now."
                 if hasattr(self, '_wake_fn') and self._wake_fn:
                     self._wake_fn()
+            await self._notifier.send_message(chat_id, msg_text, reply_to_message_id=message_id)
 
         else:
             await self._notifier.send_message(chat_id, f"Unknown action: {action}", reply_to_message_id=message_id)

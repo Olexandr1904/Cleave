@@ -797,7 +797,7 @@ class Orchestrator:
                     datetime.now(timezone.utc) + DEFAULT_QUOTA_RETRY_DELAY
                 )
                 workspace.transition(Stage.DEFERRED, retry_at=retry_at.isoformat())
-                await self._notify_deferred(workspace, retry_at)
+                await self._notify_deferred(workspace, retry_at, reason=result.error)
             else:
                 workspace.transition(Stage.FAILED)
                 workspace.update_state(error=result.error)
@@ -891,34 +891,76 @@ class Orchestrator:
 
     async def _notify_deferred(
         self, workspace: Workspace, retry_at: datetime,
+        reason: str | None = None,
     ) -> None:
-        """Send a one-shot Telegram notification for quota deferral (debounced).
+        """Send a one-shot Telegram notification for transient agent failure
+        deferrals.
 
-        On send failure, `_quota_window_end` is left unchanged so the next quota
-        hit will retry the notification instead of silencing for the full window.
+        Picks a headline from the actual cause \u2014 not all DEFERREDs are quota
+        hits, even though the pipeline reuses the quota retry path for any
+        transient CLI failure. Hard-coding "Quota exhausted" misled operators
+        when the real cause was, e.g., the agent hitting `max_turns`.
+
+        Quota-window debouncing only applies when the cause IS a real
+        usage-limit hit; other transient failures skip the silence window so
+        each ticket's distinct reason still surfaces.
         """
-        now = datetime.now(timezone.utc)
-        if self._quota_window_end is not None and now < self._quota_window_end:
-            return  # still inside the already-announced quota window
+        state = workspace.state
+        is_real_quota = bool(
+            reason and (
+                "usage limit" in reason.lower()
+                or "api_error_status\":429" in reason
+                or '"api_error_status": 429' in reason
+            )
+        )
 
-        if self._notifier is None:
-            self._quota_window_end = retry_at
+        # Window debouncing is for the case where one quota hit cascades
+        # across many tickets \u2014 silence the same announcement.
+        now = datetime.now(timezone.utc)
+        if (
+            is_real_quota
+            and self._quota_window_end is not None
+            and now < self._quota_window_end
+        ):
             return
 
-        state = workspace.state
+        if self._notifier is None:
+            if is_real_quota:
+                self._quota_window_end = retry_at
+            return
+
         chat_id = self._get_chat_id(workspace)
         title = self._get_ticket_title(workspace)
         hdr = self._tg_header("\u23f1", state, title)
-        msg = (
-            f"{hdr}\n"
-            f"Quota exhausted (at {state.previous_state or '?'}), deferred until "
-            f"{retry_at.strftime('%Y-%m-%d %H:%M')} UTC. "
-            f"Other tickets hitting the same quota will defer silently until then."
-        )
+
+        # Pick a headline that names the actual cause.
+        if is_real_quota:
+            headline = (
+                f"Quota exhausted at {state.previous_state or '?'}, deferred "
+                f"until {retry_at.strftime('%Y-%m-%d %H:%M')} UTC. "
+                f"Other tickets hitting the same quota will defer silently."
+            )
+        elif reason and "error_max_turns" in reason:
+            headline = (
+                f"Agent hit max-turns limit at {state.previous_state or '?'}, "
+                f"deferred until {retry_at.strftime('%H:%M')} UTC for retry. "
+                f"If this recurs the agent task may be too complex \u2014 consider "
+                f"raising `max_turns` or splitting the work."
+            )
+        else:
+            short = (reason or "").splitlines()[0][:200] if reason else "no detail captured"
+            headline = (
+                f"Transient agent failure at {state.previous_state or '?'}, "
+                f"deferred until {retry_at.strftime('%H:%M')} UTC. "
+                f"Reason: {short}"
+            )
+
+        msg = f"{hdr}\n{headline}"
         buttons = [Button(label="Retry Now", action=f"retry:{state.ticket_id}")]
         try:
             await self._notifier.send_message(chat_id, msg, buttons=buttons)
-            self._quota_window_end = retry_at
+            if is_real_quota:
+                self._quota_window_end = retry_at
         except Exception as e:
             logger.warning("Failed to send deferred notification: %s", e)
 

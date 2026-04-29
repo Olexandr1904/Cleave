@@ -214,7 +214,14 @@ def _parse_defaults_section(data: dict, file_path: str) -> DefaultsConfig:
 
 
 def _parse_vcs_section(data: dict, file_path: str) -> VCSConfig:
-    """Parse vcs section with provider-specific sub-config."""
+    """Parse vcs section with provider-specific sub-config.
+
+    Top-level VCSConfig fields beyond `provider`/`github`/`gitlab` (e.g.
+    `skip_pre_push_hook`) are passed through as kwargs so they're not
+    silently dropped — the original implementation only handled the three
+    nested sub-configs and discarded the rest, which made flags like
+    `skip_pre_push_hook: true` look configured but actually do nothing.
+    """
     vcs_data = dict(data.get("vcs", {}) or {})
     provider = vcs_data.pop("provider", "github")
     github_data = vcs_data.pop("github", None) or {}
@@ -224,6 +231,7 @@ def _parse_vcs_section(data: dict, file_path: str) -> VCSConfig:
             provider=provider,
             github=GitHubConfig(**github_data) if github_data else GitHubConfig(),
             gitlab=GitLabConfig(**gitlab_data) if gitlab_data else GitLabConfig(),
+            **vcs_data,  # remaining top-level fields (skip_pre_push_hook, etc.)
         )
     except TypeError as e:
         raise ConfigError(f"Invalid fields in 'vcs': {e}", file_path=file_path, field="vcs") from e

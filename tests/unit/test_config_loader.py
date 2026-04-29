@@ -147,3 +147,41 @@ class TestNewConfigSchemas:
         from config.schemas import ProjectConfig
         cfg = ProjectConfig()
         assert cfg.pipeline.mode == "manual"
+
+
+class TestParseVcsSection:
+    """The VCSConfig dataclass has top-level fields (skip_pre_push_hook, etc.)
+    beyond the three nested sub-configs (provider, github, gitlab). Earlier
+    the loader only handled the three nested ones and silently dropped any
+    other top-level field — meaning operators could set
+    `vcs.skip_pre_push_hook: true` in yaml and the value would never reach
+    the runtime config object.
+    """
+
+    def test_parses_skip_pre_push_hook_true(self):
+        from config.config_loader import _parse_vcs_section
+        data = {
+            "vcs": {
+                "provider": "github",
+                "github": {"token": "x", "owner": "o", "repo": "r"},
+                "skip_pre_push_hook": True,
+            },
+        }
+        cfg = _parse_vcs_section(data, "test.yaml")
+        assert cfg.skip_pre_push_hook is True
+        assert cfg.provider == "github"
+        assert cfg.github.token == "x"
+
+    def test_skip_pre_push_hook_default_false(self):
+        from config.config_loader import _parse_vcs_section
+        data = {"vcs": {"provider": "github", "github": {"token": "x", "owner": "o", "repo": "r"}}}
+        cfg = _parse_vcs_section(data, "test.yaml")
+        assert cfg.skip_pre_push_hook is False
+
+    def test_unknown_top_level_vcs_field_raises(self):
+        """Stay strict on typos — pass-through must validate against
+        VCSConfig fields, not blindly accept anything."""
+        from config.config_loader import ConfigError, _parse_vcs_section
+        data = {"vcs": {"provider": "github", "skip_pre_pus_hook": True}}  # typo
+        with pytest.raises(ConfigError):
+            _parse_vcs_section(data, "test.yaml")

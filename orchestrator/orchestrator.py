@@ -1230,7 +1230,7 @@ class Orchestrator:
             )
 
         # Squash commits into one clean commit before the first PR
-        self._squash_feature_commits(workspace)
+        self._squash_feature_commits(workspace, repo_config)
 
         result = await create_pr(workspace, vcs, self._tracker, repo_config, event_bus=self._events)
         if result.success:
@@ -1242,11 +1242,19 @@ class Orchestrator:
             success=False, next_state="", error=result.error, metadata={},
         )
 
-    def _squash_feature_commits(self, workspace: Workspace) -> None:
+    def _squash_feature_commits(
+        self, workspace: Workspace, repo_config: RepoConfig | None = None,
+    ) -> None:
         """Squash all commits on the feature branch into one clean commit.
 
         Keeps the first commit's message (the feat(...) one). This removes
         noise from scope-guard fix cycles and QA retry loops.
+
+        Atomic: if the post-reset commit fails (e.g. global git config
+        missing user.email so git refuses to record an author), the
+        function rolls the branch back to its original HEAD with `reset
+        --hard`. Without this rollback, a failed squash leaves the branch
+        empty and the next push opens a 0-commit PR.
         """
         import subprocess
         source = str(workspace.source_dir)
@@ -1264,6 +1272,15 @@ class Orchestrator:
             if count <= 1:
                 return  # Nothing to squash
 
+            # Capture HEAD so we can roll back if the squash commit fails.
+            head_before = subprocess.run(
+                ["git", "-C", source, "rev-parse", "HEAD"],
+                capture_output=True, text=True, timeout=10,
+            )
+            if head_before.returncode != 0:
+                return
+            old_head = head_before.stdout.strip()
+
             # Get the first (oldest) commit message on the branch
             result = subprocess.run(
                 ["git", "-C", source, "log", "--reverse", "--format=%s", f"HEAD~{count}..HEAD"],
@@ -1272,18 +1289,42 @@ class Orchestrator:
             if result.returncode != 0:
                 return
             messages = result.stdout.strip().splitlines()
-            # Use the first feat/fix commit message
             commit_msg = messages[0] if messages else f"feat({state.ticket_id}): changes"
+
+            # Build commit cmd with explicit author so git doesn't refuse
+            # when the global gitconfig is missing user.email/user.name.
+            commit_cmd = ["git", "-C", source]
+            if repo_config is not None:
+                commit_cmd += [
+                    "-c", f"user.email={repo_config.git.commit_author_email}",
+                    "-c", f"user.name={repo_config.git.commit_author_name}",
+                ]
+            commit_cmd += ["commit", "-m", commit_msg]
 
             # Soft reset to squash
             subprocess.run(
                 ["git", "-C", source, "reset", "--soft", f"HEAD~{count}"],
                 check=True, capture_output=True, timeout=10,
             )
-            subprocess.run(
-                ["git", "-C", source, "commit", "-m", commit_msg],
-                check=True, capture_output=True, timeout=10,
-            )
+            try:
+                subprocess.run(
+                    commit_cmd, check=True, capture_output=True, timeout=10,
+                )
+            except subprocess.CalledProcessError as commit_err:
+                # Rollback: restore the original commit chain. Working tree
+                # was preserved by --soft, but if commit refused to record
+                # the squashed change we must restore HEAD or push opens an
+                # empty PR.
+                logger.error(
+                    "Squash commit failed for %s; rolling back. stderr=%s",
+                    state.ticket_id,
+                    commit_err.stderr.decode(errors="replace")[:500] if commit_err.stderr else "",
+                )
+                subprocess.run(
+                    ["git", "-C", source, "reset", "--hard", old_head],
+                    check=False, capture_output=True, timeout=10,
+                )
+                return
             logger.info("Squashed %d commits into one for %s: %s", count, state.ticket_id, commit_msg)
         except Exception as e:
             logger.warning("Failed to squash commits for %s: %s", state.ticket_id, e)

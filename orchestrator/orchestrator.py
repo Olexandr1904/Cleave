@@ -1559,13 +1559,21 @@ class Orchestrator:
             f"{sep}\n"
             f"Suggestion:\n  {cc.body[:300]}\n\n"
             f"Agent assessment:\n  {cc.reason}\n"
-            f"{sep}"
+            f"{sep}\n"
+            "Tap a button below, or reply to this message with:\n"
+            "  • `fix` — re-engage dev-agent\n"
+            "  • `won't fix: <reason>` — post the reason on GitHub and resolve\n"
+            "Free-text reply lets you add context the buttons can't."
         )
-        # Use a unique action key so the callback handler can match this comment
+        # Use a unique action key so the callback handler can match this comment.
+        # Skip button is intentionally omitted — operators interpreted it as
+        # "I'm done with this comment", but the previous semantic was "ask me
+        # again every 30 min", which trapped them in a nag loop. If the
+        # operator wants to drop a comment, they reply with `won't fix:`
+        # explaining why, which is more honest about the PR state.
         comment_key = f"{state.ticket_id}:{cc.comment_id}"
         buttons = [
             Button(label="Fix", action=f"pr_fix:{comment_key}"),
-            Button(label="Skip", action=f"pr_skip:{comment_key}"),
             Button(label="Won't Fix", action=f"pr_wontfix:{comment_key}"),
         ]
         chat_id = self._get_chat_id(workspace)
@@ -1625,9 +1633,16 @@ class Orchestrator:
                     "decided_at": self._now(),
                 })
             else:
+                # "Skip" (or any unrecognized free-text reply) means "drop from
+                # pending, no GitHub action, don't nag me again". The PR
+                # conversation stays open on GitHub — the operator can revisit
+                # via the GitHub UI later — but the pipeline does not
+                # re-escalate every 30 min for a comment the operator
+                # already saw and chose to ignore.
                 skipped_comments.append(c)
                 update_entry(report_path, cid, {
                     "decision": "SKIP",
+                    "resolved": "NO",
                     "decided_at": self._now(),
                 })
 
@@ -1645,24 +1660,32 @@ class Orchestrator:
         if fixes_needed:
             return ActionResult(success=True, next_state=Stage.DEV, error="", metadata={})
 
-        # If any comments were skipped (unresolved), don't go to DONE
-        if skipped_comments:
-            if self._notifier:
-                chat_id = self._get_chat_id(workspace)
-                if chat_id:
-                    sep = "─" * 30
-                    lines = [f"⚠️ [{state.company_id}/{state.repo_id}] {state.ticket_id}"]
-                    lines.append(sep)
-                    lines.append(f"{len(skipped_comments)} comment(s) still unresolved:")
-                    for sc in skipped_comments:
-                        lines.append(f"  • @{sc.get('author','?')} on {sc.get('file','?')}:{sc.get('line','?')}")
-                    lines.append(sep)
-                    lines.append("Reply to the original comment messages with: fix / won't fix [reason]")
+        # Skipped comments are intentionally NOT re-escalated. The Skip button
+        # is the operator's "drop this, move on" exit — they have already seen
+        # the comment and chosen not to act, so a 30-min nag loop is the wrong
+        # default. Send one summary note (so the operator has a record) and
+        # advance to DONE. The PR comments stay open on GitHub for human
+        # follow-up if needed.
+        if skipped_comments and self._notifier:
+            chat_id = self._get_chat_id(workspace)
+            if chat_id:
+                sep = "─" * 30
+                lines = [f"ℹ️ [{state.company_id}/{state.repo_id}] {state.ticket_id}"]
+                lines.append(sep)
+                lines.append(
+                    f"Skipped {len(skipped_comments)} PR comment(s) — left unresolved on GitHub:"
+                )
+                for sc in skipped_comments:
+                    lines.append(f"  • @{sc.get('author','?')} on {sc.get('file','?')}:{sc.get('line','?')}")
+                lines.append(sep)
+                lines.append(
+                    "These comments are still open on the PR. Resolve them on GitHub "
+                    "directly if you want to address them later."
+                )
+                try:
                     await self._notifier.send_message(chat_id, "\n".join(lines))
-            # Re-escalate: put them back as pending so user can re-decide
-            state.pending_review_comments = skipped_comments
-            workspace.save_state()
-            return ActionResult(success=False, next_state="", error="", metadata={}, skipped=True)
+                except Exception as e:
+                    logger.warning("Failed to send PR-review skip summary: %s", e)
 
         return ActionResult(success=True, next_state=Stage.DONE, error="", metadata={})
 

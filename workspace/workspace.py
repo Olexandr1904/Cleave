@@ -79,6 +79,7 @@ class WorkspaceState:
     retry_at: str | None = None
     pending_review_comments: list[dict] | None = None
     review_cycle: int = 0
+    last_verified_sha: str = ""
     title: str | None = None
     model: str = ""
 

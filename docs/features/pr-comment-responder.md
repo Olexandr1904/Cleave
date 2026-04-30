@@ -56,6 +56,10 @@ Each entry in `state.pending_review_comments` contains:
 | 2026-04-30 | Retry-once policy for re-investigation failures: first exception increments `reinvestigation_retry_count` and leaves `pending_reinvestigation=True` for next tick (no TG surface). Second consecutive failure surfaces to TG and clears both `pending_reinvestigation` and `reinvestigation_retry_count`. |
 | 2026-04-30 | `_reinvestigate_pending` clears `pending_reinvestigation` flag when `decision is not None` (operator decided via button while re-investigation was queued), instead of skipping without clearing. |
 | 2026-04-30 | Escalated `pending_review_comments` entries now include `ticket_title` field (resolved at creation time via `_get_ticket_title`). |
+| 2026-04-30 | M-2: Removed `_unanswered_via` instance attribute; `_handle_unanswered` now accepts `via: str = "command"` as an explicit keyword argument. `handle_callback` passes `via="button"` directly. |
+| 2026-04-30 | M-3: `_handle_unanswered` now reads `ticket_title` from each pending entry via `c.get("ticket_title", "")` when calling `build_escalated_comment_message`. |
+| 2026-04-30 | M-4: `_classify_reply` now extracts the won't-fix reason from the raw (non-lowercased) text, preserving original case (e.g., "Out Of Scope" stays as-is). |
+| 2026-04-30 | M-6: Rephrased `## Operator Hint` section in `agents/pr-comment-responder-agent.md` so `{operator_hint}` lives on its own line and degrades to a blank line when empty. |
 
 ## References
 - Contracts: `docs/agent-contracts.md` (Rivera — PR Comment Responder)

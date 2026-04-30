@@ -285,6 +285,51 @@ class TestOrchestratorReinvestigation:
         orch._notifier.send_message.assert_not_awaited()
 
     @pytest.mark.asyncio
+    async def test_button_decision_after_hint_clears_flag_on_next_orchestrator_tick(self, tmp_path, monkeypatch):
+        """If the operator taps Fix while a hint is in flight, the next
+        orchestrator tick should NOT re-investigate, AND should clear
+        the pending_reinvestigation flag so it doesn't linger forever."""
+        from orchestrator.orchestrator import Orchestrator
+        import orchestrator.orchestrator as orch_mod
+
+        orch = Orchestrator.__new__(Orchestrator)
+        orch._notifier = MagicMock()
+        orch._notifier.send_message = AsyncMock()
+        orch._events = None
+        orch._get_chat_id = MagicMock(return_value="chat-1")
+        orch._get_ticket_title = MagicMock(return_value="Ticket")
+        orch._tg_header = MagicMock(return_value="hdr")
+        orch._agent_runtime = MagicMock()
+
+        ws = MagicMock()
+        ws.reports_dir = tmp_path
+        ws.state = SimpleNamespace(
+            ticket_id="T-1", company_id="acme", repo_id="app",
+            pr_number=42, review_cycle=1, stage_iterations={},
+            pending_review_comments=[
+                {"comment_id": 1, "msg_ids": [100], "decision": "fix",  # decided!
+                 "author": "C", "file": "x.kt", "line": 1, "body": "b",
+                 "reason": "r", "verdict": "Valid",
+                 "hint_rounds": 0, "last_hint": "x",
+                 "pending_reinvestigation": True},  # but hint was queued before decision
+            ],
+        )
+        ws.save_state = MagicMock()
+
+        classify_called = False
+        async def fake_classify(comments, workspace, runtime, *, operator_hint=""):
+            nonlocal classify_called
+            classify_called = True
+            return []
+        monkeypatch.setattr(orch_mod, "classify_comments", fake_classify, raising=False)
+
+        await orch._reinvestigate_pending(ws)
+
+        c = ws.state.pending_review_comments[0]
+        assert c["pending_reinvestigation"] is False  # cleared
+        assert classify_called is False  # never invoked classifier
+
+    @pytest.mark.asyncio
     async def test_reinvestigation_second_failure_surfaces_and_clears(self, tmp_path, monkeypatch):
         """Second failure surfaces to TG and clears the flag."""
         from orchestrator.orchestrator import Orchestrator

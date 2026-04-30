@@ -301,6 +301,14 @@ class TestClassifyReply:
         decision, _, _ = _classify_reply("skip")
         assert decision == "reinvestigate"
 
+    def test_wont_fix_reason_preserves_case(self):
+        _, _, reason = _classify_reply("Won't fix: Out Of Scope For This Ticket")
+        assert reason == "Out Of Scope For This Ticket"
+
+    def test_wont_fix_reason_preserves_case_with_dont_synonym(self):
+        _, _, reason = _classify_reply("Don't fix: Already Handled Upstream")
+        assert reason == "Already Handled Upstream"
+
 
 @pytest.mark.asyncio
 async def test_echo_includes_matched_token_for_fix():

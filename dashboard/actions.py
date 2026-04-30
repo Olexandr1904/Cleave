@@ -184,7 +184,7 @@ def build_action_routes(
 
         # Kill agent if running
         if running:
-            agent_runtime.cancel(ticket_id)
+            await agent_runtime.cancel(ticket_id)
 
         # Transition to MANUAL_CONTROL atomically with timestamp
         ws.transition(
@@ -307,7 +307,7 @@ def build_action_routes(
             })
 
         if running:
-            agent_runtime.cancel(ticket_id)
+            await agent_runtime.cancel(ticket_id)
 
         previous = ws.state.current_state
         ws.transition(Stage.PAUSED)

@@ -110,34 +110,79 @@ class AgentRuntime:
         if info is not None:
             info["pid"] = pid
 
-    def cancel(self, ticket_id: str) -> bool:
+    async def cancel(self, ticket_id: str, *, sigkill_after: float = 5.0) -> bool:
         """Kill a running agent for a workspace. Returns True if was running.
 
-        Kills the entire process group so child processes spawned by the agent
-        (e.g. tools the Claude CLI invokes) are also terminated.
+        Sends SIGTERM to the entire process group so child processes spawned by
+        the agent (e.g. tools the Claude CLI invokes) are also terminated, then
+        waits for the process to actually exit. If it survives `sigkill_after`
+        seconds, escalates to SIGKILL. Without the wait + escalation, callers
+        had no guarantee the process was dead when this returned.
         """
+        import os
+        import signal
+
         info = self._running.pop(ticket_id, None)
         if info is None:
             return False
         pid = info.get("pid", 0)
-        if pid > 0:
-            import os
-            import signal
+        agent_id = info["agent_id"]
+        if pid <= 0:
+            logger.info("Cancelled agent %s for %s (no PID)", agent_id, ticket_id)
+            return True
+
+        def _send(sig: int) -> bool:
+            """Signal the process group; fall back to the leader. True if delivered."""
             try:
                 pgid = os.getpgid(pid)
-                os.killpg(pgid, signal.SIGTERM)
-                logger.info("Killed agent %s (pgid %d) for %s", info["agent_id"], pgid, ticket_id)
             except ProcessLookupError:
-                logger.warning("Agent process %d already gone for %s", pid, ticket_id)
+                return False
+            try:
+                os.killpg(pgid, sig)
+                return True
+            except ProcessLookupError:
+                return False
             except PermissionError:
-                # Fall back to killing just the leader
                 try:
-                    os.kill(pid, signal.SIGTERM)
-                    logger.info("Killed agent %s (pid %d, no pgrp access) for %s", info["agent_id"], pid, ticket_id)
+                    os.kill(pid, sig)
+                    return True
                 except ProcessLookupError:
-                    pass
-        else:
-            logger.info("Cancelled agent %s for %s (no PID, will stop on next check)", info["agent_id"], ticket_id)
+                    return False
+
+        def _alive() -> bool:
+            try:
+                os.kill(pid, 0)  # signal 0 only checks existence
+                return True
+            except ProcessLookupError:
+                return False
+            except PermissionError:
+                return True  # exists but we lack permission; assume alive
+
+        if not _send(signal.SIGTERM):
+            logger.info("Agent %s (pid=%d) for %s already gone", agent_id, pid, ticket_id)
+            return True
+        logger.info("Sent SIGTERM to agent %s (pid=%d) for %s", agent_id, pid, ticket_id)
+
+        # Poll for exit. We can't waitpid() because the subprocess.Process is
+        # owned by claude_code_adapter._run_cli; it reaps via its own
+        # communicate(). Polling kill(pid, 0) is the portable cross-owner check.
+        deadline = time.monotonic() + sigkill_after
+        while time.monotonic() < deadline:
+            await asyncio.sleep(0.1)
+            if not _alive():
+                return True
+
+        logger.warning(
+            "Agent %s (pid=%d) for %s did not exit after SIGTERM; sending SIGKILL",
+            agent_id, pid, ticket_id,
+        )
+        _send(signal.SIGKILL)
+        # SIGKILL is uninterruptible — give the kernel a moment to reap.
+        for _ in range(20):
+            await asyncio.sleep(0.1)
+            if not _alive():
+                return True
+        logger.error("Agent %s (pid=%d) for %s survived SIGKILL", agent_id, pid, ticket_id)
         return True
 
     def assemble_prompt(
@@ -368,9 +413,13 @@ class AgentRuntime:
         """Execute agent via Claude Code CLI (subprocess).
 
         Claude Code handles its own tool loop internally — our max_tool_rounds
-        and token budgets don't apply here. We enforce the wall-clock budget
-        only; if it trips, asyncio.wait_for cancels the awaitable and the
-        adapter terminates the subprocess via its pid_callback registration.
+        budget doesn't apply here. We enforce wall-clock pre-emptively
+        (asyncio.wait_for cancels and we kill the subprocess on timeout) and
+        check the token budget post-hoc against the CLI's reported totals.
+        Token enforcement on the CLI path is necessarily after-the-fact: the
+        CLI is opaque, so we can't interrupt mid-flight when a token cap is
+        crossed. We still surface the overage as a permanent failure so it
+        flags in dashboards and gets operator attention.
         """
         adapter: ClaudeCodeAdapter = self._llm  # type: ignore[assignment]
 
@@ -389,8 +438,9 @@ class AgentRuntime:
             )
         except asyncio.TimeoutError:
             # Kill the subprocess we registered so it doesn't keep running
-            # detached after wait_for cancels the awaitable.
-            self.cancel(ticket_id)
+            # detached after wait_for cancels the awaitable. cancel() is
+            # async (it polls for exit and escalates to SIGKILL), so await it.
+            await self.cancel(ticket_id)
             logger.warning(
                 "Agent '%s' wall-clock budget exceeded (%ds), CLI killed",
                 agent_id, budget.wall_clock_seconds,
@@ -405,16 +455,30 @@ class AgentRuntime:
         finally:
             self.unregister_running(ticket_id)
 
-        # Write output
+        # Write output regardless — we paid for it; keep the artifact.
         output_path = workspace.reports_dir / f"{agent_id}-output.md"
         _write_agent_output(output_path, response.content)
 
+        total_tokens = response.input_tokens + response.output_tokens
+        token_overrun = total_tokens > budget.max_total_tokens
+        if token_overrun:
+            logger.warning(
+                "Agent '%s' token budget exceeded post-hoc: %d > %d",
+                agent_id, total_tokens, budget.max_total_tokens,
+            )
+
         return AgentResult(
             agent_id=agent_id,
-            success=True,
+            success=not token_overrun,
             output=response.content,
             input_tokens=response.input_tokens,
             output_tokens=response.output_tokens,
+            error=(
+                f"token_budget_exceeded ({total_tokens} tokens > "
+                f"{budget.max_total_tokens})"
+                if token_overrun else None
+            ),
+            failure_kind="permanent" if token_overrun else None,
         )
 
     async def _execute_with_tools(

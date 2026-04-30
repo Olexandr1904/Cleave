@@ -303,12 +303,16 @@ class Orchestrator:
         return self._global_config.telegram.default_chat_id
 
     @staticmethod
-    def _git_diff_files(workspace: Workspace) -> set[str]:
-        """Get set of files changed in the latest commit."""
+    def _git_diff_files(workspace: Workspace, since_sha: str = "") -> set[str]:
+        """Get set of files changed in `<since_sha>..HEAD` (or the latest commit if since_sha is empty)."""
         import subprocess
+        if since_sha:
+            diff_arg = f"{since_sha}..HEAD"
+        else:
+            diff_arg = "HEAD~1"
         try:
             result = subprocess.run(
-                ["git", "-C", str(workspace.source_dir), "diff", "HEAD~1", "--name-only"],
+                ["git", "-C", str(workspace.source_dir), "diff", diff_arg, "--name-only"],
                 capture_output=True, text=True, timeout=10,
             )
             if result.returncode == 0:
@@ -1607,8 +1611,9 @@ class Orchestrator:
             if e.get("verified") == "PENDING"
         }
         if pending_verify:
-            changed_files = self._git_diff_files(workspace)
             sha = self._git_head_sha(workspace)
+            last_verified = state.last_verified_sha or ""
+            changed_files = self._git_diff_files(workspace, since_sha=last_verified)
             for cid, entry in pending_verify.items():
                 file_path = entry.get("file", "")
                 if file_path in changed_files:
@@ -1639,6 +1644,9 @@ class Orchestrator:
                                 f"Dev-agent failed to fix comment #{cid} twice "
                                 f"({entry.get('file', '?')}:{entry.get('line', '?')})",
                             )
+            # Advance the cursor so the next cycle diffs from here
+            state.last_verified_sha = sha
+            workspace.save_state()
 
         # Phase 1.5: Process any pending re-investigations from operator hints
         await self._reinvestigate_pending(workspace)

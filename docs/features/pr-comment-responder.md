@@ -60,6 +60,7 @@ Each entry in `state.pending_review_comments` contains:
 | 2026-04-30 | M-3: `_handle_unanswered` now reads `ticket_title` from each pending entry via `c.get("ticket_title", "")` when calling `build_escalated_comment_message`. |
 | 2026-04-30 | M-4: `_classify_reply` now extracts the won't-fix reason from the raw (non-lowercased) text, preserving original case (e.g., "Out Of Scope" stays as-is). |
 | 2026-04-30 | M-6: Rephrased `## Operator Hint` section in `agents/pr-comment-responder-agent.md` so `{operator_hint}` lives on its own line and degrades to a blank line when empty. |
+| 2026-04-30 | Fix: `_git_diff_files` now accepts `since_sha` kwarg and diffs `<since_sha>..HEAD` instead of only `HEAD~1`. Phase 1 of `_action_fetch_pr_comments` captures HEAD before the loop, passes `state.last_verified_sha`, then writes `state.last_verified_sha = sha` and saves state after the loop. Prevents false `FAILED` verdicts when the QA agent commits after the dev-agent fix. |
 
 ## References
 - Contracts: `docs/agent-contracts.md` (Rivera — PR Comment Responder)

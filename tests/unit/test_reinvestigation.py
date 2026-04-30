@@ -166,7 +166,9 @@ class TestOrchestratorReinvestigation:
         assert len(c["msg_ids"]) == 2
 
     @pytest.mark.asyncio
-    async def test_skips_decided_comments_during_reinvestigation(self, tmp_path):
+    async def test_clears_flag_on_decided_comments_during_reinvestigation(self, tmp_path):
+        """When operator decided via button while re-investigation was queued,
+        the pending_reinvestigation flag must be cleared (not left as True)."""
         from orchestrator.orchestrator import Orchestrator
 
         orch = Orchestrator.__new__(Orchestrator)
@@ -185,8 +187,141 @@ class TestOrchestratorReinvestigation:
             ],
         )
         ws.save_state = MagicMock()
-        # Should be a no-op — comment is already decided
+        # Operator already decided — flag must be cleared, classifier not called
         await orch._reinvestigate_pending(ws)
         c = ws.state.pending_review_comments[0]
         assert c["hint_rounds"] == 0
-        assert c["pending_reinvestigation"] is True  # not cleared since decided
+        assert c["pending_reinvestigation"] is False  # cleared since operator already decided
+        ws.save_state.assert_called()
+
+    @pytest.mark.asyncio
+    async def test_reescalated_message_includes_new_verdict(self, tmp_path, monkeypatch):
+        """When a comment is re-investigated and the verdict changes, the
+        re-escalated TG message must contain the NEW verdict + reason."""
+        from orchestrator.orchestrator import Orchestrator
+        from orchestrator.comment_classifier import ClassifiedComment
+        import orchestrator.orchestrator as orch_mod
+
+        orch = Orchestrator.__new__(Orchestrator)
+        sent_messages = []
+        async def capture_send(chat_id, text, buttons=None):
+            sent_messages.append(text)
+            return 999
+        orch._notifier = MagicMock()
+        orch._notifier.send_message = AsyncMock(side_effect=capture_send)
+        orch._events = None
+        orch._get_chat_id = MagicMock(return_value="chat-1")
+        orch._get_ticket_title = MagicMock(return_value="Ticket")
+        orch._tg_header = MagicMock(return_value="hdr")
+        orch._agent_runtime = MagicMock()
+
+        ws = MagicMock()
+        ws.reports_dir = tmp_path
+        ws.state = SimpleNamespace(
+            current_state="PR_REVIEW", ticket_id="T-1",
+            company_id="acme", repo_id="app", pr_number=42, review_cycle=1,
+            human_input_reply=None, stage_iterations={},
+            pending_review_comments=[
+                {"comment_id": 1, "msg_ids": [100], "decision": None,
+                 "author": "C", "file": "x.kt", "line": 1, "body": "b",
+                 "reason": "old reason", "verdict": "Valid",
+                 "hint_rounds": 0, "last_hint": "look at repo X",
+                 "pending_reinvestigation": True},
+            ],
+        )
+        ws.save_state = MagicMock()
+
+        async def fake_classify(comments, workspace, runtime, *, operator_hint=""):
+            return [ClassifiedComment(
+                comment_id=1, classification="ESCALATE", verdict="Not valid",
+                reason="reviewer was wrong, file follows existing pattern.",
+                author="C", file="x.kt", line=1, body="b",
+            )]
+
+        monkeypatch.setattr(orch_mod, "classify_comments", fake_classify, raising=False)
+
+        await orch._reinvestigate_pending(ws)
+
+        assert any("Not valid — reviewer was wrong" in m for m in sent_messages)
+
+    @pytest.mark.asyncio
+    async def test_reinvestigation_first_failure_retries_silently(self, tmp_path, monkeypatch):
+        """First re-investigation failure leaves flag set for retry — no TG surface."""
+        from orchestrator.orchestrator import Orchestrator
+        import orchestrator.orchestrator as orch_mod
+
+        orch = Orchestrator.__new__(Orchestrator)
+        orch._notifier = MagicMock()
+        orch._notifier.send_message = AsyncMock()
+        orch._events = None
+        orch._get_chat_id = MagicMock(return_value="chat-1")
+        orch._agent_runtime = MagicMock()
+
+        ws = MagicMock()
+        ws.reports_dir = tmp_path
+        ws.state = SimpleNamespace(
+            ticket_id="T-1", company_id="acme", repo_id="app",
+            pr_number=42, review_cycle=1, stage_iterations={},
+            pending_review_comments=[
+                {"comment_id": 1, "msg_ids": [100], "decision": None,
+                 "author": "C", "file": "x.kt", "line": 1, "body": "b",
+                 "reason": "r", "verdict": "Valid",
+                 "hint_rounds": 0, "last_hint": "x",
+                 "pending_reinvestigation": True},
+            ],
+        )
+        ws.save_state = MagicMock()
+
+        async def fake_classify_fail(comments, workspace, runtime, *, operator_hint=""):
+            raise RuntimeError("agent crash")
+        monkeypatch.setattr(orch_mod, "classify_comments", fake_classify_fail, raising=False)
+
+        await orch._reinvestigate_pending(ws)
+
+        c = ws.state.pending_review_comments[0]
+        assert c["pending_reinvestigation"] is True  # left for retry
+        assert c.get("reinvestigation_retry_count") == 1
+        # Did NOT surface to TG yet
+        orch._notifier.send_message.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_reinvestigation_second_failure_surfaces_and_clears(self, tmp_path, monkeypatch):
+        """Second failure surfaces to TG and clears the flag."""
+        from orchestrator.orchestrator import Orchestrator
+        import orchestrator.orchestrator as orch_mod
+
+        orch = Orchestrator.__new__(Orchestrator)
+        orch._notifier = MagicMock()
+        orch._notifier.send_message = AsyncMock()
+        orch._events = None
+        orch._get_chat_id = MagicMock(return_value="chat-1")
+        orch._agent_runtime = MagicMock()
+
+        ws = MagicMock()
+        ws.reports_dir = tmp_path
+        ws.state = SimpleNamespace(
+            ticket_id="T-1", company_id="acme", repo_id="app",
+            pr_number=42, review_cycle=1, stage_iterations={},
+            pending_review_comments=[
+                {"comment_id": 1, "msg_ids": [100], "decision": None,
+                 "author": "C", "file": "x.kt", "line": 1, "body": "b",
+                 "reason": "r", "verdict": "Valid",
+                 "hint_rounds": 0, "last_hint": "x",
+                 "pending_reinvestigation": True,
+                 "reinvestigation_retry_count": 1},  # already retried once
+            ],
+        )
+        ws.save_state = MagicMock()
+
+        async def fake_classify_fail(comments, workspace, runtime, *, operator_hint=""):
+            raise RuntimeError("agent crash again")
+        monkeypatch.setattr(orch_mod, "classify_comments", fake_classify_fail, raising=False)
+
+        await orch._reinvestigate_pending(ws)
+
+        c = ws.state.pending_review_comments[0]
+        assert c["pending_reinvestigation"] is False  # cleared
+        assert c.get("reinvestigation_retry_count") == 0  # reset
+        orch._notifier.send_message.assert_awaited()
+        sent = orch._notifier.send_message.call_args.args[1]
+        assert "Re-investigation failed" in sent

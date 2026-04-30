@@ -1486,6 +1486,7 @@ class Orchestrator:
         classify_fn = getattr(_mod, "classify_comments", None)
         if classify_fn is None:
             from orchestrator.comment_classifier import classify_comments as classify_fn
+        from orchestrator.resolution_report import update_entry
 
         state = workspace.state
         pending = state.pending_review_comments or []
@@ -1499,7 +1500,9 @@ class Orchestrator:
             if not c.get("pending_reinvestigation"):
                 continue
             if c.get("decision") is not None:
-                # Operator decided via button while this was queued — skip
+                # Operator decided via button while this was queued — clear the flag
+                c["pending_reinvestigation"] = False
+                workspace.save_state()
                 continue
             comment_stub = SimpleNamespace(
                 id=c["comment_id"], author=c.get("author", ""),
@@ -1515,6 +1518,13 @@ class Orchestrator:
                 )
             except Exception as e:
                 logger.error("Re-investigation failed for comment %s: %s", c["comment_id"], e)
+                retry_count = int(c.get("reinvestigation_retry_count", 0) or 0)
+                if retry_count < 1:
+                    # First failure — leave flag set so next tick retries
+                    c["reinvestigation_retry_count"] = retry_count + 1
+                    workspace.save_state()
+                    continue
+                # Second failure — surface and clear
                 if self._notifier:
                     chat_id = self._get_chat_id(workspace)
                     if chat_id:
@@ -1525,6 +1535,7 @@ class Orchestrator:
                             f"Reply `fix` or `won't fix` to close.",
                         )
                 c["pending_reinvestigation"] = False
+                c["reinvestigation_retry_count"] = 0
                 workspace.save_state()
                 continue
 
@@ -1540,7 +1551,15 @@ class Orchestrator:
             # Note: classification can change (e.g., ESCALATE → AUTO_FIX), but we
             # always re-escalate for human confirmation. We don't auto-act.
             c["hint_rounds"] = int(c.get("hint_rounds", 0) or 0) + 1
+            c["reinvestigation_retry_count"] = 0
             c["pending_reinvestigation"] = False
+            report_path = workspace.reports_dir / "pr-review-resolution.md"
+            update_entry(report_path, c["comment_id"], {
+                "verdict": cc.verdict,
+                "reason": cc.reason,
+                "hint_round": str(c["hint_rounds"]),
+                "hint": (c.get("last_hint") or "")[:200],
+            })
             workspace.save_state()
 
             new_msg_id = await self._send_escalated_comment_tg(workspace, cc, pr_number)
@@ -1694,6 +1713,7 @@ class Orchestrator:
         auto_fixed, auto_rejected, escalated = [], [], []
         for cc in classified:
             if cc.classification == "AUTO_FIX":
+                github_reply_status = "Posted (will fix)"
                 if vcs:
                     try:
                         await vcs.reply_to_comment(
@@ -1701,34 +1721,45 @@ class Orchestrator:
                         )
                     except Exception as e:
                         logger.warning("Failed to post 'Will fix' on comment %d: %s", cc.comment_id, e)
+                        github_reply_status = f"Failed: {str(e)[:120]}"
                 add_entry(report_path, state.ticket_id, pr_number, cc.comment_id, {
                     "classification": "AUTO_FIX",
+                    "verdict": cc.verdict,
                     "file": cc.file or "",
                     "line": str(cc.line or "?"),
                     "author": cc.author or "",
                     "reason": cc.reason or "",
                     "verified": "PENDING",
-                    "github_reply": "Posted (will fix)",
+                    "github_reply": github_reply_status,
                     "fail_count": "0",
                     "cycle": str(state.review_cycle),
                 })
                 auto_fixed.append(cc)
             elif cc.classification == "AUTO_REJECT":
                 # Phase 6: AUTO_REJECT replies + resolves immediately
+                github_reply_status = "Posted"
+                resolved_status = "YES"
                 try:
                     await vcs.reply_to_comment(pr_number, cc.comment_id, f"Won't fix: {cc.reason}")
+                except Exception as e:
+                    logger.warning("Failed to reply on comment %d: %s", cc.comment_id, e)
+                    github_reply_status = f"Failed: {str(e)[:120]}"
+                    resolved_status = "NO"
+                try:
                     await vcs.resolve_comment(pr_number, cc.comment_id)
                 except Exception as e:
-                    logger.warning("Failed to reply/resolve comment %d: %s", cc.comment_id, e)
+                    logger.warning("Failed to resolve comment %d: %s", cc.comment_id, e)
+                    resolved_status = "NO"
                 add_entry(report_path, state.ticket_id, pr_number, cc.comment_id, {
                     "classification": "AUTO_REJECT",
+                    "verdict": cc.verdict,
                     "file": cc.file or "",
                     "line": str(cc.line or "?"),
                     "author": cc.author or "",
                     "reason": cc.reason or "",
                     "verified": "N/A",
-                    "github_reply": "Posted",
-                    "resolved": "YES",
+                    "github_reply": github_reply_status,
+                    "resolved": resolved_status,
                     "cycle": str(state.review_cycle),
                 })
                 auto_rejected.append(cc)
@@ -1774,6 +1805,7 @@ class Orchestrator:
 
         # Store escalated with TG msg_ids
         pending_comments = []
+        title = self._get_ticket_title(workspace)
         for cc in escalated:
             msg_id = await self._send_escalated_comment_tg(workspace, cc, pr_number)
             pending_comments.append({
@@ -1782,9 +1814,11 @@ class Orchestrator:
                 "body": cc.body, "reason": cc.reason,
                 "verdict": cc.verdict,
                 "hint_rounds": 0, "last_hint": None, "pending_reinvestigation": False,
+                "ticket_title": title,
             })
             add_entry(report_path, state.ticket_id, pr_number, cc.comment_id, {
                 "classification": "ESCALATE",
+                "verdict": cc.verdict,
                 "file": cc.file or "",
                 "line": str(cc.line or "?"),
                 "author": cc.author or "",
@@ -1841,6 +1875,7 @@ class Orchestrator:
             cid = c["comment_id"]
             if _is_fix(decision):
                 fixes_needed.append(c)
+                github_reply_status = "Posted (will fix)"
                 if vcs and pr_number:
                     try:
                         await vcs.reply_to_comment(
@@ -1848,27 +1883,38 @@ class Orchestrator:
                         )
                     except Exception as e:
                         logger.warning("Failed to post 'Will fix' on comment %d: %s", cid, e)
+                        github_reply_status = f"Failed: {str(e)[:120]}"
                 update_entry(report_path, cid, {
+                    "verdict": c.get("verdict", "Unsure"),
                     "decision": "FIX",
                     "verified": "PENDING",
-                    "github_reply": "Posted (will fix)",
+                    "github_reply": github_reply_status,
                     "fail_count": "0",
                     "decided_at": self._now(),
                 })
             elif decision.startswith("won't fix") or decision.startswith("wont fix"):
                 reason = decision.split(":", 1)[1].strip() if ":" in decision else "Operator decision"
                 wont_fix.append({**c, "wont_fix_reason": reason})
+                github_reply_status = "Posted"
+                resolved_status = "YES"
                 if vcs and pr_number:
                     try:
                         await vcs.reply_to_comment(pr_number, cid, f"Won't fix: {reason}")
+                    except Exception as e:
+                        logger.warning("Failed to reply on comment %d: %s", cid, e)
+                        github_reply_status = f"Failed: {str(e)[:120]}"
+                        resolved_status = "NO"
+                    try:
                         await vcs.resolve_comment(pr_number, cid)
                     except Exception as e:
-                        logger.warning("Failed to reply/resolve %d: %s", cid, e)
+                        logger.warning("Failed to resolve comment %d: %s", cid, e)
+                        resolved_status = "NO"
                 update_entry(report_path, cid, {
+                    "verdict": c.get("verdict", "Unsure"),
                     "decision": "WON'T_FIX",
                     "verified": "N/A",
-                    "github_reply": "Posted",
-                    "resolved": "YES",
+                    "github_reply": github_reply_status,
+                    "resolved": resolved_status,
                     "decided_at": self._now(),
                 })
             else:

@@ -43,3 +43,4 @@ Thumbs.db
 # Copy config-live.example/ to config-live/ and fill in your own values.
 config-live/
 .worktrees/
+data/events.db

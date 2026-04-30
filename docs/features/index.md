@@ -25,3 +25,9 @@
 | 18 | [Agent Permissions](agent-permissions.md) | Implemented | Project-level `.claude/settings.json` pre-approves tools for non-interactive pipeline agents, per-agent tool lists in frontmatter, CLI `--allowedTools` enforcement |
 | 19 | [Per-Ticket Model Selection](per-ticket-model-selection.md) | Implemented | Jira label `model-haiku` / `model-opus` / `model-sonnet` overrides the Claude model for that ticket; snapshotted at workspace creation |
 | 20 | [Multi-Stack Support](multi-stack-support.md) | Planned | Pluggable failure-recovery interface + `project_type` repo field — decouples Gradle/AAPT2 logic from orchestrator core so web/iOS/backend repos onboard without dead code or false-firing Android warnings |
+
+---
+
+## Open Cleanup & Bugfix Work
+
+See [docs/cleanup-plan.md](../cleanup-plan.md) for the live audit + triage tracker. As of 2026-04-30, sections A correctness, B lifecycle, D test thinness, and E cleanup are shipped. Still open: A6 (jira `transitions[0]`), A8 (workspace state schema drift), and all of section C (architecture refactors — orchestrator god-object split, tool_sandbox rename, main.py extraction, command_handler dispatcher split, etc.).

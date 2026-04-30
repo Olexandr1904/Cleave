@@ -1,6 +1,11 @@
 # Cleanup & Bugfix Plan
 
-Status: **PRs 1–4 shipped 2026-04-30.** Only postponed items remain (A6, A8). All other in-scope work is closed.
+Status as of 2026-04-30:
+
+- **Closed:** PRs 1–4 (sections A correctness, B lifecycle, D test thinness, E cleanup).
+- **Open — postponed for design decisions:** A6 (jira `transitions[0]`), A8 (workspace state schema drift).
+- **Open — section C (architecture refactors) skipped from the original quick-win batch.** All 6 items still LIVE / PARTIAL; needs its own plan since C2 (orchestrator god-object) is multi-PR.
+- **Open — uncommitted in working tree:** parallel-agent's `AgentBudget` defaults tuning (`config-live.example/global.yaml`, `config/schemas.py`, `tests/unit/test_agent_runtime.py`) — raises `wall_clock_seconds` 1800→3600 and `max_total_tokens` 500K→3M based on observed production runs.
 
 Threat model assumed: AI pipeline runs on a sandbox box owned by the operator.
 Agents have host-level access by design. Items related to "open dashboard",
@@ -83,5 +88,9 @@ Item IDs preserved from the original audit (gaps where items were closed).
 4. ~~PR 2 (section B lifecycle).~~ ✅ Shipped: B1, B2, B3, B4, B5, B6.
 5. ~~PR 3 (section D test rewrites).~~ ✅ Shipped: D2, D8. D1 + D6 dropped after re-read.
 6. ~~PR 4 (section E cleanup).~~ ✅ Shipped: E2, E3.
-7. **Open work:** A6 (jira transitions[0]) and A8 (workspace state schema drift) — both postponed pending design decisions.
-8. Delete this file when A6 and A8 are decided (or this file becomes the home of those decisions).
+7. **Open work — pick one to tackle next:**
+   - **A6** (jira `transitions[0]` blind smart-hop) — needs decision: fail-loud OR explicit-target opt-in in stage definitions OR per-project allowed-transitions allowlist.
+   - **A8** (workspace state schema drift) — needs decision: schema-version field + migration registry OR `_unknown` carry-over dict + warning log OR accept the data loss.
+   - **Section C (architecture refactors)** — see C1–C6. Largest item is C2 (split `orchestrator.py`); the rest are XS–S each.
+   - **Parallel-agent budget defaults tuning** in working tree (`config-live.example/global.yaml`, `config/schemas.py`, `tests/unit/test_agent_runtime.py`). Decide whether to commit, amend, or revert.
+8. Delete this file when all the above are closed (or this file becomes the home of those decisions).

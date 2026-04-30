@@ -30,6 +30,25 @@ class TestParsedIntent:
         assert intent.params == {}
         assert intent.reply == ""
 
+    def test_intent_parser_recognizes_unanswered(self):
+        raw = '{"intent": "unanswered", "params": {"ticket_id": ""}, "reply": "Showing pending comments"}'
+        parsed = ParsedIntent.from_json(raw)
+        assert parsed.intent == "unanswered"
+        assert parsed.params.get("ticket_id") == ""
+
+    def test_intent_parser_recognizes_unanswered_with_ticket(self):
+        raw = '{"intent": "unanswered", "params": {"ticket_id": "T-1"}, "reply": "ok"}'
+        parsed = ParsedIntent.from_json(raw)
+        assert parsed.intent == "unanswered"
+        assert parsed.params.get("ticket_id") == "T-1"
+
+    def test_intent_parser_prompt_lists_unanswered(self):
+        """Sanity check that the LLM prompt mentions 'unanswered' as a valid intent."""
+        from integrations.telegram import intent_parser
+        import inspect
+        src = inspect.getsource(intent_parser)
+        assert "unanswered" in src
+
 
 class TestIntentParser:
     @pytest.fixture

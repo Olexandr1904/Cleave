@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import subprocess
 from typing import Any
 
 import httpx
@@ -82,15 +81,33 @@ class GitHubAdapter(VCSInterface):
         raise last_error  # type: ignore[misc]
 
     @staticmethod
-    def _run_git(repo_dir: str, *args: str) -> subprocess.CompletedProcess:
-        """Run a git command in the given repo directory."""
+    async def _run_git(repo_dir: str, *args: str) -> tuple[str, str]:
+        """Run a git command in the given repo directory.
+
+        Async so the event loop isn't blocked for the duration of the git
+        operation (which can be up to SUBPROCESS_TIMEOUT seconds for `push`).
+        """
         cmd = ["git", "-C", repo_dir] + list(args)
-        result = subprocess.run(
-            cmd, capture_output=True, text=True, timeout=SUBPROCESS_TIMEOUT,
+        proc = await asyncio.create_subprocess_exec(
+            *cmd,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
         )
-        if result.returncode != 0:
-            raise RuntimeError(f"Git command failed: {' '.join(cmd)}\n{result.stderr.strip()}")
-        return result
+        try:
+            stdout_b, stderr_b = await asyncio.wait_for(
+                proc.communicate(), timeout=SUBPROCESS_TIMEOUT,
+            )
+        except asyncio.TimeoutError:
+            proc.kill()
+            await proc.wait()
+            raise RuntimeError(
+                f"Git command timed out after {SUBPROCESS_TIMEOUT}s: {' '.join(cmd)}"
+            )
+        stdout = stdout_b.decode("utf-8", errors="replace")
+        stderr = stderr_b.decode("utf-8", errors="replace")
+        if proc.returncode != 0:
+            raise RuntimeError(f"Git command failed: {' '.join(cmd)}\n{stderr.strip()}")
+        return stdout, stderr
 
     async def clone_repo(self, url: str, dest: str, depth: int = 0) -> None:
         """Clone a repository."""
@@ -108,7 +125,7 @@ class GitHubAdapter(VCSInterface):
 
     async def create_branch(self, repo_dir: str, branch_name: str) -> None:
         """Create and checkout a new branch."""
-        self._run_git(repo_dir, "checkout", "-b", branch_name)
+        await self._run_git(repo_dir, "checkout", "-b", branch_name)
         logger.info("Created branch: %s", branch_name)
 
     async def push(
@@ -121,7 +138,7 @@ class GitHubAdapter(VCSInterface):
             args.insert(1, "--force")
         if skip_hooks:
             args.insert(1, "--no-verify")
-        self._run_git(repo_dir, *args)
+        await self._run_git(repo_dir, *args)
         suffix = ""
         if force:
             suffix += " (force)"

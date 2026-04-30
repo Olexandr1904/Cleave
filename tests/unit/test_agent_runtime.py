@@ -51,6 +51,33 @@ def workspace(tmp_path):
     return ws
 
 
+def test_workspace_state_has_model_field_default_empty():
+    """WorkspaceState exposes a `model` field defaulting to empty string.
+
+    Empty string means: no per-ticket override; agent_runtime falls back to
+    agent frontmatter / global default.
+    """
+    state = WorkspaceState(
+        ticket_id="TEST-1",
+        company_id="p",
+        repo_id="r",
+        workspace_root="/tmp/x",
+    )
+    assert state.model == ""
+
+
+def test_workspace_state_model_field_settable():
+    """The model field can be set to a Claude model id."""
+    state = WorkspaceState(
+        ticket_id="TEST-1",
+        company_id="p",
+        repo_id="r",
+        workspace_root="/tmp/x",
+        model="claude-opus-4-7",
+    )
+    assert state.model == "claude-opus-4-7"
+
+
 class TestAssemblePrompt:
     def test_includes_agent_body(self, registry, mock_llm, workspace):
         runtime = AgentRuntime(registry, mock_llm)

@@ -80,6 +80,7 @@ class WorkspaceState:
     pending_review_comments: list[dict] | None = None
     review_cycle: int = 0
     title: str | None = None
+    model: str = ""
 
     def __post_init__(self) -> None:
         now = _now_iso()

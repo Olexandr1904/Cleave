@@ -24,6 +24,7 @@ from integrations.telegram.handlers.analyze import AnalyzeHandler
 from integrations.telegram.handlers.approval import APPROVAL_NEXT_STATE
 from integrations.telegram.handlers.mode import ModeHandler
 from orchestrator.agent_runtime import AgentRuntime
+from orchestrator.model_resolver import resolve_ticket_model
 from orchestrator.gradle_remediation import (
     ARCH_MISMATCH_HELP,
     clear_gradle_transforms,
@@ -555,6 +556,20 @@ class Orchestrator:
             else repo_config.vcs.gitlab.branch_prefix,
             title=pt.ticket.summary,
         )
+
+        # Per-ticket model label resolution (see docs/superpowers/specs/2026-04-30-per-ticket-model-label-design.md)
+        resolution = resolve_ticket_model(pt.ticket.labels)
+        if resolution.model:
+            ws.state.model = resolution.model
+            ws.save_state()
+        if resolution.warning and self._tracker is not None:
+            try:
+                await self._tracker.add_comment(pt.ticket.id, resolution.warning)
+            except Exception as e:
+                logger.warning(
+                    "Failed to post model-label warning to %s: %s",
+                    pt.ticket.id, e,
+                )
 
         # Write ticket data as markdown
         ticket_md = _ticket_to_markdown(pt.ticket)

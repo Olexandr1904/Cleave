@@ -2,12 +2,12 @@
 
 **Status:** Implemented
 **Created:** 2026-04-30
-**Updated:** 2026-04-30
+**Updated:** 2026-04-30 (dashboard pill added)
 **Author:** Oleksandr Brazhenko
 
 ## Description
 
-Every ticket workspace stores the Claude model it should use on `WorkspaceState.model` — the single source of truth for that workspace. The model is resolved once at workspace creation: a Jira label (`model-haiku`, `model-opus`, or `model-sonnet`) overrides the global default; absent a label, the global default is snapshotted. Every agent dispatched against the ticket uses this snapshot.
+Every ticket workspace stores the Claude model it should use on `WorkspaceState.model` — the single source of truth for that workspace. The dashboard renders this on each ticket card as a colored pill showing the short name (`haiku` / `opus` / `sonnet`). The model is resolved once at workspace creation: a Jira label (`model-haiku`, `model-opus`, or `model-sonnet`) overrides the global default; absent a label, the global default is snapshotted. Every agent dispatched against the ticket uses this snapshot.
 
 ## How to use
 

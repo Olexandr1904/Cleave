@@ -351,7 +351,10 @@ function renderCard(ws) {
   if (totalIters > 0) metaParts.push(`iter ${totalIters}`);
   const metaHtml = `<div class="card-meta">${metaParts.join(' <span class="card-meta-sep">·</span> ')}</div>`;
 
-  // Footer: PR + Jira tags + contextual button (Approve/Clean)
+  // Footer: model + PR + Jira tags + contextual button (Approve/Clean)
+  const modelTag = ws.model_short
+    ? `<span class="card-tag card-tag-model" title="Model: ${esc(ws.model || '')}">${esc(ws.model_short)}</span>`
+    : '';
   const prTag = ws.pr_url
     ? `<a class="card-tag card-tag-pr" href="${esc(ws.pr_url)}" target="_blank" rel="noopener" onclick="event.stopPropagation()">PR #${esc(String(ws.pr_number || ''))}</a>`
     : '';
@@ -365,8 +368,9 @@ function renderCard(ws) {
   } else if (dimmed && ws.workspace_root) {
     contextualBtn = `<button class="action-btn btn-clean" data-action="clean" data-ticket="${esc(ws.ticket_id)}" onclick="event.stopPropagation()" title="Remove source code to free disk space">Clean</button>`;
   }
-  const footerHtml = (prTag || jiraTag || contextualBtn)
+  const footerHtml = (modelTag || prTag || jiraTag || contextualBtn)
     ? `<div class="card-footer">
+         ${modelTag}
          ${prTag}
          ${jiraTag}
          <span class="card-footer-spacer"></span>

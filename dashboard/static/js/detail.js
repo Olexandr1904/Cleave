@@ -245,10 +245,14 @@ function buildInfoSection(ws) {
     ? Object.entries(ws.stage_iterations).map(([k, v]) => `${esc(k)}: ${esc(String(v))}`).join(', ')
     : '';
 
+  const modelCell = ws.model_short
+    ? `<span class="card-tag card-tag-model" title="${esc(ws.model || '')}">${esc(ws.model_short)}</span>`
+    : '\u2014';
   let grid = `<div class="info-grid">
     <span class="info-label">Branch</span><span class="info-value">${esc(ws.branch || '\u2014')}</span>
     <span class="info-label">Repo</span><span class="info-value">${esc(ws.repo_id || '\u2014')}</span>
     <span class="info-label">Project</span><span class="info-value">${esc(ws.company_id || '\u2014')}</span>
+    <span class="info-label">Model</span><span class="info-value">${modelCell}</span>
     <span class="info-label">Started</span><span class="info-value">${esc(fmtIso(ws.started_at))}</span>
     <span class="info-label">Last updated</span><span class="info-value">${esc(fmtIso(ws.last_updated_at))}</span>`;
   if (iters) {

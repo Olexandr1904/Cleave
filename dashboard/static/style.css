@@ -250,6 +250,12 @@
     border-color: #9e6a0344;
   }
   .card-tag-jira:hover { background: #9e6a0333; }
+  .card-tag-model {
+    color: #a371f7;
+    background: #2c1f3d;
+    border-color: #8957e544;
+    text-transform: lowercase;
+  }
 
   /* Icon buttons (line 1) */
   .card-icon-btn {

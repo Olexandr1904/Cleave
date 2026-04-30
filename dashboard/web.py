@@ -19,6 +19,7 @@ from starlette.staticfiles import StaticFiles
 from dashboard.event_store import EventStore
 from dashboard.events import EventBus
 from health.runner import check_all
+from orchestrator.model_resolver import model_short_name
 from workspace.workspace import Stage
 
 logger = logging.getLogger(__name__)
@@ -148,6 +149,7 @@ def _scan_all_workspaces(
             meta_dir = ws_root / "meta"
             meta = sorted(f.name for f in meta_dir.iterdir() if f.is_file()) if meta_dir.exists() else []
             kind = "setup" if ws_root.name == "setup" else "ticket"
+            model_id = data.get("model", "")
             results.append({
                 "ticket_id": data.get("ticket_id", ""),
                 "company_id": data.get("company_id", ""),
@@ -168,6 +170,8 @@ def _scan_all_workspaces(
                 "workspace_root": str(ws_root),
                 "links": _build_external_links(data, projects),
                 "kind": kind,
+                "model": model_id,
+                "model_short": model_short_name(model_id) or (model_id if model_id else None),
             })
         except Exception as e:
             logger.warning("Failed to read workspace at %s: %s", state_file.parent, e)

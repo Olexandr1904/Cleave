@@ -1,6 +1,6 @@
 # Cleanup & Bugfix Plan
 
-Status: **PR 1 (section A) and PR 2 (section B) shipped 2026-04-30.** 12 actionable items remain.
+Status: **PRs 1–4 shipped 2026-04-30.** Only postponed items remain (A6, A8). All other in-scope work is closed.
 
 Threat model assumed: AI pipeline runs on a sandbox box owned by the operator.
 Agents have host-level access by design. Items related to "open dashboard",
@@ -48,17 +48,17 @@ Item IDs preserved from the original audit (gaps where items were closed).
 
 | #  | Status | File | Note |
 |----|--------|------|------|
-| D1 | LIVE | `tests/unit/test_orchestrator_modes.py:81` | Body still `assert orch._tracker.poll_tickets.called`. |
-| D2 | LIVE | `tests/unit/test_intent_parser.py:79` | Body still `assert mock_adapter.quick_query.called`. |
-| D6 | LIVE | `tests/unit/test_dashboard_actions.py:187, :297` | Both still `assert ws.transition.called`. |
-| D8 | LIVE | `dashboard/atlas_runner.py` | File present, no test references. Decide: smoke test or delete. |
+| D1 | DROPPED | `tests/unit/test_orchestrator_modes.py:81` | On reread: `.called` IS the meaningful assertion (mode dispatches to tracker). Symmetric with `assert_not_called()` in the manual-mode sibling test. Audit was over-strict. |
+| D2 | ✅ FIXED | `tests/unit/test_intent_parser.py` | Commit `6e91853`. Now asserts mode + ticket IDs appear in the system prompt passed to the adapter. |
+| D6 | DROPPED | `tests/unit/test_dashboard_actions.py:187, :297` | On reread: both lines are followed by `args[0] == "MANUAL_CONTROL"` and kwargs checks. The `assert ws.transition.called` is redundant prefix, not a thin test. Audit was over-strict. |
+| D8 | ✅ FIXED | `dashboard/atlas_runner.py` | Commit `6e91853`. 4 smoke tests added: happy path, failure, rollback-raise resilience, on_complete invariant. |
 
 ## E — Cleanup
 
 | #  | Status | Item | Note |
 |----|--------|------|------|
-| E2 | LIVE | `start.md` (865 LOC) | Present at repo root. Referenced from docs/, not from code. |
-| E3 | LIVE | `environment.template` vs `deploy/environment.template` | Both present. Mismatch confirmed: root uses `CLAUDE_API_KEY`, `deploy/` uses `ANTHROPIC_API_KEY`. |
+| E2 | ✅ FIXED | `start.md` (865 LOC) | Commit `89e6076`. Moved to `docs/legacy/start.md`; references in project-brief, prd, architecture updated. |
+| E3 | ✅ FIXED | `environment.template` vs `deploy/environment.template` | Commit `89e6076`. `deploy/environment.template` now uses `CLAUDE_API_KEY` to match the rest of the codebase. |
 
 ---
 
@@ -81,6 +81,7 @@ Item IDs preserved from the original audit (gaps where items were closed).
 2. ~~Remove STALE / invalid items.~~ ✅ Done.
 3. ~~PR 1 (section A correctness).~~ ✅ Shipped: A1, A2, A3, A5. A6 + A8 postponed.
 4. ~~PR 2 (section B lifecycle).~~ ✅ Shipped: B1, B2, B3, B4, B5, B6.
-5. **PR 3 (section D test rewrites)** ← next
-6. PR 4 (section E cleanup)
-7. Delete this file when all items closed.
+5. ~~PR 3 (section D test rewrites).~~ ✅ Shipped: D2, D8. D1 + D6 dropped after re-read.
+6. ~~PR 4 (section E cleanup).~~ ✅ Shipped: E2, E3.
+7. **Open work:** A6 (jira transitions[0]) and A8 (workspace state schema drift) — both postponed pending design decisions.
+8. Delete this file when A6 and A8 are decided (or this file becomes the home of those decisions).

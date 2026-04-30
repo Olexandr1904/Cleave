@@ -635,8 +635,54 @@ class CommandHandler:
                 return True
         return False
 
-    async def _stage_reinvestigation(self, c, ws, hint_text, chat_id) -> bool:
-        """Stub — replaced in Task 8."""
+    async def _stage_reinvestigation(self, c, ws, hint_text: str, chat_id: str) -> bool:
+        """Stage a re-investigation request on the comment entry.
+
+        Returns True (always handled, even when capped).
+        """
+        rounds = int(c.get("hint_rounds", 0) or 0)
+        file_line = f"{c.get('file','?')}:{c.get('line','?')}"
+        if rounds >= 3:
+            msg = (
+                f"⚠ Hint loop exceeded (3/3) for @{c.get('author','?')} on {file_line}. "
+                f"Reply `fix` or `won't fix` to close this comment."
+            )
+            await self._notifier.send_message(chat_id, msg)
+            if self._events is not None:
+                self._events.emit(
+                    "pr_comment_hint_exhausted",
+                    f"{ws.state.ticket_id}: hint cap reached for comment {c.get('comment_id')}",
+                    ticket_id=ws.state.ticket_id,
+                    data={
+                        "comment_id": c.get("comment_id"),
+                        "attempted_hint_excerpt": hint_text[:120],
+                    },
+                )
+            return True
+
+        c["last_hint"] = hint_text
+        c["pending_reinvestigation"] = True
+        ws.save_state()
+
+        next_round = rounds + 1
+        msg = (
+            f"🔍 Recognized as hint (round {next_round}/3). "
+            f"Re-checking @{c.get('author','?')}'s comment on {file_line} with your context…"
+        )
+        await self._notifier.send_message(chat_id, msg)
+        if self._events is not None:
+            self._events.emit(
+                "pr_comment_reinvestigation_staged",
+                f"{ws.state.ticket_id}: hint round {next_round} for comment {c.get('comment_id')}",
+                ticket_id=ws.state.ticket_id,
+                data={
+                    "comment_id": c.get("comment_id"),
+                    "hint_round": next_round,
+                    "hint_excerpt": hint_text[:200],
+                },
+            )
+        if hasattr(self, "_wake_fn") and self._wake_fn:
+            self._wake_fn()
         return True
 
     async def handle_callback(self, action: str, ticket_id: str, chat_id: str, message_id: int) -> None:

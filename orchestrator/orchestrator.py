@@ -1671,9 +1671,11 @@ class Orchestrator:
         for cc in escalated:
             msg_id = await self._send_escalated_comment_tg(workspace, cc, pr_number)
             pending_comments.append({
-                "comment_id": cc.comment_id, "msg_id": msg_id, "decision": None,
+                "comment_id": cc.comment_id, "msg_ids": [msg_id], "decision": None,
                 "author": cc.author, "file": cc.file, "line": cc.line,
                 "body": cc.body, "reason": cc.reason,
+                "verdict": cc.verdict,
+                "hint_rounds": 0, "last_hint": None, "pending_reinvestigation": False,
             })
             add_entry(report_path, state.ticket_id, pr_number, cc.comment_id, {
                 "classification": "ESCALATE",
@@ -1692,36 +1694,16 @@ class Orchestrator:
 
     async def _send_escalated_comment_tg(self, workspace: Workspace, cc: Any, pr_number: int) -> int:
         """Send a single escalated comment to TG. Returns the message ID."""
+        from orchestrator.escalation_view import build_escalated_comment_message
+
         state = workspace.state
-        sep = "─" * 30
         title = self._get_ticket_title(workspace)
-        hdr = self._tg_header("💬", state, title)
-        msg = (
-            f"{hdr} — PR #{pr_number}\n"
-            f"Comment by @{cc.author} on {cc.file}:{cc.line or '?'}\n"
-            f"{sep}\n"
-            f"Suggestion:\n  {cc.body[:300]}\n\n"
-            f"Agent assessment:\n  {cc.reason}\n"
-            f"{sep}\n"
-            "Tap a button below, or reply to this message with:\n"
-            "  • `fix` — re-engage dev-agent\n"
-            "  • `won't fix: <reason>` — post the reason on GitHub and resolve\n"
-            "Free-text reply lets you add context the buttons can't."
+        text, buttons = build_escalated_comment_message(
+            state, cc, pr_number, ticket_title=title,
         )
-        # Use a unique action key so the callback handler can match this comment.
-        # Skip button is intentionally omitted — operators interpreted it as
-        # "I'm done with this comment", but the previous semantic was "ask me
-        # again every 30 min", which trapped them in a nag loop. If the
-        # operator wants to drop a comment, they reply with `won't fix:`
-        # explaining why, which is more honest about the PR state.
-        comment_key = f"{state.ticket_id}:{cc.comment_id}"
-        buttons = [
-            Button(label="Fix", action=f"pr_fix:{comment_key}"),
-            Button(label="Won't Fix", action=f"pr_wontfix:{comment_key}"),
-        ]
         chat_id = self._get_chat_id(workspace)
         if chat_id and self._notifier:
-            return await self._notifier.send_message(chat_id, msg, buttons=buttons)
+            return await self._notifier.send_message(chat_id, text, buttons=buttons)
         return 0
 
     async def _execute_review_decisions(self, workspace: Workspace) -> ActionResult:

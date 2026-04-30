@@ -34,6 +34,23 @@ def _fake_workspace_for_send():
 
 
 @pytest.mark.asyncio
+async def test_escalation_message_renders_verdict():
+    """The escalated TG message must include the one-word verdict."""
+    notifier = MagicMock()
+    notifier.send_message = AsyncMock(return_value=42)
+    orch = _make_orch_for_send(notifier)
+
+    cc = SimpleNamespace(
+        comment_id=99, author="Copilot", file="x.kt", line=10,
+        body="Suggestion", reason="Real issue.", verdict="Valid",
+    )
+    await orch._send_escalated_comment_tg(_fake_workspace_for_send(), cc, pr_number=1234)
+
+    body = notifier.send_message.call_args.args[1]
+    assert "Valid — Real issue." in body
+
+
+@pytest.mark.asyncio
 async def test_escalation_message_has_no_skip_button():
     """Skip button removed — operators interpreted it as 'I'm done with this'
     but the old semantic was 'remind me again every 30 min', which trapped

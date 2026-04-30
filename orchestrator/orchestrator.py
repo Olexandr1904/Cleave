@@ -704,8 +704,13 @@ class Orchestrator:
         ws.transition(Stage.ANALYSIS)
         return ws
 
-    async def advance_workspace(self, workspace: Workspace) -> None:
-        """Advance a workspace through the pipeline."""
+    async def advance_workspace(self, workspace: Workspace, _resume_depth: int = 0) -> None:
+        """Advance a workspace through the pipeline.
+
+        `_resume_depth` is internal: the auto-resume branch tail-calls back into
+        this method so the resumed workspace doesn't wait a full poll cycle.
+        Capped to prevent stack overflow if cascading gates ever chain.
+        """
         state = workspace.state
         current = state.current_state
 
@@ -736,7 +741,14 @@ class Orchestrator:
                 state.ticket_id, previous, next_state,
             )
             # Re-advance so the resumed workspace doesn't wait a full poll cycle.
-            await self.advance_workspace(workspace)
+            if _resume_depth >= 5:
+                logger.warning(
+                    "advance_workspace auto-resume cap hit for %s (depth=%d); "
+                    "next poll cycle will pick it up",
+                    state.ticket_id, _resume_depth,
+                )
+                return
+            await self.advance_workspace(workspace, _resume_depth + 1)
             return
 
         if current in (Stage.DONE, Stage.ARCHIVED):

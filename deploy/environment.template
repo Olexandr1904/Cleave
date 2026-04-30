@@ -2,8 +2,9 @@
 # Copy to /etc/sickle/environment and fill in values.
 
 # --- Anthropic / Claude ---
-# API key for Claude LLM calls
-ANTHROPIC_API_KEY=
+# API key for Claude LLM calls. Variable name matches what config_loader
+# substitutes into config-live/global.yaml ("${CLAUDE_API_KEY}").
+CLAUDE_API_KEY=
 
 # --- Jira ---
 # Jira Cloud instance URL (e.g., https://your-org.atlassian.net)

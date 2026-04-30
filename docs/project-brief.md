@@ -194,7 +194,7 @@ The key differentiator from tools like Devin or SWE-Agent: Sickle is **self-host
 
 ### A. Key Documents
 
-- `start.md` — Full technical specification and architecture document
+- `docs/legacy/start.md` — Original master implementation prompt (historical; superseded by `docs/architecture.md`)
 - `projects/{id}/shared/arch-rules.md` — Per-project architecture rules (created by operator)
 - `scripts/ticket-to-prompt.py` — Existing script, generates implementation prompts from Jira tickets
 - `scripts/copilot-validator.py` — Existing script, validates Copilot review comments

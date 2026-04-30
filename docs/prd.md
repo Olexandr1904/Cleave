@@ -657,4 +657,4 @@ To be completed after PRD review — will run `pm-checklist` to validate complet
 
 ### Architect Prompt
 
-This PRD provides the full product requirements for Sickle. Please review the PRD and the technical spec (`start.md`) thoroughly, then create the architecture document: module interfaces, agent prompt format specification, config schemas, state machine definition, and integration adapter contracts. Pay special attention to the BMAD-style agent system — define how agent prompt files are structured, loaded, and executed.
+This PRD provides the full product requirements for Sickle. Please review the PRD and the original technical spec (`docs/legacy/start.md`) thoroughly, then create the architecture document: module interfaces, agent prompt format specification, config schemas, state machine definition, and integration adapter contracts. Pay special attention to the BMAD-style agent system — define how agent prompt files are structured, loaded, and executed.

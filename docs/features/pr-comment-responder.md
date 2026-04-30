@@ -44,6 +44,7 @@ Each entry in `state.pending_review_comments` contains:
 | Date | Description |
 |------|-------------|
 | 2026-04-30 | `command_handler.handle_reply` now matches replies against `msg_ids` list (new schema) with lazy in-place migration for old state entries that still carry the singular `msg_id` key. Helper `_ensure_msg_ids(c)` mutates the dict on first access — no batch migration needed. |
+| 2026-04-30 | Added `_classify_reply(text)` module-level helper. Returns `(decision, matched_token, wf_reason)` where decision ∈ `{'fix', 'wont_fix', 'reinvestigate'}`. Fix synonyms (`fix`, `fxi`, `fixx`, `yes`, etc.) require an exact match; won't-fix synonyms (`won't fix`, `wont fix`, `do not fix`, etc.) allow an optional `:` or whitespace separator followed by a reason. Everything else falls through to `reinvestigate`. `skip` is intentionally not in either set. |
 
 ## References
 - Contracts: `docs/agent-contracts.md` (Rivera — PR Comment Responder)

@@ -76,7 +76,16 @@ class TestIntentParser:
             "active_workspaces": ["ACME-456 — DEV"],
         }
         await parser.parse("yes", pipeline_context=context)
-        assert mock_adapter.quick_query.called
+
+        # The test name promises context is wired into the system prompt.
+        # Inspect what the adapter actually received instead of just trusting
+        # `.called` — otherwise a renamed parameter or skipped substitution
+        # would slip past the assertion silently.
+        system_prompt = mock_adapter.quick_query.call_args.kwargs.get("system") \
+            or mock_adapter.quick_query.call_args[0][1]
+        assert "manual" in system_prompt
+        assert "ACME-123" in system_prompt
+        assert "ACME-456" in system_prompt
 
     async def test_parse_handles_adapter_error(self, mock_adapter):
         mock_adapter.quick_query = AsyncMock(side_effect=RuntimeError("CLI unavailable"))

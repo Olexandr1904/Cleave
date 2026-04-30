@@ -50,7 +50,9 @@ def orchestrator():
     orch.get_active_workspaces = MagicMock(return_value=[])
     orch._agent_runtime = MagicMock()
     orch._agent_runtime.get_running = MagicMock(return_value=None)
-    orch._agent_runtime.cancel = MagicMock(return_value=False)
+    # cancel() is async since the SIGKILL-escalation fix; tests that assert
+    # on call args still work via AsyncMock.
+    orch._agent_runtime.cancel = AsyncMock(return_value=False)
     return orch
 
 

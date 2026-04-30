@@ -39,6 +39,12 @@ Agent that classifies and triages PR review comments. Operates with extreme skep
 Each entry in `state.pending_review_comments` contains:
 `comment_id`, `msg_ids` (list of TG message IDs), `decision`, `author`, `file`, `line`, `body`, `reason`, `verdict`, `hint_rounds`, `last_hint`, `pending_reinvestigation`
 
+## Change Log
+
+| Date | Description |
+|------|-------------|
+| 2026-04-30 | `command_handler.handle_reply` now matches replies against `msg_ids` list (new schema) with lazy in-place migration for old state entries that still carry the singular `msg_id` key. Helper `_ensure_msg_ids(c)` mutates the dict on first access — no batch migration needed. |
+
 ## References
 - Contracts: `docs/agent-contracts.md` (Rivera — PR Comment Responder)
 - Agent file: `agents/pr-comment-responder-agent.md`

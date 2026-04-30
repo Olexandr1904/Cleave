@@ -33,11 +33,28 @@ class MaxIterationsConfig:
 
 
 @dataclass
+class AgentBudget:
+    """Per-execution resource ceiling for a single agent.
+
+    Caps both quality-of-loop (tool rounds) and dollar/wall-clock cost
+    (tokens, wall clock). Whichever ceiling hits first ends the run; the
+    runtime returns a permanent failure tagged with which budget tripped.
+    """
+    max_tool_rounds: int = 25
+    wall_clock_seconds: int = 1800  # 30 min
+    max_total_tokens: int = 500_000  # input + output combined
+
+
+@dataclass
 class DefaultsConfig:
     poll_interval_seconds: int = 60
     max_iterations: MaxIterationsConfig = field(default_factory=MaxIterationsConfig)
     max_parallel_tickets: int = 7
     pr_comment_fetch_delay_minutes: int = 30
+    agent_budget: AgentBudget = field(default_factory=AgentBudget)
+    # Per-agent overrides keyed by agent id (e.g. "dev-agent"). Missing keys
+    # fall back to agent_budget above.
+    agent_budget_overrides: dict[str, AgentBudget] = field(default_factory=dict)
 
 
 @dataclass

@@ -23,6 +23,23 @@ defaults:
     dev: 2
   max_parallel_tickets: 5
   pr_comment_fetch_delay_minutes: 30
+  # Per-agent execution ceiling. Whichever limit hits first ends the run and
+  # marks it failed (permanent). Tune these down to lower runaway-quota cost.
+  agent_budget:
+    max_tool_rounds: 25
+    wall_clock_seconds: 1800       # 30 min
+    max_total_tokens: 500000       # input + output combined
+  # Optional per-agent overrides — use the agent id (as in agents/<id>.md
+  # frontmatter). Anything unspecified inherits from `agent_budget` above.
+  # agent_budget_overrides:
+  #   dev-agent:
+  #     max_tool_rounds: 30
+  #     wall_clock_seconds: 2400
+  #     max_total_tokens: 800000
+  #   ba-agent:
+  #     max_tool_rounds: 15
+  #     wall_clock_seconds: 600
+  #     max_total_tokens: 200000
 
 logging:
   level: "INFO"

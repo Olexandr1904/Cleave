@@ -1694,6 +1694,13 @@ class Orchestrator:
         auto_fixed, auto_rejected, escalated = [], [], []
         for cc in classified:
             if cc.classification == "AUTO_FIX":
+                if vcs:
+                    try:
+                        await vcs.reply_to_comment(
+                            pr_number, cc.comment_id, f"Will fix: {cc.reason}",
+                        )
+                    except Exception as e:
+                        logger.warning("Failed to post 'Will fix' on comment %d: %s", cc.comment_id, e)
                 add_entry(report_path, state.ticket_id, pr_number, cc.comment_id, {
                     "classification": "AUTO_FIX",
                     "file": cc.file or "",
@@ -1701,6 +1708,7 @@ class Orchestrator:
                     "author": cc.author or "",
                     "reason": cc.reason or "",
                     "verified": "PENDING",
+                    "github_reply": "Posted (will fix)",
                     "fail_count": "0",
                     "cycle": str(state.review_cycle),
                 })
@@ -1833,9 +1841,17 @@ class Orchestrator:
             cid = c["comment_id"]
             if _is_fix(decision):
                 fixes_needed.append(c)
+                if vcs and pr_number:
+                    try:
+                        await vcs.reply_to_comment(
+                            pr_number, cid, f"Will fix: {c.get('reason', 'operator decision')}",
+                        )
+                    except Exception as e:
+                        logger.warning("Failed to post 'Will fix' on comment %d: %s", cid, e)
                 update_entry(report_path, cid, {
                     "decision": "FIX",
                     "verified": "PENDING",
+                    "github_reply": "Posted (will fix)",
                     "fail_count": "0",
                     "decided_at": self._now(),
                 })

@@ -10,7 +10,6 @@ agent:
   id: "agent-id"          # Unique identifier (matches filename without .md)
   name: "AgentName"       # Human-readable name / persona
   title: "Role Title"     # Role title
-  model: ""               # Optional model override (e.g., "claude-sonnet-4-5")
 
 persona:
   role: "Role description"
@@ -72,3 +71,7 @@ Agents can declare dependencies on:
 - **Data** (`data/`): Reference data injected into the agent's context
 
 All dependencies are resolved by `id` at startup. Missing dependencies produce warnings in the log.
+
+## Model Selection
+
+Agents do not pick their own Claude model. The model is decided per ticket at workspace creation and stored on `WorkspaceState.model` — every agent dispatched against that ticket uses it. Operators can override per ticket with a Jira label (`model-haiku`, `model-opus`, `model-sonnet`); otherwise the global default from the dashboard is snapshotted. See [docs/features/per-ticket-model-selection.md](../docs/features/per-ticket-model-selection.md).

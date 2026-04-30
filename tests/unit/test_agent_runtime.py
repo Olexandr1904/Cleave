@@ -437,13 +437,13 @@ class TestQuotaFailureClassification:
 
 
 class TestModelSelection:
-    """Per-ticket snapshot wins over agent frontmatter wins over default."""
+    """agent_runtime dispatches with workspace.state.model — the single source of truth."""
 
     @pytest.mark.asyncio
-    async def test_state_model_overrides_agent_frontmatter(
+    async def test_dispatches_with_state_model(
         self, registry, mock_llm, tmp_path
     ):
-        """When workspace.state.model is set, it overrides any agent pin."""
+        """Whatever is on workspace.state.model is what reaches the LLM call."""
         ws_root = tmp_path / "snap-ws"
         ws_root.mkdir()
         (ws_root / "meta").mkdir()
@@ -467,10 +467,12 @@ class TestModelSelection:
         assert call_kwargs.get("model") == "claude-opus-4-7"
 
     @pytest.mark.asyncio
-    async def test_empty_state_model_falls_back_to_agent_frontmatter(
+    async def test_empty_state_model_passes_through_unchanged(
         self, registry, mock_llm, workspace
     ):
-        """When state.model is empty, the existing fallback chain applies."""
+        """If state.model is empty (legacy workspaces), agent_runtime passes
+        the empty string through. Ticket workspaces created by the orchestrator
+        always have state.model set, so this path only matters for old data."""
         assert workspace.state.model == ""
 
         runtime = AgentRuntime(registry, mock_llm)

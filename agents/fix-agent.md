@@ -3,7 +3,6 @@ agent:
   id: "fix-agent"
   name: "Fixer"
   title: "Fix / Reviewer Agent"
-  model: ""
 
 persona:
   role: "Code Review Response Specialist"

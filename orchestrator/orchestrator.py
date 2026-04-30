@@ -71,6 +71,7 @@ class Orchestrator:
         workflow: WorkflowDefinition,
         workspace_manager: WorkspaceManager,
         agent_runtime: AgentRuntime,
+        default_model_provider: Callable[[], str],
         tracker: TrackerInterface | None = None,
         vcs: VCSInterface | None = None,
         notifier: NotifierInterface | None = None,
@@ -85,6 +86,7 @@ class Orchestrator:
         self._workflow = workflow
         self._workspace_manager = workspace_manager
         self._agent_runtime = agent_runtime
+        self._default_model_provider = default_model_provider
         self._tracker = tracker
         self._vcs = vcs
         self._notifier = notifier
@@ -557,11 +559,13 @@ class Orchestrator:
             title=pt.ticket.summary,
         )
 
-        # Per-ticket model label resolution (see docs/superpowers/specs/2026-04-30-per-ticket-model-label-design.md)
+        # Per-ticket model snapshot — single source of truth for this workspace.
+        # Resolves to a non-empty Claude model id at workspace creation and is
+        # used by every agent dispatched against this ticket. See
+        # docs/superpowers/specs/2026-04-30-per-ticket-model-label-design.md.
         resolution = resolve_ticket_model(pt.ticket.labels)
-        if resolution.model:
-            ws.state.model = resolution.model
-            ws.save_state()
+        ws.state.model = resolution.model or self._default_model_provider()
+        ws.save_state()
         if resolution.warning and self._tracker is not None:
             try:
                 await self._tracker.add_comment(pt.ticket.id, resolution.warning)

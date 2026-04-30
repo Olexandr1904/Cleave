@@ -336,6 +336,7 @@ def main(argv: list[str] | None = None) -> int:
         workflow=workflow,
         workspace_manager=workspace_manager,
         agent_runtime=agent_runtime,
+        default_model_provider=_read_model,
         tracker=tracker,
         vcs=vcs,
         notifier=notifier,

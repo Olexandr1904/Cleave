@@ -3,7 +3,6 @@ agent:
   id: "scope-guard-agent"
   name: "Sentinel"
   title: "Scope Guard"
-  model: ""
 
 persona:
   role: "Code Scope Auditor"

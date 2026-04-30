@@ -55,7 +55,7 @@ def _make_repo_config() -> MagicMock:
     return cfg
 
 
-def _make_orchestrator(fake_ws, tracker_mock):
+def _make_orchestrator(fake_ws, tracker_mock, default_model="claude-sonnet-4-6"):
     """Build a real Orchestrator with the heavy deps stubbed.
 
     Bypasses __init__ and injects the attributes _create_workspace_for_ticket
@@ -72,6 +72,7 @@ def _make_orchestrator(fake_ws, tracker_mock):
     orch._emit = MagicMock()
     orch._repo_vcs = {}  # empty -> no existing-PR check
     orch._mode_handler = None
+    orch._default_model_provider = lambda: default_model
     return orch
 
 
@@ -97,15 +98,15 @@ async def test_valid_label_persists_model_and_no_comment(fake_ws):
 
 
 @pytest.mark.asyncio
-async def test_no_label_leaves_model_empty(fake_ws):
-    """No model-* label -> state.model stays empty, no comment posted."""
+async def test_no_label_snapshots_global_default(fake_ws):
+    """No model-* label -> state.model is set to the global default snapshot."""
     from orchestrator.ticket_prioritizer import PrioritizedTicket
 
     tracker = AsyncMock()
     tracker._request = AsyncMock(side_effect=Exception("skip jira fetch"))
     tracker.add_comment = AsyncMock()
 
-    orch = _make_orchestrator(fake_ws, tracker)
+    orch = _make_orchestrator(fake_ws, tracker, default_model="claude-haiku-4-5-20251001")
     pt = PrioritizedTicket(
         ticket=_make_ticket(["ai-pipeline"]), repo_id="r", project_id="p",
     )
@@ -113,20 +114,20 @@ async def test_no_label_leaves_model_empty(fake_ws):
     await orch._create_workspace_for_ticket(pt, "p", _make_repo_config())
 
     reloaded = Workspace(str(fake_ws.root))
-    assert reloaded.state.model == ""
+    assert reloaded.state.model == "claude-haiku-4-5-20251001"
     tracker.add_comment.assert_not_called()
 
 
 @pytest.mark.asyncio
-async def test_conflicting_labels_post_comment_and_leave_model_empty(fake_ws):
-    """Two model-* labels -> state.model stays empty, comment posted once."""
+async def test_conflicting_labels_snapshot_default_and_post_comment(fake_ws):
+    """Two model-* labels -> state.model = global default + comment posted once."""
     from orchestrator.ticket_prioritizer import PrioritizedTicket
 
     tracker = AsyncMock()
     tracker._request = AsyncMock(side_effect=Exception("skip jira fetch"))
     tracker.add_comment = AsyncMock()
 
-    orch = _make_orchestrator(fake_ws, tracker)
+    orch = _make_orchestrator(fake_ws, tracker, default_model="claude-sonnet-4-6")
     pt = PrioritizedTicket(
         ticket=_make_ticket(["model-opus", "model-haiku"]),
         repo_id="r", project_id="p",
@@ -135,7 +136,7 @@ async def test_conflicting_labels_post_comment_and_leave_model_empty(fake_ws):
     await orch._create_workspace_for_ticket(pt, "p", _make_repo_config())
 
     reloaded = Workspace(str(fake_ws.root))
-    assert reloaded.state.model == ""
+    assert reloaded.state.model == "claude-sonnet-4-6"
     tracker.add_comment.assert_called_once()
     call_args = tracker.add_comment.call_args
     assert call_args.args[0] == "TEST-1"

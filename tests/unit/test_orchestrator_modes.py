@@ -51,6 +51,7 @@ def _make_orchestrator(mode="auto"):
         workflow=workflow,
         workspace_manager=workspace_manager,
         agent_runtime=MagicMock(),
+        default_model_provider=lambda: "claude-sonnet-4-6",
         tracker=AsyncMock(),
         notifier=AsyncMock(),
     )

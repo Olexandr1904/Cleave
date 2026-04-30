@@ -11,6 +11,7 @@ import time
 from collections import deque
 from collections.abc import Callable
 from datetime import datetime, timedelta, timezone
+from types import SimpleNamespace
 from typing import Any
 
 from config.config_loader import ConfigError, load_config
@@ -1472,6 +1473,96 @@ class Orchestrator:
         except Exception as e:
             logger.warning("Failed to squash commits for %s: %s", state.ticket_id, e)
 
+    async def _reinvestigate_pending(self, workspace: Workspace) -> None:
+        """Process any pending re-investigation requests on this workspace.
+
+        For each entry with pending_reinvestigation=True (and not decided), call
+        the classifier with operator_hint, update the entry in place, and re-send
+        a fresh escalated TG message. Always re-escalates — never acts silently
+        after a hint.
+        """
+        import sys
+        _mod = sys.modules[__name__]
+        classify_fn = getattr(_mod, "classify_comments", None)
+        if classify_fn is None:
+            from orchestrator.comment_classifier import classify_comments as classify_fn
+
+        state = workspace.state
+        pending = state.pending_review_comments or []
+        if not pending:
+            return
+        pr_number = state.pr_number
+        if not pr_number:
+            return
+
+        for c in pending:
+            if not c.get("pending_reinvestigation"):
+                continue
+            if c.get("decision") is not None:
+                # Operator decided via button while this was queued — skip
+                continue
+            comment_stub = SimpleNamespace(
+                id=c["comment_id"], author=c.get("author", ""),
+                path=c.get("file", ""), line=c.get("line"),
+                body=c.get("body", ""),
+            )
+            old_verdict = c.get("verdict")
+            old_classification = "ESCALATE"
+            try:
+                classified = await classify_fn(
+                    [comment_stub], workspace, self._agent_runtime,
+                    operator_hint=c.get("last_hint") or "",
+                )
+            except Exception as e:
+                logger.error("Re-investigation failed for comment %s: %s", c["comment_id"], e)
+                if self._notifier:
+                    chat_id = self._get_chat_id(workspace)
+                    if chat_id:
+                        await self._notifier.send_message(
+                            chat_id,
+                            f"⚠ Re-investigation failed for @{c.get('author','?')} "
+                            f"on {c.get('file','?')}:{c.get('line','?')}. "
+                            f"Reply `fix` or `won't fix` to close.",
+                        )
+                c["pending_reinvestigation"] = False
+                workspace.save_state()
+                continue
+
+            if not classified:
+                logger.warning("Re-investigation returned no result for comment %s", c["comment_id"])
+                c["pending_reinvestigation"] = False
+                workspace.save_state()
+                continue
+
+            cc = classified[0]
+            c["verdict"] = cc.verdict
+            c["reason"] = cc.reason
+            # Note: classification can change (e.g., ESCALATE → AUTO_FIX), but we
+            # always re-escalate for human confirmation. We don't auto-act.
+            c["hint_rounds"] = int(c.get("hint_rounds", 0) or 0) + 1
+            c["pending_reinvestigation"] = False
+            workspace.save_state()
+
+            new_msg_id = await self._send_escalated_comment_tg(workspace, cc, pr_number)
+            if new_msg_id:
+                c.setdefault("msg_ids", []).append(new_msg_id)
+                workspace.save_state()
+
+            if self._events is not None:
+                self._emit(
+                    "pr_comment_reinvestigation_completed",
+                    f"{state.ticket_id}: re-checked comment {c['comment_id']}",
+                    project_id=state.company_id, ticket_id=state.ticket_id,
+                    data={
+                        "comment_id": c["comment_id"],
+                        "hint_round": c["hint_rounds"],
+                        "old_verdict": old_verdict,
+                        "new_verdict": cc.verdict,
+                        "old_classification": old_classification,
+                        "new_classification": cc.classification,
+                    },
+                )
+
     async def _action_fetch_pr_comments(
         self, workspace: Workspace, stage_def: Any,
     ) -> ActionResult:
@@ -1529,6 +1620,9 @@ class Orchestrator:
                                 f"Dev-agent failed to fix comment #{cid} twice "
                                 f"({entry.get('file', '?')}:{entry.get('line', '?')})",
                             )
+
+        # Phase 1.5: Process any pending re-investigations from operator hints
+        await self._reinvestigate_pending(workspace)
 
         # Phase 2: Check pending escalated decisions
         pending = state.pending_review_comments or []

@@ -744,16 +744,10 @@ class Orchestrator:
             logger.warning("No stage definition for '%s'", stage_id)
             return
 
-        # If the stage was previously completed (ticket looped back from a later stage),
-        # reset iteration counter so it gets a fresh budget. Detect by checking if the
-        # counter already equals or exceeds max — that means it ran in a prior cycle.
-        max_iter = stage_def.max_iterations
-        if max_iter > 0 and state.stage_iterations.get(stage_id, 0) >= max_iter:
-            state.stage_iterations[stage_id] = 0
-            workspace.save_state()
-            logger.info("Reset %s iteration counter for %s (was at max %d)", stage_id, state.ticket_id, max_iter)
-
-        # Check iteration cap -> escalate
+        # Check iteration cap -> escalate. A workflow that loops back into an
+        # earlier stage with a stale at-max counter must clear
+        # state.stage_iterations[<stage_id>] explicitly at transition time —
+        # otherwise it will escalate immediately on re-entry.
         if stage_def.max_iterations > 0:
             iterations = state.stage_iterations.get(stage_id, 0)
             if should_escalate(stage_id, self._workflow, iterations):

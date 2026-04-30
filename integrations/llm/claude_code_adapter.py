@@ -233,6 +233,7 @@ class ClaudeCodeAdapter(LLMInterface):
             )
         except asyncio.TimeoutError:
             proc.kill()
+            await proc.wait()  # reap to avoid zombie + leaked pipes
             raise RuntimeError(f"Claude Code quick_query timed out after {timeout}s")
 
         stdout_str = stdout.decode("utf-8", errors="replace").strip()
@@ -312,6 +313,7 @@ class ClaudeCodeAdapter(LLMInterface):
             )
         except asyncio.TimeoutError:
             proc.kill()
+            await proc.wait()  # reap to avoid zombie + leaked pipes
             raise RuntimeError(
                 f"Claude Code CLI timed out after {self._timeout}s"
             )

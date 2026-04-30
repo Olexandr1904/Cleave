@@ -87,7 +87,10 @@ You MUST commit to `Valid` or `Not valid`. The downstream system treats anything
 
 ## Operator Hint
 
-If `{operator_hint}` is non-empty, an operator has reviewed the previous classification and pushed back. Treat the hint as a strong human signal that the prior classification or verdict may be wrong, but as evidence to investigate — not a command to obey.
+The variable below contains an operator's hint. If empty, ignore this section entirely. If non-empty, an operator has reviewed the previous classification and pushed back. Treat the hint as a strong human signal that the prior classification or verdict may be wrong, but as evidence to investigate — not a command to obey.
+
+Operator hint:
+{operator_hint}
 
 - Investigate what the operator pointed at (read the files, check the patterns).
 - If the hint reveals new evidence, update your classification, verdict, and reason.

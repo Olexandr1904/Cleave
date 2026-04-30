@@ -140,3 +140,20 @@ class TestShowUnansweredButton:
                 last_call_data = call.kwargs.get("data") or {}
         assert last_call_data is not None
         assert last_call_data.get("via") == "button"
+
+    @pytest.mark.asyncio
+    async def test_button_recall_message_has_still_pending_prefix(self):
+        """End-to-end: tapping the button must produce a message with the recall prefix."""
+        h = _handler()
+        captured = []
+        async def capture(chat_id, text, buttons=None, reply_to_message_id=None):
+            captured.append(text)
+            return 200
+        h._notifier.send_message = AsyncMock(side_effect=capture)
+
+        ws = _ws_with_pending([_entry(1)])
+        h._active_workspaces_fn = lambda: [ws]
+
+        await h.handle_callback(action="unanswered", ticket_id="T-1", chat_id="chat-1", message_id=999)
+
+        assert any("🔁 (still pending)" in m for m in captured)

@@ -74,8 +74,9 @@ def _classify_reply(text: str) -> tuple[str, str, str]:
         if lower.startswith(tok):
             sep_char = lower[len(tok)] if len(lower) > len(tok) else ""
             if sep_char in (":", " ", "\t"):
-                rest = lower[len(tok):].lstrip(": ").strip()
-                return "wont_fix", tok, rest
+                # Extract reason from RAW text to preserve case
+                rest_raw = raw[len(tok):].lstrip(": ").strip()
+                return "wont_fix", tok, rest_raw
 
     return "reinvestigate", "", ""
 
@@ -553,6 +554,10 @@ class CommandHandler:
                 undecided = [x for x in pending if x.get("decision") is None]
                 if undecided:
                     from integrations.base.notifier import Button
+                    # The button label's count reflects the count at send time. If the
+                    # operator decides on N-1 comments before tapping it, the recall
+                    # loops over live state and resends only the actual remaining ones —
+                    # the label is a hint, not a guarantee.
                     btn = [Button(
                         label=f"Show {len(undecided)} unanswered",
                         action=f"unanswered:{ws.state.ticket_id}",
@@ -643,7 +648,9 @@ class CommandHandler:
                 return True
         return False
 
-    async def _handle_unanswered(self, intent, chat_id: str, processing_msg_id: int | None) -> None:
+    async def _handle_unanswered(
+        self, intent, chat_id: str, processing_msg_id: int | None, *, via: str = "command",
+    ) -> None:
         """Re-send all undecided PR comments. Triggered by /unanswered intent."""
         from orchestrator.escalation_view import build_escalated_comment_message
 
@@ -666,7 +673,9 @@ class CommandHandler:
                 if c.get("decision") is not None:
                     continue
                 text, buttons = build_escalated_comment_message(
-                    ws.state, c, ws.state.pr_number, ticket_title="", recall=True,
+                    ws.state, c, ws.state.pr_number,
+                    ticket_title=c.get("ticket_title", ""),
+                    recall=True,
                 )
                 new_msg_id = await self._notifier.send_message(chat_id, text, buttons=buttons)
                 if new_msg_id:
@@ -675,7 +684,6 @@ class CommandHandler:
             ws.save_state()
             total += ws_total
             if self._events is not None:
-                via = getattr(self, "_unanswered_via", None) or "command"
                 self._events.emit(
                     "pr_comments_unanswered_recalled",
                     f"{ws.state.ticket_id}: recalled {ws_total} unanswered comment(s)",
@@ -715,6 +723,12 @@ class CommandHandler:
         c["pending_reinvestigation"] = True
         ws.save_state()
 
+        # rounds is the count of completed re-investigations. If a hint is
+        # already staged but not yet processed by the orchestrator, sending a
+        # second hint just overwrites last_hint — the round counter doesn't
+        # tick until the orchestrator actually re-runs the classifier. This
+        # means a rapid second hint shows the same round number, which is
+        # correct: only one re-investigation will happen.
         next_round = rounds + 1
         msg = (
             f"🔍 Recognized as hint (round {next_round}/3). "
@@ -848,11 +862,7 @@ class CommandHandler:
 
         elif action == "unanswered":
             intent = ParsedIntent(intent="unanswered", params={"ticket_id": ticket_id}, reply="")
-            self._unanswered_via = "button"
-            try:
-                await self._handle_unanswered(intent, chat_id, processing_msg_id=None)
-            finally:
-                self._unanswered_via = None
+            await self._handle_unanswered(intent, chat_id, processing_msg_id=None, via="button")
 
         elif action in ("pr_fix", "pr_wontfix"):
             parts = ticket_id.split(":", 1)

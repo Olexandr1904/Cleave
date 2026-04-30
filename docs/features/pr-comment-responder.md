@@ -12,7 +12,8 @@ Agent that classifies and triages PR review comments. Operates with extreme skep
 `orchestrator/comment_classifier.py` parses the agent's JSON output into `ClassifiedComment` objects.
 
 - `VALID_CLASSIFICATIONS`: `AUTO_FIX`, `AUTO_REJECT`, `ESCALATE` — unknown values default to `ESCALATE`
-- `verdict` field: `"Valid"` | `"Not valid"` — missing or unknown values default to `"Unsure"` with a warning log
+- `verdict` field: required, exactly `"Valid"` or `"Not valid"` — missing or unknown values default to `"Unsure"` with a warning log
+- `operator_hint`: optional free-text feedback from human operators; agent treats as evidence to investigate, not commands to obey
 
 ## Resolution Report
 

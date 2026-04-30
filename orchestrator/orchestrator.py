@@ -389,7 +389,7 @@ class Orchestrator:
 
             try:
                 self._wake_event.clear()
-                done, _ = await asyncio.wait(
+                done, pending = await asyncio.wait(
                     [
                         asyncio.create_task(self._shutdown_event.wait()),
                         asyncio.create_task(self._wake_event.wait()),
@@ -397,6 +397,14 @@ class Orchestrator:
                     timeout=poll_interval,
                     return_when=asyncio.FIRST_COMPLETED,
                 )
+                # Cancel and reap the loser(s) so they don't leak across cycles.
+                for t in pending:
+                    t.cancel()
+                for t in pending:
+                    try:
+                        await t
+                    except (asyncio.CancelledError, Exception):
+                        pass
                 for t in done:
                     t.result()  # suppress unhandled-task warnings
             except asyncio.TimeoutError:

@@ -19,6 +19,7 @@ The current PR-review flow ([orchestrator/orchestrator.py:1456-1823](../../../or
 - Free-text replies trigger re-investigation by the `pr-comment-responder` agent with the operator's hint as context, capped at 3 rounds per comment.
 - Reply-matching works whether the operator replies to the original escalation or any later "still pending" recall.
 - Recognition feedback in every confirmation message ("matched: 'don't fix'") so it's never ambiguous how the system parsed a reply.
+- **Every PR comment receives a reply on GitHub from the agent** stating fix-or-don't-fix and the reason/details, posted at the moment the decision is known. Reviewers should never see a comment go silent.
 
 ## Non-Goals
 
@@ -141,6 +142,22 @@ Agent assessment:
   - On agent error during re-investigation: leave flag set, retry once on next tick, then surface to TG with an error message and clear the flag.
 - `_send_escalated_comment_tg`: refactored to delegate rendering to `build_escalated_comment_message`. Also sets the `verdict` field on the new pending entry.
 - Auto-handled summary at [orchestrator.py:1619-1633](../../../orchestrator/orchestrator.py): append `Button(label=f"Show {len(escalated)} unanswered", action=f"unanswered:{state.ticket_id}")` when `escalated` is non-empty.
+- **AUTO_FIX path:** post `"Will fix: <reason>"` reply on GitHub at classification time (do NOT resolve — resolve happens after the fix is verified in the diff, where the existing flow posts `"Fixed in commit <sha>"` and resolves). Resolution report gains `github_reply: "Posted (will fix)"` so the audit trail shows the announce.
+- **ESCALATE → operator FIX:** in `_execute_review_decisions`, when a comment's decision is `fix`, post `"Will fix: <reason>"` reply on GitHub before transitioning to DEV. The reason is the agent's most recent `reason` (which may have been updated by re-investigation with the operator's hint). Existing post-verification `"Fixed in commit"` reply still fires after the dev-agent lands the change.
+
+### Reply policy: every comment is answered
+
+The complete reply matrix on GitHub (per comment):
+
+| Path | Initial reply (at decision time) | Final reply (after action) |
+|---|---|---|
+| AUTO_FIX | `Will fix: <agent reason>` | `Fixed in commit <sha>` + resolve |
+| AUTO_REJECT | `Won't fix: <agent reason>` + resolve | (none — already resolved) |
+| ESCALATE → operator FIX | `Will fix: <agent reason>` | `Fixed in commit <sha>` + resolve |
+| ESCALATE → operator WON'T FIX | `Won't fix: <reason>` + resolve | (none) |
+| ESCALATE → re-investigation in flight | (none — decision pending) | (becomes one of the above when settled) |
+
+Re-investigation rounds do NOT post intermediate replies on GitHub — only the final settled decision speaks on the PR. This keeps the reviewer's notification feed clean.
 
 ### 5. `integrations/telegram/command_handler.py`
 
@@ -240,5 +257,5 @@ Three new events plus one payload extension:
 - Operator types `/unanswered` → every undecided comment from active PR_REVIEW workspaces re-sent with fresh buttons.
 - Reply to either original or recall message resolves the same comment.
 - 4th hint on the same comment rejected with "Hint loop exceeded" message.
-- All existing AUTO_FIX / AUTO_REJECT flows work unchanged.
+- **Every comment receives a GitHub reply at decision time:** AUTO_FIX gets a `"Will fix: ..."` announce, ESCALATE→FIX gets a `"Will fix: ..."` announce, AUTO_REJECT and ESCALATE→WON'T FIX continue to post `"Won't fix: ..."` and resolve. Post-fix `"Fixed in commit ..."` replies still fire after dev-agent lands the change.
 - All new tests pass; renamed test file's old SKIP assertions are gone.

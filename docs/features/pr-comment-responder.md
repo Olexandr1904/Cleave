@@ -23,6 +23,16 @@ Agent that classifies and triages PR review comments. Operates with extreme skep
 - `add_entry(path, ticket_id, pr_number, comment_id, fields)` — append new entry; creates file if missing
 - `update_entry(path, comment_id, updates)` — patch fields on an existing entry in place
 
+## Escalation Message Renderer
+
+`orchestrator/escalation_view.py` — shared renderer for escalated PR comment Telegram messages.
+
+- `build_escalated_comment_message(state, cc, pr_number, ticket_title, *, recall)` — returns `(text, buttons)` tuple
+- Accepts `cc` as either a `dict` or an attribute-style object (e.g., `ClassifiedComment`)
+- Verdict rendering: `"Valid"` / `"Not valid"` prefix the reason; any other verdict (e.g., `"Unsure"`) renders reason only
+- `recall=True` prefixes the message with `🔁 (still pending)` for the recall flow
+- Used by both `orchestrator.py` (initial escalation) and `command_handler.py` (recall flow)
+
 ## References
 - Contracts: `docs/agent-contracts.md` (Rivera — PR Comment Responder)
 - Agent file: `agents/pr-comment-responder-agent.md`

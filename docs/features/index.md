@@ -9,12 +9,12 @@
 | 2 | [Orchestrator](orchestrator.md) | Implemented | Main loop, slot management, workspace spawning, workflow router with agent + action stages, quota-deferral recovery (DEFERRED state auto-resumes) |
 | 3 | [Workspace Isolation](workspace-isolation.md) | Implemented | Per-ticket workspaces with multi-company hierarchy: base/company/repo/tickets/id/ |
 | 4 | [Configuration Cascade](configuration-cascade.md) | Implemented | 3-level config hierarchy with VCS/CI provider abstraction and helper script paths |
-| 5 | [Jira Integration](jira-integration.md) | Planned | Poll tickets with AND semantics on trigger_labels, sync status, transition on completion |
-| 6 | [GitHub Integration](github-integration.md) | Planned | Branch creation, PR management, review handling (no auto-merge) |
+| 5 | [Jira Integration](jira-integration.md) | Implemented | Poll tickets with AND semantics on trigger_labels, sync status, transition on completion |
+| 6 | [GitHub Integration](github-integration.md) | Implemented | Branch creation, PR management, review handling (no auto-merge) |
 | 7 | [Telegram Notifications](telegram-notifications.md) | In Progress | Alert human when stuck, receive threaded replies to unblock; IntentParser classifies free-text commands |
 | 8 | [QA Pipeline](qa-pipeline.md) | Planned | Lint, test, build gates with configurable hard/soft enforcement |
 | 9 | [Scope Guard](scope-guard.md) | Planned | Validate diff against plan and architecture rules, prevent scope creep |
-| 10 | [Tool Sandbox](tool-sandbox.md) | Planned | Sandboxed tool execution for agents with path restrictions and per-agent allowlists |
+| 10 | [Tool Sandbox](tool-sandbox.md) | Implemented | Sandboxed tool execution for agents with path restrictions and per-agent allowlists |
 | 11 | [PR Comment Responder](pr-comment-responder.md) | In Progress | Classify and respond to PR review comments with extreme skepticism; resolution report module implemented |
 | 12 | [GitLab Integration](gitlab-integration.md) | Planned | MR creation, comment fetching/resolving via GitLab API |
 | 13 | [Jenkins Integration](jenkins-integration.md) | Planned | Build status and failure log retrieval from Jenkins |

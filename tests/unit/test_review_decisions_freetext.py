@@ -1,8 +1,11 @@
-"""Tests for Orchestrator._execute_review_decisions — Skip semantic.
+"""Tests for Orchestrator._execute_review_decisions — defensive SKIP fallback.
 
-Skip used to re-escalate every 30-min pr_review cycle, which trapped operators
-in a nag loop on a button labelled "Skip". The intent of Skip is "drop this,
-move on" — these tests pin that contract.
+Free-text replies no longer reach _execute_review_decisions as decision="skip"
+(they route to _stage_reinvestigation in command_handler — see
+test_reinvestigation.py and test_pr_comment_decision_echo.py). The SKIP branch
+in _execute_review_decisions remains as a defensive fallback for legacy
+state files that may still have decision="skip" from before that change.
+These tests pin that legacy/defensive contract.
 """
 
 from __future__ import annotations

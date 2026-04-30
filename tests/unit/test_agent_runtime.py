@@ -260,7 +260,11 @@ class TestToolUseExecution:
         runtime = AgentRuntime(registry, mock_llm, max_tool_rounds=3)
         result = await runtime.execute("loop-agent", workspace)
 
-        assert result.success is True
+        # Hitting the round cap with a tool call still pending means the agent
+        # never produced a final answer — the run is a failure, not a success.
+        assert result.success is False
+        assert result.failure_kind == "permanent"
+        assert result.error == "max_tool_rounds_exhausted"
         assert result.tool_rounds == 3
         assert result.tool_calls == 3  # one per round
 

@@ -423,7 +423,10 @@ class AgentRuntime:
                 {"role": "assistant", "content": self._build_assistant_content(response)}
             )
 
-        if rounds >= self._max_tool_rounds and response.tool_use:
+        # If the loop exited because we hit the round cap with tool calls still
+        # pending, the agent never produced a final answer. Don't claim success.
+        hit_max_rounds = rounds >= self._max_tool_rounds and bool(response.tool_use)
+        if hit_max_rounds:
             logger.warning(
                 "Agent '%s' hit max tool rounds (%d)", agent_id, self._max_tool_rounds,
             )
@@ -445,12 +448,14 @@ class AgentRuntime:
 
         return AgentResult(
             agent_id=agent_id,
-            success=True,
+            success=not hit_max_rounds,
             output=response.content,
             input_tokens=total_input,
             output_tokens=total_output,
             tool_calls=total_tool_calls,
             tool_rounds=rounds,
+            error="max_tool_rounds_exhausted" if hit_max_rounds else None,
+            failure_kind="permanent" if hit_max_rounds else None,
         )
 
     def _build_assistant_content(self, response: LLMResponse) -> list[dict[str, Any]]:

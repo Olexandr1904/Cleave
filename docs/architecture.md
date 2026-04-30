@@ -1239,7 +1239,7 @@ tests/
 
 ### Developer Handoff
 
-This architecture document, combined with the PRD (`docs/prd.md`) and technical spec (`start.md`), provides the complete blueprint for implementing Sickle.
+This architecture document, combined with the PRD (`docs/prd.md`) and the original technical spec (`docs/legacy/start.md`), provides the complete blueprint for implementing Sickle.
 
 **Start with Epic 1, Story 1.1** — create the project skeleton and CLI entry point. The source tree above is your target structure. Key files to create first:
 

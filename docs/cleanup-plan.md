@@ -1,6 +1,6 @@
 # Cleanup & Bugfix Plan
 
-Status: **PR 1 (section A) shipped 2026-04-30.** 18 actionable items remain.
+Status: **PR 1 (section A) and PR 2 (section B) shipped 2026-04-30.** 12 actionable items remain.
 
 Threat model assumed: AI pipeline runs on a sandbox box owned by the operator.
 Agents have host-level access by design. Items related to "open dashboard",
@@ -26,12 +26,12 @@ Item IDs preserved from the original audit (gaps where items were closed).
 
 | #  | Status | Location | Bug |
 |----|--------|----------|-----|
-| B1 | LIVE | `integrations/llm/claude_code_adapter.py:234, :313` | `proc.kill()` on timeout, no `await proc.wait()` → zombies + leaked pipes |
-| B2 | LIVE | `orchestrator/agent_runtime.py:107` | `cancel()` SIGTERMs and forgets — no SIGKILL fallback, no wait |
-| B3 | LIVE | `orchestrator/orchestrator.py:392-401` | `asyncio.wait()` leaves loser task uncancelled every poll |
-| B4 | LIVE | `integrations/github/github_adapter.py:83` | Synchronous `subprocess.run` for git inside `async` methods → blocks loop ≤300s |
-| B5 | LIVE | `orchestrator/agent_runtime.py:168` | Per-file 5KB cap, no total budget cap → silent context-window overflow |
-| B6 | LIVE | `orchestrator/orchestrator.py:731` | Auto-resume tail-recurses → cascading gates can stack-overflow |
+| B1 | ✅ FIXED | `integrations/llm/claude_code_adapter.py` | `proc.kill()` on timeout — commit `192c0b7`. `await proc.wait()` added in both call sites. |
+| B2 | ✅ FIXED | `orchestrator/agent_runtime.py` | `cancel()` SIGTERMs and forgets — commit `f61d5d2`. Now async with SIGKILL escalation; dashboard callers updated. |
+| B3 | ✅ FIXED | `orchestrator/orchestrator.py` | `asyncio.wait()` task leak — commit `add6ac7`. Pending tasks cancelled and reaped. |
+| B4 | ✅ FIXED | `integrations/github/github_adapter.py` | Sync `subprocess.run` in async — commit `4a2add4`. `_run_git` now async via `create_subprocess_exec`. |
+| B5 | ✅ FIXED | `orchestrator/agent_runtime.py` | No total context budget — commit `e3ee090` (bundled with parallel budget-config work). |
+| B6 | ✅ FIXED | `orchestrator/orchestrator.py` | Auto-resume tail-recursion — commit `ef1a746`. Recursion depth capped at 5. |
 
 ## C — Architecture refactors
 
@@ -80,7 +80,7 @@ Item IDs preserved from the original audit (gaps where items were closed).
 1. ~~Recheck pass.~~ ✅ Done.
 2. ~~Remove STALE / invalid items.~~ ✅ Done.
 3. ~~PR 1 (section A correctness).~~ ✅ Shipped: A1, A2, A3, A5. A6 + A8 postponed.
-4. **PR 2 (section B lifecycle)** ← next
-5. PR 3 (section D test rewrites)
+4. ~~PR 2 (section B lifecycle).~~ ✅ Shipped: B1, B2, B3, B4, B5, B6.
+5. **PR 3 (section D test rewrites)** ← next
 6. PR 4 (section E cleanup)
 7. Delete this file when all items closed.

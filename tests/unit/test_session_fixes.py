@@ -60,24 +60,32 @@ class TestLooksLikeFail:
         assert self._check("All checks passed successfully") is False
 
 
-# --- Iteration counter auto-reset ---
+# --- Iteration cap escalation ---
 
-class TestIterationReset:
+class TestIterationCapEscalates:
     @pytest.mark.asyncio
-    async def test_resets_when_at_max(self, tmp_path):
-        """When a stage counter equals max_iterations, it resets to 0."""
+    async def test_escalates_when_at_max(self, tmp_path):
+        """When a stage counter is at max_iterations, escalation fires.
+
+        Regression: the code previously reset the counter to 0 here, then
+        re-checked `should_escalate(0)` → False — so escalation never fired
+        and the stage ran forever.
+        """
         from orchestrator.orchestrator import Orchestrator
+        from orchestrator.workflow_router import StageDefinition, WorkflowDefinition
 
         orch = MagicMock(spec=Orchestrator)
         orch._dry_run = False
         orch._mode_handler = None
         orch._emit = MagicMock()
-        orch._workflow = MagicMock()
-
-        stage_def = SimpleNamespace(
-            agent="test-agent", action="", max_iterations=2,
+        orch._handle_escalate = AsyncMock()
+        orch._handle_agent_stage = AsyncMock()
+        orch._workflow = WorkflowDefinition(
+            stages={"qa": StageDefinition(
+                id="qa", agent="qa-agent",
+                max_iterations=2, on_max_iterations="escalate",
+            )},
         )
-        orch._workflow.stages = {"qa": stage_def}
 
         ws = MagicMock()
         ws.state = SimpleNamespace(
@@ -87,14 +95,10 @@ class TestIterationReset:
             error=None, branch="feature/t-1",
         )
 
-        # The advance should reset qa to 0, not escalate
-        with patch.object(Orchestrator, '_handle_agent_stage', new=AsyncMock()):
-            await Orchestrator.advance_workspace(orch, ws)
+        await Orchestrator.advance_workspace(orch, ws)
 
-        # Counter should have been reset
-        assert ws.state.stage_iterations["qa"] == 0 or \
-               orch._handle_agent_stage.called, \
-               "Should either reset counter or dispatch agent, not escalate"
+        orch._handle_escalate.assert_awaited_once_with(ws)
+        orch._handle_agent_stage.assert_not_awaited()
 
 
 # --- Smart retry (furthest stage detection) ---

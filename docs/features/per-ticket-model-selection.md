@@ -2,7 +2,7 @@
 
 **Status:** Implemented
 **Created:** 2026-04-30
-**Updated:** 2026-04-30 (dashboard pill added)
+**Updated:** 2026-04-30 (dashboard pill added, with backfill for legacy workspaces)
 **Author:** Oleksandr Brazhenko
 
 ## Description
@@ -62,6 +62,7 @@ The label prefix is lowercase; the short name is matched case-insensitively (`mo
 - Changing the dashboard's global default does **not** affect in-flight tickets. Each workspace keeps the model that was current when it was created. Only new workspaces pick up the new default.
 - Per-agent model pinning is no longer supported. The agent frontmatter `model:` field has been removed; the workspace-level snapshot is the single source of truth.
 - LLM calls that aren't tied to a workspace (e.g. the Telegram intent parser) continue to read the global default at call time — they're outside this feature's scope.
+- Workspaces created before this feature shipped have `state.model == ""`. They still run correctly (the LLM adapter falls back to the global default at dispatch time) and the dashboard backfills the pill display by reading the current global default. The pill on a legacy ticket therefore tracks the *current* global default rather than a frozen snapshot — matches what would actually run on the next dispatch.
 
 ## References
 

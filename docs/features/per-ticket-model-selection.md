@@ -40,6 +40,13 @@ Allows operators to override the Claude model used for a single ticket by adding
 - AC5: After server restart, the resolved model is still applied to dispatches against the same workspace.
 - AC6: `add_comment` failure does not abort workspace creation.
 
+## Implementation Notes
+
+- Resolver lives at `orchestrator/model_resolver.py` and is a pure function — no I/O, no side effects.
+- `WorkspaceState.model` defaults to `""`, which preserves the prior fallback behavior. Old `state.json` files load with `""` automatically (the existing `_load_state` filter tolerates added fields).
+- `agent_runtime.execute()` checks `workspace.state.model` first; if empty, falls through to the agent frontmatter pin.
+- Workspace creation in `_create_workspace_for_ticket` calls the resolver, persists the model, and posts a Jira comment when labels are ambiguous or unknown.
+
 ## References
 
 - Spec: [`docs/superpowers/specs/2026-04-30-per-ticket-model-label-design.md`](../superpowers/specs/2026-04-30-per-ticket-model-label-design.md)

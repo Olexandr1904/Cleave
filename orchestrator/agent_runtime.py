@@ -210,11 +210,13 @@ class AgentRuntime:
                 error=f"Agent '{agent_id}' not found in registry",
             )
 
-        # Determine model
-        model = ""
-        agent_meta = agent.metadata.get("agent", {})
-        if isinstance(agent_meta, dict):
-            model = agent_meta.get("model", "")
+        # Determine model — per-ticket snapshot wins over agent frontmatter.
+        # See docs/superpowers/specs/2026-04-30-per-ticket-model-label-design.md
+        model = workspace.state.model or ""
+        if not model:
+            agent_meta = agent.metadata.get("agent", {})
+            if isinstance(agent_meta, dict):
+                model = agent_meta.get("model", "")
 
         # Get agent's tool allowlist
         allowed_tools = self._get_agent_tools(agent)

@@ -434,3 +434,49 @@ class TestQuotaFailureClassification:
         assert result.success is False
         assert result.failure_kind == "quota"  # reused for auto-retry
         assert result.retry_at is not None
+
+
+class TestModelSelection:
+    """Per-ticket snapshot wins over agent frontmatter wins over default."""
+
+    @pytest.mark.asyncio
+    async def test_state_model_overrides_agent_frontmatter(
+        self, registry, mock_llm, tmp_path
+    ):
+        """When workspace.state.model is set, it overrides any agent pin."""
+        ws_root = tmp_path / "snap-ws"
+        ws_root.mkdir()
+        (ws_root / "meta").mkdir()
+        (ws_root / "logs").mkdir()
+        (ws_root / "source" / "reports").mkdir(parents=True)
+        state = WorkspaceState(
+            ticket_id="TEST-99",
+            company_id="p",
+            repo_id="r",
+            workspace_root=str(ws_root),
+            model="claude-opus-4-7",
+        )
+        ws = Workspace(str(ws_root), state)
+        ws.save_state()
+
+        runtime = AgentRuntime(registry, mock_llm)
+        await runtime.execute("dev-agent", ws)
+
+        assert mock_llm.send_message.called
+        call_kwargs = mock_llm.send_message.call_args.kwargs
+        assert call_kwargs.get("model") == "claude-opus-4-7"
+
+    @pytest.mark.asyncio
+    async def test_empty_state_model_falls_back_to_agent_frontmatter(
+        self, registry, mock_llm, workspace
+    ):
+        """When state.model is empty, the existing fallback chain applies."""
+        assert workspace.state.model == ""
+
+        runtime = AgentRuntime(registry, mock_llm)
+        await runtime.execute("dev-agent", workspace)
+
+        assert mock_llm.send_message.called
+        call_kwargs = mock_llm.send_message.call_args.kwargs
+        assert call_kwargs.get("model") == ""
+

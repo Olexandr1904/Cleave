@@ -207,10 +207,10 @@ async def test_text_reply_wontfix_with_reason_echoes_reason():
 
 
 @pytest.mark.asyncio
-async def test_text_reply_freeform_shows_dropped_label():
-    """Free-text that doesn't match any prefix gets stored verbatim and
-    treated as skip downstream. The echo must be honest about that —
-    operators shouldn't think "looks fine to me" was registered as fix."""
+async def test_text_reply_freeform_routes_to_reinvestigation():
+    """Free-text that doesn't match fix or won't-fix now routes to
+    _stage_reinvestigation (Task 8). The old SKIP echo is gone; the stub
+    returns True without sending a message."""
     notifier = AsyncMock()
     notifier.send_message = AsyncMock(return_value=1)
     ws = _make_workspace_with_pending(pending=[
@@ -224,11 +224,13 @@ async def test_text_reply_freeform_shows_dropped_label():
         active_workspaces_fn=lambda: [ws],
     )
 
-    await handler.handle_reply(591, "looks fine to me", "12345")
+    handled = await handler.handle_reply(591, "looks fine to me", "12345")
 
-    msg = notifier.send_message.call_args.args[1]
-    assert "SKIP" in msg.upper()
-    assert "looks fine to me" in msg.lower()  # echoed so user can reconsider
+    assert handled is True
+    # The stub _stage_reinvestigation doesn't send a message; confirm no SKIP echo
+    for call in notifier.send_message.call_args_list:
+        msg = call.args[1] if len(call.args) > 1 else call.kwargs.get("message", "")
+        assert "SKIP" not in msg.upper()
 
 
 @pytest.mark.asyncio
@@ -299,3 +301,58 @@ class TestClassifyReply:
         """Skip semantic was removed — should now be free-text."""
         decision, _, _ = _classify_reply("skip")
         assert decision == "reinvestigate"
+
+
+@pytest.mark.asyncio
+async def test_echo_includes_matched_token_for_fix():
+    handler = CommandHandler.__new__(CommandHandler)
+    handler._allowed_chat_ids = None
+    handler._notifier = MagicMock()
+    handler._notifier.send_message = AsyncMock()
+    handler._events = None
+    handler._wake_fn = None
+    ws = MagicMock()
+    ws.state = SimpleNamespace(
+        current_state="PR_REVIEW", ticket_id="T-1",
+        pending_review_comments=[
+            {"comment_id": 1, "msg_ids": [100], "decision": None,
+             "author": "C", "file": "x.kt", "line": 1, "body": "b", "reason": "r",
+             "verdict": "Valid", "hint_rounds": 0, "last_hint": None,
+             "pending_reinvestigation": False},
+        ],
+    )
+    handler._active_workspaces_fn = lambda: [ws]
+
+    await handler.handle_reply(reply_to_msg_id=100, text="yes", chat_id="c-1")
+
+    sent = handler._notifier.send_message.call_args.args[1]
+    assert "Recognized as FIX" in sent
+    assert "matched: 'yes'" in sent
+
+
+@pytest.mark.asyncio
+async def test_echo_includes_matched_token_for_wont_fix():
+    handler = CommandHandler.__new__(CommandHandler)
+    handler._allowed_chat_ids = None
+    handler._notifier = MagicMock()
+    handler._notifier.send_message = AsyncMock()
+    handler._events = None
+    handler._wake_fn = None
+    ws = MagicMock()
+    ws.state = SimpleNamespace(
+        current_state="PR_REVIEW", ticket_id="T-1",
+        pending_review_comments=[
+            {"comment_id": 1, "msg_ids": [100], "decision": None,
+             "author": "C", "file": "x.kt", "line": 1, "body": "b", "reason": "r",
+             "verdict": "Valid", "hint_rounds": 0, "last_hint": None,
+             "pending_reinvestigation": False},
+        ],
+    )
+    handler._active_workspaces_fn = lambda: [ws]
+
+    await handler.handle_reply(reply_to_msg_id=100, text="don't fix this is intentional", chat_id="c-1")
+
+    sent = handler._notifier.send_message.call_args.args[1]
+    assert "Recognized as WON'T FIX" in sent
+    # Accept either escaping style for the apostrophe
+    assert "matched: 'don\\'t fix'" in sent or "matched: \"don't fix\"" in sent

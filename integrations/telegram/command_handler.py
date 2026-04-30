@@ -509,62 +509,56 @@ class CommandHandler:
                 continue
             pending = ws.state.pending_review_comments or []
             for c in pending:
-                if reply_to_msg_id in _ensure_msg_ids(c):
-                    raw = text.strip().lower()
-                    if raw in ("fix", "fxi", "fifx", "fixx", "fx", "fi", "yes", "fix it"):
-                        decision = "fix"
-                    elif raw.startswith("won't fix") or raw.startswith("wont fix"):
-                        decision = raw
-                    elif raw == "skip":
-                        decision = "skip"
-                    else:
-                        # Free-text reply that doesn't match a recognized prefix.
-                        # Stored verbatim; _execute_review_decisions falls
-                        # through to "skip" semantics for these. Confirm
-                        # explicitly so operators don't assume the bot
-                        # interpreted their prose as fix/won't-fix.
-                        decision = raw
-                    c["decision"] = decision
-                    ws.save_state()
-                    file_line = f"{c.get('file','?')}:{c.get('line','?')}"
-                    decision_label = {
-                        "fix": "FIX (dev-agent will re-engage)",
-                        "skip": "SKIP (drop, no action)",
-                    }.get(decision)
-                    if decision_label is None:
-                        if decision.startswith("won't fix") or decision.startswith("wont fix"):
-                            wf_prefix_len = len("won't fix") if decision.startswith("won't fix") else len("wont fix")
-                            wf_reason = decision[wf_prefix_len:].lstrip(": ").strip() or "operator decision"
-                            decision_label = f"WON'T FIX (will reply on GitHub: {wf_reason})"
-                        else:
-                            decision_label = f"SKIP (free-text reply, dropped: {decision[:60]!r})"
-                    confirm = f"✓ Recorded {decision_label} for @{c.get('author','?')} on {file_line}"
-                    if self._events is not None:
-                        self._events.emit(
-                            "pr_comment_decision_recorded",
-                            f"{ws.state.ticket_id}: {decision} for comment {c.get('comment_id')}",
-                            ticket_id=ws.state.ticket_id,
-                            data={
-                                "comment_id": c.get("comment_id"),
-                                "decision": decision,
-                                "via": "reply",
-                                "raw_text": text.strip()[:200],
-                            },
-                        )
-                    undecided = [x for x in pending if x.get("decision") is None]
-                    if undecided:
-                        await self._notifier.send_message(
-                            chat_id,
-                            f"{confirm}\n{len(undecided)} comment(s) remaining.",
-                        )
-                    else:
-                        await self._notifier.send_message(
-                            chat_id,
-                            f"{confirm}\nAll decisions in for {ws.state.ticket_id}. Executing now.",
-                        )
-                        if hasattr(self, '_wake_fn') and self._wake_fn:
-                            self._wake_fn()
-                    return True
+                if reply_to_msg_id not in _ensure_msg_ids(c):
+                    continue
+                decision, matched_token, wf_reason = _classify_reply(text)
+
+                if decision == "reinvestigate":
+                    return await self._stage_reinvestigation(c, ws, text.strip(), chat_id)
+
+                file_line = f"{c.get('file','?')}:{c.get('line','?')}"
+                if decision == "fix":
+                    c["decision"] = "fix"
+                    decision_label = f"FIX (matched: {matched_token!r}). Dev-agent will re-engage on {file_line}."
+                    recorded_label = "FIX"
+                    stored_decision = "fix"
+                else:  # wont_fix
+                    reason_text = wf_reason or "operator decision"
+                    c["decision"] = f"won't fix: {reason_text}"
+                    decision_label = (
+                        f"WON'T FIX (matched: {matched_token!r}). "
+                        f'Posting on GitHub: "{reason_text}".'
+                    )
+                    recorded_label = "WON'T FIX"
+                    stored_decision = c["decision"]
+
+                ws.save_state()
+                confirm = f"✓ Recognized as {recorded_label}. {decision_label}"
+                if self._events is not None:
+                    self._events.emit(
+                        "pr_comment_decision_recorded",
+                        f"{ws.state.ticket_id}: {stored_decision} for comment {c.get('comment_id')}",
+                        ticket_id=ws.state.ticket_id,
+                        data={
+                            "comment_id": c.get("comment_id"),
+                            "decision": stored_decision,
+                            "via": "reply",
+                            "matched_token": matched_token,
+                            "raw_text": text.strip()[:200],
+                        },
+                    )
+                undecided = [x for x in pending if x.get("decision") is None]
+                if undecided:
+                    await self._notifier.send_message(
+                        chat_id, f"{confirm}\n{len(undecided)} comment(s) remaining.",
+                    )
+                else:
+                    await self._notifier.send_message(
+                        chat_id, f"{confirm}\nAll decisions in for {ws.state.ticket_id}. Executing now.",
+                    )
+                    if hasattr(self, '_wake_fn') and self._wake_fn:
+                        self._wake_fn()
+                return True
 
         for ws in workspaces:
             if ws.state.escalation_msg_id != reply_to_msg_id:
@@ -640,6 +634,10 @@ class CommandHandler:
                 )
                 return True
         return False
+
+    async def _stage_reinvestigation(self, c, ws, hint_text, chat_id) -> bool:
+        """Stub — replaced in Task 8."""
+        return True
 
     async def handle_callback(self, action: str, ticket_id: str, chat_id: str, message_id: int) -> None:
         """Handle an inline button press. Bypasses LLM intent parsing."""

@@ -1271,6 +1271,14 @@ class Orchestrator:
                 metadata={},
             )
 
+        # Defensive: rescue branches that have staged dev work but zero
+        # committed commits (typical aftermath of a partially-failed squash
+        # before the ea8819c atomicity fix; also covers any future git
+        # operation that leaves the branch in this state). Without this,
+        # the next push opens an empty PR (GitHub 422 "No commits between
+        # develop and feature/...") and operators have to commit by hand.
+        self._ensure_branch_has_commits(workspace, repo_config)
+
         # Squash commits into one clean commit before the first PR
         self._squash_feature_commits(workspace, repo_config)
 
@@ -1283,6 +1291,80 @@ class Orchestrator:
         return ActionResult(
             success=False, next_state="", error=result.error, metadata={},
         )
+
+    def _ensure_branch_has_commits(
+        self, workspace: Workspace, repo_config: RepoConfig,
+    ) -> None:
+        """If the feature branch has 0 commits ahead of remotes but the
+        index has staged tracked changes, commit them so the upcoming push
+        actually has something to send.
+
+        Prevents the GitHub 422 "No commits between develop and feature/..."
+        failure that occurs when an earlier git step (e.g. a non-atomic
+        squash before ea8819c) reset the branch to base but never recorded
+        the follow-up commit. Idempotent: a no-op when the branch already
+        has commits or when there is no staged work to recover.
+
+        Stays narrow on purpose:
+          * commits ONLY what is already in the index (does not run
+            `git add` — won't sweep up untracked clutter or files agents
+            chose not to stage)
+          * uses repo_config author (same as `_squash_feature_commits`)
+          * emits `branch_recovered_from_orphan_state` so the recovery is
+            visible in events.db rather than silent
+        """
+        import subprocess
+        source = str(workspace.source_dir)
+        state = workspace.state
+
+        try:
+            count_result = subprocess.run(
+                ["git", "-C", source, "rev-list", "--count", "HEAD", "--not", "--remotes"],
+                capture_output=True, text=True, timeout=10,
+            )
+            if count_result.returncode != 0:
+                return
+            if int(count_result.stdout.strip() or "0") > 0:
+                return  # branch has commits — happy path
+
+            # Zero commits ahead. Anything in the index?
+            status = subprocess.run(
+                ["git", "-C", source, "diff", "--cached", "--name-only"],
+                capture_output=True, text=True, timeout=10,
+            )
+            staged = [line for line in status.stdout.splitlines() if line.strip()]
+            if not staged:
+                return  # truly nothing to recover
+
+            commit_msg = f"feat({state.ticket_id}): recovered work after orphaned-branch state"
+            commit_cmd = [
+                "git", "-C", source,
+                "-c", f"user.email={repo_config.git.commit_author_email}",
+                "-c", f"user.name={repo_config.git.commit_author_name}",
+                "commit", "-m", commit_msg,
+            ]
+            commit_result = subprocess.run(
+                commit_cmd, capture_output=True, text=True, timeout=10,
+            )
+            if commit_result.returncode != 0:
+                logger.error(
+                    "Failed to recover orphaned branch for %s: %s",
+                    state.ticket_id, commit_result.stderr.strip()[:500],
+                )
+                return
+
+            logger.warning(
+                "Recovered %d staged file(s) for %s — branch had 0 commits ahead",
+                len(staged), state.ticket_id,
+            )
+            self._emit(
+                "branch_recovered_from_orphan_state",
+                f"Recovered {len(staged)} staged file(s) for {state.ticket_id}",
+                project_id=state.company_id, ticket_id=state.ticket_id,
+                data={"file_count": len(staged), "files": staged[:20]},
+            )
+        except Exception as e:
+            logger.warning("Branch-recovery check failed for %s: %s", state.ticket_id, e)
 
     def _squash_feature_commits(
         self, workspace: Workspace, repo_config: RepoConfig | None = None,

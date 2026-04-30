@@ -111,3 +111,32 @@ class TestHandleUnanswered:
         # Reply to the recall message
         await h.handle_reply(reply_to_msg_id=200, text="fix", chat_id="chat-1")
         assert ws.state.pending_review_comments[0]["decision"] == "fix"
+
+
+class TestShowUnansweredButton:
+    @pytest.mark.asyncio
+    async def test_button_action_recalls_comments(self):
+        h = _handler()
+        ws = _ws_with_pending([_entry(1), _entry(2)])
+        h._active_workspaces_fn = lambda: [ws]
+
+        await h.handle_callback(action="unanswered", ticket_id="T-1", chat_id="chat-1", message_id=999)
+
+        assert len(ws.state.pending_review_comments[0]["msg_ids"]) == 2
+        assert len(ws.state.pending_review_comments[1]["msg_ids"]) == 2
+
+    @pytest.mark.asyncio
+    async def test_button_payload_via_button(self):
+        h = _handler()
+        ws = _ws_with_pending([_entry(1)])
+        h._active_workspaces_fn = lambda: [ws]
+
+        await h.handle_callback(action="unanswered", ticket_id="T-1", chat_id="chat-1", message_id=999)
+
+        h._events.emit.assert_called()
+        last_call_data = None
+        for call in h._events.emit.call_args_list:
+            if call.args[0] == "pr_comments_unanswered_recalled":
+                last_call_data = call.kwargs.get("data") or {}
+        assert last_call_data is not None
+        assert last_call_data.get("via") == "button"

@@ -1741,9 +1741,13 @@ class Orchestrator:
                 for ar in auto_rejected:
                     lines.append(f"❌ REJECT: {ar.body[:60]} — {ar.reason}")
                 lines.append(sep)
+                summary_buttons = None
                 if escalated:
                     lines.append(f"Waiting for your decisions on {len(escalated)} escalated comment(s).")
-                await self._notifier.send_message(chat_id, "\n".join(lines))
+                    summary_buttons = [
+                        Button(label=f"Show {len(escalated)} unanswered", action=f"unanswered:{state.ticket_id}"),
+                    ]
+                await self._notifier.send_message(chat_id, "\n".join(lines), buttons=summary_buttons)
 
         # Phase 7: Handle escalated or collect FIX items
         if not escalated:

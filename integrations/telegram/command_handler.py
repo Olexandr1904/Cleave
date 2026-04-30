@@ -552,8 +552,13 @@ class CommandHandler:
                     )
                 undecided = [x for x in pending if x.get("decision") is None]
                 if undecided:
+                    from integrations.base.notifier import Button
+                    btn = [Button(
+                        label=f"Show {len(undecided)} unanswered",
+                        action=f"unanswered:{ws.state.ticket_id}",
+                    )]
                     await self._notifier.send_message(
-                        chat_id, f"{confirm}\n{len(undecided)} comment(s) remaining.",
+                        chat_id, f"{confirm}\n{len(undecided)} comment(s) remaining.", buttons=btn,
                     )
                 else:
                     await self._notifier.send_message(
@@ -841,6 +846,14 @@ class CommandHandler:
             if hasattr(self, '_wake_fn') and self._wake_fn:
                 self._wake_fn()
 
+        elif action == "unanswered":
+            intent = ParsedIntent(intent="unanswered", params={"ticket_id": ticket_id}, reply="")
+            self._unanswered_via = "button"
+            try:
+                await self._handle_unanswered(intent, chat_id, processing_msg_id=None)
+            finally:
+                self._unanswered_via = None
+
         elif action in ("pr_fix", "pr_skip", "pr_wontfix"):
             # PR comment decision via button — ticket_id is "TICKET:COMMENT_ID"
             parts = ticket_id.split(":", 1)
@@ -889,12 +902,18 @@ class CommandHandler:
 
             undecided = [x for x in ws.state.pending_review_comments if x.get("decision") is None]
             if undecided:
+                from integrations.base.notifier import Button
+                btn = [Button(
+                    label=f"Show {len(undecided)} unanswered",
+                    action=f"unanswered:{tid}",
+                )]
                 msg_text = f"{confirm}\n{len(undecided)} comment(s) remaining."
+                await self._notifier.send_message(chat_id, msg_text, buttons=btn, reply_to_message_id=message_id)
             else:
                 msg_text = f"{confirm}\nAll decisions in for {tid}. Executing now."
                 if hasattr(self, '_wake_fn') and self._wake_fn:
                     self._wake_fn()
-            await self._notifier.send_message(chat_id, msg_text, reply_to_message_id=message_id)
+                await self._notifier.send_message(chat_id, msg_text, reply_to_message_id=message_id)
 
         else:
             await self._notifier.send_message(chat_id, f"Unknown action: {action}", reply_to_message_id=message_id)

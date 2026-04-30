@@ -30,6 +30,8 @@ class JiraAdapter(TrackerInterface):
         statuses: dict[str, str] | None = None,
     ) -> None:
         self._url = url.rstrip("/")
+        self._email = email
+        self._token = token
         self._project_key = project_key
         self._trigger_labels = trigger_labels or ["ai-pipeline"]
         self._ignore_labels = ignore_labels or []
@@ -235,9 +237,31 @@ class JiraAdapter(TrackerInterface):
 
 def _extract_adf_text(adf: dict) -> str:
     """Extract plain text from Atlassian Document Format."""
-    texts = []
-    for content in adf.get("content", []):
-        for item in content.get("content", []):
-            if item.get("type") == "text":
-                texts.append(item.get("text", ""))
-    return "\n".join(texts)
+    lines: list[str] = []
+
+    def walk(node: dict, buf: list[str]) -> None:
+        ntype = node.get("type")
+        if ntype == "text":
+            buf.append(node.get("text", ""))
+            return
+        if ntype == "hardBreak":
+            buf.append("\n")
+            return
+        # Block-level nodes flush the current line buffer before/after
+        block = ntype in {"paragraph", "listItem", "heading", "blockquote",
+                          "codeBlock", "tableRow", "tableHeader", "tableCell",
+                          "orderedList", "bulletList"}
+        if block:
+            inner: list[str] = []
+            for child in node.get("content", []) or []:
+                walk(child, inner)
+            text = "".join(inner).strip()
+            if text:
+                lines.append(text)
+        else:
+            for child in node.get("content", []) or []:
+                walk(child, buf)
+
+    for child in adf.get("content", []) or []:
+        walk(child, [])
+    return "\n".join(lines)

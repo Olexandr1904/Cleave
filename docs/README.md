@@ -1,7 +1,7 @@
 # Sickle — Project Reference
 
 > Single-file context document for AI agents and contributors.
-> Last updated: 2026-04-08 (after Phase 4 implementation).
+> Last updated: 2026-04-24.
 
 ---
 
@@ -40,7 +40,7 @@ Jira Poll                                              Telegram
          DONE (notify human, await merge)
 ```
 
-**13 pipeline states:** NEW, ANALYSIS, DEV, SCOPE_CHECK, QA, PUSHED, PR_REVIEW, DONE, BLOCKED, FAILED, ARCHIVED, AWAITING_APPROVAL, MANUAL_CONTROL
+**14 pipeline states:** NEW, ANALYSIS, DEV, SCOPE_CHECK, QA, PUSHED, PR_REVIEW, DONE, BLOCKED, FAILED, ARCHIVED, AWAITING_APPROVAL, MANUAL_CONTROL, DEFERRED
 
 **State machine:** File-based (`state.json`), atomic writes (temp + rename), BLOCKED stores `previous_state` for resume.
 
@@ -48,7 +48,7 @@ Jira Poll                                              Telegram
 
 ## Agents
 
-8 BMAD-style agents, each a markdown file in `agents/` with YAML frontmatter declaring tools, inputs, outputs:
+9 BMAD-style agents, each a markdown file in `agents/` with YAML frontmatter declaring tools, inputs, outputs:
 
 | Agent | ID | Role | Tools |
 |-------|----|------|-------|
@@ -59,6 +59,7 @@ Jira Poll                                              Telegram
 | QA (Quinn) | qa-agent | Test writing, lint/test/build gates | all 6 tools |
 | Fix (Fixer) | fix-agent | Fix code based on review comments | all 6 tools |
 | PR Comment Responder (Rivera) | pr-comment-responder-agent | Classify PR comments with extreme skepticism | read_file, list_directory, search_code |
+| Project Setup (Atlas) | project-setup-agent | Onboard new projects with guided Q&A and config generation | read_file, list_directory, search_code |
 | Merge (legacy) | merge-agent | Not used in v2 — merge is human's job | - |
 
 **6 sandboxed tools:** read_file, write_file, list_directory, search_code, run_command, git_operation
@@ -101,10 +102,19 @@ integrations/
   llm/llm_interface.py           # Abstract: LLMInterface
   llm/claude_adapter.py          # Anthropic API adapter (needs API key)
   llm/claude_code_adapter.py     # Claude Code CLI adapter (uses Max sub)
+dashboard/
+  web.py                         # Flask web server
+  actions.py                     # Dashboard action handlers
+  events.py                      # Event definitions
+  event_store.py                 # Structured event log storage
+  atlas_runner.py                # Project setup agent integration
+health/                          # Per-project health validators
 agents/                          # BMAD agent prompt files (.md)
 workflows/default-workflow.yaml  # Stage definitions and transitions
 config-live/                     # Real deployment config (env vars for secrets)
-tests/unit/                      # 239 unit tests
+deploy/                          # Systemd service files
+scripts/                         # Helper/utility scripts
+tests/                           # 761 unit tests across 66 files
 ```
 
 ### Config Cascade
@@ -129,9 +139,9 @@ Secrets via `${ENV_VAR}` references resolved at load time.
 /data/sickle/{company}/{repo}/tickets/{ticket_id}/
   state.json        # Pipeline state (atomic writes)
   meta/             # ticket.md, parent.md (input data)
-  reports/          # Agent outputs (ba.md, developer.md, qa.md, etc.)
   logs/             # Per-agent execution logs
   source/           # Git clone (deleted after merge, rest preserved)
+    reports/        # Agent outputs (ba.md, developer.md, qa.md, etc.)
 ```
 
 ---
@@ -149,33 +159,35 @@ Secrets via `${ENV_VAR}` references resolved at load time.
 
 ---
 
-## Current Status (2026-04-08)
+## Current Status (2026-04-24)
 
-### Implemented (Phases 1-4)
-- State machine with 13 states and BLOCKED/resume (incl. AWAITING_APPROVAL, MANUAL_CONTROL)
+### Implemented
+- State machine with 14 states incl. BLOCKED/resume, DEFERRED/quota-recovery
 - Multi-company workspace hierarchy
 - Config schemas with VCS/CI provider abstraction
 - Workflow router with 8-stage pipeline
 - Tool sandbox (6 tools, path restriction, protected files)
-- Claude Code CLI adapter
+- Claude Code CLI adapter with TOOL_MAP for agent tool mapping
 - Agent runtime with tool_use loop (API) and CLI subprocess paths
 - Orchestrator: Jira polling, workspace creation, agent dispatch, push/PR, Telegram escalation
-- All 8 agent prompt files with v2 metadata
-- Real config for Acme/Acme App (acme/acme-app)
-- 239 passing unit tests
+- Jira adapter (TrackerInterface implementation)
+- GitHub adapter (VCSInterface implementation)
+- All 9 agent prompt files with v2 metadata (incl. Atlas project-setup agent)
+- Dashboard with structured event log, per-project ticket history, real-time refresh
+- Per-project health validators (Jira, VCS, git identity, git remote)
+- Agent permissions via `.claude/settings.json` and per-agent tool allowlists
+- 761 passing unit tests across 66 test files
 
-### Not Yet Implemented (Phases 5-6)
+### Not Yet Implemented
 - GitLab adapter (`integrations/gitlab/`)
 - Jenkins adapter (`integrations/jenkins/`)
 - CI interface (`integrations/base/ci.py`)
 - Multi-company simultaneous operation (config exists, not tested)
 - Reopen detection (ticket changed after processing)
-- Systemd deployment, log rotation, monitoring
-- First real end-to-end ticket run
 
 ### Integration Endpoints
-- **Jira:** acme.atlassian.net, project ACME, trigger label `ai-pipeline`
-- **GitHub:** acme/acme-app
+- **Jira:** Acme Mobile Atlassian, project ACME, trigger label `ai-pipeline`
+- **GitHub:** Acme Mobile/acme-mobile
 - **Telegram:** bot configured, chat_id set
 - **Claude:** via Claude Code CLI (no API key)
 

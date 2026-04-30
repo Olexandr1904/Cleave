@@ -77,7 +77,7 @@ services or escalate privileges — API calls go through Sickle's own adapters).
 
 **How agents get their tools:**
 1. Each agent's `.md` frontmatter lists allowed tools (e.g., `tools: [read_file, write_file, git_operation]`)
-2. `AgentRuntime` maps these to Claude Code tool names via `TOOL_MAP`
+2. `ClaudeCodeAdapter` maps these to Claude Code tool names via `TOOL_MAP` (in `integrations/llm/claude_code_adapter.py`)
 3. The CLI is invoked with `--allowedTools Read,Write,Edit,Bash,Glob,Grep,LS`
 4. `.claude/settings.json` pre-approves these so `claude -p` runs non-interactively
 

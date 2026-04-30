@@ -52,7 +52,13 @@ Both default to `None` — existing callers are unaffected.
 | Deferred | `Orchestrator._notify_deferred` | `[Retry Now]` | `retry:TICKET` |
 | Escalation / BLOCKED | `Orchestrator._handle_escalate` | **None** | N/A — free-text reply only |
 
-Existing text hints in message bodies ("Reply: proceed or reject", etc.) stay as fallback.
+## Button Rule
+
+**When a Telegram message expects a discrete action (approve, reject, retry, reviewed, skip), it MUST have inline buttons. The message text MUST NOT contain reply hints for actions covered by buttons** (e.g. no "Reply: proceed or reject" when `[Approve] [Reject]` buttons exist).
+
+Messages that require **free-text input** (escalation answers, PR comment decisions with "won't fix [reason]") keep their text hints and do not get buttons for those actions.
+
+**Informational messages** (pipeline complete, PR review summary) have no user action and no buttons.
 
 ## Callback Flow
 

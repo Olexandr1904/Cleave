@@ -378,10 +378,13 @@ function bindActionButtons(ticketId, ws, stateVal, onBack) {
 
   // Pause
   const pauseBtn = document.getElementById('act-pause');
+  console.log('[detail-pause] button found:', !!pauseBtn, 'state:', stateVal, 'ticket:', ticketId);
   if (pauseBtn) {
     pauseBtn.addEventListener('click', async () => {
+      console.log('[detail-pause] click on ticket', ticketId);
       try {
         const result = await pauseWorkspace(ticketId, false);
+        console.log('[detail-pause] response', result);
         if (result && result.status === 'agent_running') {
           showConfirmDialog(
             `Pause ${ticketId}?`,
@@ -405,12 +408,18 @@ function bindActionButtons(ticketId, ws, stateVal, onBack) {
 
   // Unpause
   const unpauseBtn = document.getElementById('act-unpause');
+  console.log('[detail-unpause] button found:', !!unpauseBtn, 'state:', stateVal, 'ticket:', ticketId);
   if (unpauseBtn) {
     unpauseBtn.addEventListener('click', async () => {
+      console.log('[detail-unpause] click on ticket', ticketId);
       try {
-        await unpauseWorkspace(ticketId);
+        const result = await unpauseWorkspace(ticketId);
+        console.log('[detail-unpause] response', result);
         await renderDetail(ticketId, onBack);
-      } catch (e) { alert('Unpause failed: ' + e.message); }
+      } catch (e) {
+        console.error('[detail-unpause] failed', e);
+        alert('Unpause failed: ' + e.message);
+      }
     });
   }
 

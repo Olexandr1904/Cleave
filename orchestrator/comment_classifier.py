@@ -10,6 +10,7 @@ from typing import Any
 logger = logging.getLogger(__name__)
 
 VALID_CLASSIFICATIONS = {"AUTO_FIX", "AUTO_REJECT", "ESCALATE"}
+VALID_VERDICTS = {"Valid", "Not valid"}
 
 
 @dataclass
@@ -18,6 +19,7 @@ class ClassifiedComment:
     classification: str  # AUTO_FIX | AUTO_REJECT | ESCALATE
     reason: str
     suggested_fix: str = ""
+    verdict: str = "Unsure"
     author: str = ""
     file: str = ""
     line: int | None = None
@@ -54,11 +56,19 @@ def parse_classifications(raw_output: str) -> list[ClassifiedComment]:
         classification = item.get("classification", "ESCALATE")
         if classification not in VALID_CLASSIFICATIONS:
             classification = "ESCALATE"
+        verdict = item.get("verdict", "")
+        if verdict not in VALID_VERDICTS:
+            logger.warning(
+                "Comment %s missing or invalid verdict %r — defaulting to Unsure",
+                item.get("comment_id"), verdict,
+            )
+            verdict = "Unsure"
         results.append(ClassifiedComment(
             comment_id=item.get("comment_id", 0),
             classification=classification,
             reason=item.get("reason", "classification missing"),
             suggested_fix=item.get("suggested_fix", ""),
+            verdict=verdict,
         ))
     return results
 

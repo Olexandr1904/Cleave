@@ -7,6 +7,13 @@ Agent that classifies and triages PR review comments. Operates with extreme skep
 - Output: `reports/pr-comments.md` with classified comments
 - Extreme skepticism ported from existing PR review workflow rules
 
+## Comment Classifier
+
+`orchestrator/comment_classifier.py` parses the agent's JSON output into `ClassifiedComment` objects.
+
+- `VALID_CLASSIFICATIONS`: `AUTO_FIX`, `AUTO_REJECT`, `ESCALATE` — unknown values default to `ESCALATE`
+- `verdict` field: `"Valid"` | `"Not valid"` — missing or unknown values default to `"Unsure"` with a warning log
+
 ## Resolution Report
 
 `orchestrator/resolution_report.py` — single source of truth for PR comment decisions. Each comment gets one permanent entry; decisions persist across review cycles.

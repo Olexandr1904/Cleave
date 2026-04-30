@@ -131,8 +131,14 @@ def _maybe_backfill_title(ws_root: Path, data: dict) -> str:
 def _scan_all_workspaces(
     base_dir: str,
     projects: dict[str, Any] | None = None,
+    default_model: str = "",
 ) -> list[dict[str, Any]]:
-    """Scan workspace base_dir for ALL workspaces (including terminal states)."""
+    """Scan workspace base_dir for ALL workspaces (including terminal states).
+
+    `default_model` is used to backfill the model pill on legacy workspaces
+    whose state.json predates the per-ticket model snapshot. Pass "" to skip
+    backfilling (callers that don't need pills).
+    """
     base = Path(base_dir)
     if not base.exists():
         return []
@@ -149,7 +155,7 @@ def _scan_all_workspaces(
             meta_dir = ws_root / "meta"
             meta = sorted(f.name for f in meta_dir.iterdir() if f.is_file()) if meta_dir.exists() else []
             kind = "setup" if ws_root.name == "setup" else "ticket"
-            model_id = data.get("model", "")
+            model_id = data.get("model", "") or default_model
             results.append({
                 "ticket_id": data.get("ticket_id", ""),
                 "company_id": data.get("company_id", ""),
@@ -223,8 +229,16 @@ def create_app(
 
     async def get_workspaces(request: Request) -> JSONResponse:
         """Return all workspaces from disk, optionally filtered by project."""
+        from dashboard.settings_store import get_model
         project_id = request.query_params.get("project_id")
-        workspaces = _scan_all_workspaces(workspace_base_dir, projects)
+        # Read the global default once so legacy workspaces (state.model == "")
+        # still get a model pill on the dashboard.
+        try:
+            async with aiosqlite.connect(store._db_path) as conn:
+                default_model = await get_model(conn)
+        except Exception:
+            default_model = ""
+        workspaces = _scan_all_workspaces(workspace_base_dir, projects, default_model)
         if project_id:
             workspaces = [w for w in workspaces if w["company_id"] == project_id]
         # Sort: active first (by state order), then by last_updated_at descending

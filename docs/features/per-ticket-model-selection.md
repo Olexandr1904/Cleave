@@ -1,6 +1,6 @@
 # Feature: Per-Ticket Model Selection via Jira Label
 
-**Status:** In Progress
+**Status:** Implemented
 **Created:** 2026-04-30
 **Updated:** 2026-04-30
 **Author:** Oleksandr Brazhenko

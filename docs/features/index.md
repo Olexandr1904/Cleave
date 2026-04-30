@@ -23,4 +23,4 @@
 | 16 | [Dashboard & Event Log](dashboard.md) | Implemented | Local web dashboard with structured event log, per-project ticket history, and real-time auto-refresh |
 | 17 | [Project Health + Stage Verification](dashboard.md#fr16) | Implemented | Per-project validators (Jira, vcs, git identity, git remote) + mechanical post-stage checks → BLOCKED on failure |
 | 18 | [Agent Permissions](agent-permissions.md) | Implemented | Project-level `.claude/settings.json` pre-approves tools for non-interactive pipeline agents, per-agent tool lists in frontmatter, CLI `--allowedTools` enforcement |
-| 19 | [Per-Ticket Model Selection](per-ticket-model-selection.md) | In Progress | Jira label `model-haiku` / `model-opus` / `model-sonnet` overrides the Claude model for that ticket; snapshotted at workspace creation |
+| 19 | [Per-Ticket Model Selection](per-ticket-model-selection.md) | Implemented | Jira label `model-haiku` / `model-opus` / `model-sonnet` overrides the Claude model for that ticket; snapshotted at workspace creation |

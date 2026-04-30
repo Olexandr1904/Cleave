@@ -8,6 +8,7 @@ from unittest.mock import AsyncMock
 import pytest
 
 from config.resource_registry import discover_resources
+from config.schemas import AgentBudget
 from integrations.llm.llm_interface import LLMResponse, ToolUseRequest
 from orchestrator.agent_runtime import AgentRuntime, HARD_SAFETY_RULES
 from workspace.workspace import Workspace, WorkspaceState
@@ -124,6 +125,30 @@ class TestAssemblePrompt:
         assert "Operator Profile" in prompt
         assert "Tech Lead" in prompt
 
+    def test_total_context_budget_caps_many_files(self, registry, mock_llm, workspace):
+        """Many context files are truncated at the total budget, not unbounded.
+
+        Without the cap, N files of `_PER_FILE_CONTEXT_BYTES` each could blow
+        past the model's prompt window silently.
+        """
+        from orchestrator.agent_runtime import _PER_FILE_CONTEXT_BYTES, _TOTAL_CONTEXT_BYTES
+
+        # Write enough files to overshoot the total budget by ~3x. Use a
+        # distinctive payload so we can count only context-file bytes (the
+        # agent body and safety rules have no 'Z's).
+        marker = "Z"
+        files_needed = (_TOTAL_CONTEXT_BYTES // _PER_FILE_CONTEXT_BYTES) * 3
+        for i in range(files_needed):
+            (workspace.meta_dir / f"ctx_{i:03d}.txt").write_text(marker * _PER_FILE_CONTEXT_BYTES)
+
+        runtime = AgentRuntime(registry, mock_llm)
+        agent = registry.get_agent("dev-agent")
+        prompt = runtime.assemble_prompt(agent, workspace)
+
+        # Total context payload is bounded by the budget (no slack — the
+        # implementation enforces a hard ceiling).
+        assert prompt.count(marker) <= _TOTAL_CONTEXT_BYTES
+
 
 class TestExecute:
     async def test_successful_execution(self, registry, mock_llm, workspace):
@@ -229,6 +254,87 @@ class TestToolUseExecution:
         tool_log = workspace.logs_dir / "test-tool-agent-tools.log"
         assert tool_log.exists()
         assert "read_file" in tool_log.read_text()
+
+    async def test_token_budget_stops_loop(self, registry, mock_llm, workspace):
+        """Total-token budget ends the tool loop before max_tool_rounds."""
+        tool_response = LLMResponse(
+            content="",
+            input_tokens=600,
+            output_tokens=400,  # 1000 tokens per round
+            model="claude-sonnet-4-5",
+            tool_use=[
+                ToolUseRequest(id="c", name="read_file", input={"path": "main.py"}),
+            ],
+            stop_reason="tool_use",
+        )
+        mock_llm.send_message.return_value = tool_response
+        mock_llm.send_tool_results.return_value = tool_response
+
+        (workspace.source_dir / "main.py").write_text("x = 1\n")
+
+        from config.resource_registry import AgentEntry
+        agent = AgentEntry(
+            id="token-budget-agent",
+            name="Token Budget Agent",
+            resource_type="agents",
+            file_path=str(Path(PROJECT_ROOT) / "agents" / "ba-agent.md"),
+            metadata={"tools": ["read_file"]},
+        )
+        registry.add("agents", agent)
+
+        # Budget allows ~3 rounds before tokens exceed 2500 (first call adds
+        # 1000, then each round adds 1000). Round cap is high so token cap
+        # is what trips first.
+        budget = AgentBudget(
+            max_tool_rounds=100, wall_clock_seconds=60, max_total_tokens=2500,
+        )
+        runtime = AgentRuntime(registry, mock_llm, default_budget=budget)
+        result = await runtime.execute("token-budget-agent", workspace)
+
+        assert result.success is False
+        assert result.failure_kind == "permanent"
+        assert result.error is not None
+        assert result.error.startswith("token_budget_exceeded")
+        # We expect to break before hitting 100 rounds
+        assert result.tool_rounds < 100
+
+    async def test_per_agent_budget_override(self, registry, mock_llm, workspace):
+        """Overrides keyed by agent id beat the default budget."""
+        tool_response = LLMResponse(
+            content="",
+            input_tokens=100, output_tokens=50,
+            model="claude-sonnet-4-5",
+            tool_use=[ToolUseRequest(id="c", name="read_file", input={"path": "m.py"})],
+            stop_reason="tool_use",
+        )
+        mock_llm.send_message.return_value = tool_response
+        mock_llm.send_tool_results.return_value = tool_response
+
+        (workspace.source_dir / "m.py").write_text("x = 1\n")
+
+        from config.resource_registry import AgentEntry
+        agent = AgentEntry(
+            id="override-agent",
+            name="Override Agent",
+            resource_type="agents",
+            file_path=str(Path(PROJECT_ROOT) / "agents" / "ba-agent.md"),
+            metadata={"tools": ["read_file"]},
+        )
+        registry.add("agents", agent)
+
+        # Default budget would allow 25 rounds; override caps this agent at 2.
+        runtime = AgentRuntime(
+            registry, mock_llm,
+            default_budget=AgentBudget(max_tool_rounds=25),
+            budget_overrides={
+                "override-agent": AgentBudget(max_tool_rounds=2),
+            },
+        )
+        result = await runtime.execute("override-agent", workspace)
+
+        assert result.success is False
+        assert result.error == "max_tool_rounds_exhausted"
+        assert result.tool_rounds == 2
 
     async def test_max_tool_rounds_limit(self, registry, mock_llm, workspace):
         """Agent stops after max_tool_rounds even if LLM keeps requesting tools."""

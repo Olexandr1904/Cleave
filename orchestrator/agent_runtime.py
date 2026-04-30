@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import time
 from dataclasses import dataclass, field
@@ -10,6 +11,7 @@ from pathlib import Path
 from typing import Any
 
 from config.resource_registry import AgentEntry, ResourceRegistry
+from config.schemas import AgentBudget
 from integrations.llm.llm_interface import LLMInterface, LLMResponse
 from orchestrator.tool_sandbox import ToolSandbox, get_tool_definitions
 from workspace.workspace import Workspace
@@ -23,7 +25,16 @@ except ImportError:
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_MAX_TOOL_ROUNDS = 50
+# Conservative defaults. The previous 50-round value let runaway agents chew
+# enormous quota before tripping. Override per-agent via DefaultsConfig.
+DEFAULT_MAX_TOOL_ROUNDS = 25
+
+# Per-file truncation cap and total context budget across all files in
+# meta_dir. The total cap protects the model context window when a workspace
+# accumulates many context files; without it, N context files of 5KB each can
+# silently overflow the prompt.
+_PER_FILE_CONTEXT_BYTES = 5000
+_TOTAL_CONTEXT_BYTES = 100_000
 
 
 @dataclass
@@ -52,13 +63,23 @@ class AgentRuntime:
         operator_profile: str = "",
         max_tool_rounds: int = DEFAULT_MAX_TOOL_ROUNDS,
         event_bus: Any | None = None,
+        default_budget: AgentBudget | None = None,
+        budget_overrides: dict[str, AgentBudget] | None = None,
     ) -> None:
         self._registry = registry
         self._llm = llm
         self._operator_profile = operator_profile
-        self._max_tool_rounds = max_tool_rounds
+        # Backward-compat: callers passing only `max_tool_rounds` still work —
+        # we synthesize an AgentBudget that overrides only that field.
+        self._default_budget = default_budget or AgentBudget(max_tool_rounds=max_tool_rounds)
+        self._budget_overrides = budget_overrides or {}
+        # Kept so existing accessors / logs read a sensible value.
+        self._max_tool_rounds = self._default_budget.max_tool_rounds
         self._events = event_bus
         self._running: dict[str, dict[str, Any]] = {}  # ticket_id -> {agent_id, pid, started_at}
+
+    def _budget_for(self, agent_id: str) -> AgentBudget:
+        return self._budget_overrides.get(agent_id, self._default_budget)
 
     def _get_agent_tools(self, agent: AgentEntry) -> list[str]:
         """Extract tool allowlist from agent metadata."""
@@ -160,18 +181,30 @@ class AgentRuntime:
         # Note: reports/ is inside source/ — agent reads them directly via tools
         context_sections: list[str] = []
         context_dir = workspace.meta_dir
+        total_bytes = 0
         if context_dir.exists():
             for ctx_file in sorted(context_dir.iterdir()):
-                if ctx_file.is_file():
-                    try:
-                        file_content = ctx_file.read_text(encoding="utf-8")
-                        if len(file_content) > 5000:
-                            file_content = file_content[:5000] + "\n...(truncated)"
-                        context_sections.append(
-                            f"<context file=\"{ctx_file.name}\">\n{file_content}\n</context>"
-                        )
-                    except (UnicodeDecodeError, OSError):
-                        pass
+                if not ctx_file.is_file():
+                    continue
+                if total_bytes >= _TOTAL_CONTEXT_BYTES:
+                    logger.warning(
+                        "Context budget %d B exhausted; skipping remaining files in %s",
+                        _TOTAL_CONTEXT_BYTES, context_dir,
+                    )
+                    break
+                try:
+                    file_content = ctx_file.read_text(encoding="utf-8")
+                except (UnicodeDecodeError, OSError):
+                    continue
+                if len(file_content) > _PER_FILE_CONTEXT_BYTES:
+                    file_content = file_content[:_PER_FILE_CONTEXT_BYTES] + "\n...(truncated)"
+                remaining = _TOTAL_CONTEXT_BYTES - total_bytes
+                if len(file_content) > remaining:
+                    file_content = file_content[:remaining] + "\n...(budget exhausted)"
+                context_sections.append(
+                    f"<context file=\"{ctx_file.name}\">\n{file_content}\n</context>"
+                )
+                total_bytes += len(file_content)
 
         if context_sections:
             prompt_body += "\n\n## Workspace Context\n\n" + "\n\n".join(context_sections)
@@ -218,6 +251,7 @@ class AgentRuntime:
 
         # Get agent's tool allowlist
         allowed_tools = self._get_agent_tools(agent)
+        budget = self._budget_for(agent_id)
 
         try:
             prompt = self.assemble_prompt(agent, workspace, extra_context)
@@ -226,14 +260,14 @@ class AgentRuntime:
             # Choose execution path based on adapter type
             if ClaudeCodeAdapter is not None and isinstance(self._llm, ClaudeCodeAdapter):
                 result = await self._execute_cli(
-                    agent_id, prompt, model, workspace, allowed_tools,
+                    agent_id, prompt, model, workspace, allowed_tools, budget,
                 )
             elif allowed_tools:
                 result = await self._execute_with_tools(
-                    agent_id, prompt, model, workspace, allowed_tools, protected_files,
+                    agent_id, prompt, model, workspace, allowed_tools, protected_files, budget,
                 )
             else:
-                result = await self._execute_simple(agent_id, prompt, model, workspace)
+                result = await self._execute_simple(agent_id, prompt, model, workspace, budget)
 
             result.duration_seconds = time.time() - start_time
 
@@ -289,12 +323,26 @@ class AgentRuntime:
         prompt: str,
         model: str,
         workspace: Workspace,
+        budget: AgentBudget,
     ) -> AgentResult:
         """Execute agent without tools (single LLM call)."""
-        response: LLMResponse = await self._llm.send_message(
-            prompt=prompt,
-            model=model,
-        )
+        try:
+            response: LLMResponse = await asyncio.wait_for(
+                self._llm.send_message(prompt=prompt, model=model),
+                timeout=budget.wall_clock_seconds,
+            )
+        except asyncio.TimeoutError:
+            logger.warning(
+                "Agent '%s' wall-clock budget exceeded (%ds)",
+                agent_id, budget.wall_clock_seconds,
+            )
+            return AgentResult(
+                agent_id=agent_id,
+                success=False,
+                output="",
+                error=f"wall_clock_budget_exceeded ({budget.wall_clock_seconds}s)",
+                failure_kind="permanent",
+            )
 
         # Write output
         output_path = workspace.reports_dir / f"{agent_id}-output.md"
@@ -315,23 +363,44 @@ class AgentRuntime:
         model: str,
         workspace: Workspace,
         allowed_tools: list[str],
+        budget: AgentBudget,
     ) -> AgentResult:
         """Execute agent via Claude Code CLI (subprocess).
 
-        Claude Code handles its own tool loop internally.
-        We pass --allowedTools and --cwd to control access.
+        Claude Code handles its own tool loop internally — our max_tool_rounds
+        and token budgets don't apply here. We enforce the wall-clock budget
+        only; if it trips, asyncio.wait_for cancels the awaitable and the
+        adapter terminates the subprocess via its pid_callback registration.
         """
         adapter: ClaudeCodeAdapter = self._llm  # type: ignore[assignment]
 
         ticket_id = workspace.state.ticket_id
         self.register_running(ticket_id, agent_id, pid=0)
         try:
-            response = await adapter.execute_in_workspace(
-                prompt=prompt,
-                cwd=str(workspace.source_dir),
-                allowed_tools=allowed_tools if allowed_tools else None,
-                model=model,
-                pid_callback=lambda pid: self.update_pid(ticket_id, pid),
+            response = await asyncio.wait_for(
+                adapter.execute_in_workspace(
+                    prompt=prompt,
+                    cwd=str(workspace.source_dir),
+                    allowed_tools=allowed_tools if allowed_tools else None,
+                    model=model,
+                    pid_callback=lambda pid: self.update_pid(ticket_id, pid),
+                ),
+                timeout=budget.wall_clock_seconds,
+            )
+        except asyncio.TimeoutError:
+            # Kill the subprocess we registered so it doesn't keep running
+            # detached after wait_for cancels the awaitable.
+            self.cancel(ticket_id)
+            logger.warning(
+                "Agent '%s' wall-clock budget exceeded (%ds), CLI killed",
+                agent_id, budget.wall_clock_seconds,
+            )
+            return AgentResult(
+                agent_id=agent_id,
+                success=False,
+                output="",
+                error=f"wall_clock_budget_exceeded ({budget.wall_clock_seconds}s)",
+                failure_kind="permanent",
             )
         finally:
             self.unregister_running(ticket_id)
@@ -356,8 +425,9 @@ class AgentRuntime:
         workspace: Workspace,
         allowed_tools: list[str],
         protected_files: list[str] | None,
+        budget: AgentBudget,
     ) -> AgentResult:
-        """Execute agent with tool_use loop."""
+        """Execute agent with tool_use loop, bounded by `budget`."""
         sandbox = ToolSandbox(
             workspace_root=str(workspace.root),
             allowed_tools=allowed_tools,
@@ -369,6 +439,8 @@ class AgentRuntime:
         total_output = 0
         total_tool_calls = 0
         rounds = 0
+        loop_start = time.monotonic()
+        budget_exceeded: str | None = None  # which budget tripped, if any
 
         # First call
         response = await self._llm.send_message(
@@ -385,8 +457,20 @@ class AgentRuntime:
             {"role": "assistant", "content": self._build_assistant_content(response)},
         ]
 
-        # Tool loop
-        while response.tool_use and rounds < self._max_tool_rounds:
+        # Tool loop. Three bounds end it: round cap (loop predicate),
+        # wall-clock, total tokens. The latter two are checked at the loop
+        # boundary because they only become meaningful after a round.
+        while response.tool_use and rounds < budget.max_tool_rounds:
+            elapsed = time.monotonic() - loop_start
+            if elapsed > budget.wall_clock_seconds:
+                budget_exceeded = f"wall_clock_budget_exceeded ({int(elapsed)}s)"
+                break
+            if total_input + total_output > budget.max_total_tokens:
+                budget_exceeded = (
+                    f"token_budget_exceeded ({total_input + total_output} tokens)"
+                )
+                break
+
             rounds += 1
             tool_results = []
 
@@ -423,13 +507,19 @@ class AgentRuntime:
                 {"role": "assistant", "content": self._build_assistant_content(response)}
             )
 
-        # If the loop exited because we hit the round cap with tool calls still
-        # pending, the agent never produced a final answer. Don't claim success.
-        hit_max_rounds = rounds >= self._max_tool_rounds and bool(response.tool_use)
+        # If the loop exited with tool calls still pending, the agent never
+        # produced a final answer. Surface which budget ended it.
+        hit_max_rounds = (
+            rounds >= budget.max_tool_rounds
+            and bool(response.tool_use)
+            and budget_exceeded is None
+        )
         if hit_max_rounds:
             logger.warning(
-                "Agent '%s' hit max tool rounds (%d)", agent_id, self._max_tool_rounds,
+                "Agent '%s' hit max tool rounds (%d)", agent_id, budget.max_tool_rounds,
             )
+        elif budget_exceeded is not None:
+            logger.warning("Agent '%s' %s", agent_id, budget_exceeded)
 
         # Write final output
         output_path = workspace.reports_dir / f"{agent_id}-output.md"
@@ -446,16 +536,23 @@ class AgentRuntime:
                 )
             log_path.write_text("\n".join(lines), encoding="utf-8")
 
+        if hit_max_rounds:
+            error = "max_tool_rounds_exhausted"
+        elif budget_exceeded is not None:
+            error = budget_exceeded
+        else:
+            error = None
+
         return AgentResult(
             agent_id=agent_id,
-            success=not hit_max_rounds,
+            success=error is None,
             output=response.content,
             input_tokens=total_input,
             output_tokens=total_output,
             tool_calls=total_tool_calls,
             tool_rounds=rounds,
-            error="max_tool_rounds_exhausted" if hit_max_rounds else None,
-            failure_kind="permanent" if hit_max_rounds else None,
+            error=error,
+            failure_kind="permanent" if error is not None else None,
         )
 
     def _build_assistant_content(self, response: LLMResponse) -> list[dict[str, Any]]:

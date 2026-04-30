@@ -16,6 +16,7 @@ from typing import Any
 import yaml
 
 from config.schemas import (
+    AgentBudget,
     ArchitectureConfig,
     BuildConfig,
     CIConfig,
@@ -202,13 +203,48 @@ def _parse_jira_section(data: dict, file_path: str) -> JiraConfig:
         raise ConfigError(f"Invalid fields in 'jira': {e}", file_path=file_path, field="jira") from e
 
 
+def _parse_agent_budget(data: dict, file_path: str, where: str) -> AgentBudget:
+    try:
+        return AgentBudget(**data)
+    except TypeError as e:
+        raise ConfigError(
+            f"Invalid fields in '{where}': {e}", file_path=file_path, field=where,
+        ) from e
+
+
 def _parse_defaults_section(data: dict, file_path: str) -> DefaultsConfig:
-    """Parse defaults section, handling nested max_iterations."""
+    """Parse defaults section, handling nested max_iterations and agent budgets."""
     defaults_data = dict(data.get("defaults", {}) or {})
     max_iter_data = defaults_data.pop("max_iterations", None) or {}
     max_iterations = MaxIterationsConfig(**max_iter_data) if max_iter_data else MaxIterationsConfig()
+
+    budget_data = defaults_data.pop("agent_budget", None) or {}
+    agent_budget = (
+        _parse_agent_budget(budget_data, file_path, "defaults.agent_budget")
+        if budget_data
+        else AgentBudget()
+    )
+
+    overrides_raw = defaults_data.pop("agent_budget_overrides", None) or {}
+    if not isinstance(overrides_raw, dict):
+        raise ConfigError(
+            "'defaults.agent_budget_overrides' must be a mapping of agent_id -> budget",
+            file_path=file_path, field="defaults.agent_budget_overrides",
+        )
+    agent_budget_overrides: dict[str, AgentBudget] = {
+        agent_id: _parse_agent_budget(
+            cfg or {}, file_path, f"defaults.agent_budget_overrides.{agent_id}",
+        )
+        for agent_id, cfg in overrides_raw.items()
+    }
+
     try:
-        return DefaultsConfig(**defaults_data, max_iterations=max_iterations)
+        return DefaultsConfig(
+            **defaults_data,
+            max_iterations=max_iterations,
+            agent_budget=agent_budget,
+            agent_budget_overrides=agent_budget_overrides,
+        )
     except TypeError as e:
         raise ConfigError(f"Invalid fields in 'defaults': {e}", file_path=file_path, field="defaults") from e
 

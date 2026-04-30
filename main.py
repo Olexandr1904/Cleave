@@ -215,8 +215,17 @@ def main(argv: list[str] | None = None) -> int:
         if op.rules:
             operator_profile += "Rules:\n" + "\n".join(f"- {r}" for r in op.rules) + "\n"
 
-    # Initialize agent runtime
-    agent_runtime = AgentRuntime(registry, llm, operator_profile=operator_profile, event_bus=event_bus)
+    # Initialize agent runtime — propagate the configured per-agent budgets so
+    # runaway loops trip on rounds, wall-clock, or total tokens (whichever
+    # comes first) instead of silently chewing quota.
+    agent_runtime = AgentRuntime(
+        registry,
+        llm,
+        operator_profile=operator_profile,
+        event_bus=event_bus,
+        default_budget=global_config.defaults.agent_budget,
+        budget_overrides=global_config.defaults.agent_budget_overrides,
+    )
 
     # Initialize integration adapters
     tracker = None

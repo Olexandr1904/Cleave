@@ -29,6 +29,20 @@ def _write_human_input(workspace: Any, text: str) -> None:
     path.write_text(existing + entry, encoding="utf-8")
 
 
+def _ensure_msg_ids(c: dict) -> list[int]:
+    """Lazy migration: old entries had 'msg_id', new ones have 'msg_ids'.
+
+    Mutates c in place and returns the list.
+    """
+    if "msg_ids" in c:
+        return c["msg_ids"]
+    if "msg_id" in c:
+        c["msg_ids"] = [c.pop("msg_id")]
+        return c["msg_ids"]
+    c["msg_ids"] = []
+    return c["msg_ids"]
+
+
 class CommandHandler:
     """Routes incoming Telegram messages to the appropriate handler."""
 
@@ -458,7 +472,7 @@ class CommandHandler:
                 continue
             pending = ws.state.pending_review_comments or []
             for c in pending:
-                if c.get("msg_id") == reply_to_msg_id:
+                if reply_to_msg_id in _ensure_msg_ids(c):
                     raw = text.strip().lower()
                     if raw in ("fix", "fxi", "fifx", "fixx", "fx", "fi", "yes", "fix it"):
                         decision = "fix"

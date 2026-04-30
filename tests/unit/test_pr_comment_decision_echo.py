@@ -229,3 +229,29 @@ async def test_text_reply_freeform_shows_dropped_label():
     msg = notifier.send_message.call_args.args[1]
     assert "SKIP" in msg.upper()
     assert "looks fine to me" in msg.lower()  # echoed so user can reconsider
+
+
+@pytest.mark.asyncio
+async def test_reply_matches_against_msg_ids_list():
+    """Reply matching must work whether comment has 'msg_id' (old) or 'msg_ids' (new)."""
+    handler = CommandHandler.__new__(CommandHandler)
+    handler._allowed_chat_ids = None
+    handler._notifier = MagicMock()
+    handler._notifier.send_message = AsyncMock()
+    handler._events = None
+
+    ws = MagicMock()
+    ws.state = SimpleNamespace(
+        current_state="PR_REVIEW", ticket_id="T-1",
+        pending_review_comments=[
+            {"comment_id": 1, "msg_ids": [100, 200], "decision": None,
+             "author": "C", "file": "x.kt", "line": 1, "body": "b", "reason": "r",
+             "verdict": "Valid", "hint_rounds": 0, "last_hint": None,
+             "pending_reinvestigation": False},
+        ],
+    )
+    handler._active_workspaces_fn = lambda: [ws]
+
+    matched = await handler.handle_reply(reply_to_msg_id=200, text="fix", chat_id="c-1")
+    assert matched is True
+    assert ws.state.pending_review_comments[0]["decision"] == "fix"

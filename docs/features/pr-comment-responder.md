@@ -32,6 +32,12 @@ Agent that classifies and triages PR review comments. Operates with extreme skep
 - Verdict rendering: `"Valid"` / `"Not valid"` prefix the reason; any other verdict (e.g., `"Unsure"`) renders reason only
 - `recall=True` prefixes the message with `🔁 (still pending)` for the recall flow
 - Used by both `orchestrator.py` (initial escalation) and `command_handler.py` (recall flow)
+- `orchestrator._send_escalated_comment_tg` delegates entirely to this renderer — no inline message construction
+
+## Pending Comment Schema
+
+Each entry in `state.pending_review_comments` contains:
+`comment_id`, `msg_ids` (list of TG message IDs), `decision`, `author`, `file`, `line`, `body`, `reason`, `verdict`, `hint_rounds`, `last_hint`, `pending_reinvestigation`
 
 ## References
 - Contracts: `docs/agent-contracts.md` (Rivera — PR Comment Responder)

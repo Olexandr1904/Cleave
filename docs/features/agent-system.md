@@ -29,6 +29,18 @@ Pluggable AI agent system following the BMAD pattern. Each agent is a standalone
 - QA Agent — write tests, run suite + lint + build
 - Merge Agent — gate checklist, conflict resolution, merge, Jira transition
 
+### PR Review: Verdict, Hints, and Recall
+
+Each escalated PR comment carries a one-word verdict — **Valid** (the reviewer is correct) or **Not valid** (the reviewer is mistaken) — alongside the agent's reasoning. The verdict is the agent's own lean; the operator decides what to do.
+
+If the operator replies with neither `fix` nor `won't fix`, the free text is treated as a hint: the comment is re-classified by the responder agent with the operator's hint as context. Capped at 3 rounds per comment.
+
+Operators can recall pending comments via the `/unanswered` command (or `/unanswered <TICKET>` for one ticket) — both paths re-send each undecided comment with fresh Fix / Won't Fix buttons. Replies match against the original message OR any recall.
+
+Every comment receives a reply on GitHub at decision time: `Will fix: <reason>` for AUTO_FIX and operator-FIX paths, `Won't fix: <reason>` for AUTO_REJECT and operator-WON'T-FIX paths. Resolution happens later when the diff is verified.
+
+See: [docs/superpowers/specs/2026-04-30-pr-review-flow-improvements-design.md](../superpowers/specs/2026-04-30-pr-review-flow-improvements-design.md).
+
 ## Technical Approach
 
 - Agent prompt files stored in `agents/` directory as `.md` files

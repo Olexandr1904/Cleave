@@ -4,6 +4,8 @@
 **Created:** 2026-04-21
 **Author:** Oleksandr Brazhenko
 
+**See also:** [2026-04-30 PR Review Flow Improvements](2026-04-30-pr-review-flow-improvements-design.md) — adds verdict, re-investigation hint loop, and unanswered recall on top of this base flow.
+
 ## Problem
 
 After the pipeline pushes code and opens a PR, human reviewers leave comments. Today the pipeline has no way to:

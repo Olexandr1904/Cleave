@@ -425,7 +425,7 @@ class CommandHandler:
         processing_msg_id: int | None = None,
     ) -> None:
         """Resume a BLOCKED workspace with free-text input the user typed."""
-        blocked = [ws for ws in workspaces if ws.state.current_state == "BLOCKED"]
+        blocked = [ws for ws in workspaces if ws.state.current_state == Stage.BLOCKED]
         if not blocked:
             recent = self._format_recent_unblock_notice()
             if recent:

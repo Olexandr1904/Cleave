@@ -854,8 +854,7 @@ class CommandHandler:
             finally:
                 self._unanswered_via = None
 
-        elif action in ("pr_fix", "pr_skip", "pr_wontfix"):
-            # PR comment decision via button — ticket_id is "TICKET:COMMENT_ID"
+        elif action in ("pr_fix", "pr_wontfix"):
             parts = ticket_id.split(":", 1)
             tid = parts[0]
             comment_id_str = parts[1] if len(parts) > 1 else ""
@@ -864,39 +863,46 @@ class CommandHandler:
                 await self._notifier.send_message(chat_id, f"No pending comments for {tid}.", reply_to_message_id=message_id)
                 return
 
-            decision_map = {"pr_fix": "fix", "pr_skip": "skip", "pr_wontfix": "won't fix: operator decision"}
-            decision = decision_map[action]
-
             matched_comment = None
             for c in ws.state.pending_review_comments:
                 if str(c.get("comment_id")) == comment_id_str:
-                    c["decision"] = decision
+                    if action == "pr_fix":
+                        c["decision"] = "fix"
+                        stored_decision = "fix"
+                        recorded_label = "FIX"
+                        matched_token = "button:fix"
+                        btn_label = "'Fix' button"
+                        action_tail = "Dev-agent will re-engage"
+                    else:
+                        c["decision"] = "won't fix: operator decision"
+                        stored_decision = c["decision"]
+                        recorded_label = "WON'T FIX"
+                        matched_token = "button:wontfix"
+                        btn_label = "'Won't Fix' button"
+                        action_tail = 'Posting on GitHub: "operator decision"'
                     matched_comment = c
                     break
 
             if matched_comment is None:
-                await self._notifier.send_message(chat_id, f"Comment not found.", reply_to_message_id=message_id)
+                await self._notifier.send_message(chat_id, "Comment not found.", reply_to_message_id=message_id)
                 return
 
             ws.save_state()
-            # Echo what got recorded so operators see exactly what happened —
-            # button taps in TG are silent unless we explicitly confirm.
             file_line = f"{matched_comment.get('file','?')}:{matched_comment.get('line','?')}"
-            decision_label = {
-                "fix": "FIX (dev-agent will re-engage)",
-                "won't fix: operator decision": "WON'T FIX (will reply on GitHub)",
-                "skip": "SKIP (drop, no action)",
-            }.get(decision, decision.upper())
-            confirm = f"✓ Recorded {decision_label} for @{matched_comment.get('author','?')} on {file_line}"
+            confirm = (
+                f"✓ Recognized as {recorded_label} (matched: {btn_label}). "
+                f"{action_tail} on {file_line}."
+            )
             if self._events is not None:
                 self._events.emit(
                     "pr_comment_decision_recorded",
-                    f"{tid}: {decision} for comment {comment_id_str}",
+                    f"{tid}: {stored_decision} for comment {comment_id_str}",
                     ticket_id=tid,
                     data={
                         "comment_id": comment_id_str,
-                        "decision": decision,
+                        "decision": stored_decision,
                         "via": "button",
+                        "matched_token": matched_token,
                     },
                 )
 

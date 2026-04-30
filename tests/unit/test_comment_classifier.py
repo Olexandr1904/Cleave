@@ -3,6 +3,10 @@
 from __future__ import annotations
 
 import json
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, MagicMock
+
+import pytest
 
 from orchestrator.comment_classifier import ClassifiedComment, parse_classifications
 
@@ -92,3 +96,39 @@ class TestVerdict:
         }])
         result = parse_classifications(raw)
         assert result[0].verdict == "Unsure"
+
+
+class TestOperatorHint:
+    @pytest.mark.asyncio
+    async def test_operator_hint_threaded_to_agent_runtime(self):
+        from orchestrator.comment_classifier import classify_comments
+
+        runtime = MagicMock()
+        result = MagicMock()
+        result.success = True
+        result.output = '[{"comment_id": 1, "classification": "ESCALATE", "verdict": "Valid", "reason": "ok"}]'
+        runtime.execute = AsyncMock(return_value=result)
+
+        ws = MagicMock()
+        comments = [SimpleNamespace(id=1, author="C", path="x.kt", line=1, body="b")]
+
+        await classify_comments(comments, ws, runtime, operator_hint="check repo X")
+
+        ctx = runtime.execute.call_args.kwargs["extra_context"]
+        assert ctx["operator_hint"] == "check repo X"
+
+    @pytest.mark.asyncio
+    async def test_default_operator_hint_is_empty_string(self):
+        from orchestrator.comment_classifier import classify_comments
+
+        runtime = MagicMock()
+        result = MagicMock()
+        result.success = True
+        result.output = "[]"
+        runtime.execute = AsyncMock(return_value=result)
+        ws = MagicMock()
+
+        await classify_comments([], ws, runtime)
+
+        ctx = runtime.execute.call_args.kwargs["extra_context"]
+        assert ctx["operator_hint"] == ""

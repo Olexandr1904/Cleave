@@ -186,6 +186,9 @@ class CommandHandler:
             await self._reply(chat_id, intent.reply, processing_msg_id)
         elif intent.intent == "reviewed":
             await self._handle_reviewed(intent, chat_id, workspaces, processing_msg_id)
+        elif intent.intent == "unanswered":
+            await self._handle_unanswered(intent, chat_id, processing_msg_id)
+            return
         else:
             await self._reply(chat_id, intent.reply or
                 "I didn't understand that. I can do: status, analyze, approve, reject, retry, set_mode, reviewed.", processing_msg_id)
@@ -634,6 +637,49 @@ class CommandHandler:
                 )
                 return True
         return False
+
+    async def _handle_unanswered(self, intent, chat_id: str, processing_msg_id: int | None) -> None:
+        """Re-send all undecided PR comments. Triggered by /unanswered intent."""
+        from orchestrator.escalation_view import build_escalated_comment_message
+
+        workspaces = self._active_workspaces_fn()
+        target_id = (intent.params.get("ticket_id") or "").strip()
+        matches = [
+            w for w in workspaces
+            if w.state.current_state == "PR_REVIEW"
+            and w.state.pending_review_comments
+            and (not target_id or w.state.ticket_id == target_id)
+        ]
+        if not matches:
+            await self._reply(chat_id, "No tickets have unanswered PR comments.", processing_msg_id)
+            return
+
+        total = 0
+        for ws in matches:
+            ws_total = 0
+            for c in ws.state.pending_review_comments:
+                if c.get("decision") is not None:
+                    continue
+                text, buttons = build_escalated_comment_message(
+                    ws.state, c, ws.state.pr_number, ticket_title="", recall=True,
+                )
+                new_msg_id = await self._notifier.send_message(chat_id, text, buttons=buttons)
+                if new_msg_id:
+                    _ensure_msg_ids(c).append(new_msg_id)
+                    ws_total += 1
+            ws.save_state()
+            total += ws_total
+            if self._events is not None:
+                via = getattr(self, "_unanswered_via", None) or "command"
+                self._events.emit(
+                    "pr_comments_unanswered_recalled",
+                    f"{ws.state.ticket_id}: recalled {ws_total} unanswered comment(s)",
+                    ticket_id=ws.state.ticket_id,
+                    data={"ticket_id": ws.state.ticket_id, "count": ws_total, "via": via},
+                )
+        await self._reply(
+            chat_id, f"Resent {total} unanswered comment(s).", processing_msg_id,
+        )
 
     async def _stage_reinvestigation(self, c, ws, hint_text: str, chat_id: str) -> bool:
         """Stage a re-investigation request on the comment entry.

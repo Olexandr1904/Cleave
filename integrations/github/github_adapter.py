@@ -25,6 +25,8 @@ class GitHubAdapter(VCSInterface):
     def __init__(self, token: str, owner: str, repo: str) -> None:
         self._owner = owner
         self._repo = repo
+        # _token is read by _graphql_request; httpx headers cover REST only.
+        self._token = token
         self._client = httpx.AsyncClient(
             base_url="https://api.github.com",
             headers={

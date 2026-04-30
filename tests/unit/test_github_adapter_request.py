@@ -29,6 +29,16 @@ def _http_error(status: int, body: str) -> httpx.HTTPStatusError:
     )
 
 
+def test_init_stores_token_for_graphql():
+    """_graphql_request reads self._token; __init__ must populate it.
+
+    Regression: previously only the httpx client headers carried the token,
+    leaving _graphql_request to AttributeError on every call.
+    """
+    adapter = GitHubAdapter(token="ghp_xyz", owner="acme", repo="app")
+    assert adapter._token == "ghp_xyz"
+
+
 @pytest.mark.asyncio
 async def test_request_422_includes_response_body_in_error():
     adapter = _make_adapter()

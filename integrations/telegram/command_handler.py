@@ -43,6 +43,43 @@ def _ensure_msg_ids(c: dict) -> list[int]:
     return c["msg_ids"]
 
 
+_FIX_TOKENS = ("fix it", "fix", "fxi", "fifx", "fixx", "fx", "fi", "yes")
+_WONT_FIX_TOKENS = (
+    "won't fix", "wont fix", "do not fix", "don't fix", "dont fix",
+    "not fix", "no fix",
+)
+
+
+def _classify_reply(text: str) -> tuple[str, str, str]:
+    """Classify an operator reply into (decision, matched_token, wf_reason).
+
+    decision ∈ {'fix', 'wont_fix', 'reinvestigate'}
+    matched_token: empty for reinvestigate, else the canonical token used.
+    wf_reason: only meaningful for 'wont_fix'; the text after ':' or whitespace.
+    """
+    raw = text.strip()
+    lower = raw.lower()
+    if not lower:
+        return "reinvestigate", "", ""
+
+    # Fix synonyms — must be exact match (no trailing reason)
+    for tok in _FIX_TOKENS:
+        if lower == tok:
+            return "fix", tok, ""
+
+    # Won't-fix synonyms — token at start, optional ':' or whitespace + reason
+    for tok in _WONT_FIX_TOKENS:
+        if lower == tok:
+            return "wont_fix", tok, ""
+        if lower.startswith(tok):
+            sep_char = lower[len(tok)] if len(lower) > len(tok) else ""
+            if sep_char in (":", " ", "\t"):
+                rest = lower[len(tok):].lstrip(": ").strip()
+                return "wont_fix", tok, rest
+
+    return "reinvestigate", "", ""
+
+
 class CommandHandler:
     """Routes incoming Telegram messages to the appropriate handler."""
 

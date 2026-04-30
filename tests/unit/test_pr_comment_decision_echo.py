@@ -13,7 +13,7 @@ from unittest.mock import AsyncMock, MagicMock, PropertyMock
 
 import pytest
 
-from integrations.telegram.command_handler import CommandHandler
+from integrations.telegram.command_handler import CommandHandler, _classify_reply
 from orchestrator.orchestrator import Orchestrator
 
 
@@ -255,3 +255,47 @@ async def test_reply_matches_against_msg_ids_list():
     matched = await handler.handle_reply(reply_to_msg_id=200, text="fix", chat_id="c-1")
     assert matched is True
     assert ws.state.pending_review_comments[0]["decision"] == "fix"
+
+
+class TestClassifyReply:
+    @pytest.mark.parametrize("text,expected_token", [
+        ("fix", "fix"), ("FIX", "fix"), ("yes", "yes"), ("fxi", "fxi"),
+        ("fixx", "fixx"), ("Fix it", "fix it"),
+    ])
+    def test_fix_synonyms(self, text, expected_token):
+        decision, token, _ = _classify_reply(text)
+        assert decision == "fix"
+        assert token == expected_token
+
+    @pytest.mark.parametrize("text,expected_token", [
+        ("won't fix", "won't fix"),
+        ("wont fix", "wont fix"),
+        ("don't fix", "don't fix"),
+        ("dont fix", "dont fix"),
+        ("do not fix", "do not fix"),
+        ("not fix", "not fix"),
+        ("no fix", "no fix"),
+        ("WON'T FIX: out of scope", "won't fix"),
+    ])
+    def test_wont_fix_synonyms(self, text, expected_token):
+        decision, token, _reason = _classify_reply(text)
+        assert decision == "wont_fix"
+        assert token == expected_token
+
+    def test_wont_fix_extracts_reason(self):
+        _, _, reason = _classify_reply("don't fix: this is intentional")
+        assert reason == "this is intentional"
+
+    def test_wont_fix_no_reason(self):
+        _, _, reason = _classify_reply("won't fix")
+        assert reason == ""
+
+    def test_free_text_is_reinvestigate(self):
+        decision, token, _ = _classify_reply("check other repos, we use this pattern")
+        assert decision == "reinvestigate"
+        assert token == ""
+
+    def test_skip_is_no_longer_recognized(self):
+        """Skip semantic was removed — should now be free-text."""
+        decision, _, _ = _classify_reply("skip")
+        assert decision == "reinvestigate"

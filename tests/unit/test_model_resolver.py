@@ -8,6 +8,7 @@ from orchestrator.model_resolver import (
     LABEL_PREFIX,
     SHORT_NAME_TO_MODEL,
     ResolutionResult,
+    model_short_name,
     resolve_ticket_model,
 )
 
@@ -94,3 +95,14 @@ def test_label_prefix_constant():
 def test_short_name_map_covers_three_models():
     """The mapping covers exactly haiku, opus, sonnet."""
     assert set(SHORT_NAME_TO_MODEL.keys()) == {"haiku", "opus", "sonnet"}
+
+
+def test_model_short_name_reverse_map():
+    """Reverse-map from full model id to short name for dashboard pills."""
+    for short, full in SHORT_NAME_TO_MODEL.items():
+        assert model_short_name(full) == short
+
+
+def test_model_short_name_unknown_returns_none():
+    assert model_short_name("claude-some-future-model") is None
+    assert model_short_name("") is None

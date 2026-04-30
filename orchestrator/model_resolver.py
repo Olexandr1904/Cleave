@@ -68,3 +68,14 @@ def resolve_ticket_model(labels: list[str]) -> ResolutionResult:
         )
 
     return ResolutionResult(model=SHORT_NAME_TO_MODEL[short_name], warning=None)
+
+
+_MODEL_TO_SHORT_NAME: dict[str, str] = {v: k for k, v in SHORT_NAME_TO_MODEL.items()}
+
+
+def model_short_name(model_id: str) -> str | None:
+    """Reverse map: 'claude-opus-4-7' -> 'opus'. Returns None for unknown ids.
+
+    Used by the dashboard to render a compact pill on each ticket card.
+    """
+    return _MODEL_TO_SHORT_NAME.get(model_id)

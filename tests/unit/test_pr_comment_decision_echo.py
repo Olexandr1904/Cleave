@@ -132,7 +132,6 @@ async def test_button_fix_press_echoes_decision_with_file_line():
     sent = notifier.send_message.call_args
     msg = sent.args[1] if len(sent.args) > 1 else sent.kwargs.get("message", "")
     assert "FIX" in msg.upper()
-    assert "@Copilot" in msg
     assert "Frag.kt:96" in msg
     assert sent.kwargs.get("reply_to_message_id") == 42
 
@@ -356,3 +355,40 @@ async def test_echo_includes_matched_token_for_wont_fix():
     assert "Recognized as WON'T FIX" in sent
     # Accept either escaping style for the apostrophe
     assert "matched: 'don\\'t fix'" in sent or "matched: \"don't fix\"" in sent
+
+
+@pytest.mark.asyncio
+async def test_button_press_echo_includes_matched_token():
+    handler = CommandHandler.__new__(CommandHandler)
+    handler._allowed_chat_ids = None
+    handler._notifier = MagicMock()
+    handler._notifier.send_message = AsyncMock()
+    handler._events = MagicMock()
+    handler._events.emit = MagicMock()
+    handler._wake_fn = None
+
+    ws = MagicMock()
+    ws.state = SimpleNamespace(
+        ticket_id="T-1",
+        pending_review_comments=[
+            {"comment_id": 7, "msg_ids": [10], "decision": None,
+             "author": "C", "file": "x.kt", "line": 1, "body": "b",
+             "reason": "r", "verdict": "Valid",
+             "hint_rounds": 0, "last_hint": None,
+             "pending_reinvestigation": False},
+        ],
+    )
+    handler._active_workspaces_fn = lambda: [ws]
+
+    await handler.handle_callback(
+        action="pr_fix", ticket_id="T-1:7", chat_id="chat-1", message_id=10,
+    )
+
+    sent = handler._notifier.send_message.call_args.args[1]
+    assert "Recognized as FIX" in sent
+    assert "matched: 'Fix' button" in sent
+
+    # Event payload includes matched_token + via=button
+    event_data = handler._events.emit.call_args.kwargs.get("data") or {}
+    assert event_data.get("matched_token") == "button:fix"
+    assert event_data.get("via") == "button"

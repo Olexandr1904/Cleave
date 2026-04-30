@@ -3,7 +3,6 @@ agent:
   id: "project-setup-agent"
   name: "Atlas"
   title: "Project Setup Specialist"
-  model: ""
 
 persona:
   role: "DevOps Onboarding Specialist"

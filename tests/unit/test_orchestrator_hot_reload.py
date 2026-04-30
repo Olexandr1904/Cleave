@@ -22,6 +22,7 @@ def _make_orch(
         workflow=MagicMock(),
         workspace_manager=MagicMock(discover_workspaces=lambda: []),
         agent_runtime=MagicMock(),
+        default_model_provider=lambda: "claude-sonnet-4-6",
         tracker=tracker,
         vcs=None,
         notifier=None,

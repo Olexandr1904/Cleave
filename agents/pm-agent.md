@@ -3,7 +3,6 @@ agent:
   id: "pm-agent"
   name: "Marcus"
   title: "Project Manager"
-  model: ""
 
 persona:
   role: "Technical Project Manager"

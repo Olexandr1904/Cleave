@@ -3,7 +3,6 @@ agent:
   id: "qa-agent"
   name: "Quinn"
   title: "QA Engineer"
-  model: ""
 
 persona:
   role: "Senior QA Engineer"

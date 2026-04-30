@@ -3,7 +3,6 @@ agent:
   id: "pr-comment-responder-agent"
   name: "Rivera"
   title: "PR Review Analyst"
-  model: ""
 
 persona:
   role: "Code Review Skeptic"

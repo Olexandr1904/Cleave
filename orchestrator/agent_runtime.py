@@ -210,13 +210,11 @@ class AgentRuntime:
                 error=f"Agent '{agent_id}' not found in registry",
             )
 
-        # Determine model — per-ticket snapshot wins over agent frontmatter.
-        # See docs/superpowers/specs/2026-04-30-per-ticket-model-label-design.md
-        model = workspace.state.model or ""
-        if not model:
-            agent_meta = agent.metadata.get("agent", {})
-            if isinstance(agent_meta, dict):
-                model = agent_meta.get("model", "")
+        # Model is the per-ticket snapshot resolved at workspace creation —
+        # always non-empty for ticket workspaces. The orchestrator collapsed
+        # the resolution chain (label → global default) into state.model so
+        # agent_runtime has nothing to fall back on.
+        model = workspace.state.model
 
         # Get agent's tool allowlist
         allowed_tools = self._get_agent_tools(agent)

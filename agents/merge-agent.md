@@ -3,7 +3,6 @@ agent:
   id: "merge-agent"
   name: "Morgan"
   title: "Merge Agent"
-  model: ""
 
 persona:
   role: "Release Gatekeeper"

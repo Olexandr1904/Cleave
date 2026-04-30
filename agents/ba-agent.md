@@ -3,7 +3,6 @@ agent:
   id: "ba-agent"
   name: "Alice"
   title: "Business Analyst"
-  model: ""
 
 persona:
   role: "Senior Business Analyst"

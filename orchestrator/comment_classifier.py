@@ -77,6 +77,8 @@ async def classify_comments(
     comments: list[Any],
     workspace: Any,
     agent_runtime: Any,
+    *,
+    operator_hint: str = "",
 ) -> list[ClassifiedComment]:
     """Run the pr-comment-responder agent to classify PR comments.
 
@@ -95,7 +97,10 @@ async def classify_comments(
     result = await agent_runtime.execute(
         agent_id="pr-comment-responder-agent",
         workspace=workspace,
-        extra_context={"pr_comments_json": json.dumps(comment_data, indent=2)},
+        extra_context={
+            "pr_comments_json": json.dumps(comment_data, indent=2),
+            "operator_hint": operator_hint,
+        },
     )
 
     if not result.success:

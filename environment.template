@@ -1,8 +1,10 @@
 # Sickle — Required Environment Variables
 # Copy this file to .env and fill in the values.
 
-# Claude API
-CLAUDE_API_KEY=sk-ant-...
+# Claude API key — leave empty to use the Claude Code CLI adapter
+# (browser-authenticated Max/Pro subscription). Set this only if you want
+# to bill the Anthropic API directly. Auto-detected at startup.
+CLAUDE_API_KEY=
 
 # Telegram Bot
 TELEGRAM_BOT_TOKEN=123456:ABC-...

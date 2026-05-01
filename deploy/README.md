@@ -69,9 +69,10 @@ journalctl -u sickle -f
 
 ## Log Files
 
-- Service log: `/var/log/sickle/sickle.log`
-- Error log: `/var/log/sickle/sickle-error.log`
+- Daemon log: `/var/log/sickle/sickle-daemon.log` (rotating, 10 MB × 5 backups). Path is `<logging.dir>/sickle-daemon.log`; the daemon falls back to `./data/` if the configured dir isn't writable.
+- systemd journal: `journalctl -u sickle -f` for stdout/stderr captured by the unit
 - Agent logs: per-workspace in `{workspace}/logs/`
+- Agent reports: per-workspace in `{workspace}/reports/`
 
 ## Dry-Run Testing (Development)
 

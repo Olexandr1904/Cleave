@@ -149,7 +149,10 @@ def _scan_all_workspaces(
             ws_root = state_file.parent
             title = _maybe_backfill_title(ws_root, data)
             # List available reports
-            reports_dir = ws_root / "reports"
+            # Ticket workspaces keep reports inside source/; setup workspaces use root/reports/.
+            reports_dir = ws_root / "source" / "reports"
+            if not reports_dir.exists():
+                reports_dir = ws_root / "reports"
             reports = sorted(f.name for f in reports_dir.iterdir() if f.is_file()) if reports_dir.exists() else []
             # List meta files
             meta_dir = ws_root / "meta"
@@ -263,7 +266,15 @@ def create_app(
         # Find workspace on disk
         for ws in _scan_all_workspaces(workspace_base_dir, projects):
             if ws["ticket_id"] == ticket_id:
-                file_path = Path(ws["workspace_root"]) / folder / filename
+                ws_root = Path(ws["workspace_root"])
+                if folder == "reports":
+                    # Ticket workspaces store reports inside source/; setup workspaces at root level.
+                    candidate = ws_root / "source" / "reports" / filename
+                    if not candidate.exists():
+                        candidate = ws_root / "reports" / filename
+                    file_path = candidate
+                else:
+                    file_path = ws_root / folder / filename
                 if file_path.exists() and file_path.is_file():
                     return PlainTextResponse(file_path.read_text(encoding="utf-8", errors="replace"))
                 return PlainTextResponse(f"File not found: {folder}/{filename}", status_code=404)

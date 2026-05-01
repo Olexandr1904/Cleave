@@ -39,10 +39,22 @@ class AgentBudget:
     Caps both quality-of-loop (tool rounds) and dollar/wall-clock cost
     (tokens, wall clock). Whichever ceiling hits first ends the run; the
     runtime returns a permanent failure tagged with which budget tripped.
+
+    Bias: false-positives on real feature work (legit run gets killed) are
+    much worse than letting a runaway burn extra quota before tripping —
+    `max_iterations` already bounds repeated agent invocations per stage.
+    Defaults below are sized for *real feature* work, not the fix-heavy
+    sample we have today: dev-agent peaks at ~2.5M tokens on observed fixes,
+    so a real feature could plausibly use 5–10× that, and a complex
+    multi-file refactor could run 1–2 h before producing a commit. The cap
+    is here to catch genuinely stuck runs (multi-hour idle subprocess) and
+    cost catastrophes (>15M tokens), not normal feature complexity. Tighten
+    per-agent via `agent_budget_overrides` for the agents whose work is
+    naturally bounded (e.g. scope-guard, pr-comment-responder).
     """
-    max_tool_rounds: int = 25
-    wall_clock_seconds: int = 1800  # 30 min
-    max_total_tokens: int = 500_000  # input + output combined
+    max_tool_rounds: int = 25  # only applies to the in-process tool loop
+    wall_clock_seconds: int = 14_400  # 4 h — stuck runs in prod logged 9–13 h
+    max_total_tokens: int = 15_000_000  # input + output combined
 
 
 @dataclass

@@ -157,6 +157,9 @@ MANUAL_CONTROL → ANALYSIS (release control)
 Any active stage → DEFERRED (Claude CLI quota hit)
 DEFERRED → (resume previous stage after retry_at)
 
+Any active stage → PAUSED (operator paused via dashboard or Telegram)
+PAUSED → (resume previous stage)
+
 Any stage → FAILED (recoverable — operator can re-run from any active stage or archive)
 DONE → ARCHIVED (source cleanup)
 ```
@@ -177,7 +180,8 @@ DONE → ARCHIVED (source cleanup)
 | `FAILED` | Recoverable error — operator can re-run from any active stage or archive |
 | `AWAITING_APPROVAL` | Pipeline paused, waiting for operator approval to continue |
 | `MANUAL_CONTROL` | Operator has taken control, pipeline paused, Claude Code session active |
-| `DEFERRED` | DEFERRED — paused on Claude CLI quota hit; auto-resumes after retry_at |
+| `DEFERRED` | Paused on Claude CLI quota hit or transient agent failure; auto-resumes after retry_at |
+| `PAUSED` | Operator paused the workspace via dashboard or Telegram; orchestrator skips it until resumed |
 | `ARCHIVED` | Source code deleted after merge (ticket artifacts remain) |
 
 **Valid transitions:**
@@ -185,12 +189,12 @@ DONE → ARCHIVED (source cleanup)
 ```python
 VALID_TRANSITIONS = {
     "NEW":                {"ANALYSIS", "FAILED"},
-    "ANALYSIS":           {"DEV", "BLOCKED", "FAILED", "DEFERRED", "AWAITING_APPROVAL", "MANUAL_CONTROL"},
-    "DEV":                {"SCOPE_CHECK", "BLOCKED", "FAILED", "DEFERRED", "MANUAL_CONTROL"},
-    "SCOPE_CHECK":        {"QA", "DEV", "BLOCKED", "FAILED", "DEFERRED", "MANUAL_CONTROL"},
-    "QA":                 {"PUSHED", "DEV", "BLOCKED", "FAILED", "DEFERRED", "AWAITING_APPROVAL", "MANUAL_CONTROL"},
-    "PUSHED":             {"PR_REVIEW", "BLOCKED", "FAILED", "DEFERRED", "MANUAL_CONTROL"},
-    "PR_REVIEW":          {"DEV", "DONE", "BLOCKED", "FAILED", "DEFERRED", "AWAITING_APPROVAL", "MANUAL_CONTROL"},
+    "ANALYSIS":           {"DEV", "BLOCKED", "FAILED", "DEFERRED", "AWAITING_APPROVAL", "MANUAL_CONTROL", "PAUSED"},
+    "DEV":                {"SCOPE_CHECK", "BLOCKED", "FAILED", "DEFERRED", "MANUAL_CONTROL", "PAUSED"},
+    "SCOPE_CHECK":        {"QA", "DEV", "BLOCKED", "FAILED", "DEFERRED", "MANUAL_CONTROL", "PAUSED"},
+    "QA":                 {"PUSHED", "DEV", "BLOCKED", "FAILED", "DEFERRED", "AWAITING_APPROVAL", "MANUAL_CONTROL", "PAUSED"},
+    "PUSHED":             {"PR_REVIEW", "BLOCKED", "FAILED", "DEFERRED", "MANUAL_CONTROL", "PAUSED"},
+    "PR_REVIEW":          {"DEV", "DONE", "BLOCKED", "FAILED", "DEFERRED", "AWAITING_APPROVAL", "MANUAL_CONTROL", "PAUSED"},
     "DONE":               {"ARCHIVED"},
     "BLOCKED":            {"ANALYSIS", "DEV", "SCOPE_CHECK", "QA", "PUSHED", "PR_REVIEW", "FAILED", "MANUAL_CONTROL"},
     "FAILED":             {"ANALYSIS", "DEV", "SCOPE_CHECK", "QA", "PUSHED", "PR_REVIEW", "MANUAL_CONTROL", "ARCHIVED"},
@@ -198,6 +202,7 @@ VALID_TRANSITIONS = {
     "AWAITING_APPROVAL":  {"ANALYSIS", "DEV", "SCOPE_CHECK", "QA", "PUSHED", "PR_REVIEW", "DONE", "FAILED", "MANUAL_CONTROL"},
     "MANUAL_CONTROL":     {"ANALYSIS"},  # release control → back to ANALYSIS
     "DEFERRED":           {"ANALYSIS", "DEV", "SCOPE_CHECK", "QA", "PUSHED", "PR_REVIEW", "FAILED", "MANUAL_CONTROL"},
+    "PAUSED":             {"ANALYSIS", "DEV", "SCOPE_CHECK", "QA", "PUSHED", "PR_REVIEW", "FAILED", "MANUAL_CONTROL"},
 }
 ```
 
@@ -258,7 +263,10 @@ telegram:
 
 claude:
   api_key: "${CLAUDE_API_KEY}"
-  model: "claude-sonnet-4-5"
+  # Note: the active Claude model is no longer set here. It is stored in the
+  # dashboard's SQLite settings table (see DashboardConfig.db_path) and may be
+  # overridden per ticket via Jira label (`model-haiku` / `model-sonnet` /
+  # `model-opus`). See docs/labels.md and docs/features/per-ticket-model-selection.md.
 
 workspaces:
   base_dir: "/data"
@@ -305,7 +313,7 @@ jira:
     done: "Done"
 
 telegram:
-  chat_id: "${TELEGRAM_CHAT_ACME}"
+  default_chat_id: "${TELEGRAM_CHAT_ACME}"
 
 parallelism:
   max_concurrent_tickets: 5
@@ -735,7 +743,9 @@ agent:
   name: Developer
   role: "Code Implementation Agent"
   goal: "Implement ticket requirements on a feature branch"
-  model: "claude-sonnet-4-5"
+  # Per-agent `model:` in the frontmatter has been removed. The model is decided
+  # at workspace creation (Jira label or global default) and stored on
+  # WorkspaceState.model — every agent on that workspace uses the snapshot.
   inputs:
     - meta/ticket.md
     - meta/parent.md

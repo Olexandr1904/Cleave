@@ -316,15 +316,6 @@ class GitHubAdapter(VCSInterface):
             ],
         )
 
-    async def merge_pr(self, pr_number: int, merge_method: str = "squash") -> None:
-        """Merge a pull request."""
-        await self._request(
-            "PUT",
-            f"{self._repo_path}/pulls/{pr_number}/merge",
-            json={"merge_method": merge_method},
-        )
-        logger.info("Merged PR #%d via %s", pr_number, merge_method)
-
     async def close_pr(self, pr_number: int) -> None:
         """Close a PR without merging."""
         await self._request(

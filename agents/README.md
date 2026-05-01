@@ -62,6 +62,11 @@ Hard rules the agent must follow.
 | Marcus | `pm-agent` | Ticket prioritization and routing |
 | Alice | `ba-agent` | Requirements validation and implementation planning |
 | James | `dev-agent` | Code implementation following plans |
+| Scope Guard | `scope-guard-agent` | Validates dev-agent diffs against the plan and architecture rules; fails the stage if scope creep is detected |
+| QA | `qa-agent` | Writes tests and runs lint / test / build gates |
+| Fix | `fix-agent` | Targeted recovery agent for narrow failure categories |
+| PR Comment Responder | `pr-comment-responder-agent` | Classifies PR review comments and decides Fix / Won't Fix / re-investigate |
+| Atlas | `project-setup-agent` | Onboards new projects (interactive add/list/remove); used by the dashboard wizard and the `/add-project`, `/list-projects`, `/remove-project` slash commands |
 
 ## Dependencies
 

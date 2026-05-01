@@ -773,7 +773,7 @@ class Orchestrator:
             if should_escalate(stage_id, self._workflow, iterations):
                 next_stage = get_next_stage(stage_id, self._workflow, "max_iterations")
                 if next_stage == "escalate":
-                    await self._handle_escalate(workspace)
+                    await self._handle_escalate(workspace, is_max_iterations=True)
                 return
 
         # Dispatch: agent stage or action stage
@@ -2085,9 +2085,10 @@ class Orchestrator:
         """Extract a human-readable reason for why a workspace is blocked.
 
         For analysis: prefer reports/ba-questions.md (the BA agent's numbered
-        questions). For other stages (or if ba-questions.md is absent): read the
-        latest reports/*-output.md by mtime and strip header boilerplate.
-        Falls back to a generic message if nothing useful is found.
+        questions). For other stages: prefer the stage-specific output file
+        (e.g. qa-agent-output.md for the qa stage) so that a different stage's
+        more-recent output is not mistakenly used as the blocking reason.
+        Falls back to latest by mtime, then a generic message.
         """
         reports = workspace.reports_dir
         if not reports.exists():
@@ -2100,15 +2101,23 @@ class Orchestrator:
                 if text:
                     return self._truncate_reason(text)
 
+        # Prefer the output file that belongs to this specific stage/agent.
+        stage_def = self._workflow.stages.get(stage_id)
+        stage_output = None
+        if stage_def and stage_def.agent:
+            candidate = reports / f"{stage_def.agent}-output.md"
+            if candidate.exists():
+                stage_output = candidate
+
         outputs = sorted(
             reports.glob("*-output.md"),
             key=lambda p: p.stat().st_mtime,
             reverse=True,
         )
-        if not outputs:
+        if not outputs and stage_output is None:
             return f"Pipeline stuck at {stage_id}. Check reports/ for details."
 
-        raw = outputs[0].read_text(encoding="utf-8")
+        raw = (stage_output or outputs[0]).read_text(encoding="utf-8")
         # Strip leading boilerplate and blank lines.
         lines = raw.splitlines()
         start = 0
@@ -2134,7 +2143,7 @@ class Orchestrator:
             return text
         return text[: cls._BLOCKED_REASON_MAX_CHARS] + "…"
 
-    async def _handle_escalate(self, workspace: Workspace) -> None:
+    async def _handle_escalate(self, workspace: Workspace, *, is_max_iterations: bool = False) -> None:
         """Send escalation notification and block workspace."""
         state = workspace.state
 
@@ -2155,9 +2164,16 @@ class Orchestrator:
         sep = "─" * 30
         title = self._get_ticket_title(workspace)
         hdr = self._tg_header("🔔", state, title)
-        header = f"{hdr}\nStage: {stage}\n{sep}\n"
+        stage_id_str = stage.lower() if isinstance(stage, str) else str(stage).lower()
+        if is_max_iterations:
+            stage_def = self._workflow.stages.get(stage_id_str)
+            cap = stage_def.max_iterations if stage_def else "?"
+            iterations = state.stage_iterations.get(stage_id_str, 0)
+            header = f"{hdr}\nStage: {stage} — iteration limit reached ({iterations}/{cap})\n{sep}\n"
+        else:
+            header = f"{hdr}\nStage: {stage}\n{sep}\n"
 
-        reason = self._build_blocked_reason(workspace, stage.lower() if isinstance(stage, str) else stage)
+        reason = self._build_blocked_reason(workspace, stage_id_str)
         hint = f"\n{sep}\n↩️ Reply with your answer or additional context."
         message = f"{header}\n{reason}{hint}"
 

@@ -23,23 +23,37 @@ defaults:
     dev: 2
   max_parallel_tickets: 5
   pr_comment_fetch_delay_minutes: 30
-  # Per-agent execution ceiling. Whichever limit hits first ends the run and
-  # marks it failed (permanent). Tune these down to lower runaway-quota cost.
+  # Per-execution agent ceilings. Whichever limit trips first ends the run
+  # and marks it permanent-failed.
+  #   - max_tool_rounds: applies only to the in-process tool loop (API
+  #     adapter). The Claude Code CLI subprocess handles its own tool loop
+  #     and is opaque to this counter, so this number doesn't bound CLI runs.
+  #   - wall_clock_seconds: applies to both API and CLI paths. On the CLI
+  #     path we kill the subprocess on timeout.
+  #   - max_total_tokens: enforced pre-emptively in the API tool loop, and
+  #     post-hoc on the CLI path (we can't interrupt the CLI mid-flight).
+  #
+  # The global default is sized for *real feature* work, not the fix-heavy
+  # sample today's logs show. False-positive kills on legit feature runs are
+  # worse than letting a runaway burn extra quota — `max_iterations` already
+  # bounds re-invocations per stage. So defaults are loose, and per-agent
+  # overrides tighten only for naturally bounded agents.
   agent_budget:
     max_tool_rounds: 25
-    wall_clock_seconds: 1800       # 30 min
-    max_total_tokens: 500000       # input + output combined
-  # Optional per-agent overrides — use the agent id (as in agents/<id>.md
-  # frontmatter). Anything unspecified inherits from `agent_budget` above.
-  # agent_budget_overrides:
-  #   dev-agent:
-  #     max_tool_rounds: 30
-  #     wall_clock_seconds: 2400
-  #     max_total_tokens: 800000
-  #   ba-agent:
-  #     max_tool_rounds: 15
-  #     wall_clock_seconds: 600
-  #     max_total_tokens: 200000
+    wall_clock_seconds: 14400      # 4 h — stuck runs in prod logged 9–13 h
+    max_total_tokens: 15000000     # 15M; dev/qa fixes peak ~2.5M, features ≫
+  # Tighter ceilings for agents whose work is bounded by inputs (diff size,
+  # PR comment count) rather than by feature complexity. These are safe to
+  # tighten because a bigger feature won't make scope-guard or
+  # pr-comment-responder do more work — they'll always finish in <5 min and
+  # <500K tokens on real production runs.
+  agent_budget_overrides:
+    scope-guard-agent:
+      wall_clock_seconds: 1200     # 20 min — biggest observed ~5 min
+      max_total_tokens: 2000000    # 2M; max observed ~470K
+    pr-comment-responder-agent:
+      wall_clock_seconds: 900      # 15 min — biggest observed ~3 min
+      max_total_tokens: 1500000    # 1.5M; max observed ~380K
 
 logging:
   level: "INFO"

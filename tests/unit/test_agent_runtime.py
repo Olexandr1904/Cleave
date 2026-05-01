@@ -523,6 +523,41 @@ class TestQuotaFailureClassification:
         assert result.failure_kind == "permanent"
         assert result.retry_at is None
 
+    async def test_cli_token_overrun_marks_permanent_failure(
+        self, registry, workspace
+    ):
+        """CLI returns successfully but tokens exceed budget — flagged as
+        permanent failure so dashboards/alerting catch the cost overrun."""
+        from integrations.llm.claude_code_adapter import ClaudeCodeAdapter
+        from integrations.llm.llm_interface import LLMResponse
+        from orchestrator.agent_runtime import AgentRuntime
+
+        class StubAdapter(ClaudeCodeAdapter):
+            def __init__(self):
+                pass
+
+            async def execute_in_workspace(self, *args, **kwargs):
+                return LLMResponse(
+                    content="all good",
+                    input_tokens=4_000_000,
+                    output_tokens=50_000,
+                    model="claude-sonnet-4-5",
+                )
+
+        runtime = AgentRuntime(
+            registry,
+            StubAdapter(),
+            default_budget=AgentBudget(max_total_tokens=3_000_000),
+        )
+        result = await runtime.execute("dev-agent", workspace)
+
+        assert result.success is False
+        assert result.failure_kind == "permanent"
+        assert result.error is not None
+        assert result.error.startswith("token_budget_exceeded")
+        # We still wrote the output — we already paid for it.
+        assert (workspace.reports_dir / "dev-agent-output.md").exists()
+
     async def test_cli_timed_out_sets_failure_kind_quota_for_retry(
         self, registry, workspace
     ):

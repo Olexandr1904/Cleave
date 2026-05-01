@@ -10,6 +10,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from orchestrator.comment_classifier import parse_classifications
+from orchestrator.constants import REPORT_BA, REPORT_DEV, REPORT_QA, REPORT_SCOPE_GUARD
 from workspace.workspace import Stage
 
 
@@ -97,7 +98,7 @@ class TestIterationCapEscalates:
 
         await Orchestrator.advance_workspace(orch, ws)
 
-        orch._handle_escalate.assert_awaited_once_with(ws)
+        orch._handle_escalate.assert_awaited_once_with(ws, is_max_iterations=True)
         orch._handle_agent_stage.assert_not_awaited()
 
 
@@ -105,21 +106,20 @@ class TestIterationCapEscalates:
 
 class TestSmartRetry:
     def test_detects_qa_as_furthest(self, tmp_path):
-        """If qa-agent-output.md exists, retry goes to PUSHED."""
+        """If qa.md (agent report) exists, retry goes to PUSHED."""
         reports = tmp_path / "reports"
         reports.mkdir()
-        (reports / "qa-agent-output.md").write_text("QA pass")
-        (reports / "scope-guard-agent-output.md").write_text("PASS")
-        (reports / "ba-agent-output.md").write_text("done")
+        (reports / REPORT_QA).write_text("QA pass")
+        (reports / REPORT_SCOPE_GUARD).write_text("PASS")
+        (reports / REPORT_BA).write_text("done")
 
-        # Simulate the smart retry logic
-        if (reports / "qa-agent-output.md").exists():
+        if (reports / REPORT_QA).exists():
             target = Stage.PUSHED
-        elif (reports / "scope-guard-agent-output.md").exists():
+        elif (reports / REPORT_SCOPE_GUARD).exists():
             target = Stage.QA
-        elif (reports / "dev-agent-output.md").exists():
+        elif (reports / REPORT_DEV).exists():
             target = Stage.SCOPE_CHECK
-        elif (reports / "ba.md").exists() or (reports / "ba-agent-output.md").exists():
+        elif (reports / REPORT_BA).exists():
             target = Stage.DEV
         else:
             target = Stage.ANALYSIS
@@ -129,15 +129,15 @@ class TestSmartRetry:
     def test_detects_dev_as_furthest(self, tmp_path):
         reports = tmp_path / "reports"
         reports.mkdir()
-        (reports / "ba-agent-output.md").write_text("done")
+        (reports / REPORT_BA).write_text("done")
 
-        if (reports / "qa-agent-output.md").exists():
+        if (reports / REPORT_QA).exists():
             target = Stage.PUSHED
-        elif (reports / "scope-guard-agent-output.md").exists():
+        elif (reports / REPORT_SCOPE_GUARD).exists():
             target = Stage.QA
-        elif (reports / "dev-agent-output.md").exists():
+        elif (reports / REPORT_DEV).exists():
             target = Stage.SCOPE_CHECK
-        elif (reports / "ba.md").exists() or (reports / "ba-agent-output.md").exists():
+        elif (reports / REPORT_BA).exists():
             target = Stage.DEV
         else:
             target = Stage.ANALYSIS
@@ -148,13 +148,13 @@ class TestSmartRetry:
         reports = tmp_path / "reports"
         reports.mkdir()
 
-        if (reports / "qa-agent-output.md").exists():
+        if (reports / REPORT_QA).exists():
             target = Stage.PUSHED
-        elif (reports / "scope-guard-agent-output.md").exists():
+        elif (reports / REPORT_SCOPE_GUARD).exists():
             target = Stage.QA
-        elif (reports / "dev-agent-output.md").exists():
+        elif (reports / REPORT_DEV).exists():
             target = Stage.SCOPE_CHECK
-        elif (reports / "ba.md").exists() or (reports / "ba-agent-output.md").exists():
+        elif (reports / REPORT_BA).exists():
             target = Stage.DEV
         else:
             target = Stage.ANALYSIS

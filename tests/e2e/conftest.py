@@ -11,6 +11,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from orchestrator.constants import RUNTIME_OUTPUT_BA
+
 import pytest
 import uvicorn
 
@@ -172,13 +174,13 @@ def seeded_workspaces(tmp_path: Path) -> Path:
 
     _seed_workspace(
         base, "SPIKE-1", "DEV",
-        reports=["ba-agent-output.md"],
+        reports=[RUNTIME_OUTPUT_BA],
         meta=["ticket.md"],
     )
     _seed_workspace(
         base, "SPIKE-2", "AWAITING_APPROVAL",
         previous_state="ANALYSIS",
-        reports=["ba-agent-output.md"],
+        reports=[RUNTIME_OUTPUT_BA],
         meta=["ticket.md"],
     )
     _seed_workspace(

@@ -9,6 +9,7 @@ from unittest.mock import patch, MagicMock
 
 import pytest
 
+from orchestrator.constants import REPORT_BA
 from workspace.workspace import Stage, Workspace, WorkspaceState
 from workspace.workspace_manager import WorkspaceManager, WorkspaceError
 
@@ -208,7 +209,7 @@ class TestSourceCleanup:
         # Add a file to source to verify it gets deleted
         (ws_root / "source" / "file.txt").write_text("code")
         # Add report to verify it's preserved
-        (ws_root / "reports" / "ba.md").write_text("report")
+        (ws_root / "reports" / REPORT_BA).write_text("report")
 
         ws = Workspace(str(ws_root))
         manager.cleanup_source(ws)
@@ -216,7 +217,7 @@ class TestSourceCleanup:
         assert not (ws_root / "source").exists()
         assert (ws_root / "meta").exists()
         assert (ws_root / "reports").exists()
-        assert (ws_root / "reports" / "ba.md").exists()
+        assert (ws_root / "reports" / REPORT_BA).exists()
         assert (ws_root / "logs").exists()
         assert (ws_root / "state.json").exists()
 

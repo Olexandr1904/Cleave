@@ -25,6 +25,12 @@ from integrations.telegram.handlers.analyze import AnalyzeHandler
 from integrations.telegram.handlers.approval import APPROVAL_NEXT_STATE
 from integrations.telegram.handlers.mode import ModeHandler
 from orchestrator.agent_runtime import AgentRuntime
+from orchestrator.constants import (
+    REPORT_BA,
+    REPORT_BA_QUESTIONS,
+    STAGE_REPORT_FILE,
+    STAGE_RUNTIME_OUTPUT,
+)
 from orchestrator.model_resolver import resolve_ticket_model
 from orchestrator.gradle_remediation import (
     ARCH_MISMATCH_HELP,
@@ -1149,14 +1155,20 @@ class Orchestrator:
             return
 
         if not result.success:
-            workspace.transition(Stage.FAILED)
-            workspace.update_state(error=result.error)
             self._emit(
                 "action_failed",
                 f"Action {action} failed for {state.ticket_id}: {result.error}",
                 project_id=state.company_id, ticket_id=state.ticket_id,
                 data={"stage": stage_id, "error": result.error},
             )
+            if action == "push_and_open_pr":
+                # PR creation failures need operator attention — escalate so a
+                # Telegram message is sent and the ticket can be recovered.
+                workspace.update_state(error=result.error)
+                await self._handle_escalate(workspace)
+            else:
+                workspace.transition(Stage.FAILED)
+                workspace.update_state(error=result.error)
             return
 
         verify_result = stage_verifier.verify(stage_id, workspace, stage_start_commit)
@@ -2085,39 +2097,44 @@ class Orchestrator:
         """Extract a human-readable reason for why a workspace is blocked.
 
         For analysis: prefer reports/ba-questions.md (the BA agent's numbered
-        questions). For other stages: prefer the stage-specific output file
-        (e.g. qa-agent-output.md for the qa stage) so that a different stage's
-        more-recent output is not mistakenly used as the blocking reason.
-        Falls back to latest by mtime, then a generic message.
+        questions). For other stages: prefer the stage-specific runtime output
+        file (e.g. qa-agent-output.md for the qa stage) so that a different
+        stage's more-recent output is never mistakenly shown as the block reason.
+        Falls back to latest *-output.md by mtime, then a generic message.
         """
         reports = workspace.reports_dir
         if not reports.exists():
             return f"Pipeline stuck at {stage_id}. Check reports/ for details."
 
         if stage_id == "analysis":
-            questions = reports / "ba-questions.md"
+            questions = reports / REPORT_BA_QUESTIONS
             if questions.exists():
                 text = questions.read_text(encoding="utf-8").strip()
                 if text:
                     return self._truncate_reason(text)
 
-        # Prefer the output file that belongs to this specific stage/agent.
-        stage_def = self._workflow.stages.get(stage_id)
+        # Prefer the runtime output file for this specific stage so we never
+        # show a different stage's (e.g. scope-guard) output when QA is blocked.
         stage_output = None
-        if stage_def and stage_def.agent:
-            candidate = reports / f"{stage_def.agent}-output.md"
+        runtime_filename = STAGE_RUNTIME_OUTPUT.get(stage_id)
+        if runtime_filename:
+            candidate = reports / runtime_filename
             if candidate.exists():
                 stage_output = candidate
+            else:
+                return f"{stage_id} agent produced no output (may have timed out or crashed). Check pipeline logs."
 
-        outputs = sorted(
-            reports.glob("*-output.md"),
-            key=lambda p: p.stat().st_mtime,
-            reverse=True,
-        )
-        if not outputs and stage_output is None:
-            return f"Pipeline stuck at {stage_id}. Check reports/ for details."
+        if stage_output is None:
+            outputs = sorted(
+                reports.glob("*-output.md"),
+                key=lambda p: p.stat().st_mtime,
+                reverse=True,
+            )
+            if not outputs:
+                return f"Pipeline stuck at {stage_id}. Check reports/ for details."
+            stage_output = outputs[0]
 
-        raw = (stage_output or outputs[0]).read_text(encoding="utf-8")
+        raw = stage_output.read_text(encoding="utf-8")
         # Strip leading boilerplate and blank lines.
         lines = raw.splitlines()
         start = 0
@@ -2174,7 +2191,15 @@ class Orchestrator:
             header = f"{hdr}\nStage: {stage}\n{sep}\n"
 
         reason = self._build_blocked_reason(workspace, stage_id_str)
-        hint = f"\n{sep}\n↩️ Reply with your answer or additional context."
+        if is_max_iterations:
+            hint = (
+                f"\n{sep}\n"
+                f"↩️ Reply with context to resume, or send:\n"
+                f"  `retry {state.ticket_id} from {stage_id_str}` — reset counter and re-run\n"
+                f"  `retry {state.ticket_id} from dev` — restart from dev"
+            )
+        else:
+            hint = f"\n{sep}\n↩️ Reply with your answer or additional context."
         message = f"{header}\n{reason}{hint}"
 
         try:
@@ -2334,7 +2359,7 @@ class Orchestrator:
 
         if gate_state == Stage.ANALYSIS:
             # Include BA summary from ba.md
-            ba_file = workspace.reports_dir / "ba.md"
+            ba_file = workspace.reports_dir / REPORT_BA
             summary = ""
             if ba_file.exists():
                 content = ba_file.read_text(encoding="utf-8")
@@ -2368,7 +2393,7 @@ class Orchestrator:
         output_lower = output.lower()
 
         if stage_id == "analysis":
-            ba_plan = workspace.reports_dir / "ba.md"
+            ba_plan = workspace.reports_dir / REPORT_BA
             # If ba.md exists, analysis is done — proceed regardless of keywords
             if ba_plan.exists():
                 return "default"
@@ -2381,26 +2406,16 @@ class Orchestrator:
             )
             return "unclear"
 
-        if stage_id == "scope_check":
-            report = workspace.reports_dir / "scope-guard-agent-output.md"
-            if report.exists():
-                content = report.read_text().lower()
-                if _looks_like_pass(content):
-                    return "pass"
-                if _looks_like_fail(content):
-                    return "fail"
-            if _looks_like_pass(output_lower):
-                return "pass"
-            return "fail"
-
-        if stage_id == "qa":
-            report = workspace.reports_dir / "qa-agent-output.md"
-            if report.exists():
-                content = report.read_text().lower()
-                if _looks_like_pass(content):
-                    return "pass"
-                if _looks_like_fail(content):
-                    return "fail"
+        if stage_id in ("scope_check", "qa"):
+            runtime_name = STAGE_RUNTIME_OUTPUT.get(stage_id)
+            if runtime_name:
+                report = workspace.reports_dir / runtime_name
+                if report.exists():
+                    content = report.read_text().lower()
+                    if _looks_like_pass(content):
+                        return "pass"
+                    if _looks_like_fail(content):
+                        return "fail"
             if _looks_like_pass(output_lower):
                 return "pass"
             return "fail"

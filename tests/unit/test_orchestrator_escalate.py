@@ -6,6 +6,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+from orchestrator.constants import REPORT_BA_QUESTIONS
 from orchestrator.orchestrator import Orchestrator
 from workspace.workspace import Stage
 
@@ -46,7 +47,7 @@ def _make_orch(notifier) -> Orchestrator:
 @pytest.mark.asyncio
 async def test_escalate_sends_message_without_buttons(tmp_path):
     ws = _make_workspace(tmp_path)
-    (ws.reports_dir / "ba-questions.md").write_text(
+    (ws.reports_dir / REPORT_BA_QUESTIONS).write_text(
         "## Questions for Human Review\n\n1. [AC2] What errors?\n"
     )
     notifier = MagicMock()
@@ -68,7 +69,7 @@ async def test_escalate_sends_message_without_buttons(tmp_path):
 @pytest.mark.asyncio
 async def test_escalate_stores_reason_only_in_human_input_question(tmp_path):
     ws = _make_workspace(tmp_path)
-    (ws.reports_dir / "ba-questions.md").write_text("Only the questions.\n")
+    (ws.reports_dir / REPORT_BA_QUESTIONS).write_text("Only the questions.\n")
     notifier = MagicMock()
     notifier.send_message = AsyncMock(return_value=99)
 
@@ -87,7 +88,7 @@ async def test_escalate_stores_reason_only_in_human_input_question(tmp_path):
 @pytest.mark.asyncio
 async def test_escalate_transitions_to_blocked_and_records_msg_id(tmp_path):
     ws = _make_workspace(tmp_path)
-    (ws.reports_dir / "ba-questions.md").write_text("Q.\n")
+    (ws.reports_dir / REPORT_BA_QUESTIONS).write_text("Q.\n")
     notifier = MagicMock()
     notifier.send_message = AsyncMock(return_value=123)
 

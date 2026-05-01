@@ -13,6 +13,7 @@ from typing import Any
 from starlette.requests import Request
 from starlette.responses import JSONResponse
 
+from orchestrator.constants import REPORT_BA, REPORT_DEV, REPORT_QA, REPORT_SCOPE_GUARD
 from workspace.workspace import Stage
 
 logger = logging.getLogger(__name__)
@@ -133,13 +134,13 @@ def build_action_routes(
         # Smart retry: detect furthest completed stage from existing artifacts
         target = ws.state.previous_state or Stage.ANALYSIS
         reports = Path(ws.reports_dir)
-        if (reports / "qa-agent-output.md").exists():
+        if (reports / REPORT_QA).exists():
             target = Stage.PUSHED
-        elif (reports / "scope-guard-agent-output.md").exists():
+        elif (reports / REPORT_SCOPE_GUARD).exists():
             target = Stage.QA
-        elif (reports / "dev-agent-output.md").exists():
+        elif (reports / REPORT_DEV).exists():
             target = Stage.SCOPE_CHECK
-        elif (reports / "ba.md").exists() or (reports / "ba-agent-output.md").exists():
+        elif (reports / REPORT_BA).exists():
             target = Stage.DEV
 
         ws.state.human_input_pending = False

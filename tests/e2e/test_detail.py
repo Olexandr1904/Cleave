@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from playwright.sync_api import Page, expect
 
+from orchestrator.constants import RUNTIME_OUTPUT_BA
 from tests.e2e.conftest import goto_and_wait_for_board, make_fake_projects
 from workspace.workspace import Stage
 
@@ -65,14 +66,14 @@ class TestDetailReports:
     ):
         open_detail(page, dashboard_server["base_url"], "SPIKE-1")
         tabs = page.locator("#report-tabs .tab-btn")
-        # SPIKE-1 has 1 report (ba-agent-output.md) + 1 meta (ticket.md)
+        # SPIKE-1 has 1 report (RUNTIME_OUTPUT_BA) + 1 meta (ticket.md)
         expect(tabs).to_have_count(2)
 
     def test_clicking_report_tab_loads_content(
         self, page: Page, dashboard_server: dict
     ):
         open_detail(page, dashboard_server["base_url"], "SPIKE-1")
-        page.locator('.tab-btn[data-file="ba-agent-output.md"]').click()
+        page.locator(f'.tab-btn[data-file="{RUNTIME_OUTPUT_BA}"]').click()
         area = page.locator("#report-content-area")
         expect(area).to_contain_text("Test report content")
 

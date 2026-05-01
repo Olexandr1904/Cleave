@@ -556,6 +556,123 @@ class Orchestrator:
                         pt.ticket.id, e,
                     )
 
+    async def _refetch_ticket_data(self, workspace: Workspace) -> None:
+        """Write or append ticket meta files (ticket.md, comments.md, history.md).
+
+        First run (file absent): writes fresh content.
+        Rerun (file exists): appends a timestamped refresh block so agents can
+        see what changed between runs.
+        """
+        import re
+        from datetime import date
+
+        ticket_id = workspace.state.ticket_id
+
+        if self._tracker:
+            try:
+                ticket = await self._tracker.get_ticket(ticket_id)
+                ticket_md = _ticket_to_markdown(ticket)
+                ticket_file = workspace.meta_dir / "ticket.md"
+                if ticket_file.exists():
+                    refresh_date = date.today().isoformat()
+                    ticket_file.write_text(
+                        ticket_file.read_text(encoding="utf-8")
+                        + f"\n\n## Refresh {refresh_date}\n\n{ticket_md}",
+                        encoding="utf-8",
+                    )
+                else:
+                    ticket_file.write_text(ticket_md, encoding="utf-8")
+            except Exception as e:
+                logger.warning(
+                    "Failed to refetch ticket description for %s: %s", ticket_id, e
+                )
+
+        if self._tracker and hasattr(self._tracker, "_request"):
+            try:
+                data = await self._tracker._request(
+                    "GET", f"/issue/{ticket_id}?expand=changelog&fields=comment",
+                )
+
+                # Comments — write fresh on first run, append only new ones on rerun
+                comments = (
+                    data.get("fields", {}).get("comment", {}).get("comments", [])
+                )
+                if comments:
+                    comments_file = workspace.meta_dir / "comments.md"
+                    existing_ids: set[str] = set()
+                    if comments_file.exists():
+                        existing_ids = set(
+                            re.findall(
+                                r"<!-- comment:(\S+) -->",
+                                comments_file.read_text(encoding="utf-8"),
+                            )
+                        )
+                    new_lines: list[str] = []
+                    for c in comments:
+                        cid = str(c.get("id", ""))
+                        if cid and cid in existing_ids:
+                            continue
+                        author = c.get("author", {}).get("displayName", "?")
+                        created = c.get("created", "")[:10]
+                        body = c.get("body", "")
+                        if isinstance(body, dict):
+                            from integrations.jira.jira_adapter import _extract_adf_text
+                            body = _extract_adf_text(body)
+                        marker = f"<!-- comment:{cid} -->\n" if cid else ""
+                        new_lines.append(
+                            f"{marker}## {author} ({created})\n\n{body}\n"
+                        )
+                    if new_lines:
+                        block = "\n".join(new_lines)
+                        if comments_file.exists():
+                            comments_file.write_text(
+                                comments_file.read_text(encoding="utf-8")
+                                + "\n"
+                                + block,
+                                encoding="utf-8",
+                            )
+                        else:
+                            comments_file.write_text(
+                                "# Jira Comments\n\n" + block, encoding="utf-8"
+                            )
+
+                # History — write fresh on first run, append only new lines on rerun
+                changelog = data.get("changelog", {}).get("histories", [])
+                history_file = workspace.meta_dir / "history.md"
+                existing_history = (
+                    history_file.read_text(encoding="utf-8")
+                    if history_file.exists()
+                    else ""
+                )
+                new_changes: list[str] = []
+                for h in changelog:
+                    for item in h.get("items", []):
+                        if item.get("field") == "status":
+                            line = (
+                                f"- {h.get('created', '')[:10]}: "
+                                f"{item.get('fromString', '?')} → "
+                                f"{item.get('toString', '?')} "
+                                f"by {h.get('author', {}).get('displayName', '?')}"
+                            )
+                            if line not in existing_history:
+                                new_changes.append(line)
+                if new_changes:
+                    new_block = "\n".join(new_changes) + "\n"
+                    if history_file.exists():
+                        history_file.write_text(
+                            existing_history.rstrip() + "\n" + new_block,
+                            encoding="utf-8",
+                        )
+                    else:
+                        history_file.write_text(
+                            "# Status History\n\n" + new_block, encoding="utf-8"
+                        )
+
+            except Exception as e:
+                logger.warning(
+                    "Failed to refetch comments/history for %s: %s", ticket_id, e
+                )
+
     async def _create_workspace_for_ticket(
         self,
         pt: PrioritizedTicket,
@@ -594,46 +711,8 @@ class Orchestrator:
                     pt.ticket.id, e,
                 )
 
-        # Write ticket data as markdown
-        ticket_md = _ticket_to_markdown(pt.ticket)
-        (ws.meta_dir / "ticket.md").write_text(ticket_md, encoding="utf-8")
-
-        # Fetch Jira comments and status history for agent context
-        if self._tracker and hasattr(self._tracker, '_request'):
-            try:
-                data = await self._tracker._request(
-                    "GET", f"/issue/{pt.ticket.id}?expand=changelog&fields=comment",
-                )
-                # Comments
-                comments = data.get("fields", {}).get("comment", {}).get("comments", [])
-                if comments:
-                    lines = ["# Jira Comments\n"]
-                    for c in comments:
-                        author = c.get("author", {}).get("displayName", "?")
-                        created = c.get("created", "")[:10]
-                        body = c.get("body", "")
-                        if isinstance(body, dict):
-                            from integrations.jira.jira_adapter import _extract_adf_text
-                            body = _extract_adf_text(body)
-                        lines.append(f"## {author} ({created})\n\n{body}\n")
-                    (ws.meta_dir / "comments.md").write_text("\n".join(lines), encoding="utf-8")
-
-                # Status history
-                changelog = data.get("changelog", {}).get("histories", [])
-                status_changes = []
-                for h in changelog:
-                    for item in h.get("items", []):
-                        if item.get("field") == "status":
-                            status_changes.append(
-                                f"- {h.get('created','')[:10]}: "
-                                f"{item.get('fromString','?')} → {item.get('toString','?')} "
-                                f"by {h.get('author',{}).get('displayName','?')}"
-                            )
-                if status_changes:
-                    history = "# Status History\n\n" + "\n".join(status_changes) + "\n"
-                    (ws.meta_dir / "history.md").write_text(history, encoding="utf-8")
-            except Exception as e:
-                logger.warning("Failed to fetch comments/history for %s: %s", pt.ticket.id, e)
+        # Write ticket metadata — calls tracker for comments/history/attachments
+        await self._refetch_ticket_data(ws)
 
         # Download ticket attachments (screenshots, images)
         if pt.ticket.attachments:
@@ -648,7 +727,6 @@ class Orchestrator:
                     import httpx
                     async with httpx.AsyncClient(timeout=30) as client:
                         # Jira requires auth for attachment downloads
-                        auth = None
                         if self._tracker and hasattr(self._tracker, '_email') and hasattr(self._tracker, '_token'):
                             import base64
                             creds = base64.b64encode(f"{self._tracker._email}:{self._tracker._token}".encode()).decode()
@@ -1050,6 +1128,28 @@ class Orchestrator:
             await self._notifier.send_message(chat_id, msg, buttons=buttons)
         except Exception as e:
             logger.warning("Failed to send failure notification: %s", e)
+
+    async def _notify_rerun(
+        self, workspace: Workspace, branch: str, reason: str
+    ) -> None:
+        """Send Telegram notification when a rerun is triggered from the dashboard."""
+        if self._notifier is None:
+            return
+        chat_id = self._get_chat_id(workspace)
+        state = workspace.state
+        title = self._get_ticket_title(workspace)
+        hdr = self._tg_header("🔄", state, title)
+        first_line = reason.splitlines()[0][:80] if reason else ""
+        msg = (
+            f"{hdr}\n"
+            f"Rerun started from dashboard.\n"
+            f"Branch: {branch}\n"
+            f"Reason: {first_line}"
+        )
+        try:
+            await self._notifier.send_message(chat_id, msg)
+        except Exception as e:
+            logger.warning("Failed to send rerun notification: %s", e)
 
     def _reconcile_disk_workspaces(self) -> None:
         """Sync in-memory workspace state with disk.

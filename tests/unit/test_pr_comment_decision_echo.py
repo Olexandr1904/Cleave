@@ -241,7 +241,7 @@ async def test_reply_matches_against_msg_ids_list():
 
     ws = MagicMock()
     ws.state = SimpleNamespace(
-        current_state="PR_REVIEW", ticket_id="T-1",
+        current_state="PR_REVIEW", ticket_id="T-1", company_id="acme",
         pending_review_comments=[
             {"comment_id": 1, "msg_ids": [100, 200], "decision": None,
              "author": "C", "file": "x.kt", "line": 1, "body": "b", "reason": "r",
@@ -318,7 +318,7 @@ async def test_echo_includes_matched_token_for_fix():
     handler._wake_fn = None
     ws = MagicMock()
     ws.state = SimpleNamespace(
-        current_state="PR_REVIEW", ticket_id="T-1",
+        current_state="PR_REVIEW", ticket_id="T-1", company_id="acme",
         pending_review_comments=[
             {"comment_id": 1, "msg_ids": [100], "decision": None,
              "author": "C", "file": "x.kt", "line": 1, "body": "b", "reason": "r",
@@ -345,7 +345,7 @@ async def test_echo_includes_matched_token_for_wont_fix():
     handler._wake_fn = None
     ws = MagicMock()
     ws.state = SimpleNamespace(
-        current_state="PR_REVIEW", ticket_id="T-1",
+        current_state="PR_REVIEW", ticket_id="T-1", company_id="acme",
         pending_review_comments=[
             {"comment_id": 1, "msg_ids": [100], "decision": None,
              "author": "C", "file": "x.kt", "line": 1, "body": "b", "reason": "r",
@@ -375,7 +375,7 @@ async def test_button_press_echo_includes_matched_token():
 
     ws = MagicMock()
     ws.state = SimpleNamespace(
-        ticket_id="T-1",
+        ticket_id="T-1", company_id="acme",
         pending_review_comments=[
             {"comment_id": 7, "msg_ids": [10], "decision": None,
              "author": "C", "file": "x.kt", "line": 1, "body": "b",

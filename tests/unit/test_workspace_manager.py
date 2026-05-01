@@ -330,3 +330,78 @@ class TestDiscoverWorkspacesIncludesFailedDeferred:
         mgr = WorkspaceManager(str(base))
         discovered = mgr.discover_workspaces()
         assert len(discovered) == 0
+
+
+class TestResetSource:
+    def _make_ws(self, tmp_path, branch="feature/T-1-t-1"):
+        ws_root = tmp_path / "acme" / "repo" / "tickets" / "T-1"
+        ws_root.mkdir(parents=True)
+        (ws_root / "meta").mkdir()
+        state = WorkspaceState(
+            ticket_id="T-1",
+            company_id="acme",
+            repo_id="repo",
+            workspace_root=str(ws_root),
+            branch=branch,
+        )
+        ws = Workspace(str(ws_root), state)
+        ws.save_state()
+        return ws
+
+    @patch("subprocess.run")
+    def test_clones_and_checks_out_feature_branch(self, mock_run, tmp_path):
+        ws = self._make_ws(tmp_path)
+        # clone succeeds; checkout feature branch succeeds
+        mock_run.side_effect = [
+            MagicMock(returncode=0, stderr=""),   # git clone
+            MagicMock(returncode=0, stderr=""),   # git checkout feature/T-1-t-1
+        ]
+        manager = WorkspaceManager(str(tmp_path))
+        # create the source dir so rmtree runs
+        ws.source_dir.mkdir(parents=True)
+
+        branch = manager.reset_source(ws, "https://git.example.com/repo.git", "develop")
+
+        assert branch == "feature/T-1-t-1"
+        clone_call = mock_run.call_args_list[0]
+        assert clone_call[0][0][0] == "git"
+        assert clone_call[0][0][1] == "clone"
+        checkout_call = mock_run.call_args_list[1]
+        assert "feature/T-1-t-1" in checkout_call[0][0]
+
+    @patch("subprocess.run")
+    def test_falls_back_to_default_branch_when_feature_missing(self, mock_run, tmp_path):
+        ws = self._make_ws(tmp_path)
+        mock_run.side_effect = [
+            MagicMock(returncode=0, stderr=""),   # git clone
+            MagicMock(returncode=1, stderr="pathspec did not match"),  # checkout feature fails
+            MagicMock(returncode=0, stderr=""),   # git checkout develop
+        ]
+        manager = WorkspaceManager(str(tmp_path))
+        ws.source_dir.mkdir(parents=True)
+
+        branch = manager.reset_source(ws, "https://git.example.com/repo.git", "develop")
+
+        assert branch == "develop"
+
+    @patch("subprocess.run")
+    def test_works_when_source_already_absent(self, mock_run, tmp_path):
+        ws = self._make_ws(tmp_path)
+        mock_run.side_effect = [
+            MagicMock(returncode=0, stderr=""),  # git clone
+            MagicMock(returncode=0, stderr=""),  # git checkout feature
+        ]
+        manager = WorkspaceManager(str(tmp_path))
+        # source_dir does NOT exist — should not raise
+
+        branch = manager.reset_source(ws, "https://git.example.com/repo.git", "develop")
+        assert branch == "feature/T-1-t-1"
+
+    @patch("subprocess.run")
+    def test_raises_workspace_error_on_clone_failure(self, mock_run, tmp_path):
+        ws = self._make_ws(tmp_path)
+        mock_run.return_value = MagicMock(returncode=1, stderr="Repository not found")
+        manager = WorkspaceManager(str(tmp_path))
+
+        with pytest.raises(WorkspaceError, match="Git clone failed"):
+            manager.reset_source(ws, "https://git.example.com/repo.git", "develop")

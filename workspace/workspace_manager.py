@@ -199,6 +199,59 @@ class WorkspaceManager:
                 "Cleaned up source for workspace: %s", workspace.state.ticket_id
             )
 
+    def reset_source(
+        self,
+        workspace: Workspace,
+        clone_url: str,
+        default_branch: str,
+    ) -> str:
+        """Re-clone source for a ticket rerun.
+
+        Wipes existing source/ if present, clones fresh, then checks out
+        workspace.state.branch. Falls back to default_branch if the remote
+        branch no longer exists. Returns the branch actually checked out.
+        """
+        source_dir = workspace.source_dir
+        branch_name = workspace.state.branch or default_branch
+
+        if source_dir.exists():
+            shutil.rmtree(source_dir)
+
+        result = subprocess.run(
+            ["git", "clone", clone_url, str(source_dir)],
+            capture_output=True,
+            text=True,
+            timeout=SUBPROCESS_TIMEOUT,
+        )
+        if result.returncode != 0:
+            raise WorkspaceError(f"Git clone failed: {result.stderr.strip()}")
+
+        checkout = subprocess.run(
+            ["git", "checkout", branch_name],
+            cwd=str(source_dir),
+            capture_output=True,
+            text=True,
+            timeout=SUBPROCESS_TIMEOUT,
+        )
+        checked_out = branch_name
+        if checkout.returncode != 0:
+            subprocess.run(
+                ["git", "checkout", default_branch],
+                cwd=str(source_dir),
+                capture_output=True,
+                text=True,
+                timeout=SUBPROCESS_TIMEOUT,
+            )
+            checked_out = default_branch
+
+        (source_dir / "reports").mkdir(parents=True, exist_ok=True)
+        logger.info(
+            "Reset source for %s — checked out %s",
+            workspace.state.ticket_id,
+            checked_out,
+        )
+        return checked_out
+
     def cleanup_old_workspaces(self, max_age_days: int) -> list[str]:
         """Delete full workspace dirs with ARCHIVED state older than max_age_days.
 

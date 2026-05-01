@@ -146,15 +146,15 @@ async def create_pr(
 
 
 def _get_ticket_summary(workspace: Workspace) -> str:
-    """Extract ticket summary from meta/ticket.json if available."""
-    import json
-    ticket_file = workspace.meta_dir / "ticket.json"
-    if ticket_file.exists():
-        try:
-            data = json.loads(ticket_file.read_text())
-            return data.get("summary", "Implementation")
-        except (json.JSONDecodeError, KeyError):
-            pass
+    """Extract ticket summary from meta/ticket.md if available."""
+    try:
+        ticket_file = workspace.meta_dir / "ticket.md"
+        if ticket_file.exists():
+            first_line = ticket_file.read_text(encoding="utf-8").splitlines()[0]
+            if first_line.startswith("# ") and ": " in first_line:
+                return first_line.split(": ", 1)[1].strip()
+    except Exception:
+        pass
     return "Implementation"
 
 

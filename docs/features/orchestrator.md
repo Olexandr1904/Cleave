@@ -96,6 +96,7 @@ Central daemon process that continuously polls for work, manages isolated worksp
 | 2026-05-01 | Extracted `_refetch_ticket_data(workspace)`: writes ticket.md, comments.md, and history.md on first run; appends a timestamped refresh block / only new comments / only new history lines on reruns. `_create_workspace_for_ticket` now delegates to it. Added `_notify_rerun(workspace, branch, reason)` notification helper for dashboard-triggered reruns. |
 | 2026-05-01 | Moved attachment downloading into `_refetch_ticket_data` so reruns also refresh images. Uses the ticket object fetched at the top of the method; skips files already present on disk. The duplicate block in `_create_workspace_for_ticket` was removed. |
 | 2026-05-01 | Fixed `strip_markdown` regex to prevent snake_case corruption: underscore italic pattern now uses `(?<!\w)..._([^_\n]+)_...(?!\w)` (non-word-char lookbehind/lookahead) instead of `(?<!_)...(?!_)` (non-underscore only), so `my_private_field` is not corrupted by italic removal. |
+| 2026-05-01 | Fixed `_get_ticket_summary` in `pr_creation.py`: was reading `meta/ticket.json` (never written); now parses first line of `meta/ticket.md` in `# TICKET-ID: summary` format. |
 
 
 

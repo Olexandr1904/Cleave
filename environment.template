@@ -1,4 +1,4 @@
-# Sickle — Required Environment Variables
+# Cleave — Required Environment Variables
 # Copy this file to .env and fill in the values.
 
 # Claude API key — leave empty to use the Claude Code CLI adapter

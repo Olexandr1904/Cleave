@@ -503,17 +503,6 @@ def build_action_routes(
         if not reason:
             return _error("reason is required and must be non-empty")
 
-        # Append rerun entry to meta/rerun_history.md
-        rerun_file = Path(ws.meta_dir) / "rerun_history.md"
-        ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-        entry = f"\n## Rerun {ts}\n\n{reason}\n"
-        existing = (
-            rerun_file.read_text(encoding="utf-8")
-            if rerun_file.exists()
-            else "# Rerun History\n"
-        )
-        rerun_file.write_text(existing + entry, encoding="utf-8")
-
         # Resolve repo config
         repo_config = None
         try:
@@ -548,6 +537,17 @@ def build_action_routes(
             )
         except Exception as e:
             return _error(f"Failed to reset source: {e}", 500)
+
+        # Append rerun entry to meta/rerun_history.md
+        rerun_file = Path(ws.meta_dir) / "rerun_history.md"
+        ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        entry = f"\n## Rerun {ts}\n\n{reason}\n"
+        existing = (
+            rerun_file.read_text(encoding="utf-8")
+            if rerun_file.exists()
+            else "# Rerun History\n"
+        )
+        rerun_file.write_text(existing + entry, encoding="utf-8")
 
         # Clear stale state fields and transition
         ws.state.pr_number = None

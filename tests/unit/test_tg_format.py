@@ -1,8 +1,6 @@
 """Tests for orchestrator/tg_format.py."""
 from __future__ import annotations
 
-import json
-from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -135,8 +133,8 @@ class TestReadTicketTitle:
     def test_reads_summary_field(self, tmp_path):
         meta_dir = tmp_path / "meta"
         meta_dir.mkdir()
-        (meta_dir / "ticket.json").write_text(
-            json.dumps({"summary": "Fix login crash on Samsung", "key": "T-1"}),
+        (meta_dir / "ticket.md").write_text(
+            "# T-1: Fix login crash on Samsung\n\n**URL:** ...",
             encoding="utf-8",
         )
         ws = SimpleNamespace(meta_dir=meta_dir)
@@ -146,22 +144,30 @@ class TestReadTicketTitle:
         ws = SimpleNamespace(meta_dir=tmp_path / "nonexistent")
         assert read_ticket_title(ws) == ""
 
-    def test_returns_empty_on_corrupt_json(self, tmp_path):
+    def test_returns_empty_on_malformed_md(self, tmp_path):
         meta_dir = tmp_path / "meta"
         meta_dir.mkdir()
-        (meta_dir / "ticket.json").write_text("not valid json", encoding="utf-8")
+        (meta_dir / "ticket.md").write_text("not a valid ticket heading\n", encoding="utf-8")
         ws = SimpleNamespace(meta_dir=meta_dir)
         assert read_ticket_title(ws) == ""
 
-    def test_returns_empty_when_summary_key_missing(self, tmp_path):
+    def test_returns_empty_when_no_colon_separator(self, tmp_path):
         meta_dir = tmp_path / "meta"
         meta_dir.mkdir()
-        (meta_dir / "ticket.json").write_text(
-            json.dumps({"key": "T-1", "status": "Open"}), encoding="utf-8",
-        )
+        (meta_dir / "ticket.md").write_text("# T-1\n\nNo colon in heading\n", encoding="utf-8")
         ws = SimpleNamespace(meta_dir=meta_dir)
         assert read_ticket_title(ws) == ""
 
     def test_handles_no_meta_dir_attribute(self):
         ws = SimpleNamespace()  # no meta_dir attribute
         assert read_ticket_title(ws) == ""
+
+    def test_title_with_colon_preserved(self, tmp_path):
+        meta_dir = tmp_path / "meta"
+        meta_dir.mkdir()
+        (meta_dir / "ticket.md").write_text(
+            "# T-2: Fix crash: NPE in MainActivity\n\n**URL:** ...",
+            encoding="utf-8",
+        )
+        ws = SimpleNamespace(meta_dir=meta_dir)
+        assert read_ticket_title(ws) == "Fix crash: NPE in MainActivity"

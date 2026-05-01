@@ -5,7 +5,6 @@ headers without depending on each other.
 """
 from __future__ import annotations
 
-import json
 import re
 from typing import Any
 
@@ -35,12 +34,13 @@ def tg_header(emoji: str, project_id: str, ticket_id: str, title: str = "") -> s
 
 
 def read_ticket_title(workspace: Any) -> str:
-    """Read ticket summary from meta/ticket.json. Returns empty string on any failure."""
+    """Read ticket summary from meta/ticket.md. Returns empty string on any failure."""
     try:
-        ticket_file = workspace.meta_dir / "ticket.json"
+        ticket_file = workspace.meta_dir / "ticket.md"
         if ticket_file.exists():
-            data = json.loads(ticket_file.read_text(encoding="utf-8"))
-            return data.get("summary", "")
+            first_line = ticket_file.read_text(encoding="utf-8").splitlines()[0]
+            if first_line.startswith("# ") and ": " in first_line:
+                return first_line.split(": ", 1)[1].strip()
     except Exception:
         pass
     return ""

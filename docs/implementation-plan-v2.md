@@ -1,4 +1,4 @@
-# Sickle — Implementation Plan v2
+# Cleave — Implementation Plan v2
 
 **Author:** John (PM Agent) / Oleksandr
 **Date:** 2026-04-08
@@ -396,7 +396,7 @@ class ToolSandbox:
 - Output format: `reports/pr-comments.md`
 - Read-only tools only (no write_file, no run_command)
 
-**Reference:** Port workflow rules from `/opt/sickle-helpers/pr_comments/400-pr-review-workflow.mdc`
+**Reference:** Port workflow rules from `/opt/cleave-helpers/pr_comments/400-pr-review-workflow.mdc`
 
 **Acceptance Criteria:**
 - [ ] Agent file created with full BMAD metadata
@@ -416,7 +416,7 @@ class ToolSandbox:
 - Real Jira connection config (env vars for secrets)
 - Real GitHub connection config
 - Real Telegram bot config
-- Helper script paths pointing to `/opt/sickle-helpers/`
+- Helper script paths pointing to `/opt/cleave-helpers/`
 - Architecture rules and protected files for Acme Mobile repo
 
 **Also create:**
@@ -543,7 +543,7 @@ class ToolSandbox:
 
 ### Story 6.3: Deployment & Monitoring
 
-**Files:** `deploy/sickle.service`, `deploy/setup.sh`
+**Files:** `deploy/cleave.service`, `deploy/setup.sh`
 **What to update:**
 - Systemd unit for v2 (new config path, env vars)
 - Setup script for new directory structure
@@ -591,6 +591,6 @@ Phase 1 ──────► Phase 2 ──────► Phase 3 ────
 
 - [ ] All stories in the phase have passing acceptance criteria
 - [ ] No regressions in existing unit tests
-- [ ] Code reviewed (by human or Sickle's own review process)
+- [ ] Code reviewed (by human or Cleave's own review process)
 - [ ] Architecture-v2 decisions respected (verified against docs/decisions/)
 - [ ] Feature index updated to reflect status

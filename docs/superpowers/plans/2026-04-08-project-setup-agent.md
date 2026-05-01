@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Build Atlas (`project-setup-agent`), a BMAD-style agent that onboards new projects into Sickle via guided conversational setup with live API validation.
+**Goal:** Build Atlas (`project-setup-agent`), a BMAD-style agent that onboards new projects into Cleave via guided conversational setup with live API validation.
 
 **Architecture:** New `integrations/config/config_tools.py` module provides 9 config management and validation functions. These are registered as tools in `orchestrator/tool_sandbox.py`. A new admin workspace type supports non-ticket agent execution. The agent prompt lives in `agents/project-setup-agent.md`. Three Claude Code commands (`.claude/commands/`) provide the entry points.
 
@@ -160,7 +160,7 @@ Create `integrations/config/config_tools.py`:
 ```python
 """Config management tools for the project-setup-agent.
 
-Provides validation and CRUD operations on Sickle project config files
+Provides validation and CRUD operations on Cleave project config files
 in the config-live/ directory.
 """
 
@@ -1122,7 +1122,7 @@ Add tool definitions to the `all_definitions` dict inside `get_tool_definitions`
         },
         "list_projects": {
             "name": "list_projects",
-            "description": "List all projects in the Sickle config directory.",
+            "description": "List all projects in the Cleave config directory.",
             "input_schema": {
                 "type": "object",
                 "properties": {
@@ -1420,7 +1420,7 @@ agent:
 persona:
   role: "DevOps Onboarding Specialist"
   style: "Methodical, thorough, validates before proceeding"
-  identity: "Configuration specialist who onboards new projects into the Sickle pipeline"
+  identity: "Configuration specialist who onboards new projects into the Cleave pipeline"
 
 core_principles:
   - "Always validate credentials before writing config"
@@ -1467,7 +1467,7 @@ dependencies:
 ## Activation
 
 You are Atlas, a Project Setup Specialist. Your role is to onboard new projects
-into the Sickle autonomous development pipeline. You guide users through
+into the Cleave autonomous development pipeline. You guide users through
 collecting project configuration details, validate credentials against live APIs,
 and write the YAML config files.
 
@@ -1616,8 +1616,8 @@ ci:
 
 git:
   clone_url: "{clone_url}"
-  commit_author_name: "Sickle Bot"
-  commit_author_email: "sickle@pipeline.local"
+  commit_author_name: "Cleave Bot"
+  commit_author_email: "cleave@pipeline.local"
   depth: 1
 
 architecture:
@@ -1703,9 +1703,9 @@ git commit -m "feat: add Atlas (project-setup-agent) agent definition"
 Create `.claude/commands/add-project.md`:
 
 ```markdown
-# Add Project to Sickle Pipeline
+# Add Project to Cleave Pipeline
 
-You are acting as **Atlas**, the Project Setup Specialist agent for the Sickle pipeline.
+You are acting as **Atlas**, the Project Setup Specialist agent for the Cleave pipeline.
 
 Read the full agent prompt at `agents/project-setup-agent.md` and follow its **Operation: Add** flow exactly.
 
@@ -1726,9 +1726,9 @@ Start by greeting the user and asking for the project ID and display name.
 Create `.claude/commands/list-projects.md`:
 
 ```markdown
-# List Sickle Projects
+# List Cleave Projects
 
-You are acting as **Atlas**, the Project Setup Specialist agent for the Sickle pipeline.
+You are acting as **Atlas**, the Project Setup Specialist agent for the Cleave pipeline.
 
 Scan the `config-live/projects/` directory in the project root. For each project:
 1. Read `project.yaml` to get the project name and enabled status
@@ -1751,9 +1751,9 @@ If no projects exist, say "No projects configured yet. Use /add-project to set o
 Create `.claude/commands/remove-project.md`:
 
 ```markdown
-# Remove Sickle Project
+# Remove Cleave Project
 
-You are acting as **Atlas**, the Project Setup Specialist agent for the Sickle pipeline.
+You are acting as **Atlas**, the Project Setup Specialist agent for the Cleave pipeline.
 
 Read the full agent prompt at `agents/project-setup-agent.md` and follow its **Operation: Remove** flow.
 

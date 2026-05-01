@@ -1,0 +1,19 @@
+[Unit]
+Description=Cleave — Autonomous AI Development Pipeline
+After=network.target
+
+[Service]
+Type=simple
+User=admin0
+Group=admin0
+WorkingDirectory=/home/admin0/cleave-prod
+ExecStart=/home/admin0/cleave-prod/.venv/bin/python3 main.py --config config-live
+EnvironmentFile=/home/admin0/cleave-prod/.env
+Restart=always
+RestartSec=10
+StandardOutput=append:/var/log/cleave/cleave.log
+StandardError=append:/var/log/cleave/cleave-error.log
+NoNewPrivileges=true
+
+[Install]
+WantedBy=multi-user.target

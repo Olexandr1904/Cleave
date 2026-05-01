@@ -269,7 +269,7 @@ class TestDiscoverWorkspacesIncludesFailedDeferred:
         from workspace.workspace_manager import WorkspaceManager
         from workspace.workspace import Workspace, WorkspaceState
 
-        base = tmp_path / "sickle"
+        base = tmp_path / "cleave"
         ws_root = base / "co" / "repo" / "tickets" / "T-1"
         ws_root.mkdir(parents=True)
         (ws_root / "meta").mkdir()
@@ -293,7 +293,7 @@ class TestDiscoverWorkspacesIncludesFailedDeferred:
         from workspace.workspace_manager import WorkspaceManager
         from workspace.workspace import Workspace, WorkspaceState
 
-        base = tmp_path / "sickle"
+        base = tmp_path / "cleave"
         ws_root = base / "co" / "repo" / "tickets" / "T-2"
         ws_root.mkdir(parents=True)
         (ws_root / "meta").mkdir()
@@ -316,7 +316,7 @@ class TestDiscoverWorkspacesIncludesFailedDeferred:
         from workspace.workspace_manager import WorkspaceManager
         from workspace.workspace import Workspace, WorkspaceState
 
-        base = tmp_path / "sickle"
+        base = tmp_path / "cleave"
         for tid, state_name in [("T-3", "DONE"), ("T-4", "ARCHIVED")]:
             ws_root = base / "co" / "repo" / "tickets" / tid
             ws_root.mkdir(parents=True)

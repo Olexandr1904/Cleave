@@ -6,7 +6,7 @@
 
 ## Overview
 
-A BMAD-style agent (`project-setup-agent`) that onboards new projects into the Sickle pipeline through guided conversational setup. It collects project details (Jira, VCS, CI/CD, quality gates, Telegram), validates credentials against live APIs, and writes the YAML config files to `config-live/`.
+A BMAD-style agent (`project-setup-agent`) that onboards new projects into the Cleave pipeline through guided conversational setup. It collects project details (Jira, VCS, CI/CD, quality gates, Telegram), validates credentials against live APIs, and writes the YAML config files to `config-live/`.
 
 The agent supports three operations: **add**, **list**, and **remove**.
 
@@ -34,7 +34,7 @@ agent:
 persona:
   role: "DevOps Onboarding Specialist"
   style: "Methodical, thorough, validates before proceeding"
-  identity: "Configuration specialist who onboards new projects into the Sickle pipeline"
+  identity: "Configuration specialist who onboards new projects into the Cleave pipeline"
 
 core_principles:
   - "Always validate credentials before writing config"

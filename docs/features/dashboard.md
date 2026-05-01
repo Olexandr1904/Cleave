@@ -7,7 +7,7 @@
 
 ## Description
 
-Local web dashboard providing real-time visibility into the Sickle pipeline. Shows per-project ticket history, agent activity, state transitions, Telegram messages, and a global event log. Runs as an embedded web server in the daemon process.
+Local web dashboard providing real-time visibility into the Cleave pipeline. Shows per-project ticket history, agent activity, state transitions, Telegram messages, and a global event log. Runs as an embedded web server in the daemon process.
 
 ## Requirements
 

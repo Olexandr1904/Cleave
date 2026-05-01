@@ -1,4 +1,4 @@
-# Sickle Deployment
+# Cleave Deployment
 
 ## VPS Requirements
 
@@ -13,8 +13,8 @@
 
 ```
 /home/admin0/tot/              Development (git repo, edit here)
-/home/admin0/sickle-prod/      Production (separate clone, pinned to tag)
-/var/log/sickle/               Daemon logs
+/home/admin0/cleave-prod/      Production (separate clone, pinned to tag)
+/var/log/cleave/               Daemon logs
 ```
 
 ## First-Time Setup
@@ -32,10 +32,10 @@ git push origin master --tags
 ./scripts/deploy.sh --init v0.1.0
 
 # Fill in API keys
-nano /home/admin0/sickle-prod/.env
+nano /home/admin0/cleave-prod/.env
 
 # Start the service
-sudo systemctl start sickle
+sudo systemctl start cleave
 ```
 
 ## Deploying a New Version
@@ -60,17 +60,17 @@ git push origin master --tags
 ## Service Management
 
 ```bash
-sudo systemctl start sickle
-sudo systemctl stop sickle
-sudo systemctl restart sickle
-sudo systemctl status sickle
-journalctl -u sickle -f
+sudo systemctl start cleave
+sudo systemctl stop cleave
+sudo systemctl restart cleave
+sudo systemctl status cleave
+journalctl -u cleave -f
 ```
 
 ## Log Files
 
-- Daemon log: `/var/log/sickle/sickle-daemon.log` (rotating, 10 MB × 5 backups). Path is `<logging.dir>/sickle-daemon.log`; the daemon falls back to `./data/` if the configured dir isn't writable.
-- systemd journal: `journalctl -u sickle -f` for stdout/stderr captured by the unit
+- Daemon log: `/var/log/cleave/cleave-daemon.log` (rotating, 10 MB × 5 backups). Path is `<logging.dir>/cleave-daemon.log`; the daemon falls back to `./data/` if the configured dir isn't writable.
+- systemd journal: `journalctl -u cleave -f` for stdout/stderr captured by the unit
 - Agent logs: per-workspace in `{workspace}/logs/`
 - Agent reports: per-workspace in `{workspace}/reports/`
 

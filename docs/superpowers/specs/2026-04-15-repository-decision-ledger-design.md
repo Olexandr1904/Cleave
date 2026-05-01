@@ -6,9 +6,9 @@
 
 ## Problem
 
-Every ticket starts with total amnesia. The Dev agent working on `PROJ-123` has no idea that ticket `PROJ-118` — on the same repo, three days ago — already tried switching the test runner from `unittest` to `pytest` and the human reviewer explicitly vetoed it. So `PROJ-123` proposes the same migration, gets the same veto, and Sickle pays the tokens plus the human round-trip a second time. Multiply across hundreds of tickets per repo over months and the compounding loss is substantial.
+Every ticket starts with total amnesia. The Dev agent working on `PROJ-123` has no idea that ticket `PROJ-118` — on the same repo, three days ago — already tried switching the test runner from `unittest` to `pytest` and the human reviewer explicitly vetoed it. So `PROJ-123` proposes the same migration, gets the same veto, and Cleave pays the tokens plus the human round-trip a second time. Multiply across hundreds of tickets per repo over months and the compounding loss is substantial.
 
-Ticket isolation is deliberate and correct: tickets should not share workspace, scratch files, or transient state. But "repo-level rulings that the humans already made" is not transient state. It's repo knowledge that deserves to live *with the repo*, not inside a ticket's workspace and not inside Sickle's daemon.
+Ticket isolation is deliberate and correct: tickets should not share workspace, scratch files, or transient state. But "repo-level rulings that the humans already made" is not transient state. It's repo knowledge that deserves to live *with the repo*, not inside a ticket's workspace and not inside Cleave's daemon.
 
 ## Goal
 
@@ -24,10 +24,10 @@ A single append-only markdown file committed to the target repository that recor
 
 ## The mechanism
 
-A single file committed to the **target repository** (not to Sickle):
+A single file committed to the **target repository** (not to Cleave):
 
 ```
-<target-repo>/.sickle/decisions.md
+<target-repo>/.cleave/decisions.md
 ```
 
 Append-only. One entry per decision. Example entries:
@@ -64,20 +64,20 @@ The format is a convention, not a schema. Agents produce it from a prompt templa
 
 ### Readers
 
-**`BA agent`** — reads the ledger during ticket analysis. The BA prompt gains a read step: *"Before drafting the ticket brief, read `.sickle/decisions.md` if present. Cite any entry whose scope overlaps the current ticket in the 'Constraints' section of the brief."*
+**`BA agent`** — reads the ledger during ticket analysis. The BA prompt gains a read step: *"Before drafting the ticket brief, read `.cleave/decisions.md` if present. Cite any entry whose scope overlaps the current ticket in the 'Constraints' section of the brief."*
 
-**`Dev agent`** — reads the ledger before planning. The Dev prompt gains: *"Before proposing an implementation plan, read `.sickle/decisions.md` if present. Treat each entry as a binding constraint unless the ticket explicitly supersedes it. If the plan would violate an entry, stop and escalate."*
+**`Dev agent`** — reads the ledger before planning. The Dev prompt gains: *"Before proposing an implementation plan, read `.cleave/decisions.md` if present. Treat each entry as a binding constraint unless the ticket explicitly supersedes it. If the plan would violate an entry, stop and escalate."*
 
 Other agents (PM, QA, Merge) do not read the ledger — they don't need the information and giving every agent the file invites prompt bloat.
 
-## Why in the target repo, not in Sickle
+## Why in the target repo, not in Cleave
 
 Three reasons in order of importance:
 
 ### 1. Scope boundary matches repo boundary
 
 Decisions about repo X apply only to repo X. Storing them inside the repo means:
-- No synchronization problem between Sickle and the repo
+- No synchronization problem between Cleave and the repo
 - No cross-repo contamination if two projects share agents
 - No ambiguity about which set of decisions applies to a given ticket
 
@@ -88,18 +88,18 @@ The repo is the natural unit of ownership for these rulings. Any other location 
 No new database. No vector store. No separate service. The ledger is:
 - Version-controlled alongside the code it governs
 - Diff-able and reviewable in PRs (humans can see when a ruling was added and by whom)
-- Resilient to Sickle being rebuilt, moved, or reinstalled from scratch
-- Accessible to any tool that reads the repo, not just Sickle
+- Resilient to Cleave being rebuilt, moved, or reinstalled from scratch
+- Accessible to any tool that reads the repo, not just Cleave
 
 ### 3. Humans can edit it
 
-A developer can open `.sickle/decisions.md` in their editor and:
+A developer can open `.cleave/decisions.md` in their editor and:
 - Fix a wrong entry
 - Add context the agents missed
 - Delete a ruling that no longer applies
 - Write an entry manually from the start of the repo's life
 
-If the ledger lived in Sickle's SQLite, it would be opaque, locked to Sickle's tooling, and would rot. Making it a markdown file in the repo means maintenance is a normal PR.
+If the ledger lived in Cleave's SQLite, it would be opaque, locked to Cleave's tooling, and would rot. Making it a markdown file in the repo means maintenance is a normal PR.
 
 ## Writing discipline (the fragile part)
 
@@ -125,13 +125,13 @@ The prompts include explicit anti-patterns to reject during self-review, modeled
 ## Lifecycle and commit flow
 
 - The ledger file is **created lazily** by the first writer. If it doesn't exist when a reader looks, the reader treats it as empty and moves on. No errors, no warnings.
-- Writes happen **in the same commit** as the ticket's code change. The agent that made the code change stages `.sickle/decisions.md` alongside its other files. This means:
+- Writes happen **in the same commit** as the ticket's code change. The agent that made the code change stages `.cleave/decisions.md` alongside its other files. This means:
   - The ledger grows in lockstep with the code
   - No orphan "ledger update" commits that look suspicious in history
   - If the ticket's PR is rejected, the ledger entry is rejected with it
-- **Concurrent writes are not a problem.** Tickets are isolated per workspace, so two tickets can never write to the same `.sickle/decisions.md` at the same time. Merge conflicts at the ledger level are handled the same way as any other merge conflict on a shared file — by the human reviewer.
+- **Concurrent writes are not a problem.** Tickets are isolated per workspace, so two tickets can never write to the same `.cleave/decisions.md` at the same time. Merge conflicts at the ledger level are handled the same way as any other merge conflict on a shared file — by the human reviewer.
 
-## Sickle-side implementation
+## Cleave-side implementation
 
 Minimal. The bulk of the feature lives in agent prompt changes. Code changes:
 
@@ -158,7 +158,7 @@ Minimal. The bulk of the feature lives in agent prompt changes. Code changes:
 | An agent rewrites or deletes existing entries | Hard failure. Caught at review time in the PR diff; the offending PR is rejected and the prompt is tightened. Rule 3 should be stated in the strongest possible language in writer prompts. |
 | The ledger grows unbounded | Expected behavior for the first year. At ~50 entries per repo, add a "recent 20 entries" windowing at read time; at ~200 entries, consider sectioning by scope. Not a day-one concern. |
 | Stale entries (rulings that no longer apply) | Humans curate in a normal PR; agents never delete. Entry format includes "Binding until" field to make currency explicit. |
-| Repo doesn't have `.sickle/` directory | `append_entry` creates it on first write. Readers treat missing file as empty. |
+| Repo doesn't have `.cleave/` directory | `append_entry` creates it on first write. Readers treat missing file as empty. |
 
 ## Testing strategy
 

@@ -5,11 +5,11 @@
 
 ## Goal
 
-Make Sickle's documentation land for a first-time reader by splitting the front-page README from per-topic reference docs. The current README is 73 lines and mixes "what is this" with "how do I run it"; details (labels, TG commands, dashboard buttons) get truncated to one-liners.
+Make Cleave's documentation land for a first-time reader by splitting the front-page README from per-topic reference docs. The current README is 73 lines and mixes "what is this" with "how do I run it"; details (labels, TG commands, dashboard buttons) get truncated to one-liners.
 
 After this change a reader should be able to:
 
-1. Read the README in 60 s and understand what Sickle is, what it can do, and how to start it.
+1. Read the README in 60 s and understand what Cleave is, what it can do, and how to start it.
 2. Drill into one specific topic (Telegram, dashboard, labels, troubleshooting) without scrolling through 500 lines of unrelated material.
 3. Find every shipped feature listed once, in the right doc.
 
@@ -24,7 +24,7 @@ After this change a reader should be able to:
 - Inline button callback actions from `escalation_view.py` and `orchestrator.py` (approve, reject, retry, reviewed, pr_fix, pr_wontfix, clear_gradle, unanswered)
 - Allowlist behavior, BLOCKED reply unblock, escalation message types
 
-**`docs/labels.md`** (new) — single reference for every Jira label Sickle reads:
+**`docs/labels.md`** (new) — single reference for every Jira label Cleave reads:
 - Trigger labels (`jira.trigger_labels`, default `["ai-pipeline"]`, AND semantics)
 - Ignore labels (`jira.ignore_labels`)
 - Model labels (`model-haiku`, `model-sonnet`, `model-opus`) — case-insensitive on short name, prefix lowercase

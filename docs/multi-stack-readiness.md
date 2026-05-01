@@ -1,11 +1,11 @@
-# Multi-Stack Readiness — Can Sickle Onboard Web / iOS / Backend Projects?
+# Multi-Stack Readiness — Can Cleave Onboard Web / iOS / Backend Projects?
 
 **Audit date:** 2026-04-30
 **Question:** How easy is it to add a web (React/TS), iOS (Swift), or backend (Python/Node/Go) project to the pipeline? What needs to decouple first?
 
 ## TL;DR
 
-**Sickle is ~85% project-agnostic by design and ~15% Android/Gradle-coupled by accretion.** The hard parts (state machine, agent dispatch, VCS/tracker/notifier) are well-abstracted. The leak is concentrated in **one module** ([`orchestrator/gradle_remediation.py`](orchestrator/gradle_remediation.py)) and **two call sites** in [`orchestrator/orchestrator.py`](orchestrator/orchestrator.py) and [`orchestrator/pr_creation.py`](orchestrator/pr_creation.py).
+**Cleave is ~85% project-agnostic by design and ~15% Android/Gradle-coupled by accretion.** The hard parts (state machine, agent dispatch, VCS/tracker/notifier) are well-abstracted. The leak is concentrated in **one module** ([`orchestrator/gradle_remediation.py`](orchestrator/gradle_remediation.py)) and **two call sites** in [`orchestrator/orchestrator.py`](orchestrator/orchestrator.py) and [`orchestrator/pr_creation.py`](orchestrator/pr_creation.py).
 
 **You could onboard a web/iOS/backend project today** by setting `linting.run_command`, `testing.run_command`, `build.check_command` in repo YAML — agents read those and run them blindly. The Android-specific code would just sit dead. The right thing to do before scaling: extract one `FailureRecoveryPlugin` interface so per-stack remediation hooks plug in cleanly. **Estimated work: 1 focused day.**
 
@@ -102,12 +102,12 @@ Assuming **no** decoupling work first (just use the existing levers):
 | Stack | Required config changes | Will the pipeline run? | Will failure UX be clean? |
 |---|---|---|---|
 | **Web (React/TS)** | `linting.run_command: "npm run lint"`, `testing.run_command: "npm test"`, `build.check_command: "npm run build"` | Yes | No — Gradle button + "Android SDK not installed" warnings will misfire on certain errors |
-| **iOS (Swift)** | `linting.run_command: "swiftlint"`, `testing.run_command: "xcodebuild test ..."`, `build.check_command: "xcodebuild build ..."` | Yes, but `xcodebuild` requires macOS host — Sickle daemon is Linux-only today | Same warning leakage |
+| **iOS (Swift)** | `linting.run_command: "swiftlint"`, `testing.run_command: "xcodebuild test ..."`, `build.check_command: "xcodebuild build ..."` | Yes, but `xcodebuild` requires macOS host — Cleave daemon is Linux-only today | Same warning leakage |
 | **Backend (Python)** | `linting.run_command: "ruff check ."`, `testing.run_command: "pytest"`, `build.check_command: "python -m build"` | Yes | Same warning leakage |
 | **Backend (Node)** | `linting.run_command: "eslint ."`, `testing.run_command: "npm test"`, `build.check_command: "tsc --noEmit"` | Yes | Same |
 | **Backend (Go)** | `linting.run_command: "golangci-lint run"`, `testing.run_command: "go test ./..."`, `build.check_command: "go build ./..."` | Yes | Same |
 
-**iOS has an extra blocker:** `xcodebuild` needs macOS. The Sickle daemon currently assumes Linux ([`CLAUDE.md`](CLAUDE.md) lists `gradlew`, no Xcode tooling). A separate macOS runner or a build-on-CI-only mode is needed. Punt: have iOS QA delegate compilation entirely to GitHub Actions runners and treat local lint-only as the gate.
+**iOS has an extra blocker:** `xcodebuild` needs macOS. The Cleave daemon currently assumes Linux ([`CLAUDE.md`](CLAUDE.md) lists `gradlew`, no Xcode tooling). A separate macOS runner or a build-on-CI-only mode is needed. Punt: have iOS QA delegate compilation entirely to GitHub Actions runners and treat local lint-only as the gate.
 
 ---
 

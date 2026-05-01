@@ -1,4 +1,4 @@
-"""Embedded web server for the Sickle dashboard."""
+"""Embedded web server for the Cleave dashboard."""
 
 from __future__ import annotations
 

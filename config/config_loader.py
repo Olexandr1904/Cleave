@@ -1,4 +1,4 @@
-"""Configuration loader for Sickle.
+"""Configuration loader for Cleave.
 
 Loads and validates the 3-level config hierarchy:
   global.yaml -> project.yaml -> repo.yaml

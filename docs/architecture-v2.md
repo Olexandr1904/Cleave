@@ -1,8 +1,8 @@
-# Sickle — Architecture Document v2
+# Cleave — Architecture Document v2
 
 ## Introduction
 
-This document is the definitive system architecture for Sickle — an autonomous Jira-driven development system (AJDS). It merges the original Sickle architecture with the AJDS RFC and incorporates decisions made during the 2026-04-08 architecture review session.
+This document is the definitive system architecture for Cleave — an autonomous Jira-driven development system (AJDS). It merges the original Cleave architecture with the AJDS RFC and incorporates decisions made during the 2026-04-08 architecture review session.
 
 This document supersedes `architecture.md` (v1). All implementation work references this document.
 
@@ -43,7 +43,7 @@ This document supersedes `architecture.md` (v1). All implementation work referen
 
 ### Technical Summary
 
-Sickle is a modular monolith Python daemon that orchestrates autonomous software development. The system follows an **event-loop + agent dispatch** architecture: a single persistent orchestrator polls for work, manages isolated workspaces, and dispatches BMAD-style AI agents via Claude API with tool_use (function calling). All inter-agent communication is file-based (workspace artifacts). All state is on disk (`state.json`). All external integrations are behind abstract adapter interfaces supporting multiple providers (GitHub/GitLab, GitHub Actions/Jenkins, Jira, Telegram).
+Cleave is a modular monolith Python daemon that orchestrates autonomous software development. The system follows an **event-loop + agent dispatch** architecture: a single persistent orchestrator polls for work, manages isolated workspaces, and dispatches BMAD-style AI agents via Claude API with tool_use (function calling). All inter-agent communication is file-based (workspace artifacts). All state is on disk (`state.json`). All external integrations are behind abstract adapter interfaces supporting multiple providers (GitHub/GitLab, GitHub Actions/Jenkins, Jira, Telegram).
 
 ### Architecture Diagram
 
@@ -284,7 +284,7 @@ defaults:
 
 logging:
   level: "INFO"
-  dir: "/var/log/sickle"
+  dir: "/var/log/cleave"
 
 heartbeat:
   enabled: true
@@ -353,8 +353,8 @@ ci:
 git:
   clone_url: "git@github.com:acme-orgcation/acme-mobile.git"
   depth: 1                          # shallow clone (0 = full)
-  commit_author_name: "Sickle Bot"
-  commit_author_email: "sickle@acme.com"
+  commit_author_name: "Cleave Bot"
+  commit_author_email: "cleave@acme.com"
 
 architecture:
   rules_file: "arch-rules.md"      # relative to /rules/
@@ -389,11 +389,11 @@ pr_description_template: |
 
 # Existing helper scripts (wrapped as subprocesses)
 helpers:
-  fetch_pr_comments: "/opt/sickle-helpers/pr_comments/fetch_pr_comments.py"
-  resolve_pr_comments: "/opt/sickle-helpers/pr_comments/resolve_pr_comments.py"
-  fetch_ci_failure: "/opt/sickle-helpers/ci_failures/fetch_ci_failure.py"
-  fetch_jira_tickets: "/opt/sickle-helpers/jira_tickets/fetch_jira_tickets.py"
-  update_jira_status: "/opt/sickle-helpers/jira_tickets/update_jira_status.py"
+  fetch_pr_comments: "/opt/cleave-helpers/pr_comments/fetch_pr_comments.py"
+  resolve_pr_comments: "/opt/cleave-helpers/pr_comments/resolve_pr_comments.py"
+  fetch_ci_failure: "/opt/cleave-helpers/ci_failures/fetch_ci_failure.py"
+  fetch_jira_tickets: "/opt/cleave-helpers/jira_tickets/fetch_jira_tickets.py"
+  update_jira_status: "/opt/cleave-helpers/jira_tickets/update_jira_status.py"
 ```
 
 ---
@@ -960,7 +960,7 @@ Daily summary:
 ## 12. Source Tree
 
 ```
-sickle/
+cleave/
 ├── main.py                              # CLI entry point
 ├── pyproject.toml                       # Dependencies
 │
@@ -1023,7 +1023,7 @@ sickle/
 │   └── fixtures/
 │
 ├── deploy/
-│   ├── sickle.service                   # systemd unit
+│   ├── cleave.service                   # systemd unit
 │   ├── setup.sh                         # VPS setup
 │   └── environment.template             # Env vars template
 │
@@ -1044,13 +1044,13 @@ sickle/
 
 - **Target:** Ubuntu VPS (Hetzner/DigitalOcean/AWS Lightsail)
 - **Requirements:** 4 CPU, 8GB RAM, 50GB disk (10-15GB for workspaces)
-- **Deployment:** `git pull && pip install -e . && systemctl restart sickle`
+- **Deployment:** `git pull && pip install -e . && systemctl restart cleave`
 - **Process management:** systemd with `Restart=always`, `RestartSec=10`
-- **Runs as:** dedicated `sickle` user
+- **Runs as:** dedicated `cleave` user
 
 ### Rollback
 
-- `git revert` + `systemctl restart sickle`
+- `git revert` + `systemctl restart cleave`
 - Recovery time: < 5 minutes
 - All workspace state survives restart automatically
 

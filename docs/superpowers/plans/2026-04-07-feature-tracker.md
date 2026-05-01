@@ -41,7 +41,7 @@
 Create `docs/features/index.md` with the full table:
 
 ```markdown
-# Sickle — Feature Tracker
+# Cleave — Feature Tracker
 
 > Track all features, their status, and link to detailed specs.
 > Statuses: **Planned** | **In Progress** | **Implemented**
@@ -969,7 +969,7 @@ git checkout -- agents/dev-agent.md docs/features/agent-system.md
 Create `CONTRIBUTING.md` in the project root:
 
 ```markdown
-# Contributing to Sickle
+# Contributing to Cleave
 
 ## Feature Documentation Rule
 
@@ -1135,7 +1135,7 @@ head -3 CONTRIBUTING.md
 
 Expected:
 ```
-# Contributing to Sickle
+# Contributing to Cleave
 
 ## Feature Documentation Rule
 ```

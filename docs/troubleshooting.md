@@ -1,6 +1,6 @@
 # Troubleshooting
 
-What to do when Sickle isn't doing what you expect.
+What to do when Cleave isn't doing what you expect.
 
 This doc is a user-facing reference for diagnosing common problems. For implementation/spec content, see [docs/features/](features/).
 
@@ -8,11 +8,11 @@ This doc is a user-facing reference for diagnosing common problems. For implemen
 
 ## First: ask an AI
 
-Sickle's codebase is opinionated and the error messages are usually specific. Before diving into logs, try this:
+Cleave's codebase is opinionated and the error messages are usually specific. Before diving into logs, try this:
 
-1. Copy the relevant error log lines (from `/var/log/sickle/sickle-daemon.log` or `<workspace>/logs/`).
+1. Copy the relevant error log lines (from `/var/log/cleave/cleave-daemon.log` or `<workspace>/logs/`).
 2. Copy the command you ran and any relevant `state.json`.
-3. Paste it into Claude (or your AI assistant of choice) along with: "I'm running Sickle, an autonomous AI dev pipeline. Here's what happened: …"
+3. Paste it into Claude (or your AI assistant of choice) along with: "I'm running Cleave, an autonomous AI dev pipeline. Here's what happened: …"
 
 AI assistants are particularly good at the following common categories of failure:
 
@@ -49,7 +49,7 @@ It prints each project's check results. Use this in CI or when smoke-testing a n
 ### 3. Daemon log
 
 ```
-/var/log/sickle/sickle-daemon.log
+/var/log/cleave/cleave-daemon.log
 ```
 
 - Configurable via `global.yaml` → `logging.dir`
@@ -60,7 +60,7 @@ It prints each project's check results. Use this in CI or when smoke-testing a n
 Tail it during a poll cycle:
 
 ```bash
-tail -f /var/log/sickle/sickle-daemon.log
+tail -f /var/log/cleave/cleave-daemon.log
 ```
 
 ### 4. Per-workspace logs and reports
@@ -76,7 +76,7 @@ Every workspace keeps its own logs and agent reports:
     reports/        — Markdown reports the agents wrote (BA plan, QA output, etc.)
 ```
 
-`workspaces.base_dir` is set in `global.yaml` (schema default `/data`; the example config-live ships `/data/sickle`).
+`workspaces.base_dir` is set in `global.yaml` (schema default `/data`; the example config-live ships `/data/cleave`).
 
 The dashboard's Ticket Detail view exposes the same files inline — you don't need to ssh in.
 
@@ -141,7 +141,7 @@ The four most common host-config root causes:
 
 If you've gone through the above and the failure is in the orchestrator, an agent's tool sandbox, the dashboard, or an integration adapter — and the AI assistant agrees it isn't a config issue — open a GitHub issue with:
 
-- Sickle version (`./run.sh` prints it on startup, or `python main.py --config config-live --help` after install)
+- Cleave version (`./run.sh` prints it on startup, or `python main.py --config config-live --help` after install)
 - The relevant `state.json` (redact tokens)
 - The daemon log lines around the failure
 - The agent report, if the failure is in an agent

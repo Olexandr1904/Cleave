@@ -10,7 +10,7 @@ from typing import Any
 logger = logging.getLogger(__name__)
 
 INTENT_SYSTEM_PROMPT = """\
-You are the command parser for Sickle, an autonomous dev pipeline.
+You are the command parser for Cleave, an autonomous dev pipeline.
 Current state:
 - Mode: {mode}
 - Awaiting approval: {awaiting_approval}

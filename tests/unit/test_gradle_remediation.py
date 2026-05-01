@@ -40,7 +40,7 @@ class TestLooksLikeGradleCacheCorruption:
     def test_matches_real_world_push_failure(self):
         # Verbatim from ACME-12058 state.json — full pre-push hook output
         msg = (
-            "Git command failed: git -C /data/sickle/.../source push -u origin feature/ACME-12058\n"
+            "Git command failed: git -C /data/cleave/.../source push -u origin feature/ACME-12058\n"
             "AAPT2 aapt2-8.6.1-11315950-linux Daemon #1: Unexpected error output: "
             "/home/admin0/.gradle/caches/8.14.1/transforms/.../aapt2: 2: Syntax error: \"(\" unexpected\n"
             "FAILURE: Build failed with an exception."

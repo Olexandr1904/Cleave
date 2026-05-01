@@ -167,7 +167,7 @@ def discover_resources(base_dir: str) -> ResourceRegistry:
     """Scan resource directories and build a ResourceRegistry.
 
     Args:
-        base_dir: Root directory of the sickle project (where agents/, tasks/, etc. live).
+        base_dir: Root directory of the cleave project (where agents/, tasks/, etc. live).
 
     Returns:
         A populated ResourceRegistry.

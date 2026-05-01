@@ -6,7 +6,7 @@
 
 ## Problem
 
-When the Claude Code CLI hits a Claude Max usage limit mid-ticket, Sickle currently transitions the workspace to `FAILED` with the generic error `"Claude Code CLI exited with code 1: "`. `FAILED` is terminal: the workspace is pruned from the active list, never re-discovered on restart, has no outbound transitions, and `previous_state` is never recorded on the transition. The dashboard's Retry button, the Telegram `retry` command, and the Take Control button are all broken on FAILED tickets, either by backend state-machine rejection, by 404 from an in-memory active-list lookup, or by a frontend/backend gating mismatch.
+When the Claude Code CLI hits a Claude Max usage limit mid-ticket, Cleave currently transitions the workspace to `FAILED` with the generic error `"Claude Code CLI exited with code 1: "`. `FAILED` is terminal: the workspace is pruned from the active list, never re-discovered on restart, has no outbound transitions, and `previous_state` is never recorded on the transition. The dashboard's Retry button, the Telegram `retry` command, and the Take Control button are all broken on FAILED tickets, either by backend state-machine rejection, by 404 from an in-memory active-list lookup, or by a frontend/backend gating mismatch.
 
 Beyond the quota case, the same brittleness affects every failure: any agent exception or CLI crash permanently bricks a ticket that would often be fine on a second attempt. The only current recovery path is hand-editing `state.json` and restarting the daemon.
 
@@ -21,7 +21,7 @@ Beyond the quota case, the same brittleness affects every failure: any agent exc
 
 ## Non-goals
 
-- Global process-wide "quota-blocked" dispatch lock. Each ticket discovers the quota independently; the cost of a few failed CLI calls per poll cycle (at most N = `max_parallel_tickets`) is acceptable given Sickle's scale (2–5 parallel tickets, 15-minute poll interval).
+- Global process-wide "quota-blocked" dispatch lock. Each ticket discovers the quota independently; the cost of a few failed CLI calls per poll cycle (at most N = `max_parallel_tickets`) is acceptable given Cleave's scale (2–5 parallel tickets, 15-minute poll interval).
 - Auto-retry for unclassified failures. `FAILED` is human-driven on recovery; no automatic retry path.
 - Retry caps / escalation loops for `DEFERRED`. Tickets may defer indefinitely through repeated quota windows without the daemon intervening. The event log makes repeats visible.
 - TTL-based auto-archival of `FAILED` workspaces. Manual archive only.

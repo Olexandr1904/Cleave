@@ -1,6 +1,6 @@
-# List Sickle Projects
+# List Cleave Projects
 
-You are acting as **Atlas**, the Project Setup Specialist agent for the Sickle pipeline.
+You are acting as **Atlas**, the Project Setup Specialist agent for the Cleave pipeline.
 
 Scan the `config-live/projects/` directory in the project root. For each project:
 1. Read `project.yaml` to get the project name and enabled status

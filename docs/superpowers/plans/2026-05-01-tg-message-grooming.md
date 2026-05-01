@@ -587,7 +587,7 @@ With:
                     f"{hdr}\n"
                     f"PR opened: {pr_url}\n\n"
                     f"Review the diff and merge when ready. The pipeline will wait.\n\n"
-                    f"If there are review comments, Sickle will escalate them one by one "
+                    f"If there are review comments, Cleave will escalate them one by one "
                     f"for your decision (Fix or Won't Fix). Reply to any escalation message "
                     f"to provide context.\n\n"
                     f"When done: tap Review Complete or reply to this message."

@@ -1,4 +1,4 @@
-"""Configuration schema dataclasses for Sickle (v2)."""
+"""Configuration schema dataclasses for Cleave (v2)."""
 
 from __future__ import annotations
 
@@ -72,7 +72,7 @@ class DefaultsConfig:
 @dataclass
 class LoggingConfig:
     level: str = "INFO"
-    dir: str = "/var/log/sickle"
+    dir: str = "/var/log/cleave"
 
 
 @dataclass
@@ -183,7 +183,7 @@ class VCSConfig:
     # the pipeline's QA stage already covers, or that fails for reasons
     # unrelated to code (e.g. host-level toolchain incompatibility). Default
     # off; set to true per-project only after confirming the hook is
-    # redundant with Sickle's own QA gate.
+    # redundant with Cleave's own QA gate.
     skip_pre_push_hook: bool = False
 
 
@@ -208,8 +208,8 @@ class CIConfig:
 @dataclass
 class GitConfig:
     clone_url: str = ""
-    commit_author_name: str = "Sickle Bot"
-    commit_author_email: str = "sickle@pipeline.local"
+    commit_author_name: str = "Cleave Bot"
+    commit_author_email: str = "cleave@pipeline.local"
     depth: int = 0
 
 

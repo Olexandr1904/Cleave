@@ -171,7 +171,7 @@ def _build_pr_body(workspace: Workspace, repo_config: RepoConfig) -> str:
     # Default template
     return (
         f"## {state.ticket_id}\n\n"
-        f"Automated PR created by Sickle pipeline.\n\n"
+        f"Automated PR created by Cleave pipeline.\n\n"
         f"### Checklist\n"
         f"- [x] Implementation plan followed\n"
         f"- [x] Scope guard passed\n"

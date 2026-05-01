@@ -27,7 +27,7 @@ def filter_tickets(
     tickets: list[TicketData],
     trigger_labels: list[str],
     ignore_labels: list[str],
-    bot_name: str = "Sickle Pipeline",
+    bot_name: str = "Cleave Pipeline",
 ) -> list[TicketData]:
     """Filter tickets by label and assignee rules.
 
@@ -171,7 +171,7 @@ def prioritize_and_route(
     tickets: list[TicketData],
     project: LoadedProject,
     done_ticket_ids: set[str] | None = None,
-    bot_name: str = "Sickle Pipeline",
+    bot_name: str = "Cleave Pipeline",
 ) -> list[PrioritizedTicket]:
     """Full PM Agent pipeline: filter → route → skip blocked → prioritize.
 

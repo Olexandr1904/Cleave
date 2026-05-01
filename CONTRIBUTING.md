@@ -1,4 +1,4 @@
-# Contributing to Sickle
+# Contributing to Cleave
 
 ## Feature Documentation Rule
 

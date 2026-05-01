@@ -1,6 +1,6 @@
 # Dashboard Reference
 
-Tour of the Sickle web dashboard: every view, every button, what each one does.
+Tour of the Cleave web dashboard: every view, every button, what each one does.
 
 This doc is a user-facing reference. For the implementation/spec, see [docs/features/dashboard.md](features/dashboard.md).
 
@@ -8,7 +8,7 @@ This doc is a user-facing reference. For the implementation/spec, see [docs/feat
 
 ## Starting and reaching it
 
-The dashboard runs in-process with the daemon — when you start Sickle (`./run.sh` or `python main.py --config config-live`), the dashboard comes up at the same time.
+The dashboard runs in-process with the daemon — when you start Cleave (`./run.sh` or `python main.py --config config-live`), the dashboard comes up at the same time.
 
 - **URL:** [http://localhost:8080](http://localhost:8080) (defaults; the daemon binds to `dashboard.host` `0.0.0.0` and listens on `dashboard.port` `8080`)
 - **Configured at:** `global.yaml` → `dashboard.host`, `dashboard.port`

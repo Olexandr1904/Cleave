@@ -1,4 +1,4 @@
-# Sickle — Project Reference
+# Cleave — Project Reference
 
 > Single-file context document for AI agents and contributors.
 > Last updated: 2026-04-30.
@@ -7,9 +7,9 @@
 
 ---
 
-## What is Sickle?
+## What is Cleave?
 
-Sickle is a fully autonomous, 24/7 AI-driven development pipeline. It takes Jira tickets from "To Do" to open PR without human involvement in the happy path. When stuck, it asks precise questions via Telegram and resumes on reply. Humans review and merge PRs — the system never merges.
+Cleave is a fully autonomous, 24/7 AI-driven development pipeline. It takes Jira tickets from "To Do" to open PR without human involvement in the happy path. When stuck, it asks precise questions via Telegram and resumes on reply. Humans review and merge PRs — the system never merges.
 
 It runs as a single Python daemon on a VPS, manages multiple companies/repos via config, and uses BMAD-style AI agents (markdown prompt files) executed via Claude Code CLI.
 
@@ -136,7 +136,7 @@ Secrets via `${ENV_VAR}` references resolved at load time.
 ### Workspace Directory
 
 ```
-/data/sickle/{company}/{repo}/tickets/{ticket_id}/
+/data/cleave/{company}/{repo}/tickets/{ticket_id}/
   state.json        # Pipeline state (atomic writes)
   meta/             # ticket.md, parent.md (input data)
   logs/             # Per-agent execution logs
@@ -191,5 +191,5 @@ Secrets via `${ENV_VAR}` references resolved at load time.
 - [Architecture v2](architecture-v2.md) — full technical architecture (1000+ lines)
 - [Agent Contracts](agent-contracts.md) — formal BMAD contracts for all agents
 - [Implementation Plan](implementation-plan-v2.md) — phased stories with acceptance criteria
-- [Decisions](decisions/2026-04-08-architecture-decisions.md) — RFC vs Sickle resolution log
+- [Decisions](decisions/2026-04-08-architecture-decisions.md) — RFC vs Cleave resolution log
 - [Feature Tracker](features/index.md) — feature status table

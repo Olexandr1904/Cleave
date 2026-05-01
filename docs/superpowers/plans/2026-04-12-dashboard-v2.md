@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Rewrite the Sickle dashboard into an operations dashboard with working navigation, action buttons (approve/reject/retry), and a "Take Control" feature that pauses the pipeline and opens a Claude Code session.
+**Goal:** Rewrite the Cleave dashboard into an operations dashboard with working navigation, action buttons (approve/reject/retry), and a "Take Control" feature that pauses the pipeline and opens a Claude Code session.
 
 **Architecture:** Multi-file vanilla JS frontend (no framework, no build step) served by the existing Starlette backend. New REST action endpoints modify workspace state. A new `MANUAL_CONTROL` workspace state locks a ticket for human takeover. The orchestrator skips MANUAL_CONTROL workspaces and exposes agent cancellation.
 
@@ -2156,13 +2156,13 @@ Replace the entire file with:
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Sickle Dashboard</title>
+<title>Cleave Dashboard</title>
 <link rel="stylesheet" href="/static/style.css">
 </head>
 <body>
 
 <nav id="sidebar">
-  <div id="sidebar-logo">Sickle</div>
+  <div id="sidebar-logo">Cleave</div>
   <div class="sidebar-section">
     <a class="nav-link" id="nav-board">Board</a>
     <a class="nav-link" id="nav-eventlog">Event Log</a>

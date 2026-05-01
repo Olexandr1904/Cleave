@@ -62,7 +62,7 @@ Strong success criteria let you loop independently. Weak criteria ("make it work
 
 ## 5. Pipeline Agent Permissions
 
-Sickle dispatches Claude Code agents via `claude -p` as automated subprocesses.
+Cleave dispatches Claude Code agents via `claude -p` as automated subprocesses.
 These agents need tool access to read/write code, run git, and execute build commands.
 
 **Permission setup:** `.claude/settings.json` pre-approves tools for the pipeline:
@@ -73,7 +73,7 @@ These agents need tool access to read/write code, run git, and execute build com
 - **Shell basics:** ls, find, cat, grep, mkdir, cp, mv
 
 **Denied:** `rm -rf /`, `sudo`, `curl`, `wget` (agents must not reach external
-services or escalate privileges — API calls go through Sickle's own adapters).
+services or escalate privileges — API calls go through Cleave's own adapters).
 
 **How agents get their tools:**
 1. Each agent's `.md` frontmatter lists allowed tools (e.g., `tools: [read_file, write_file, git_operation]`)

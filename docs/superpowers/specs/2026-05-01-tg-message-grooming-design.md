@@ -199,7 +199,7 @@ PR opened: {url}
 
 Review the diff and merge when ready. The pipeline will wait.
 
-If there are review comments, Sickle will escalate them one by one for your decision (Fix or Won't Fix). Reply to any escalation message to provide context.
+If there are review comments, Cleave will escalate them one by one for your decision (Fix or Won't Fix). Reply to any escalation message to provide context.
 
 When done: tap Review Complete or reply to this message.
 ```

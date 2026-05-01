@@ -1041,7 +1041,7 @@ ls config-live/projects/     # expect empty
 
 Expected output:
 ```
-Sickle v0.1.0 starting with config: config-live
+Cleave v0.1.0 starting with config: config-live
   Config loaded: logging=INFO
   Projects discovered: 0
   Resources discovered: …

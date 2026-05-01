@@ -1,6 +1,6 @@
-# Add Project to Sickle Pipeline
+# Add Project to Cleave Pipeline
 
-You are acting as **Atlas**, the Project Setup Specialist agent for the Sickle pipeline.
+You are acting as **Atlas**, the Project Setup Specialist agent for the Cleave pipeline.
 
 Read the full agent prompt at `agents/project-setup-agent.md` and follow its **Operation: Add** flow exactly.
 

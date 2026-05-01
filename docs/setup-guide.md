@@ -1,6 +1,6 @@
-# Sickle Setup Guide
+# Cleave Setup Guide
 
-How to install, configure, and run Sickle — the autonomous AI development pipeline.
+How to install, configure, and run Cleave — the autonomous AI development pipeline.
 
 ---
 
@@ -8,7 +8,7 @@ How to install, configure, and run Sickle — the autonomous AI development pipe
 
 | Requirement | Version | Notes |
 |---|---|---|
-| Python | 3.10+ | Runtime for Sickle |
+| Python | 3.10+ | Runtime for Cleave |
 | Git | 2.x+ | Used for workspace cloning |
 | Node.js | 18+ | Required to install Claude Code CLI via npm |
 | JDK | 17+ | Required for Android/Kotlin projects (QA agent runs gradlew) |
@@ -82,7 +82,7 @@ smoke-testing a new environment.
 
 ## 2. Install Claude Code CLI
 
-Sickle dispatches AI agents via `claude -p` subprocess calls. You need the Claude Code CLI installed globally.
+Cleave dispatches AI agents via `claude -p` subprocess calls. You need the Claude Code CLI installed globally.
 
 ```bash
 npm install -g @anthropic-ai/claude-code
@@ -91,15 +91,15 @@ claude --version
 
 **Authentication — pick one:**
 
-- **Claude Max/Pro subscription:** Run `claude` once in a terminal, authenticate via browser. No API key needed — leave `CLAUDE_API_KEY` empty in `.env` and Sickle auto-detects the CLI adapter.
-- **Anthropic API key:** Get one from [console.anthropic.com](https://console.anthropic.com). Set it as `CLAUDE_API_KEY` in `.env`. Sickle uses the API adapter directly.
+- **Claude Max/Pro subscription:** Run `claude` once in a terminal, authenticate via browser. No API key needed — leave `CLAUDE_API_KEY` empty in `.env` and Cleave auto-detects the CLI adapter.
+- **Anthropic API key:** Get one from [console.anthropic.com](https://console.anthropic.com). Set it as `CLAUDE_API_KEY` in `.env`. Cleave uses the API adapter directly.
 
 ---
 
 ## 3. Clone & Install
 
 ```bash
-git clone <repo-url> && cd sickle
+git clone <repo-url> && cd cleave
 python3 -m venv .venv && source .venv/bin/activate
 pip install -e ".[dev]"
 ```
@@ -125,7 +125,7 @@ Dev dependencies (`pytest`, `pytest-asyncio`, `respx`, `ruff`) are included with
 
 ## 4. External Accounts & API Keys
 
-Sickle integrates with four external services. You need accounts and tokens for each.
+Cleave integrates with four external services. You need accounts and tokens for each.
 
 | Service | What you need | How to get it | Env var(s) |
 |---|---|---|---|
@@ -146,7 +146,7 @@ Edit `.env` and fill in all values. The file is in `.gitignore` — it is never 
 
 ## 5. Configuration
 
-Sickle uses a 3-level YAML config cascade. Lower levels override higher levels; unset fields inherit from the parent.
+Cleave uses a 3-level YAML config cascade. Lower levels override higher levels; unset fields inherit from the parent.
 
 ```
 config-live/                     # Your deployment (gitignored)
@@ -179,7 +179,7 @@ Secrets are referenced as `${ENV_VAR}` in YAML and resolved at load time from `.
 | `vcs.github.owner` / `vcs.github.repo` | Target GitHub repository |
 | `git.clone_url` | Clone URL (use `${GITHUB_TOKEN}` for auth) |
 | `jira.project_key` | Jira project to poll |
-| `jira.trigger_labels` | Labels that mark tickets for Sickle (ticket must have ALL) |
+| `jira.trigger_labels` | Labels that mark tickets for Cleave (ticket must have ALL) |
 | `linting.run_command` | Lint command (e.g., `./gradlew detekt`) |
 | `testing.run_command` | Test command (e.g., `./gradlew test`) |
 | `build.check_command` | Build command (e.g., `./gradlew assembleDebug`) |
@@ -201,7 +201,7 @@ Set `enabled: false` in `project.yaml` or `{repo-id}.yaml` to exclude it from th
 
 ---
 
-## 6. Running Sickle
+## 6. Running Cleave
 
 ### Foreground (development)
 
@@ -242,7 +242,7 @@ pytest
 
 ### Production deployment
 
-For running Sickle as a 24/7 systemd service on a VPS, see [deploy/README.md](../deploy/README.md). It covers:
+For running Cleave as a 24/7 systemd service on a VPS, see [deploy/README.md](../deploy/README.md). It covers:
 
 - VPS requirements (Ubuntu 22.04+, 2+ GB RAM, 20+ GB disk)
 - Automated setup script (`deploy/setup.sh`)

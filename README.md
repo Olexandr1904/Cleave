@@ -1,8 +1,8 @@
-# Sickle
+# Cleave
 
 Autonomous AI-driven software development pipeline.
 
-Sickle is a daemon. Drop a Jira ticket with the right label and Sickle picks it up, an AI writes the code in an isolated workspace, opens a PR, and pings you on Telegram only if it gets stuck. A human reviews and merges the PR — there is no auto-merge.
+Cleave is a daemon. Drop a Jira ticket with the right label and Cleave picks it up, an AI writes the code in an isolated workspace, opens a PR, and pings you on Telegram only if it gets stuck. A human reviews and merges the PR — there is no auto-merge.
 
 ## What it does
 
@@ -49,7 +49,7 @@ The happy path uses the dashboard wizard — no manual YAML editing on first run
 
 ```bash
 # 1. Clone and install
-git clone <repo-url> && cd sickle
+git clone <repo-url> && cd cleave
 python3 -m venv .venv && source .venv/bin/activate
 pip install -e ".[dev]"
 

@@ -6,7 +6,7 @@
 
 ## Purpose
 
-Five features that close gaps in Sickle's current pipeline without changing its core character (Jira-driven, human-merged, ticket-isolated, subscription-based). Each feature addresses a distinct class of problem: reliability, signal, memory, control, and collaboration.
+Five features that close gaps in Cleave's current pipeline without changing its core character (Jira-driven, human-merged, ticket-isolated, subscription-based). Each feature addresses a distinct class of problem: reliability, signal, memory, control, and collaboration.
 
 ## The five features
 
@@ -30,11 +30,11 @@ Five features that close gaps in Sickle's current pipeline without changing its 
 
 Each was chosen against three hard filters:
 
-- **Does it preserve ticket isolation?** Sickle's strength is that tickets can't corrupt each other. Anything reintroducing shared mutable state between tickets is rejected.
-- **Does it preserve human-merged PRs?** Sickle explicitly rejects auto-merge. Anything implying a merge queue, auto-approval, or reduced review is rejected.
-- **Is it additive, not restructuring?** Sickle's orchestrator, state machine, config cascade, and agent model all work. Features that require ripping out existing components to install are rejected.
+- **Does it preserve ticket isolation?** Cleave's strength is that tickets can't corrupt each other. Anything reintroducing shared mutable state between tickets is rejected.
+- **Does it preserve human-merged PRs?** Cleave explicitly rejects auto-merge. Anything implying a merge queue, auto-approval, or reduced review is rejected.
+- **Is it additive, not restructuring?** Cleave's orchestrator, state machine, config cascade, and agent model all work. Features that require ripping out existing components to install are rejected.
 
-All five features pass all three filters. The watchdog sits alongside the orchestrator loop without changing it. The severity tiers extend the existing Telegram path without rewriting it. The decision ledger lives in the *target repo*, not Sickle, so it can't contaminate Sickle's ticket isolation. Project lifecycle management operates at the project level, not the ticket level — paused projects simply stop polling for new tickets while existing in-flight tickets complete naturally. Jira question escalation uses the existing `add_comment()` Jira adapter method and `BLOCKED` state — it adds a comment to the ticket, not a new state or external dependency.
+All five features pass all three filters. The watchdog sits alongside the orchestrator loop without changing it. The severity tiers extend the existing Telegram path without rewriting it. The decision ledger lives in the *target repo*, not Cleave, so it can't contaminate Cleave's ticket isolation. Project lifecycle management operates at the project level, not the ticket level — paused projects simply stop polling for new tickets while existing in-flight tickets complete naturally. Jira question escalation uses the existing `add_comment()` Jira adapter method and `BLOCKED` state — it adds a comment to the ticket, not a new state or external dependency.
 
 ## Sequencing recommendation
 
@@ -61,7 +61,7 @@ Each feature is independently shippable and reversible. If feature 3 (Decision L
 **Out of scope (explicitly):**
 - Cross-repo or cross-project memory (would break isolation)
 - Semantic search, embeddings, or vector stores (premature; a file suffices)
-- Auto-merge, merge queues, or CI gating of Sickle's own pushes
+- Auto-merge, merge queues, or CI gating of Cleave's own pushes
 - Web UI for configuration (YAML cascade is deliberate)
 - Multi-agent hierarchies, "CEO" layers, or goal decomposition (Jira already decomposes)
 - PagerDuty / email / SMS fallbacks (Telegram only)

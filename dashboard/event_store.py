@@ -1,4 +1,4 @@
-"""SQLite-backed event persistence for the Sickle dashboard."""
+"""SQLite-backed event persistence for the Cleave dashboard."""
 
 from __future__ import annotations
 

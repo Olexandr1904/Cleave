@@ -5,7 +5,7 @@
 
 ## Problem
 
-Users interact with the Sickle pipeline via Telegram. Every action (approve, reject, retry, reviewed) requires typing a text command or replying to a message. For discrete-choice actions this is unnecessarily friction-heavy — inline buttons are a better UX.
+Users interact with the Cleave pipeline via Telegram. Every action (approve, reject, retry, reviewed) requires typing a text command or replying to a message. For discrete-choice actions this is unnecessarily friction-heavy — inline buttons are a better UX.
 
 At the same time, escalation messages where agents ask free-text questions must stay as reply-to-message interactions — buttons can't replace typed answers.
 

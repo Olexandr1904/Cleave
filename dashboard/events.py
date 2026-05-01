@@ -1,4 +1,4 @@
-"""Structured event system for Sickle pipeline observability."""
+"""Structured event system for Cleave pipeline observability."""
 
 from __future__ import annotations
 

@@ -1,10 +1,10 @@
 # Agent Permissions
 
-How Sickle's pipeline agents get tool access in Claude Code.
+How Cleave's pipeline agents get tool access in Claude Code.
 
 ## Overview
 
-Sickle runs Claude Code agents as non-interactive subprocesses (`claude -p`).
+Cleave runs Claude Code agents as non-interactive subprocesses (`claude -p`).
 Each agent needs specific tools (read files, write code, run git) without
 human approval prompts — the pipeline is fully automated.
 
@@ -31,7 +31,7 @@ skips permission prompts for matching patterns.
 
 **Allow:** File operations, git, build tools, standard shell commands.
 **Deny:** Destructive operations, privilege escalation, external network
-calls (API access goes through Sickle's adapters, not the agent).
+calls (API access goes through Cleave's adapters, not the agent).
 
 ### Layer 2: Per-agent tool list (agent `.md` frontmatter)
 

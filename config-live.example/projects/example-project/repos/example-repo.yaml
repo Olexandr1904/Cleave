@@ -21,8 +21,8 @@ ci:
 
 git:
   clone_url: "https://${GITHUB_TOKEN}@github.com/your-org/your-repo.git"
-  commit_author_name: "Sickle Bot"
-  commit_author_email: "sickle@pipeline.local"
+  commit_author_name: "Cleave Bot"
+  commit_author_email: "cleave@pipeline.local"
   depth: 1
 
 architecture:
@@ -61,7 +61,7 @@ jira_repo_label: "example-repo"
 pr_description_template: |
   ## {ticket_id}
 
-  Automated PR created by Sickle pipeline.
+  Automated PR created by Cleave pipeline.
 
   **Jira:** ${JIRA_URL}/browse/{ticket_id}
 

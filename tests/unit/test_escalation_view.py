@@ -76,3 +76,23 @@ class TestBuildMessage:
         )
         assert "Valid — Repo convention requires @Inject." in text
         assert buttons[0].action == "pr_fix:T-1:99"
+
+    def test_header_uses_underscore_separator(self):
+        text, _ = build_escalated_comment_message(
+            _state(), _cc(), pr_number=42, ticket_title="A ticket",
+        )
+        assert "_" * 30 in text
+
+    def test_no_backticks_in_message(self):
+        text, _ = build_escalated_comment_message(
+            _state(), _cc(), pr_number=42, ticket_title="A ticket",
+        )
+        assert "`" not in text
+
+    def test_header_contains_ticket_and_project(self):
+        text, _ = build_escalated_comment_message(
+            _state(), _cc(), pr_number=42, ticket_title="Fix crash",
+        )
+        assert "[acme]" in text
+        assert "T-1" in text
+        assert "Fix crash" in text

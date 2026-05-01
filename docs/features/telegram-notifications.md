@@ -100,3 +100,4 @@ Telegram bot adapter behind the NotifierInterface. Sends formatted notifications
 | 2026-05-01 | `strip_markdown` now handles `_italic_` (underscore) in addition to `*italic*` (asterisk), matching the design spec. |
 | 2026-05-01 | Migrated all Telegram message sites in `orchestrator.py` to use `tg_format.*`; removed `_tg_header` and `_get_ticket_title` static methods; wrapped `_build_blocked_reason` output with `strip_markdown` in escalation and verification-blocked paths; rewrote message bodies for FAILED-generic, PR-opened, Pipeline-complete, dev-agent-fix-failed, re-investigation-failed. |
 | 2026-05-01 | Fixed `read_ticket_title` in `tg_format.py`: was reading `meta/ticket.json` (never written); now parses first line of `meta/ticket.md` in `# TICKET-ID: summary` format. |
+| 2026-05-01 | `escalation_view.build_escalated_comment_message` now uses `tg_format.tg_header` for the message header; removed backtick-wrapped option text in favour of plain dashes. |

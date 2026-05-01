@@ -806,26 +806,6 @@ class CommandHandler:
             if hasattr(self, '_wake_fn') and self._wake_fn:
                 self._wake_fn()
 
-        elif action == "skip":
-            ws = next((w for w in workspaces if w.state.ticket_id == ticket_id), None)
-            if not ws:
-                await self._notifier.send_message(chat_id, f"No active workspace found for {ticket_id}.", reply_to_message_id=message_id)
-                return
-            _NEXT = {
-                Stage.ANALYSIS: Stage.DEV, Stage.DEV: Stage.SCOPE_CHECK,
-                Stage.SCOPE_CHECK: Stage.QA, Stage.QA: Stage.PUSHED,
-                Stage.PUSHED: Stage.PR_REVIEW, Stage.PR_REVIEW: Stage.DONE,
-            }
-            prev = ws.state.previous_state or ws.state.current_state
-            target = _NEXT.get(prev, Stage.DONE)
-            ws.state.human_input_pending = False
-            ws.state.error = None
-            ws.transition(target)
-            ws.save_state()
-            await self._notifier.send_message(chat_id, f"Skipped {prev} for {ticket_id}. Advanced to {target}.", reply_to_message_id=message_id)
-            if hasattr(self, '_wake_fn') and self._wake_fn:
-                self._wake_fn()
-
         elif action == "clear_gradle":
             from orchestrator.gradle_remediation import clear_gradle_transforms
 

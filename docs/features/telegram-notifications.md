@@ -2,7 +2,7 @@
 
 **Status:** In Progress
 **Created:** 2026-04-07
-**Updated:** 2026-04-21
+**Updated:** 2026-05-01
 **Author:** Oleksandr Brazhenko
 
 ## Description
@@ -95,3 +95,4 @@ Telegram bot adapter behind the NotifierInterface. Sends formatted notifications
 | 2026-04-30 | Button-press echo unified with reply-path echo: `pr_fix`/`pr_wontfix` callbacks now produce `✓ Recognized as FIX (matched: 'Fix' button). Dev-agent will re-engage on x.kt:1.` — same `Recognized as` prefix as the text-reply path. `pr_skip` dead branch dropped. `pr_comment_decision_recorded` event payload now includes `matched_token` (`button:fix` / `button:wontfix`) and `via=button`. |
 | 2026-04-30 | `CommandHandler._handle_provide_input` now uses `Stage.BLOCKED` instead of the literal `"BLOCKED"` string when filtering blocked workspaces, matching the convention used elsewhere in the same file. Both worked at runtime since `Stage` is a `StrEnum`, but the inconsistency would silently break if the enum is ever migrated to a non-string base. |
 | 2026-05-01 | `_handle_retry` now resets `stage_iterations[stage]` to 0 for the target stage before transitioning, so the iteration-cap check does not immediately re-escalate without running the agent. Smart retry detection updated to use `STAGE_REPORT_FILE` constants (agent-written reports) so it confirms stage work product exists, not just that the agent ran. |
+| 2026-05-01 | Removed dead `elif action == "skip":` block from `handle_callback` — the skip path was only reachable from a button that no longer exists; skip as a BLOCKED reply-text is handled in `handle_reply`. Documented `skip` reply keyword and the PR_REVIEW reply anchor in `docs/telegram.md`. |

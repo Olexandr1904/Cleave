@@ -1,10 +1,10 @@
-# Sickle — Architecture Document (v1, historical)
+# Cleave — Architecture Document (v1, historical)
 
 > **Superseded.** This is the v1 architecture. The current architecture is [architecture-v2.md](architecture-v2.md). This file is kept for the change log and historical context only — do not use it as a reference for current code.
 
 ## Introduction
 
-This document outlined the complete system architecture for Sickle — an autonomous AI-driven development pipeline. It served as the guiding blueprint for the v1 implementation. The pipeline shape, agent roster, dashboard, and integrations have all evolved since; see v2.
+This document outlined the complete system architecture for Cleave — an autonomous AI-driven development pipeline. It served as the guiding blueprint for the v1 implementation. The pipeline shape, agent roster, dashboard, and integrations have all evolved since; see v2.
 
 ### Starter Template or Existing Project
 
@@ -23,7 +23,7 @@ N/A — greenfield Python project, no starter template.
 
 ### Technical Summary
 
-Sickle is a modular monolith Python daemon that orchestrates autonomous software development. The system follows an **event-loop + agent dispatch** architecture: a single persistent orchestrator polls for work, manages isolated workspaces, and dispatches BMAD-style AI agents via Claude API calls. All inter-agent communication is file-based (workspace context files), all state is on disk (`state.json`), and all external integrations (Jira, GitHub, Telegram) are behind abstract adapter interfaces. The architecture prioritizes idempotency, isolation, and pluggability.
+Cleave is a modular monolith Python daemon that orchestrates autonomous software development. The system follows an **event-loop + agent dispatch** architecture: a single persistent orchestrator polls for work, manages isolated workspaces, and dispatches BMAD-style AI agents via Claude API calls. All inter-agent communication is file-based (workspace context files), all state is on disk (`state.json`), and all external integrations (Jira, GitHub, Telegram) are behind abstract adapter interfaces. The architecture prioritizes idempotency, isolation, and pluggability.
 
 ### High Level Overview
 
@@ -625,7 +625,7 @@ Atomic writes via temp-file + rename pattern to prevent corruption on crash.
 ## Source Tree
 
 ```
-sickle/
+cleave/
 ├── main.py                         # Entry point — CLI args, starts orchestrator
 ├── pyproject.toml                  # Dependencies and project metadata
 │
@@ -718,9 +718,9 @@ sickle/
 │       └── config/                     # Test config hierarchy
 │
 ├── deploy/
-│   ├── sickle.service              # systemd unit file
+│   ├── cleave.service              # systemd unit file
 │   ├── setup.sh                    # VPS setup script
-│   ├── sickle.env.template         # Environment variables template
+│   ├── cleave.env.template         # Environment variables template
 │   └── README.md                   # Deployment instructions
 │
 └── docs/
@@ -743,7 +743,7 @@ sickle/
 
 - **Strategy:** Direct deployment via git pull + service restart
 - **CI/CD Platform:** Manual for MVP; GitHub Actions for future automated deploys
-- **Pipeline Configuration:** `deploy/setup.sh` handles initial setup; updates are `git pull && pip install -e . && systemctl restart sickle`
+- **Pipeline Configuration:** `deploy/setup.sh` handles initial setup; updates are `git pull && pip install -e . && systemctl restart cleave`
 
 ### Environments
 
@@ -753,7 +753,7 @@ sickle/
 
 ### Rollback Strategy
 
-- **Primary Method:** `git revert` + `systemctl restart sickle`
+- **Primary Method:** `git revert` + `systemctl restart cleave`
 - **Trigger Conditions:** Pipeline producing bad PRs, daemon crashes repeatedly, integration failures
 - **Recovery Time Objective:** < 5 minutes (revert commit + restart)
 
@@ -806,7 +806,7 @@ Each workspace is a full git clone. Concurrent workspaces on large repos can exh
 
 - **Error Model:** Exception-based with structured error categories
 - **Exception Hierarchy:**
-  - `SickleError` (base)
+  - `CleaveError` (base)
     - `ConfigError` — invalid config, missing env var
     - `WorkspaceError` — clone failure, state corruption
     - `IntegrationError` — Jira/GitHub/Telegram API failures
@@ -1038,7 +1038,7 @@ stages:
 - **Language:** Python 3.11+
 - **Style & Linting:** ruff (replaces flake8 + isort + black) with default config
 - **Type Hints:** Required on all public function signatures
-- **Test Organization:** `tests/unit/test_{module}.py` mirrors `sickle/{module}.py`
+- **Test Organization:** `tests/unit/test_{module}.py` mirrors `cleave/{module}.py`
 
 ### Naming Conventions
 
@@ -1168,8 +1168,8 @@ stages:
 
 ```bash
 # Clone the repo
-git clone git@github.com:{owner}/sickle.git
-cd sickle
+git clone git@github.com:{owner}/cleave.git
+cd cleave
 
 # Create virtual environment
 python -m venv .venv
@@ -1179,7 +1179,7 @@ source .venv/bin/activate
 pip install -e ".[dev]"
 
 # Copy and fill env vars for local development
-cp deploy/sickle.env.template .env
+cp deploy/cleave.env.template .env
 # Edit .env with test/sandbox credentials (or dummy values for --dry-run)
 
 # Load env vars
@@ -1241,7 +1241,7 @@ tests/
 
 ### Developer Handoff
 
-This architecture document, combined with the PRD (`docs/prd.md`) and the original technical spec (`docs/legacy/start.md`), provides the complete blueprint for implementing Sickle.
+This architecture document, combined with the PRD (`docs/prd.md`) and the original technical spec (`docs/legacy/start.md`), provides the complete blueprint for implementing Cleave.
 
 **Start with Epic 1, Story 1.1** — create the project skeleton and CLI entry point. The source tree above is your target structure. Key files to create first:
 

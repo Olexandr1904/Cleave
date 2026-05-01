@@ -1,4 +1,4 @@
-# Sickle — Product Requirements Document (PRD)
+# Cleave — Product Requirements Document (PRD)
 
 ## Goals and Background Context
 
@@ -16,7 +16,7 @@
 
 Oleksandr is a team lead and KMP developer at Acme Corp managing multiple repositories. The volume of well-defined but time-consuming implementation tickets exceeds what one person can handle while also managing architecture decisions, reviews, and coordination. Existing AI tools assist interactively but still require the human at the keyboard.
 
-Sickle fills the gap: a fully autonomous pipeline that runs unattended, picks up labeled Jira tickets, and delivers merged PRs. Agents follow the BMAD pattern — each is a standalone prompt file with persona, principles, tasks, and checklists. The orchestrator acts as a decision engine, routing tickets to the right agent at each stage. Two existing scripts (`ticket-to-prompt.py` and `copilot-validator.py`) are integrated as subprocess calls.
+Cleave fills the gap: a fully autonomous pipeline that runs unattended, picks up labeled Jira tickets, and delivers merged PRs. Agents follow the BMAD pattern — each is a standalone prompt file with persona, principles, tasks, and checklists. The orchestrator acts as a decision engine, routing tickets to the right agent at each stage. Two existing scripts (`ticket-to-prompt.py` and `copilot-validator.py`) are integrated as subprocess calls.
 
 ### Change Log
 
@@ -98,7 +98,7 @@ Sickle fills the gap: a fully autonomous pipeline that runs unattended, picks up
 ### Repository Structure: Monorepo
 
 ```
-sickle/
+cleave/
 ├── main.py
 ├── orchestrator/
 ├── agents/                    # BMAD-style agent prompt files (.md)
@@ -582,7 +582,7 @@ so that the code meets quality gates before merge.
 
 ## Epic 7: Merge, Safeguards & End-to-End
 
-Implement the Merge Agent, wire all safeguards, run a full end-to-end pipeline test, and prepare for deployment. After this epic, Sickle autonomously takes a Jira ticket from "To Do" to merged PR.
+Implement the Merge Agent, wire all safeguards, run a full end-to-end pipeline test, and prepare for deployment. After this epic, Cleave autonomously takes a Jira ticket from "To Do" to merged PR.
 
 ### Story 7.1: Merge Agent
 
@@ -657,4 +657,4 @@ To be completed after PRD review — will run `pm-checklist` to validate complet
 
 ### Architect Prompt
 
-This PRD provides the full product requirements for Sickle. Please review the PRD and the original technical spec (`docs/legacy/start.md`) thoroughly, then create the architecture document: module interfaces, agent prompt format specification, config schemas, state machine definition, and integration adapter contracts. Pay special attention to the BMAD-style agent system — define how agent prompt files are structured, loaded, and executed.
+This PRD provides the full product requirements for Cleave. Please review the PRD and the original technical spec (`docs/legacy/start.md`) thoroughly, then create the architecture document: module interfaces, agent prompt format specification, config schemas, state machine definition, and integration adapter contracts. Pay special attention to the BMAD-style agent system — define how agent prompt files are structured, loaded, and executed.

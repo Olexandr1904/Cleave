@@ -5,7 +5,7 @@
 
 ## Overview
 
-Extend Sickle's Telegram integration from outbound-only notifications to a full interactive command interface. Three capabilities:
+Extend Cleave's Telegram integration from outbound-only notifications to a full interactive command interface. Three capabilities:
 
 1. **Status / health check** — on-demand pipeline status with drill-down per ticket
 2. **Auto / manual mode** — operator chooses between fully autonomous and approval-gated pipeline execution
@@ -20,7 +20,7 @@ Every incoming Telegram message (that isn't a reply to an escalation) is routed 
 **System prompt structure:**
 
 ```
-You are the command parser for Sickle, an autonomous dev pipeline.
+You are the command parser for Cleave, an autonomous dev pipeline.
 Current state:
 - Mode: {mode}
 - Awaiting approval: {list of ticket IDs and their gate}
@@ -71,7 +71,7 @@ Triggered by the `status` intent. Two levels of detail.
 ### Summary View
 
 ```
-Sickle Status
+Cleave Status
 
 Mode: manual
 Uptime: 3d 14h

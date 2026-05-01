@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Add a dashboard wizard for creating new Sickle projects, which persists raw secrets to `.env`, spawns the Atlas agent to write config YAMLs and bootstrap the workspace tree, and streams live status back to the UI.
+**Goal:** Add a dashboard wizard for creating new Cleave projects, which persists raw secrets to `.env`, spawns the Atlas agent to write config YAMLs and bootstrap the workspace tree, and streams live status back to the UI.
 
 **Architecture:** A Starlette endpoint (`POST /api/projects/create`) receives a full form payload, persists secrets to `.env` + `os.environ`, creates a setup workspace matching the existing ticket-workspace shape, and spawns Atlas as a supervised asyncio task. A vanilla-JS wizard in the dashboard collects the data and polls the existing `/api/workspaces` endpoint for progress. The existing singular `trigger_label` config field is migrated to a plural `trigger_labels` list with AND semantics as prerequisite Phase 1.
 
@@ -252,7 +252,7 @@ def filter_tickets(
     tickets: list[TicketData],
     trigger_labels: list[str],
     ignore_labels: list[str],
-    bot_name: str = "Sickle Pipeline",
+    bot_name: str = "Cleave Pipeline",
 ) -> list[TicketData]:
     if not trigger_labels:
         return []
@@ -2403,7 +2403,7 @@ async function pollStatus() {
       done('st-validating', true); done('st-writing', true); done('st-done', true);
       clearInterval(poll);
       setTimeout(closeWizard, 3000);
-      window.dispatchEvent(new CustomEvent('sickle:projects-changed'));
+      window.dispatchEvent(new CustomEvent('cleave:projects-changed'));
     }
     if (st === 'SETUP_FAILED') {
       clearInterval(poll);
@@ -2538,7 +2538,7 @@ Then pass this via the `global_config` the web app reads, e.g. attach as `global
 - Fill in a throwaway payload pointing at a test project
 - Submit and watch the status panel transition VALIDATING → WRITING → DONE
 - Verify `config-live/projects/{id}/project.yaml` exists
-- Verify `/data/sickle/{id}/{repo}/tickets/` exists
+- Verify `/data/cleave/{id}/{repo}/tickets/` exists
 - Verify `.env` contains the new var names
 
 - [ ] **Step 4: Commit**

@@ -1,10 +1,10 @@
-# Sickle — Agent Contracts (BMAD Format)
+# Cleave — Agent Contracts (BMAD Format)
 
 **Author:** Mary (BA Agent) / Oleksandr
 **Date:** 2026-04-08
 **Based on:** `docs/architecture-v2.md` (v2.0)
 
-This document defines the formal contract for every agent in the Sickle pipeline. Each contract specifies exactly what the agent receives, what it produces, what tools it can use, and what it must never do. The Agent Runtime uses these contracts to configure tool access and validate behavior.
+This document defines the formal contract for every agent in the Cleave pipeline. Each contract specifies exactly what the agent receives, what it produces, what tools it can use, and what it must never do. The Agent Runtime uses these contracts to configure tool access and validate behavior.
 
 These contracts serve as the **specification** for the agent prompt files in `agents/`. The prompt files contain the full persona and instructions; this document contains the machine-enforceable contract.
 

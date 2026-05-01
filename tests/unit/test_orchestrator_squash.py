@@ -50,8 +50,8 @@ def _repo_config_with_author() -> RepoConfig:
         vcs=VCSConfig(github=GitHubConfig()),
         jira=JiraConfig(statuses=JiraStatusesConfig()),
         git=GitConfig(
-            commit_author_name="Sickle Bot",
-            commit_author_email="sickle@pipeline.local",
+            commit_author_name="Cleave Bot",
+            commit_author_email="cleave@pipeline.local",
         ),
     )
 
@@ -104,7 +104,7 @@ def test_passes_author_via_git_dash_c(tmp_path, monkeypatch):
         ["git", "-C", str(repo), "log", "-1", "--format=%an <%ae>"],
         capture_output=True, text=True, check=True,
     ).stdout.strip()
-    assert author == "Sickle Bot <sickle@pipeline.local>"
+    assert author == "Cleave Bot <cleave@pipeline.local>"
 
     log = subprocess.run(
         ["git", "-C", str(repo), "log", "origin/main..HEAD", "--format=%s"],

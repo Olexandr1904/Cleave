@@ -1,14 +1,14 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Sickle deploy script
+# Cleave deploy script
 # Usage:
 #   ./scripts/deploy.sh --init v0.1.0   # First-time setup
 #   ./scripts/deploy.sh v0.2.0          # Deploy a tagged version
 
-PROD_DIR="/home/admin0/sickle-prod"
+PROD_DIR="/home/admin0/cleave-prod"
 REPO_URL="$(git -C "$(dirname "$0")/.." remote get-url origin)"
-SERVICE_NAME="sickle"
+SERVICE_NAME="cleave"
 
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -91,18 +91,18 @@ do_init() {
 
     # 4. Systemd service
     info "Installing systemd service..."
-    sudo cp deploy/sickle.service /etc/systemd/system/sickle.service
+    sudo cp deploy/cleave.service /etc/systemd/system/cleave.service
     sudo systemctl daemon-reload
     sudo systemctl enable "$SERVICE_NAME"
 
     # 5. Log directory
-    sudo mkdir -p /var/log/sickle
-    sudo chown "$USER:$USER" /var/log/sickle
+    sudo mkdir -p /var/log/cleave
+    sudo chown "$USER:$USER" /var/log/cleave
 
     # 6. Workspace directory (from config or default)
     local ws_dir
     ws_dir=$(grep -A1 'workspaces:' "$PROD_DIR/config-live/global.yaml" 2>/dev/null \
-        | grep 'base_dir' | sed 's/.*base_dir.*"\(.*\)".*/\1/' || echo "/data/sickle")
+        | grep 'base_dir' | sed 's/.*base_dir.*"\(.*\)".*/\1/' || echo "/data/cleave")
     if [ -n "$ws_dir" ]; then
         sudo mkdir -p "$ws_dir"
         sudo chown "$USER:$USER" "$ws_dir"
@@ -148,7 +148,7 @@ do_deploy() {
     .venv/bin/pip install -e . --quiet
 
     # 4. Update systemd unit (in case it changed)
-    sudo cp deploy/sickle.service /etc/systemd/system/sickle.service
+    sudo cp deploy/cleave.service /etc/systemd/system/cleave.service
     sudo systemctl daemon-reload
 
     # 5. Start service

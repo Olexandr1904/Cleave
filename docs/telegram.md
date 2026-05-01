@@ -1,6 +1,6 @@
 # Telegram Bot Reference
 
-Every command, free-text intent, inline button, and reply pattern Sickle's Telegram bot understands.
+Every command, free-text intent, inline button, and reply pattern Cleave's Telegram bot understands.
 
 This doc is a user-facing reference. For the implementation/spec, see [docs/features/telegram-notifications.md](features/telegram-notifications.md).
 
@@ -13,7 +13,7 @@ Set `TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_ID` in `.env`.
 - **Bot token:** create a bot via [@BotFather](https://t.me/BotFather)
 - **Chat id:** message [@userinfobot](https://t.me/userinfobot) for a personal chat id; for a group, add the bot to the group and use the negative group id
 
-The bot polls (no webhooks) and starts automatically when the daemon starts. If `TELEGRAM_BOT_TOKEN` is empty, Telegram is disabled and Sickle escalates only via the dashboard.
+The bot polls (no webhooks) and starts automatically when the daemon starts. If `TELEGRAM_BOT_TOKEN` is empty, Telegram is disabled and Cleave escalates only via the dashboard.
 
 ## Allowlist
 
@@ -51,7 +51,7 @@ Unrecognized text gets a fallback reply listing what the bot can do. If intent c
 
 ## Inline buttons
 
-For messages that expect discrete choices, Sickle attaches inline keyboard buttons. Pressing a button is equivalent to typing the corresponding free-text — the bot echoes the recorded decision back as a reply to the original message.
+For messages that expect discrete choices, Cleave attaches inline keyboard buttons. Pressing a button is equivalent to typing the corresponding free-text — the bot echoes the recorded decision back as a reply to the original message.
 
 | Button label | Where it appears | Callback action |
 |---|---|---|
@@ -68,7 +68,7 @@ Escalation messages that need a free-text answer (BLOCKED on requirements, ambig
 
 ## Replies and unblock flow
 
-When Sickle escalates a BLOCKED workspace, the message you receive in Telegram is a *thread anchor*: replying to it (Telegram's "Reply to" feature, not a new message) feeds your reply back to the agent.
+When Cleave escalates a BLOCKED workspace, the message you receive in Telegram is a *thread anchor*: replying to it (Telegram's "Reply to" feature, not a new message) feeds your reply back to the agent.
 
 - The reply text is stored on `state.human_input_reply` and made available as additional context when the agent resumes.
 - The workspace transitions out of BLOCKED back to its `previous_state` and the orchestrator wakes immediately.
@@ -100,7 +100,7 @@ Every outgoing message is prefixed with `[PROJECT/REPO]` so you can tell which p
 
 ## Notification types
 
-Sickle sends Telegram notifications in these situations:
+Cleave sends Telegram notifications in these situations:
 
 - **Daemon started / stopped** (informational)
 - **Heartbeat** (daily, configurable via `global.yaml` → `heartbeat`)
@@ -124,7 +124,7 @@ A typing indicator is shown while the intent parser thinks, so you can tell the 
 Mode is global (set via `global.yaml` → `pipeline.mode` or toggled live with `/auto` / `/manual`).
 
 - **auto** — workspace flows through every stage without gates.
-- **manual** — Sickle inserts AWAITING_APPROVAL gates at major transitions (after analysis, after QA, before pushing). Each gate sends a Telegram message with Approve/Reject buttons. Switching to `auto` mid-flight auto-resumes any AWAITING_APPROVAL workspaces to their happy-path next state.
+- **manual** — Cleave inserts AWAITING_APPROVAL gates at major transitions (after analysis, after QA, before pushing). Each gate sends a Telegram message with Approve/Reject buttons. Switching to `auto` mid-flight auto-resumes any AWAITING_APPROVAL workspaces to their happy-path next state.
 
 The `/status` reply always shows the current mode in its header.
 

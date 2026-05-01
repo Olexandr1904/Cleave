@@ -1,6 +1,6 @@
 """Config management tools for the project-setup-agent.
 
-Provides validation and CRUD operations on Sickle project config files
+Provides validation and CRUD operations on Cleave project config files
 in the config-live/ directory.
 """
 

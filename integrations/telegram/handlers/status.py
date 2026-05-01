@@ -51,7 +51,7 @@ class StatusHandler:
         is truncated upstream (ring buffer in the orchestrator).
         """
         lines = [
-            "Sickle Status",
+            "Cleave Status",
             "",
             f"Mode: {mode}",
             f"Uptime: {_format_duration(uptime_seconds)}",

@@ -170,7 +170,7 @@ def test_restart_picks_up_deferred_from_disk(tmp_path):
     """A DEFERRED workspace persisted to disk is rediscovered on restart."""
     from workspace.workspace_manager import WorkspaceManager
 
-    base = tmp_path / "sickle"
+    base = tmp_path / "cleave"
     ws_root = base / "acme" / "acme-app" / "tickets" / "T-R"
     ws_root.mkdir(parents=True)
     (ws_root / "meta").mkdir()

@@ -23,7 +23,7 @@ defaults:
 
 logging:
   level: "INFO"
-  dir: "/var/log/sickle"
+  dir: "/var/log/cleave"
 
 heartbeat:
   enabled: true

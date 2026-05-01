@@ -4,10 +4,10 @@ Consolidated decisions from RFC review session (BA + Architect analysis).
 
 ## Source Documents
 
-- **Sickle PRD**: `docs/prd.md`
-- **Sickle Architecture**: `docs/architecture.md`
+- **Cleave PRD**: `docs/prd.md`
+- **Cleave Architecture**: `docs/architecture.md`
 - **RFC (AJDS)**: Provided in conversation (not saved as file yet)
-- **Existing helpers**: production-ready scripts under `/opt/sickle-helpers/` (GitHub side) and a parallel GitLab tree.
+- **Existing helpers**: production-ready scripts under `/opt/cleave-helpers/` (GitHub side) and a parallel GitLab tree.
 
 ---
 
@@ -22,7 +22,7 @@ Consolidated decisions from RFC review session (BA + Architect analysis).
 | E | **Telegram threading by ticket_id** | One chat, threaded by ticket ID for better UX |
 | F | **Granular state machine** | `NEW → ANALYSIS → DEV → REVIEW → PUSHED → PR_REVIEW → DONE` + `BLOCKED`, `SKIPPED` |
 
-## Adopted from Sickle (kept)
+## Adopted from Cleave (kept)
 
 | # | Decision | Detail |
 |---|----------|--------|
@@ -90,7 +90,7 @@ PR Comment Responder loop:
 
 ## Existing Helpers Mapping
 
-Production-ready scripts from `/opt/sickle-helpers/`:
+Production-ready scripts from `/opt/cleave-helpers/`:
 
 | Tool | File | Maps to |
 |------|------|---------|

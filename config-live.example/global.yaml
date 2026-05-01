@@ -9,7 +9,7 @@ claude:
   api_key: "${CLAUDE_API_KEY}"
 
 workspaces:
-  base_dir: "/data/sickle"         # Where ticket workspaces are created
+  base_dir: "/data/cleave"         # Where ticket workspaces are created
   max_age_days: 14                 # Workspace TTL before cleanup
   min_free_disk_gb: 5              # Skip new tickets if disk is low
   max_workspace_size_gb: 2
@@ -57,14 +57,14 @@ defaults:
 
 logging:
   level: "INFO"
-  dir: "/var/log/sickle"
+  dir: "/var/log/cleave"
 
 heartbeat:
   enabled: true
   interval_hours: 24
   send_at: "09:00"
 
-# Operator profile — describes the human running Sickle. Agents use this to
+# Operator profile — describes the human running Cleave. Agents use this to
 # tailor code style, commit format, and scope rules. Fill in your own.
 operator:
   role: "Your role (e.g. Team Lead, Solo Developer)"

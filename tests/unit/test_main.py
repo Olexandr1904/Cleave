@@ -89,7 +89,7 @@ class TestMain:
         with patch("asyncio.run", side_effect=lambda coro: coro.close()):
             main(["--config", FIXTURES_DIR, "--project", "nonexistent"])
         captured = capsys.readouterr()
-        assert "Sickle v" in captured.out
+        assert "Cleave v" in captured.out
 
 
 PROJECT_DIR = str(Path(__file__).parent.parent.parent)
@@ -105,7 +105,7 @@ class TestHelpOutput:
             cwd=PROJECT_DIR,
         )
         assert result.returncode == 0
-        assert "Sickle" in result.stdout
+        assert "Cleave" in result.stdout
         assert "--config" in result.stdout
         assert "--project" in result.stdout
         assert "--repo" in result.stdout

@@ -4,7 +4,7 @@
 
 **Goal:** Set up dev/prod separation with two directories, semantic versioning via git tags, and a deploy script for managing releases.
 
-**Architecture:** Development stays in `/home/admin0/tot/`, production runs from `/home/admin0/sickle-prod/` (a separate git clone pinned to a tag). A `scripts/deploy.sh` script handles first-time init and subsequent deploys. The systemd service is updated to point at the prod directory.
+**Architecture:** Development stays in `/home/admin0/tot/`, production runs from `/home/admin0/cleave-prod/` (a separate git clone pinned to a tag). A `scripts/deploy.sh` script handles first-time init and subsequent deploys. The systemd service is updated to point at the prod directory.
 
 **Tech Stack:** Bash (deploy script), Python (version logging), systemd
 
@@ -26,14 +26,14 @@ def test_version_printed_at_startup(self, capsys, monkeypatch):
     self._set_all_env(monkeypatch)
     main(["--config", FIXTURES_DIR, "--project", "nonexistent"])
     captured = capsys.readouterr()
-    assert "Sickle v" in captured.out
+    assert "Cleave v" in captured.out
 ```
 
 - [ ] **Step 2: Run test to verify it fails**
 
 Run: `cd /home/admin0/tot && source .venv/bin/activate && python -m pytest tests/unit/test_main.py::TestMain::test_version_printed_at_startup -v`
 
-Expected: FAIL — "Sickle v" not found in output (current startup line is "Sickle starting with config:")
+Expected: FAIL — "Cleave v" not found in output (current startup line is "Cleave starting with config:")
 
 - [ ] **Step 3: Implement version logging**
 
@@ -44,7 +44,7 @@ def get_version() -> str:
     """Read version from package metadata, falling back to pyproject.toml."""
     try:
         from importlib.metadata import version
-        return version("sickle")
+        return version("cleave")
     except Exception:
         from pathlib import Path
         import re
@@ -56,14 +56,14 @@ def get_version() -> str:
 Then change the startup print in `main()` from:
 
 ```python
-print(f"Sickle starting with config: {args.config}")
+print(f"Cleave starting with config: {args.config}")
 ```
 
 to:
 
 ```python
 version = get_version()
-print(f"Sickle v{version} starting with config: {args.config}")
+print(f"Cleave v{version} starting with config: {args.config}")
 ```
 
 - [ ] **Step 4: Run test to verify it passes**
@@ -100,14 +100,14 @@ Create `scripts/deploy.sh`:
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Sickle deploy script
+# Cleave deploy script
 # Usage:
 #   ./scripts/deploy.sh --init v0.1.0   # First-time setup
 #   ./scripts/deploy.sh v0.2.0          # Deploy a tagged version
 
-PROD_DIR="/home/admin0/sickle-prod"
+PROD_DIR="/home/admin0/cleave-prod"
 REPO_URL="$(git -C "$(dirname "$0")/.." remote get-url origin)"
-SERVICE_NAME="sickle"
+SERVICE_NAME="cleave"
 
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -190,13 +190,13 @@ do_init() {
 
     # 4. Systemd service
     info "Installing systemd service..."
-    sudo cp deploy/sickle.service /etc/systemd/system/sickle.service
+    sudo cp deploy/cleave.service /etc/systemd/system/cleave.service
     sudo systemctl daemon-reload
     sudo systemctl enable "$SERVICE_NAME"
 
     # 5. Log directory
-    sudo mkdir -p /var/log/sickle
-    sudo chown "$USER:$USER" /var/log/sickle
+    sudo mkdir -p /var/log/cleave
+    sudo chown "$USER:$USER" /var/log/cleave
 
     echo ""
     info "Init complete! Next steps:"
@@ -237,7 +237,7 @@ do_deploy() {
     .venv/bin/pip install -e . --quiet
 
     # 4. Update systemd unit (in case it changed)
-    sudo cp deploy/sickle.service /etc/systemd/system/sickle.service
+    sudo cp deploy/cleave.service /etc/systemd/system/cleave.service
     sudo systemctl daemon-reload
 
     # 5. Start service
@@ -294,30 +294,30 @@ git commit -m "Add deploy script for prod init and tag-based deploys"
 ### Task 3: Update systemd service for new paths
 
 **Files:**
-- Modify: `deploy/sickle.service`
+- Modify: `deploy/cleave.service`
 
-The current service file uses `/opt/sickle` and `User=pipeline`. Per the spec, production is at `/home/admin0/sickle-prod` and runs as the current user.
+The current service file uses `/opt/cleave` and `User=pipeline`. Per the spec, production is at `/home/admin0/cleave-prod` and runs as the current user.
 
-- [ ] **Step 1: Update sickle.service**
+- [ ] **Step 1: Update cleave.service**
 
-Replace the full content of `deploy/sickle.service` with:
+Replace the full content of `deploy/cleave.service` with:
 
 ```ini
 [Unit]
-Description=Sickle — Autonomous AI Development Pipeline
+Description=Cleave — Autonomous AI Development Pipeline
 After=network.target
 
 [Service]
 Type=simple
 User=admin0
 Group=admin0
-WorkingDirectory=/home/admin0/sickle-prod
-ExecStart=/home/admin0/sickle-prod/.venv/bin/python3 main.py --config config-live
-EnvironmentFile=/home/admin0/sickle-prod/.env
+WorkingDirectory=/home/admin0/cleave-prod
+ExecStart=/home/admin0/cleave-prod/.venv/bin/python3 main.py --config config-live
+EnvironmentFile=/home/admin0/cleave-prod/.env
 Restart=always
 RestartSec=10
-StandardOutput=append:/var/log/sickle/sickle.log
-StandardError=append:/var/log/sickle/sickle-error.log
+StandardOutput=append:/var/log/cleave/cleave.log
+StandardError=append:/var/log/cleave/cleave-error.log
 NoNewPrivileges=true
 
 [Install]
@@ -326,14 +326,14 @@ WantedBy=multi-user.target
 
 - [ ] **Step 2: Validate service file syntax**
 
-Run: `systemd-analyze verify /home/admin0/tot/deploy/sickle.service 2>&1 || true`
+Run: `systemd-analyze verify /home/admin0/tot/deploy/cleave.service 2>&1 || true`
 
 Expected: No critical errors (warnings about unit not being loaded are OK)
 
 - [ ] **Step 3: Commit**
 
 ```bash
-git add deploy/sickle.service
+git add deploy/cleave.service
 git commit -m "Update systemd service paths for prod directory layout"
 ```
 
@@ -349,7 +349,7 @@ git commit -m "Update systemd service paths for prod directory layout"
 Replace the full content of `deploy/README.md` with:
 
 ```markdown
-# Sickle Deployment
+# Cleave Deployment
 
 ## VPS Requirements
 
@@ -364,8 +364,8 @@ Replace the full content of `deploy/README.md` with:
 
 ```
 /home/admin0/tot/              Development (git repo, edit here)
-/home/admin0/sickle-prod/      Production (separate clone, pinned to tag)
-/var/log/sickle/               Daemon logs
+/home/admin0/cleave-prod/      Production (separate clone, pinned to tag)
+/var/log/cleave/               Daemon logs
 ```
 
 ## First-Time Setup
@@ -383,10 +383,10 @@ git push origin master --tags
 ./scripts/deploy.sh --init v0.1.0
 
 # Fill in API keys
-nano /home/admin0/sickle-prod/.env
+nano /home/admin0/cleave-prod/.env
 
 # Start the service
-sudo systemctl start sickle
+sudo systemctl start cleave
 ```
 
 ## Deploying a New Version
@@ -411,17 +411,17 @@ git push origin master --tags
 ## Service Management
 
 ```bash
-sudo systemctl start sickle
-sudo systemctl stop sickle
-sudo systemctl restart sickle
-sudo systemctl status sickle
-journalctl -u sickle -f
+sudo systemctl start cleave
+sudo systemctl stop cleave
+sudo systemctl restart cleave
+sudo systemctl status cleave
+journalctl -u cleave -f
 ```
 
 ## Log Files
 
-- Service log: `/var/log/sickle/sickle.log`
-- Error log: `/var/log/sickle/sickle-error.log`
+- Service log: `/var/log/cleave/cleave.log`
+- Error log: `/var/log/cleave/cleave-error.log`
 - Agent logs: per-workspace in `{workspace}/logs/`
 
 ## Dry-Run Testing (Development)
@@ -448,7 +448,7 @@ git commit -m "Update deployment docs for two-directory layout"
 **Files:**
 - Delete: `deploy/setup.sh`
 
-The `deploy.sh --init` replaces `setup.sh`. The old script used `/opt/sickle`, a `pipeline` user, and `cp -r` instead of git — none of which match the new design.
+The `deploy.sh --init` replaces `setup.sh`. The old script used `/opt/cleave`, a `pipeline` user, and `cp -r` instead of git — none of which match the new design.
 
 - [ ] **Step 1: Remove setup.sh**
 

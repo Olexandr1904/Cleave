@@ -91,7 +91,7 @@ class TestFilterTickets:
         assert len(result) == 1
 
     def test_passes_bot_assigned(self):
-        tickets = [_ticket(labels=["ai-ready"], assignee="Sickle Pipeline")]
+        tickets = [_ticket(labels=["ai-ready"], assignee="Cleave Pipeline")]
         result = filter_tickets(tickets, trigger_labels=["ai-ready"], ignore_labels=[])
         assert len(result) == 1
 

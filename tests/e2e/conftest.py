@@ -169,7 +169,7 @@ def seeded_workspaces(tmp_path: Path) -> Path:
     """Default seed: 3 workspaces covering common states.
     Tests that need different seeds should use `workspace_seeder` instead.
     """
-    base = tmp_path / "sickle"
+    base = tmp_path / "cleave"
     base.mkdir()
 
     _seed_workspace(
@@ -195,7 +195,7 @@ def seeded_workspaces(tmp_path: Path) -> Path:
 @pytest.fixture
 def workspace_seeder(tmp_path: Path):
     """Returns (base_dir, seed_fn) for tests that need custom workspace setups."""
-    base = tmp_path / "sickle"
+    base = tmp_path / "cleave"
     base.mkdir()
 
     def seed(ticket_id: str, state: str, **kwargs) -> Path:

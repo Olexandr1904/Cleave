@@ -6,7 +6,7 @@
 
 ## Problem
 
-Sickle's Telegram integration treats every outbound alert the same. A ticket waiting for a trivial clarification ("should I use `snake_case` or `camelCase`?") pings the operator with the same urgency as a ticket that has locked the repo, left a dirty branch, and blocked three other tickets behind it. Over weeks this produces one of two failure modes:
+Cleave's Telegram integration treats every outbound alert the same. A ticket waiting for a trivial clarification ("should I use `snake_case` or `camelCase`?") pings the operator with the same urgency as a ticket that has locked the repo, left a dirty branch, and blocked three other tickets behind it. Over weeks this produces one of two failure modes:
 
 1. The operator treats every ping as urgent, loses focus constantly, and productivity collapses.
 2. The operator treats every ping as trivial, ignores them, and genuine blockers sit unaddressed for hours.

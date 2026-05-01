@@ -1,6 +1,6 @@
 # Jira Labels Reference
 
-Every Jira label Sickle reads, what it does, where it's configured, and how it behaves on conflicts.
+Every Jira label Cleave reads, what it does, where it's configured, and how it behaves on conflicts.
 
 This doc is a user-facing reference. For the implementation/spec, see [docs/features/jira-integration.md](features/jira-integration.md) and [docs/features/per-ticket-model-selection.md](features/per-ticket-model-selection.md).
 
@@ -53,7 +53,7 @@ Override the Claude model for a single ticket.
 - **Where:** add the label on the Jira ticket itself, **before** the pipeline picks it up.
 - **Snapshot timing:** the model is resolved once at workspace creation and frozen on `WorkspaceState.model`. Re-labeling later does not affect a running workspace; delete the workspace and let the pipeline recreate it if you need to switch.
 - **Case rules:** the prefix `model-` must be lowercase. The short name (`opus`/`sonnet`/`haiku`) is matched case-insensitively, so `model-OPUS` works.
-- **Conflicts:** if a ticket has multiple model labels (e.g. `model-opus` + `model-haiku`), or an unknown short name (`model-llama`), the global default is used **and** Sickle posts a Jira comment explaining which labels were ignored.
+- **Conflicts:** if a ticket has multiple model labels (e.g. `model-opus` + `model-haiku`), or an unknown short name (`model-llama`), the global default is used **and** Cleave posts a Jira comment explaining which labels were ignored.
 - **Default model:** set in the dashboard's **Settings** view. Stored in the dashboard SQLite, hot-reloaded on the next agent dispatch.
 
 See [docs/features/per-ticket-model-selection.md](features/per-ticket-model-selection.md) for the full spec.

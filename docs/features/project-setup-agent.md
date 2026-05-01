@@ -7,7 +7,7 @@
 
 ## Description
 
-A BMAD-style agent (`project-setup-agent`, codename Atlas) that onboards new projects into the Sickle pipeline through guided conversational setup. Atlas collects project details (Jira, VCS, CI/CD, quality gates, Telegram), validates credentials against live APIs, and writes the YAML config files to `config-live/`. The agent supports three operations: **add**, **list**, and **remove**.
+A BMAD-style agent (`project-setup-agent`, codename Atlas) that onboards new projects into the Cleave pipeline through guided conversational setup. Atlas collects project details (Jira, VCS, CI/CD, quality gates, Telegram), validates credentials against live APIs, and writes the YAML config files to `config-live/`. The agent supports three operations: **add**, **list**, and **remove**.
 
 ## Requirements
 

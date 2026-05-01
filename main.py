@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Sickle — Autonomous AI Development Pipeline.
+"""Cleave — Autonomous AI Development Pipeline.
 
 Entry point for the pipeline daemon. Parses CLI arguments
 and starts the orchestrator.
@@ -16,7 +16,7 @@ def get_version() -> str:
     """Read version from package metadata, falling back to pyproject.toml."""
     try:
         from importlib.metadata import PackageNotFoundError, version
-        return version("sickle")
+        return version("cleave")
     except PackageNotFoundError:
         pass
     try:
@@ -32,8 +32,8 @@ def get_version() -> str:
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     """Parse command-line arguments."""
     parser = argparse.ArgumentParser(
-        prog="sickle",
-        description="Sickle — Autonomous AI Development Pipeline",
+        prog="cleave",
+        description="Cleave — Autonomous AI Development Pipeline",
     )
     parser.add_argument(
         "--config",
@@ -73,7 +73,7 @@ def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
 
     version = get_version()
-    print(f"Sickle v{version} starting with config: {args.config}")
+    print(f"Cleave v{version} starting with config: {args.config}")
     if args.project:
         print(f"  Project filter: {args.project}")
     if args.repo:
@@ -154,7 +154,7 @@ def main(argv: list[str] | None = None) -> int:
     except (PermissionError, OSError):
         log_dir = Path(__file__).parent / "data"
         log_dir.mkdir(parents=True, exist_ok=True)
-    log_file = log_dir / "sickle-daemon.log"
+    log_file = log_dir / "cleave-daemon.log"
     file_handler = RotatingFileHandler(
         str(log_file), maxBytes=10 * 1024 * 1024, backupCount=5,
     )
@@ -541,7 +541,7 @@ def main(argv: list[str] | None = None) -> int:
                         "Failed to warm health cache: %s", e,
                     )
 
-        event_bus.emit("daemon_started", f"Sickle v{version} started")
+        event_bus.emit("daemon_started", f"Cleave v{version} started")
 
         # Emit events for configured projects so they appear in the dashboard
         for pid, proj in projects.items():

@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Add a local web dashboard showing per-project ticket history, agent activity, and a global event log — so the operator can see exactly what Sickle did, when, how, and by which agent.
+**Goal:** Add a local web dashboard showing per-project ticket history, agent activity, and a global event log — so the operator can see exactly what Cleave did, when, how, and by which agent.
 
 **Architecture:** A lightweight event bus captures structured events from orchestrator, agent runtime, and Telegram adapters, persists them to SQLite, and serves them via an embedded async web server (Starlette) running in the same process. The dashboard is a single HTML file with vanilla JS — no build step.
 
@@ -116,7 +116,7 @@ Expected: `ModuleNotFoundError: No module named 'dashboard'`
 
 ```python
 # dashboard/events.py
-"""Structured event system for Sickle pipeline observability."""
+"""Structured event system for Cleave pipeline observability."""
 
 from __future__ import annotations
 
@@ -419,7 +419,7 @@ Expected: `ModuleNotFoundError: No module named 'dashboard.event_store'`
 
 ```python
 # dashboard/event_store.py
-"""SQLite-backed event persistence for the Sickle dashboard."""
+"""SQLite-backed event persistence for the Cleave dashboard."""
 
 from __future__ import annotations
 
@@ -793,7 +793,7 @@ Expected: `ModuleNotFoundError: No module named 'dashboard.web'`
 
 ```python
 # dashboard/web.py
-"""Embedded web server for the Sickle dashboard."""
+"""Embedded web server for the Cleave dashboard."""
 
 from __future__ import annotations
 
@@ -862,8 +862,8 @@ def create_app(bus: EventBus, store: EventStore) -> Starlette:
 ```html
 <!-- dashboard/static/index.html -->
 <!DOCTYPE html>
-<html><head><title>Sickle Dashboard</title></head>
-<body><h1>Sickle Dashboard</h1><p>Loading...</p></body>
+<html><head><title>Cleave Dashboard</title></head>
+<body><h1>Cleave Dashboard</h1><p>Loading...</p></body>
 </html>
 ```
 
@@ -1194,7 +1194,7 @@ Replace the placeholder `dashboard/static/index.html` with the full dashboard. T
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Sickle Dashboard</title>
+    <title>Cleave Dashboard</title>
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
         body {
@@ -1270,7 +1270,7 @@ Replace the placeholder `dashboard/static/index.html` with the full dashboard. T
 </head>
 <body>
     <div class="sidebar">
-        <div class="logo">Sickle</div>
+        <div class="logo">Cleave</div>
         <h2>Navigation</h2>
         <a href="#" onclick="showGlobalLog()" class="active" id="nav-global">Global Log</a>
         <h2 style="margin-top: 20px;">Projects</h2>
@@ -1533,7 +1533,7 @@ In `_run_all()`, replace the function with:
             asyncio.create_task(web_server.serve())
             print(f"  Dashboard: http://{dash_config.host}:{dash_config.port}")
 
-        event_bus.emit("daemon_started", f"Sickle v{version} started")
+        event_bus.emit("daemon_started", f"Cleave v{version} started")
 
         tg_active = isinstance(notifier, TelegramAdapter)
         if tg_active:
@@ -1599,7 +1599,7 @@ Per the CONTRIBUTING.md pre-commit hook, any code change to tracked directories 
 
 ## Description
 
-Local web dashboard providing real-time visibility into the Sickle pipeline. Shows per-project ticket history, agent activity, state transitions, Telegram messages, and a global event log. Runs as an embedded web server in the daemon process.
+Local web dashboard providing real-time visibility into the Cleave pipeline. Shows per-project ticket history, agent activity, state transitions, Telegram messages, and a global event log. Runs as an embedded web server in the daemon process.
 
 ## Requirements
 

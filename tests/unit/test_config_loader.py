@@ -61,7 +61,7 @@ class TestLoadGlobalConfig:
         assert config.defaults.max_parallel_tickets == 5
         assert config.defaults.pr_comment_fetch_delay_minutes == 30
         assert config.logging.level == "INFO"
-        assert config.logging.dir == "/var/log/sickle"
+        assert config.logging.dir == "/var/log/cleave"
         assert config.heartbeat.enabled is True
         assert config.heartbeat.interval_hours == 24
 

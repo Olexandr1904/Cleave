@@ -147,7 +147,7 @@ class Workspace:
             with open(exclude_path, "a", encoding="utf-8") as f:
                 if existing and not existing.endswith("\n"):
                     f.write("\n")
-                f.write("# Sickle pipeline artifacts — never commit\nreports/\n")
+                f.write("# Cleave pipeline artifacts — never commit\nreports/\n")
         except OSError:
             pass
 

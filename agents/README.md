@@ -1,6 +1,6 @@
 # Agent Prompt Files
 
-Sickle agents follow the **BMAD-style** prompt file format. Each agent is a standalone Markdown file with YAML frontmatter metadata and Markdown body instructions.
+Cleave agents follow the **BMAD-style** prompt file format. Each agent is a standalone Markdown file with YAML frontmatter metadata and Markdown body instructions.
 
 ## File Format
 

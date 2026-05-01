@@ -5,7 +5,7 @@
 
 ## Problem
 
-The Claude model identifier used by the Sickle pipeline is duplicated across at least four locations:
+The Claude model identifier used by the Cleave pipeline is duplicated across at least four locations:
 
 - `config-live/global.yaml` — runtime config (`claude.model: "claude-sonnet-4-5"`)
 - `config/schemas.py:17` — Pydantic field default (`model: str = "claude-sonnet-4-5"`)

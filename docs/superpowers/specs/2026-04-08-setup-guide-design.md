@@ -8,13 +8,13 @@ status: approved
 
 ## Goal
 
-Create a public-facing setup guide (`docs/setup-guide.md`) so that anyone cloning the Sickle repo — human or AI agent — can understand what to install, configure, and run to get the project working. Add a link to it from `README.md`.
+Create a public-facing setup guide (`docs/setup-guide.md`) so that anyone cloning the Cleave repo — human or AI agent — can understand what to install, configure, and run to get the project working. Add a link to it from `README.md`.
 
 ## Audience
 
 - Developers cloning the repo for local development or contribution
 - AI agents (e.g., Claude Code) setting up the project on a new machine
-- Operators deploying Sickle on a production VPS
+- Operators deploying Cleave on a production VPS
 
 ## Deliverables
 
@@ -29,24 +29,24 @@ System-level requirements:
 
 | Requirement | Version | Notes |
 |---|---|---|
-| Python | 3.10+ | Runtime for Sickle |
+| Python | 3.10+ | Runtime for Cleave |
 | Git | 2.x+ | Workspace cloning |
 | Node.js | 18+ | Required for Claude Code CLI (installed via npm) |
 | OS | Ubuntu 22.04+ (production), macOS/Linux (dev) | systemd required for daemon deployment |
 
 ### 2. Install Claude Code CLI
 
-Sickle dispatches agents via `claude -p` subprocess calls. This requires:
+Cleave dispatches agents via `claude -p` subprocess calls. This requires:
 
 - Install: `npm install -g @anthropic-ai/claude-code`
 - Verify: `claude --version`
 - Auth: Either an active Claude Max/Pro subscription (CLI authenticates via browser) or an Anthropic API key set in `.env`
-- Note: If using CLI auth (Max subscription), leave `CLAUDE_API_KEY` empty in `.env` — Sickle auto-detects and uses the CLI adapter
+- Note: If using CLI auth (Max subscription), leave `CLAUDE_API_KEY` empty in `.env` — Cleave auto-detects and uses the CLI adapter
 
 ### 3. Clone & Install
 
 ```bash
-git clone <repo-url> && cd sickle
+git clone <repo-url> && cd cleave
 python3 -m venv .venv && source .venv/bin/activate
 pip install -e ".[dev]"
 pytest  # 239 tests should pass
@@ -99,7 +99,7 @@ Currently supported providers:
 - **Notifications:** Telegram
 - **LLM:** Anthropic API or Claude Code CLI
 
-### 6. Running Sickle
+### 6. Running Cleave
 
 **Dry run** (polls Jira, logs what would happen, no side effects):
 ```bash
@@ -127,6 +127,6 @@ Add to the existing Docs section:
 
 ## Out of Scope
 
-- Helper scripts at `/opt/sickle-helpers/` — these are environment-specific and optional; Sickle's built-in integration adapters handle the same functionality
+- Helper scripts at `/opt/cleave-helpers/` — these are environment-specific and optional; Cleave's built-in integration adapters handle the same functionality
 - GitLab and Jenkins adapter setup — not yet implemented, will be documented when added
 - Detailed agent authoring guide — separate concern, not needed for setup

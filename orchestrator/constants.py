@@ -1,4 +1,4 @@
-"""Shared constants for the Sickle pipeline."""
+"""Shared constants for the Cleave pipeline."""
 
 # Agent structured report files — written BY the agent via tool calls.
 # Use these to check whether a stage's work product exists (e.g. smart retry).

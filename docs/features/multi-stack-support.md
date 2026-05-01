@@ -13,7 +13,7 @@ See [`docs/multi-stack-readiness.md`](../multi-stack-readiness.md) for the full 
 
 ## Motivation
 
-Current state (audited 2026-04-30): Sickle is ~85% project-agnostic by design. The remaining 15% is concentrated in one module ([`orchestrator/gradle_remediation.py`](../../orchestrator/gradle_remediation.py)) wired into the orchestrator unconditionally:
+Current state (audited 2026-04-30): Cleave is ~85% project-agnostic by design. The remaining 15% is concentrated in one module ([`orchestrator/gradle_remediation.py`](../../orchestrator/gradle_remediation.py)) wired into the orchestrator unconditionally:
 
 - [`orchestrator/orchestrator.py:29-34`](../../orchestrator/orchestrator.py#L29-L34) — hard import of Gradle helpers.
 - [`orchestrator/orchestrator.py:854-857`](../../orchestrator/orchestrator.py#L854-L857) — hardcoded `"Android SDK not installed"` / `"JDK not installed"` warning strings appended to QA-pass Telegram messages on substring matches.

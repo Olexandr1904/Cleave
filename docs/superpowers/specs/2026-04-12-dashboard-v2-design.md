@@ -2,7 +2,7 @@
 
 ## Goal
 
-Rewrite the Sickle web dashboard from a broken event log viewer into a fully functional operations dashboard where the operator can monitor all tickets across projects, drill into any ticket to read agent reports, and take actions (approve, reject, retry, take control) directly from the browser.
+Rewrite the Cleave web dashboard from a broken event log viewer into a fully functional operations dashboard where the operator can monitor all tickets across projects, drill into any ticket to read agent reports, and take actions (approve, reject, retry, take control) directly from the browser.
 
 ## Architecture
 
@@ -22,7 +22,7 @@ Multi-file vanilla JS frontend served by the existing Starlette backend. No fram
 The dashboard uses a sidebar + main content layout:
 
 **Sidebar (fixed left, 240px):**
-- Sickle logo/title
+- Cleave logo/title
 - Navigation: Board, Event Log
 - Project list — derived from `/api/workspaces` response (not from event DB, fixing the current "no projects" bug)
 - Daemon status: mode (auto/manual), uptime, last poll time

@@ -2,7 +2,7 @@
 
 ## Overview
 
-A markdown-based feature tracking system for the Sickle project. Provides a central index of all features with their status, links to detailed per-feature documents (mini-PRDs), and enforces documentation updates via a pre-commit hook and a documented convention.
+A markdown-based feature tracking system for the Cleave project. Provides a central index of all features with their status, links to detailed per-feature documents (mini-PRDs), and enforces documentation updates via a pre-commit hook and a documented convention.
 
 ## Goals
 
@@ -36,7 +36,7 @@ CONTRIBUTING.md                       # Convention documentation (project root)
 A markdown file containing a table with all features:
 
 ```markdown
-# Sickle — Feature Tracker
+# Cleave — Feature Tracker
 
 | # | Feature | Status | Description |
 |---|---------|--------|-------------|

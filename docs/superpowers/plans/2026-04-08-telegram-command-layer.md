@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Add interactive Telegram control to Sickle: status/health check, auto/manual pipeline modes with approval gates, and a Claude CLI-powered free-text command interface.
+**Goal:** Add interactive Telegram control to Cleave: status/health check, auto/manual pipeline modes with approval gates, and a Claude CLI-powered free-text command interface.
 
 **Architecture:** New `CommandHandler` sits between TelegramAdapter's polling loop and the orchestrator — it intercepts all incoming messages, classifies intent via Claude Code CLI (`quick_query`), and dispatches to handler modules. The orchestrator gains mode awareness (auto/manual) and a new `AWAITING_APPROVAL` workspace state for manual mode gates.
 
@@ -583,7 +583,7 @@ from typing import Any
 logger = logging.getLogger(__name__)
 
 INTENT_SYSTEM_PROMPT = """\
-You are the command parser for Sickle, an autonomous dev pipeline.
+You are the command parser for Cleave, an autonomous dev pipeline.
 Current state:
 - Mode: {mode}
 - Awaiting approval: {awaiting_approval}
@@ -833,7 +833,7 @@ class StatusHandler:
     ) -> str:
         """Format the summary status message."""
         lines = [
-            "Sickle Status",
+            "Cleave Status",
             "",
             f"Mode: {mode}",
             f"Uptime: {_format_duration(uptime_seconds)}",

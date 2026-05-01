@@ -250,7 +250,7 @@ class TestDiscoverWorkspacesIncludesFailedDeferred:
         from workspace.workspace_manager import WorkspaceManager
         from workspace.workspace import Workspace, WorkspaceState
 
-        base = tmp_path / "sickle"
+        base = tmp_path / "cleave"
         ws_root = base / "co" / "repo" / "tickets" / "T-1"
         ws_root.mkdir(parents=True)
         (ws_root / "meta").mkdir()
@@ -274,7 +274,7 @@ class TestDiscoverWorkspacesIncludesFailedDeferred:
         from workspace.workspace_manager import WorkspaceManager
         from workspace.workspace import Workspace, WorkspaceState
 
-        base = tmp_path / "sickle"
+        base = tmp_path / "cleave"
         ws_root = base / "co" / "repo" / "tickets" / "T-2"
         ws_root.mkdir(parents=True)
         (ws_root / "meta").mkdir()
@@ -297,7 +297,7 @@ class TestDiscoverWorkspacesIncludesFailedDeferred:
         from workspace.workspace_manager import WorkspaceManager
         from workspace.workspace import Workspace, WorkspaceState
 
-        base = tmp_path / "sickle"
+        base = tmp_path / "cleave"
         for tid, state_name in [("T-3", "DONE"), ("T-4", "ARCHIVED")]:
             ws_root = base / "co" / "repo" / "tickets" / tid
             ws_root.mkdir(parents=True)
@@ -1859,7 +1859,7 @@ In `integrations/telegram/intent_parser.py` at line 12-29, update the `INTENT_SY
 
 ```python
 INTENT_SYSTEM_PROMPT = """\
-You are the command parser for Sickle, an autonomous dev pipeline.
+You are the command parser for Cleave, an autonomous dev pipeline.
 Current state:
 - Mode: {mode}
 - Awaiting approval: {awaiting_approval}
@@ -2100,7 +2100,7 @@ async def test_restart_picks_up_deferred_from_disk(tmp_path):
     """A DEFERRED workspace persisted to disk is rediscovered on restart."""
     from workspace.workspace_manager import WorkspaceManager
 
-    base = tmp_path / "sickle"
+    base = tmp_path / "cleave"
     ws_root = base / "acme" / "acme-app" / "tickets" / "T-R"
     ws_root.mkdir(parents=True)
     (ws_root / "meta").mkdir()

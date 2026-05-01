@@ -1,4 +1,4 @@
-# Sickle — Feature Tracker
+# Cleave — Feature Tracker
 
 > Track all features, their status, and link to detailed specs.
 > Statuses: **Planned** | **In Progress** | **Implemented**

@@ -713,7 +713,7 @@ def get_tool_definitions(allowed_tools: list[str]) -> list[dict[str, Any]]:
         },
         "list_projects": {
             "name": "list_projects",
-            "description": "List all projects in a Sickle config directory.",
+            "description": "List all projects in a Cleave config directory.",
             "input_schema": {
                 "type": "object",
                 "properties": {

@@ -797,7 +797,7 @@ If `command_handler.py` formats the stored value back into a message (e.g., for 
 
 - [ ] **Step 3: Manual verification against a real workspace**
 
-On a dev machine with a running Sickle instance:
+On a dev machine with a running Cleave instance:
 
 1. Force an analysis escalation:
    - Create or adopt a ticket whose BA agent will escalate (ambiguous requirements, or no repo label).

@@ -63,7 +63,7 @@ A harder check, also run on the orchestrator tick but with stricter conditions. 
   3. Write a final entry to the ticket's event log explaining why it was killed
   4. Transition ticket to `BLOCKED` with reason `watchdog_timeout`
   5. Emit `critical`-severity Telegram alert via the severity routing spec
-- **Invariant:** Layer 3 is the **only** component allowed to kill processes. Nothing else in Sickle may call `kill_tree()` on a ticket subprocess.
+- **Invariant:** Layer 3 is the **only** component allowed to kill processes. Nothing else in Cleave may call `kill_tree()` on a ticket subprocess.
 
 The enforcer lives in a new module `orchestrator/watchdog.py`. Keeping it isolated from the orchestrator's main file makes the kill path audit-able and testable in isolation.
 

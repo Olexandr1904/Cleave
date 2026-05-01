@@ -1,8 +1,8 @@
-# Project Brief: Sickle — Autonomous AI Development Pipeline
+# Project Brief: Cleave — Autonomous AI Development Pipeline
 
 ## Executive Summary
 
-Sickle is a self-hosted, autonomous AI-driven software development pipeline that runs as a persistent daemon on a Mac Mini. It monitors Jira for tickets labeled `ai-ready`, picks them up, analyzes requirements, writes code, opens PRs, handles code review cycles, runs tests, and merges — all without human intervention unless genuinely stuck. The human's role is approver and unlocker, not a participant in the normal flow.
+Cleave is a self-hosted, autonomous AI-driven software development pipeline that runs as a persistent daemon on a Mac Mini. It monitors Jira for tickets labeled `ai-ready`, picks them up, analyzes requirements, writes code, opens PRs, handles code review cycles, runs tests, and merges — all without human intervention unless genuinely stuck. The human's role is approver and unlocker, not a participant in the normal flow.
 
 The core value proposition: a single developer (or small team lead) can multiply their output by offloading routine implementation tickets to an AI pipeline that follows the same rules, architecture constraints, and quality gates as a human developer would. Initially deployed on a cloud VPS (Ubuntu), with the option to move to a dedicated Mac Mini later.
 
@@ -29,7 +29,7 @@ A platform-grade pipeline tool that:
 - **Escalates intelligently** via Telegram only when genuinely stuck, with precise numbered questions
 - **Is entirely config-driven** — adding a new project or repo requires zero code changes, just a yaml file
 
-The key differentiator from tools like Devin or SWE-Agent: Sickle is **self-hosted, multi-project, config-driven, and designed for long-running autonomous operation** — not a one-off "fix this issue" tool.
+The key differentiator from tools like Devin or SWE-Agent: Cleave is **self-hosted, multi-project, config-driven, and designed for long-running autonomous operation** — not a one-off "fix this issue" tool.
 
 ## Target Users
 
@@ -236,4 +236,4 @@ Poll Jira → PM Agent prioritizes → BA Agent validates requirements
 
 ### PM Handoff
 
-This Project Brief provides the full context for Sickle. Please start in 'PRD Generation Mode', review the brief thoroughly to work with the user to create the PRD section by section as the template indicates, asking for any necessary clarification or suggesting improvements.
+This Project Brief provides the full context for Cleave. Please start in 'PRD Generation Mode', review the brief thoroughly to work with the user to create the PRD section by section as the template indicates, asking for any necessary clarification or suggesting improvements.

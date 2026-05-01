@@ -9,7 +9,7 @@ author: Oleksandr Brazhenko
 
 ## Problem
 
-Adding a new project to the Sickle pipeline today requires running the Atlas
+Adding a new project to the Cleave pipeline today requires running the Atlas
 project-setup agent from the CLI, answering questions one at a time, and
 manually ensuring the required environment variables exist. There is no
 discoverable path for a team lead to onboard a new project from the web
@@ -435,8 +435,8 @@ vcs:
 
 git:
   clone_url: "https://${ACME_GITHUB_TOKEN}@github.com/acme/acme-app.git"
-  commit_author_name: "Sickle Bot"
-  commit_author_email: "sickle@pipeline.local"
+  commit_author_name: "Cleave Bot"
+  commit_author_email: "cleave@pipeline.local"
   depth: 1
 
 architecture:
@@ -563,7 +563,7 @@ migrates the schema fully:
   endpoint re-reads `.env` under the module lock just before writing to
   minimize the window.
 - **Hot-reloading env in long-running processes**: `os.environ` is set for
-  the dashboard process, but other Sickle processes (orchestrator, daemons)
+  the dashboard process, but other Cleave processes (orchestrator, daemons)
   started from the same `run.sh` will see new `.env` vars only on restart.
   Out of scope — the project configs created here aren't enabled until the
   next full restart anyway, since config discovery happens at startup.

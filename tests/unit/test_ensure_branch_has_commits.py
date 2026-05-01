@@ -56,8 +56,8 @@ def _repo_config() -> RepoConfig:
         vcs=VCSConfig(github=GitHubConfig()),
         jira=JiraConfig(statuses=JiraStatusesConfig()),
         git=GitConfig(
-            commit_author_name="Sickle Bot",
-            commit_author_email="sickle@pipeline.local",
+            commit_author_name="Cleave Bot",
+            commit_author_email="cleave@pipeline.local",
         ),
     )
 
@@ -118,7 +118,7 @@ def test_uses_repo_config_author_for_recovery_commit(tmp_path):
         ["git", "-C", str(repo), "log", "-1", "--format=%an <%ae>"],
         capture_output=True, text=True, check=True,
     ).stdout.strip()
-    assert author == "Sickle Bot <sickle@pipeline.local>"
+    assert author == "Cleave Bot <cleave@pipeline.local>"
 
 
 def test_no_op_when_branch_already_has_commits(tmp_path):

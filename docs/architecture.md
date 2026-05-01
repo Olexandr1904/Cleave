@@ -764,7 +764,7 @@ The orchestrator sends a periodic Telegram summary to confirm it's alive and rep
 - **Interval:** Configurable, default every 24 hours
 - **Message format:**
   ```
-  💓 [SICKLE] Daily heartbeat — 2026-03-28
+  💓 [CLEAVE] Daily heartbeat — 2026-03-28
   ✅ Tickets merged today: 3
   🔄 Active workspaces: 2
   ⏳ Waiting for human: 1
@@ -848,7 +848,7 @@ All integration adapters detect auth failures and alert the operator immediately
 - **Behavior on auth failure:**
   1. Log ERROR with adapter name and endpoint
   2. All workspaces using that adapter pause (no new API calls)
-  3. Telegram notification: `🔑 [SICKLE] {Adapter} authentication failed. Check token for {service}. All {service} operations paused.`
+  3. Telegram notification: `🔑 [CLEAVE] {Adapter} authentication failed. Check token for {service}. All {service} operations paused.`
   4. Orchestrator continues advancing workspaces that don't depend on the failed adapter
   5. On next poll cycle, re-attempt auth — if successful, resume paused workspaces
 - **Token renewal:** Operator updates the env var on the VPS and restarts the service (or waits for next poll cycle if env is reloaded dynamically)

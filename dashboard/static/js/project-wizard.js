@@ -668,7 +668,7 @@ async function pollStatus() {
       done('st-validating', true); done('st-writing', true); done('st-done', true);
       clearInterval(poll);
       renderSuccess();
-      window.dispatchEvent(new CustomEvent('sickle:projects-changed'));
+      window.dispatchEvent(new CustomEvent('cleave:projects-changed'));
     }
     if (st === 'SETUP_FAILED') {
       clearInterval(poll);

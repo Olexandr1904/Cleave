@@ -319,7 +319,7 @@ function renderCard(ws) {
   let retryIcon = '';
   let gradleClearIcon = '';
   let archMismatchHelp = '';
-  if (stateVal === 'FAILED') {
+  if (stateVal === 'FAILED' || stateVal === 'BLOCKED') {
     retryIcon = `<button class="card-icon-btn" data-action="retry" data-ticket="${esc(ws.ticket_id)}" title="Retry" onclick="event.stopPropagation()">↻</button>`;
     if (looksLikeAapt2ArchMismatch(ws.error)) {
       // Show help inline on the card; suppress the 🧹 button (would loop).

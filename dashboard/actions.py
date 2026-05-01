@@ -485,6 +485,100 @@ def build_action_routes(
             )
         return JSONResponse({"status": "ok", "cleaned": ticket_id})
 
+    async def rerun(request: Request) -> JSONResponse:
+        from datetime import datetime, timezone
+        ticket_id = request.path_params["ticket_id"]
+        ws = _find_workspace(orchestrator, ticket_id, global_config)
+        if ws is None:
+            return _error(f"Workspace not found: {ticket_id}", 404)
+        if ws.state.current_state != Stage.DONE:
+            return _error(f"Cannot rerun: state is {ws.state.current_state}")
+
+        body = {}
+        try:
+            body = await request.json()
+        except Exception:
+            pass
+        reason = (body.get("reason") or "").strip()
+        if not reason:
+            return _error("reason is required and must be non-empty")
+
+        # Append rerun entry to meta/rerun_history.md
+        rerun_file = Path(ws.meta_dir) / "rerun_history.md"
+        ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        entry = f"\n## Rerun {ts}\n\n{reason}\n"
+        existing = (
+            rerun_file.read_text(encoding="utf-8")
+            if rerun_file.exists()
+            else "# Rerun History\n"
+        )
+        rerun_file.write_text(existing + entry, encoding="utf-8")
+
+        # Resolve repo config
+        repo_config = None
+        try:
+            project = orchestrator._projects.get(ws.state.company_id)
+            if project:
+                repo_config = project.repos.get(ws.state.repo_id)
+        except Exception:
+            pass
+        if repo_config is None:
+            return _error(
+                f"Repo config not found for {ws.state.company_id}/{ws.state.repo_id}",
+                500,
+            )
+
+        clone_url = repo_config.git.clone_url
+        default_branch = (
+            repo_config.vcs.github.default_branch
+            if repo_config.vcs.provider == "github"
+            else repo_config.vcs.gitlab.default_branch
+        )
+
+        # Refresh ticket data (appends to meta files)
+        try:
+            await orchestrator._refetch_ticket_data(ws)
+        except Exception as e:
+            logger.warning("Failed to refetch ticket data for %s: %s", ticket_id, e)
+
+        # Re-clone source
+        try:
+            branch = orchestrator._workspace_manager.reset_source(
+                ws, clone_url, default_branch
+            )
+        except Exception as e:
+            return _error(f"Failed to reset source: {e}", 500)
+
+        # Clear stale state fields and transition
+        ws.state.pr_number = None
+        ws.state.pr_url = None
+        ws.state.last_verified_sha = ""
+        ws.state.review_cycle = 0
+        ws.state.pending_review_comments = None
+        ws.state.error = None
+        ws.state.stage_iterations = {}
+        ws.transition(Stage.ANALYSIS)
+
+        # Telegram notification
+        try:
+            await orchestrator._notify_rerun(ws, branch, reason)
+        except Exception as e:
+            logger.warning(
+                "Failed to send rerun notification for %s: %s", ticket_id, e
+            )
+
+        if event_bus:
+            event_bus.emit(
+                "dashboard_rerun",
+                f"Rerun {ticket_id} via dashboard — {reason[:60]}",
+                ticket_id=ticket_id,
+                data={"new_state": Stage.ANALYSIS, "branch": branch, "reason": reason},
+            )
+
+        return JSONResponse(
+            {"status": "ok", "new_state": Stage.ANALYSIS, "branch": branch}
+        )
+
     async def clear_gradle_and_retry(request: Request) -> JSONResponse:
         """Wipe Gradle transforms cache and retry the ticket.
 
@@ -547,6 +641,7 @@ def build_action_routes(
         Route("/api/workspaces/{ticket_id:path}/unpause", unpause, methods=["POST"]),
         Route("/api/workspaces/{ticket_id:path}/archive", archive, methods=["POST"]),
         Route("/api/workspaces/{ticket_id:path}/clean", clean_source, methods=["POST"]),
+        Route("/api/workspaces/{ticket_id:path}/rerun", rerun, methods=["POST"]),
         Route("/api/workspaces/{ticket_id:path}/delete", delete_workspace, methods=["POST"]),
         Route("/api/daemon/mode", set_mode, methods=["POST"]),
         Route("/api/daemon/status", daemon_status),

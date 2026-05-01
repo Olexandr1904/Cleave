@@ -223,3 +223,23 @@ class TestWorkspaceNewFields:
         ws = Workspace(str(ws_dir))
         assert ws.state.pending_review_comments == [{"comment_id": 1, "decision": "fix"}]
         assert ws.state.review_cycle == 3
+
+
+# --- Rerun feature: DONE → ANALYSIS ---
+
+class TestWorkspaceStateTransitions:
+    def test_done_can_transition_to_analysis(self, tmp_path):
+        from workspace.workspace import Workspace, WorkspaceState
+        ws_root = tmp_path / "ws"
+        ws_root.mkdir()
+        (ws_root / "meta").mkdir()
+        state = WorkspaceState(
+            ticket_id="T-1",
+            company_id="co",
+            repo_id="repo",
+            workspace_root=str(ws_root),
+            current_state="DONE",
+        )
+        ws = Workspace(str(ws_root), state)
+        ws.transition(Stage.ANALYSIS)
+        assert ws.state.current_state == Stage.ANALYSIS

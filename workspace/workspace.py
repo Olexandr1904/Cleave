@@ -42,7 +42,7 @@ VALID_TRANSITIONS: dict[Stage, set[Stage]] = {
     Stage.QA:                 {Stage.PUSHED, Stage.DEV, Stage.BLOCKED, Stage.FAILED, Stage.DEFERRED, Stage.AWAITING_APPROVAL, Stage.MANUAL_CONTROL, Stage.PAUSED},
     Stage.PUSHED:             {Stage.PR_REVIEW, Stage.BLOCKED, Stage.FAILED, Stage.DEFERRED, Stage.MANUAL_CONTROL, Stage.PAUSED},
     Stage.PR_REVIEW:          {Stage.DEV, Stage.DONE, Stage.BLOCKED, Stage.FAILED, Stage.DEFERRED, Stage.AWAITING_APPROVAL, Stage.MANUAL_CONTROL, Stage.PAUSED},
-    Stage.DONE:               {Stage.ARCHIVED},
+    Stage.DONE:               {Stage.ARCHIVED, Stage.ANALYSIS},
     Stage.BLOCKED:            {Stage.ANALYSIS, Stage.DEV, Stage.SCOPE_CHECK, Stage.QA, Stage.PUSHED, Stage.PR_REVIEW, Stage.FAILED, Stage.MANUAL_CONTROL},
     Stage.FAILED:             {Stage.ANALYSIS, Stage.DEV, Stage.SCOPE_CHECK, Stage.QA, Stage.PUSHED, Stage.PR_REVIEW, Stage.MANUAL_CONTROL, Stage.ARCHIVED},
     Stage.ARCHIVED:           set(),

@@ -10,7 +10,7 @@ import signal
 import time
 from collections import deque
 from collections.abc import Callable
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from types import SimpleNamespace
 from typing import Any
 
@@ -563,15 +563,13 @@ class Orchestrator:
         Rerun (file exists): appends a timestamped refresh block so agents can
         see what changed between runs.
         """
-        import re
-        from datetime import date
-
         ticket_id = workspace.state.ticket_id
 
+        ticket_obj = None  # will be set if tracker fetches successfully
         if self._tracker:
             try:
-                ticket = await self._tracker.get_ticket(ticket_id)
-                ticket_md = _ticket_to_markdown(ticket)
+                ticket_obj = await self._tracker.get_ticket(ticket_id)
+                ticket_md = _ticket_to_markdown(ticket_obj)
                 ticket_file = workspace.meta_dir / "ticket.md"
                 if ticket_file.exists():
                     refresh_date = date.today().isoformat()
@@ -673,6 +671,36 @@ class Orchestrator:
                     "Failed to refetch comments/history for %s: %s", ticket_id, e
                 )
 
+        # Download attachments — skip files already present
+        if self._tracker and ticket_obj is not None and ticket_obj.attachments:
+            attachments_dir = workspace.meta_dir / "attachments"
+            attachments_dir.mkdir(exist_ok=True)
+            for att in ticket_obj.attachments:
+                mime = att.get("mime_type", "")
+                if not mime.startswith("image/"):
+                    continue
+                filename = att.get("filename", "attachment")
+                if (attachments_dir / filename).exists():
+                    continue  # already downloaded, skip
+                try:
+                    import httpx
+                    headers = {}
+                    if hasattr(self._tracker, '_email') and hasattr(self._tracker, '_token'):
+                        import base64
+                        creds = base64.b64encode(
+                            f"{self._tracker._email}:{self._tracker._token}".encode()
+                        ).decode()
+                        headers = {"Authorization": f"Basic {creds}"}
+                    async with httpx.AsyncClient(timeout=30) as client:
+                        resp = await client.get(att["url"], headers=headers, follow_redirects=True)
+                        if resp.status_code == 200:
+                            (attachments_dir / filename).write_bytes(resp.content)
+                            logger.info("Downloaded attachment %s for %s", filename, ticket_id)
+                        else:
+                            logger.warning("Failed to download %s: HTTP %d", filename, resp.status_code)
+                except Exception as e:
+                    logger.warning("Failed to download attachment %s: %s", filename, e)
+
     async def _create_workspace_for_ticket(
         self,
         pt: PrioritizedTicket,
@@ -711,36 +739,8 @@ class Orchestrator:
                     pt.ticket.id, e,
                 )
 
-        # Write ticket metadata — calls tracker for comments/history/attachments
+        # Write ticket metadata — calls tracker for ticket description, comments, and history
         await self._refetch_ticket_data(ws)
-
-        # Download ticket attachments (screenshots, images)
-        if pt.ticket.attachments:
-            attachments_dir = ws.meta_dir / "attachments"
-            attachments_dir.mkdir(exist_ok=True)
-            for att in pt.ticket.attachments:
-                mime = att.get("mime_type", "")
-                if not mime.startswith("image/"):
-                    continue  # Only download images
-                filename = att.get("filename", "attachment")
-                try:
-                    import httpx
-                    async with httpx.AsyncClient(timeout=30) as client:
-                        # Jira requires auth for attachment downloads
-                        if self._tracker and hasattr(self._tracker, '_email') and hasattr(self._tracker, '_token'):
-                            import base64
-                            creds = base64.b64encode(f"{self._tracker._email}:{self._tracker._token}".encode()).decode()
-                            headers = {"Authorization": f"Basic {creds}"}
-                        else:
-                            headers = {}
-                        resp = await client.get(att["url"], headers=headers, follow_redirects=True)
-                        if resp.status_code == 200:
-                            (attachments_dir / filename).write_bytes(resp.content)
-                            logger.info("Downloaded attachment %s for %s", filename, pt.ticket.id)
-                        else:
-                            logger.warning("Failed to download %s: HTTP %d", filename, resp.status_code)
-                except Exception as e:
-                    logger.warning("Failed to download attachment %s: %s", filename, e)
 
         # Fetch and write parent ticket if linked
         if self._tracker and pt.ticket.linked_issues:

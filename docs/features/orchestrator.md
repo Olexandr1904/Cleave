@@ -94,6 +94,7 @@ Central daemon process that continuously polls for work, manages isolated worksp
 | 2026-04-30 | `Orchestrator.run` poll loop now cancels and reaps the loser of the `asyncio.wait` race between shutdown_event, wake_event, and the poll-interval timeout. Previously the pending task was abandoned each cycle, leaking one Future per poll for the lifetime of the daemon. |
 | 2026-04-30 | `advance_workspace` auto-resume now caps recursion depth at 5. The `AWAITING_APPROVAL → next_state` branch tail-calls `advance_workspace` so the resumed workspace doesn't wait a full poll cycle, but cascading gates could in principle stack-overflow the event loop. Added a `_resume_depth` parameter; once at the cap, the function logs and returns, and the next poll cycle picks the workspace up. |
 | 2026-05-01 | Extracted `_refetch_ticket_data(workspace)`: writes ticket.md, comments.md, and history.md on first run; appends a timestamped refresh block / only new comments / only new history lines on reruns. `_create_workspace_for_ticket` now delegates to it. Added `_notify_rerun(workspace, branch, reason)` notification helper for dashboard-triggered reruns. |
+| 2026-05-01 | Moved attachment downloading into `_refetch_ticket_data` so reruns also refresh images. Uses the ticket object fetched at the top of the method; skips files already present on disk. The duplicate block in `_create_workspace_for_ticket` was removed. |
 
 
 

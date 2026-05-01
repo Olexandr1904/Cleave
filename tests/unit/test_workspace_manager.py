@@ -405,3 +405,13 @@ class TestResetSource:
 
         with pytest.raises(WorkspaceError, match="Git clone failed"):
             manager.reset_source(ws, "https://git.example.com/repo.git", "develop")
+
+    @patch("subprocess.run")
+    def test_raises_workspace_error_on_timeout(self, mock_run, tmp_path):
+        import subprocess as sp
+        ws = self._make_ws(tmp_path)
+        mock_run.side_effect = sp.TimeoutExpired(cmd="git clone", timeout=300)
+        manager = WorkspaceManager(str(tmp_path))
+
+        with pytest.raises(WorkspaceError, match="timed out"):
+            manager.reset_source(ws, "https://git.example.com/repo.git", "develop")

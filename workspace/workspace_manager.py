@@ -217,32 +217,35 @@ class WorkspaceManager:
         if source_dir.exists():
             shutil.rmtree(source_dir)
 
-        result = subprocess.run(
-            ["git", "clone", clone_url, str(source_dir)],
-            capture_output=True,
-            text=True,
-            timeout=SUBPROCESS_TIMEOUT,
-        )
-        if result.returncode != 0:
-            raise WorkspaceError(f"Git clone failed: {result.stderr.strip()}")
+        try:
+            result = subprocess.run(
+                ["git", "clone", clone_url, str(source_dir)],
+                capture_output=True,
+                text=True,
+                timeout=SUBPROCESS_TIMEOUT,
+            )
+            if result.returncode != 0:
+                raise WorkspaceError(f"Git clone failed: {result.stderr.strip()}")
 
-        checkout = subprocess.run(
-            ["git", "checkout", branch_name],
-            cwd=str(source_dir),
-            capture_output=True,
-            text=True,
-            timeout=SUBPROCESS_TIMEOUT,
-        )
-        checked_out = branch_name
-        if checkout.returncode != 0:
-            subprocess.run(
-                ["git", "checkout", default_branch],
+            checkout = subprocess.run(
+                ["git", "checkout", branch_name],
                 cwd=str(source_dir),
                 capture_output=True,
                 text=True,
                 timeout=SUBPROCESS_TIMEOUT,
             )
-            checked_out = default_branch
+            checked_out = branch_name
+            if checkout.returncode != 0:
+                subprocess.run(
+                    ["git", "checkout", default_branch],
+                    cwd=str(source_dir),
+                    capture_output=True,
+                    text=True,
+                    timeout=SUBPROCESS_TIMEOUT,
+                )
+                checked_out = default_branch
+        except subprocess.TimeoutExpired:
+            raise WorkspaceError(f"Git operation timed out after {SUBPROCESS_TIMEOUT}s")
 
         (source_dir / "reports").mkdir(parents=True, exist_ok=True)
         logger.info(

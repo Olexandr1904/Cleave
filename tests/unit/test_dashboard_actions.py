@@ -522,6 +522,123 @@ class TestUnpauseEndpoint:
         assert resp.status_code == 404
 
 
+class TestRerunEndpoint:
+    def _make_done_workspace(self, tmp_path, ticket_id="T-1"):
+        ws_root = tmp_path / "ws"
+        ws_root.mkdir(parents=True)
+        meta = ws_root / "meta"
+        meta.mkdir()
+        ws = MagicMock(spec=Workspace)
+        ws.state = WorkspaceState(
+            ticket_id=ticket_id,
+            company_id="test-co",
+            repo_id="test-repo",
+            workspace_root=str(ws_root),
+            current_state="DONE",
+            pr_number=42,
+            pr_url="https://github.com/pr/42",
+            review_cycle=2,
+        )
+        ws.source_dir = MagicMock()
+        ws.source_dir.__str__ = lambda self: str(ws_root / "source")
+        ws.meta_dir = meta
+        ws.reports_dir = MagicMock()
+        return ws
+
+    def _make_client(self, bus, store, orchestrator, mode_handler, tmp_path):
+        # global_config with project/repo
+        repo_config = MagicMock()
+        repo_config.git.clone_url = "https://git.example.com/repo.git"
+        repo_config.vcs.provider = "github"
+        repo_config.vcs.github.default_branch = "develop"
+        project = MagicMock()
+        project.repos.get = MagicMock(return_value=repo_config)
+        global_config = MagicMock()
+        global_config.workspaces.base_dir = str(tmp_path)
+        orchestrator._projects = {"test-co": project}
+        app = create_app(
+            bus, store,
+            orchestrator=orchestrator,
+            mode_handler=mode_handler,
+            global_config=global_config,
+        )
+        return TestClient(app)
+
+    def test_rerun_transitions_to_analysis(self, bus, store, orchestrator, mode_handler, tmp_path):
+        ws = self._make_done_workspace(tmp_path)
+        orchestrator.get_active_workspaces.return_value = [ws]
+        orchestrator._refetch_ticket_data = AsyncMock()
+        orchestrator._workspace_manager = MagicMock()
+        orchestrator._workspace_manager.reset_source = MagicMock(return_value="feature/T-1-t-1")
+        orchestrator._notify_rerun = AsyncMock()
+        client = self._make_client(bus, store, orchestrator, mode_handler, tmp_path)
+
+        resp = client.post("/api/workspaces/T-1/rerun", json={"reason": "QA found login bug"})
+
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["status"] == "ok"
+        assert data["new_state"] == "ANALYSIS"
+        assert data["branch"] == "feature/T-1-t-1"
+
+    def test_rerun_rejects_non_done_state(self, bus, store, orchestrator, mode_handler, tmp_path):
+        ws = MagicMock(spec=Workspace)
+        ws.state = WorkspaceState(
+            ticket_id="T-1", company_id="test-co", repo_id="test-repo",
+            workspace_root="/tmp/x", current_state="FAILED",
+        )
+        orchestrator.get_active_workspaces.return_value = [ws]
+        client = self._make_client(bus, store, orchestrator, mode_handler, tmp_path)
+
+        resp = client.post("/api/workspaces/T-1/rerun", json={"reason": "reason"})
+
+        assert resp.status_code == 400
+        assert "Cannot rerun" in resp.json()["message"]
+
+    def test_rerun_requires_reason(self, bus, store, orchestrator, mode_handler, tmp_path):
+        ws = self._make_done_workspace(tmp_path)
+        orchestrator.get_active_workspaces.return_value = [ws]
+        client = self._make_client(bus, store, orchestrator, mode_handler, tmp_path)
+
+        resp = client.post("/api/workspaces/T-1/rerun", json={"reason": "  "})
+
+        assert resp.status_code == 400
+        assert "reason" in resp.json()["message"]
+
+    def test_rerun_writes_rerun_history(self, bus, store, orchestrator, mode_handler, tmp_path):
+        ws = self._make_done_workspace(tmp_path)
+        orchestrator.get_active_workspaces.return_value = [ws]
+        orchestrator._refetch_ticket_data = AsyncMock()
+        orchestrator._workspace_manager = MagicMock()
+        orchestrator._workspace_manager.reset_source = MagicMock(return_value="develop")
+        orchestrator._notify_rerun = AsyncMock()
+        client = self._make_client(bus, store, orchestrator, mode_handler, tmp_path)
+
+        client.post("/api/workspaces/T-1/rerun", json={"reason": "Post-QA regression"})
+
+        rerun_file = ws.meta_dir / "rerun_history.md"
+        assert rerun_file.exists()
+        content = rerun_file.read_text()
+        assert "Post-QA regression" in content
+        assert "## Rerun" in content
+
+    def test_rerun_clears_stale_pr_fields(self, bus, store, orchestrator, mode_handler, tmp_path):
+        ws = self._make_done_workspace(tmp_path)
+        orchestrator.get_active_workspaces.return_value = [ws]
+        orchestrator._refetch_ticket_data = AsyncMock()
+        orchestrator._workspace_manager = MagicMock()
+        orchestrator._workspace_manager.reset_source = MagicMock(return_value="feature/T-1-t-1")
+        orchestrator._notify_rerun = AsyncMock()
+        client = self._make_client(bus, store, orchestrator, mode_handler, tmp_path)
+
+        client.post("/api/workspaces/T-1/rerun", json={"reason": "retry"})
+
+        assert ws.state.pr_number is None
+        assert ws.state.pr_url is None
+        assert ws.state.review_cycle == 0
+        assert ws.state.error is None
+
+
 class TestPauseFallsBackToDiskScan:
     """When a workspace exists on disk but isn't in the active list,
     pause/unpause should still find it (and re-adopt it).

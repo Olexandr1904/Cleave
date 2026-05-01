@@ -229,7 +229,7 @@ class TestCreatePR:
 
     async def test_ticket_summary_from_context(self, workspace, mock_vcs, mock_tracker, repo_config):
         (workspace.meta_dir / "scope-certificate.md").write_text("PASS")
-        (workspace.meta_dir / "ticket.json").write_text('{"summary": "Add login feature"}')
+        (workspace.meta_dir / "ticket.md").write_text("# TEST-42: Add login feature\n\n**URL:** http://jira/TEST-42")
 
         await create_pr(workspace, mock_vcs, mock_tracker, repo_config)
 

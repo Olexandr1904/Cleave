@@ -39,7 +39,7 @@ Thumbs.db
 !.claude/commands/
 .superpowers/
 
-# Sickle — live deployment config (contains per-deployment data).
+# Cleave — live deployment config (contains per-deployment data).
 # Copy config-live.example/ to config-live/ and fill in your own values.
 config-live/
 .worktrees/

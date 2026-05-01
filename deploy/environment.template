@@ -1,5 +1,5 @@
-# Sickle Environment Variables
-# Copy to /etc/sickle/environment and fill in values.
+# Cleave Environment Variables
+# Copy to /etc/cleave/environment and fill in values.
 
 # --- Anthropic / Claude ---
 # API key for Claude LLM calls. Variable name matches what config_loader

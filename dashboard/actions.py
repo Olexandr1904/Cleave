@@ -538,6 +538,9 @@ def build_action_routes(
         except Exception as e:
             return _error(f"Failed to reset source: {e}", 500)
 
+        # Sync branch state if fallback occurred
+        ws.state.branch = branch
+
         # Append rerun entry to meta/rerun_history.md
         rerun_file = Path(ws.meta_dir) / "rerun_history.md"
         ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")

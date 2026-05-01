@@ -580,6 +580,7 @@ class TestRerunEndpoint:
         assert data["status"] == "ok"
         assert data["new_state"] == "ANALYSIS"
         assert data["branch"] == "feature/T-1-t-1"
+        assert ws.state.branch == "feature/T-1-t-1"
         ws.transition.assert_called_once_with(Stage.ANALYSIS)
 
     def test_rerun_rejects_non_done_state(self, bus, store, orchestrator, mode_handler, tmp_path):

@@ -17,8 +17,6 @@ def _orch():
     o._notifier.send_message = AsyncMock(return_value=999)
     o._events = None
     o._get_chat_id = MagicMock(return_value="chat-1")
-    o._get_ticket_title = MagicMock(return_value="Ticket")
-    o._tg_header = MagicMock(return_value="hdr")
     o._agent_runtime = MagicMock()
     o._log_pipeline = MagicMock()
     o._now = MagicMock(return_value="2026-04-30T10:00:00Z")

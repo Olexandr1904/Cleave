@@ -38,8 +38,6 @@ def _make_orch(notifier) -> Orchestrator:
     orch._notifier = notifier
     orch._events = None
     orch._get_chat_id = MagicMock(return_value="chat-1")
-    orch._get_ticket_title = MagicMock(return_value="A ticket")
-    orch._tg_header = MagicMock(return_value="🔔 [acme/acme-app] T-1\nTitle: A ticket")
     orch._emit = MagicMock()
     return orch
 

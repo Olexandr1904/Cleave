@@ -22,8 +22,6 @@ def _make_orch(notifier=None):
     orch._events = None
     orch._quota_window_end = None
     orch._get_chat_id = MagicMock(return_value="chat-1")
-    orch._get_ticket_title = MagicMock(return_value="A ticket")
-    orch._tg_header = MagicMock(return_value="⏱ [acme/app] T-1")
     return orch
 
 

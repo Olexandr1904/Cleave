@@ -63,6 +63,7 @@ Buttons only appear when relevant for the workspace's current state:
 |---|---|---|
 | **Approve** / **Reject** | AWAITING_APPROVAL | Resolve the gate (or stop the workspace) |
 | **Retry** | FAILED, DEFERRED | Re-enter at `previous_state` |
+| **Rerun** | DONE | Show reason dialog → re-clone source, refresh ticket data, restart from ANALYSIS |
 | **🧹** | FAILED with AAPT2 corruption signature | Wipe `<gradle_home>/caches/*/transforms` and retry |
 | **Take Control** | Any active state except already-MANUAL_CONTROL | Pause workspace, hand to a human Claude session |
 | **Release** | MANUAL_CONTROL | Re-enter pipeline at ANALYSIS |
@@ -99,7 +100,7 @@ The same action buttons available on the Board card appear in the toolbar of thi
 
 Every event the orchestrator, agent runtime, and Telegram adapter emit, persisted to SQLite (`data/events.db`).
 
-- **Filter by type** dropdown: `agent_dispatched`, `agent_completed`, `agent_failed`, `stage_transition`, `workspace_created`, `pr_created`, `dashboard_approve`, `dashboard_reject`, `dashboard_retry`, `manual_control_started`, `manual_control_released`, `tg_message_received`, `tg_message_sent`, `poll_cycle`, `daemon_started`
+- **Filter by type** dropdown: `agent_dispatched`, `agent_completed`, `agent_failed`, `stage_transition`, `workspace_created`, `pr_created`, `dashboard_approve`, `dashboard_reject`, `dashboard_retry`, `dashboard_rerun`, `manual_control_started`, `manual_control_released`, `tg_message_received`, `tg_message_sent`, `poll_cycle`, `daemon_started`
 - **Project filter** — clicking a project in the sidebar narrows the log
 - **Ticket filter** — opens automatically when you arrive from a Ticket Detail view
 
@@ -184,6 +185,7 @@ Write endpoints (`POST`):
 - `/api/workspaces/{id}/approve|reject|retry` — resolve gates and re-run
 - `/api/workspaces/{id}/take-control|release-control` — hand a workspace to a human and back
 - `/api/workspaces/{id}/pause|unpause|resume|archive|delete|clean` — workspace lifecycle
+- `/api/workspaces/{id}/rerun` — DONE-only: re-clone source, refresh ticket data from tracker, restart pipeline from ANALYSIS; body `{ "reason": "<non-empty string>" }`
 - `/api/workspaces/{id}/clear-gradle-and-retry` — server-side validates the workspace is FAILED and the error matches the AAPT2 signature before wiping caches
 - `/api/projects/create` and `/api/projects/validate-step` — the wizard's two endpoints (validate one step against live APIs, then commit)
 

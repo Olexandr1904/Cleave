@@ -19,7 +19,7 @@ Local web dashboard providing real-time visibility into the Sickle pipeline. Sho
 - FR6: Workspace board view showing tickets grouped by project with state badges
 - FR7: Ticket detail view with pipeline progress, workspace info, and agent report viewer
 - FR8: Workspace API serving state.json data and report/meta/log files from disk
-- FR9: Action endpoints for workspace control (approve, reject, retry, take-control, release-control)
+- FR9: Action endpoints for workspace control (approve, reject, retry, rerun, take-control, release-control)
 - FR10: Daemon mode and status endpoints
 - FR11: Take Control feature: pause pipeline, open Claude Code session, release back
 - FR12: Frontend split into ES modules (no build step)
@@ -35,7 +35,7 @@ Local web dashboard providing real-time visibility into the Sickle pipeline. Sho
 - Starlette embedded web server sharing the daemon's asyncio loop
 - Multi-file vanilla JS frontend (ES modules), CSS extracted, no build step
 - REST API: /api/events, /api/projects, /api/projects/{id}/tickets, /api/tickets/{id}/events, /api/workspaces, /api/workspaces/{id}/report/{file}
-- Action API: /api/workspaces/{id}/approve|reject|retry|take-control|release-control, /api/daemon/mode, /api/daemon/status
+- Action API: /api/workspaces/{id}/approve|reject|retry|rerun|take-control|release-control, /api/daemon/mode, /api/daemon/status
 - Three UI views: Board (ticket cards by project), Ticket Detail (progress + reports), Event Log
 
 ## Dependencies
@@ -58,7 +58,7 @@ Local web dashboard providing real-time visibility into the Sickle pipeline. Sho
 - [x] Ticket detail shows pipeline progress bar and workspace info
 - [x] Agent reports viewable from ticket detail page
 - [x] Workspace API scans state.json files from disk
-- [x] Action endpoints: approve, reject, retry, take-control, release-control
+- [x] Action endpoints: approve, reject, retry, rerun, take-control, release-control
 - [x] Daemon mode switch and status endpoints
 - [x] Action routes wired via orchestrator/mode_handler passed to create_app
 - [x] MANUAL_CONTROL state added to workspace state machine
@@ -96,3 +96,4 @@ Local web dashboard providing real-time visibility into the Sickle pipeline. Sho
 | 2026-04-27 | Settings page (FR17): SQLite-backed settings table + GET/PUT /api/settings/model; init_settings runs on dashboard startup |
 | 2026-04-27 | Adapters take `model_provider: Callable[[], str]`; YAML `claude.model` field and hardcoded defaults dropped — runtime store is the sole source |
 | 2026-04-28 | New `POST /api/workspaces/{ticket_id}/clear-gradle-and-retry` endpoint that pairs with the new "🧹" icon on FAILED ticket cards whose error matches the AAPT2 corruption signature. Server-side validation refuses the operation if the ticket isn't FAILED or the error doesn't match the signature, so wholesale cache wipes can't happen by accident. The board's `renderCard` mirrors the same regex client-side to decide when to show the icon. |
+| 2026-05-01 | Rerun pipeline from DONE state: `POST /api/workspaces/{id}/rerun` with required reason, re-clones source, refreshes ticket data from tracker (append-only), restarts from ANALYSIS. Reason stored in `meta/rerun_history.md` as BA input context. Telegram notification includes branch checked out. |

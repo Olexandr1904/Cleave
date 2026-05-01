@@ -927,7 +927,7 @@ All messages for one ticket are threaded using `reply_to_message_id`:
 
 Daily summary:
 ```
-💓 [SICKLE] Daily heartbeat — 2026-04-08
+💓 [CLEAVE] Daily heartbeat — 2026-04-08
 ✅ Tickets completed: 3
 🔄 Active: 2
 ⏳ Waiting for human: 1

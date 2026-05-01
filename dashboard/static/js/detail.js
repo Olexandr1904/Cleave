@@ -4,7 +4,7 @@ import { loadWorkspaces, loadEvents } from './api.js';
 import { esc, timeAgo, fmtIso, stateBadgeHtml, PIPELINE_STAGES, STAGE_ORDER } from './helpers.js';
 import { renderEventsHtml } from './events.js';
 import { renderReportTabs, bindReportTabClicks } from './reports.js';
-import { approveWorkspace, rejectWorkspace, retryWorkspace, takeControl, releaseControl, resumeWorkspace, archiveWorkspace, pauseWorkspace, unpauseWorkspace, showConfirmDialog } from './actions.js';
+import { approveWorkspace, rejectWorkspace, retryWorkspace, takeControl, releaseControl, resumeWorkspace, archiveWorkspace, pauseWorkspace, unpauseWorkspace, showConfirmDialog, rerunWorkspace } from './actions.js';
 
 export async function renderDetail(ticketId, onBack) {
   const content = document.getElementById('content');
@@ -122,6 +122,9 @@ function buildActionBar(ws, stateVal) {
   }
   if (canArchive) {
     buttons += `<button class="action-btn btn-reject" id="act-archive">Archive</button>`;
+  }
+  if (stateVal === 'DONE') {
+    buttons += `<button class="action-btn btn-retry" id="act-rerun">Rerun</button>`;
   }
   if (canTakeControl) {
     buttons += `<span style="display:inline-block;width:1px;height:20px;background:#30363d;margin:0 4px;"></span>`;
@@ -346,6 +349,25 @@ function bindActionButtons(ticketId, ws, stateVal, onBack) {
           } catch (e) { alert('Archive failed: ' + e.message); }
         },
       );
+    });
+  }
+
+  // Rerun (from DONE)
+  const rerunBtn = document.getElementById('act-rerun');
+  if (rerunBtn) {
+    rerunBtn.addEventListener('click', async () => {
+      try {
+        const result = await rerunWorkspace(ticketId);
+        if (result && result.branch) {
+          const msg = result.branch.startsWith('feature/')
+            ? `Rerun started on ${result.branch}`
+            : `Feature branch not found — checked out ${result.branch}`;
+          alert(msg);
+        }
+        await renderDetail(ticketId, onBack);
+      } catch (e) {
+        if (e.message !== 'cancelled') alert('Rerun failed: ' + e.message);
+      }
     });
   }
 

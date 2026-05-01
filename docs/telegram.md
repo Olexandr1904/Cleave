@@ -73,6 +73,9 @@ When Sickle escalates a BLOCKED workspace, the message you receive in Telegram i
 - The reply text is stored on `state.human_input_reply` and made available as additional context when the agent resumes.
 - The workspace transitions out of BLOCKED back to its `previous_state` and the orchestrator wakes immediately.
 - If you reply with `retry`, the workspace re-enters its `previous_state` without adding context — useful when the agent just needs another shot.
+- If you reply with `skip`, the workspace is advanced to the next stage (e.g. ANALYSIS → DEV) without re-running the blocked stage — useful when you want to move past a stuck agent rather than give it another shot.
+
+The PR_REVIEW notification message (the one with the Review Complete button) is also a reply anchor. Replying to it with any text signals that you have finished reviewing and the pipeline should fetch PR comments. This is equivalent to tapping the Review Complete button.
 
 For PR review escalations specifically, replies are classified into three buckets by `_classify_reply` in `integrations/telegram/command_handler.py`:
 

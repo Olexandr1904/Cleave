@@ -33,7 +33,7 @@ def _entry():
 def _ws():
     ws = MagicMock()
     ws.state = SimpleNamespace(
-        current_state="PR_REVIEW", ticket_id="T-1",
+        current_state="PR_REVIEW", ticket_id="T-1", company_id="acme",
         pending_review_comments=[_entry()],
     )
     return ws
@@ -84,7 +84,7 @@ class TestStageReinvestigation:
         assert c["pending_reinvestigation"] is False
         assert c["last_hint"] is None  # not stored
         sent = h._notifier.send_message.call_args.args[1]
-        assert "Hint loop exceeded" in sent
+        assert "Hint limit reached" in sent
         h._wake_fn.assert_not_called()
 
     @pytest.mark.asyncio

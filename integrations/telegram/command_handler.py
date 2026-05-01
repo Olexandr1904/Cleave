@@ -12,6 +12,7 @@ from integrations.telegram.handlers.approval import ApprovalHandler
 from integrations.telegram.handlers.mode import ModeHandler
 from integrations.telegram.handlers.status import StatusHandler
 from integrations.telegram.intent_parser import IntentParser, ParsedIntent
+from orchestrator import tg_format
 from orchestrator.constants import REPORT_BA, REPORT_DEV, REPORT_QA, REPORT_SCOPE_GUARD
 from workspace.workspace import Stage
 
@@ -543,7 +544,10 @@ class CommandHandler:
                     stored_decision = c["decision"]
 
                 ws.save_state()
-                confirm = f"✓ Recognized as {recorded_label}. {decision_label}"
+                _title = tg_format.read_ticket_title(ws)
+                _emoji = "✅" if decision == "fix" else "❌"
+                _hdr = tg_format.tg_header(_emoji, ws.state.company_id, ws.state.ticket_id, _title)
+                confirm = f"{_hdr}\n✓ Recognized as {recorded_label}. {decision_label}"
                 if self._events is not None:
                     self._events.emit(
                         "pr_comment_decision_recorded",
@@ -587,9 +591,11 @@ class CommandHandler:
             if ws.state.current_state == "PR_REVIEW":
                 ws.state.human_input_reply = text
                 ws.save_state()
+                _title = tg_format.read_ticket_title(ws)
+                _hdr = tg_format.tg_header("🔍", ws.state.company_id, ws.state.ticket_id, _title)
                 await self._notifier.send_message(
                     chat_id,
-                    f"Got it. Fetching PR comments for {ws.state.ticket_id} now.",
+                    f"{_hdr}\nGot it. Fetching PR comments now.",
                 )
                 if hasattr(self, '_wake_fn') and self._wake_fn:
                     self._wake_fn()
@@ -613,9 +619,11 @@ class CommandHandler:
                     ws.state.error = None
                     ws.transition(resume_state)
                     ws.save_state()
+                    _title = tg_format.read_ticket_title(ws)
+                    _hdr = tg_format.tg_header("⏭", ws.state.company_id, ws.state.ticket_id, _title)
                     await self._notifier.send_message(
                         chat_id,
-                        f"Skipped {prev} for {ws.state.ticket_id}. Advanced to {resume_state}.",
+                        f"{_hdr}\nSkipped {prev}. Advanced to {resume_state}.",
                     )
                     if hasattr(self, '_wake_fn') and self._wake_fn:
                         self._wake_fn()
@@ -627,9 +635,11 @@ class CommandHandler:
                     ws.state.error = None
                     ws.transition(resume_state)
                     ws.save_state()
+                    _title = tg_format.read_ticket_title(ws)
+                    _hdr = tg_format.tg_header("🔄", ws.state.company_id, ws.state.ticket_id, _title)
                     await self._notifier.send_message(
                         chat_id,
-                        f"Retrying {resume_state} for {ws.state.ticket_id}.",
+                        f"{_hdr}\nRetrying {resume_state}.",
                     )
                     if hasattr(self, '_wake_fn') and self._wake_fn:
                         self._wake_fn()
@@ -643,9 +653,11 @@ class CommandHandler:
                 ws.transition(resume_state)
                 ws.save_state()
                 self._recently_unblocked[ws.state.ticket_id] = (time.time(), resume_state)
+                _title = tg_format.read_ticket_title(ws)
+                _hdr = tg_format.tg_header("▶", ws.state.company_id, ws.state.ticket_id, _title)
                 await self._notifier.send_message(
                     chat_id,
-                    f"Got it. Resuming {ws.state.ticket_id} from {resume_state} with your input.",
+                    f"{_hdr}\nResuming from {resume_state} with your input.",
                 )
                 logger.info(
                     "Unblocked %s via reply to msg %d",
@@ -708,9 +720,12 @@ class CommandHandler:
         rounds = int(c.get("hint_rounds", 0) or 0)
         file_line = f"{c.get('file','?')}:{c.get('line','?')}"
         if rounds >= 3:
+            _title = tg_format.read_ticket_title(ws)
+            _hdr = tg_format.tg_header("⚠️", ws.state.company_id, ws.state.ticket_id, _title)
             msg = (
-                f"⚠ Hint loop exceeded (3/3) for @{c.get('author','?')} on {file_line}. "
-                f"Reply `fix` or `won't fix` to close this comment."
+                f"{_hdr}\n"
+                f"Hint limit reached (3/3) for @{c.get('author','?')} on {file_line}. "
+                f"Reply \"fix\" or \"won't fix: <reason>\" to close this comment."
             )
             await self._notifier.send_message(chat_id, msg)
             if self._events is not None:
@@ -736,9 +751,12 @@ class CommandHandler:
         # means a rapid second hint shows the same round number, which is
         # correct: only one re-investigation will happen.
         next_round = rounds + 1
+        _title = tg_format.read_ticket_title(ws)
+        _hdr = tg_format.tg_header("🔍", ws.state.company_id, ws.state.ticket_id, _title)
         msg = (
-            f"🔍 Recognized as hint (round {next_round}/3). "
-            f"Re-checking @{c.get('author','?')}'s comment on {file_line} with your context…"
+            f"{_hdr}\n"
+            f"Recognized as hint (round {next_round}/3). "
+            f"Re-checking @{c.get('author','?')}'s comment on {file_line} with your context."
         )
         await self._notifier.send_message(chat_id, msg)
         if self._events is not None:
@@ -770,7 +788,9 @@ class CommandHandler:
                 return
             next_state = self._approval_handler.resolve_next_state(ws)
             ws.transition(next_state)
-            await self._notifier.send_message(chat_id, f"Approved {ticket_id}. Moving to {next_state}.", reply_to_message_id=message_id)
+            _title = tg_format.read_ticket_title(ws)
+            _hdr = tg_format.tg_header("✅", ws.state.company_id, ws.state.ticket_id, _title)
+            await self._notifier.send_message(chat_id, f"{_hdr}\nApproved. Moving to {next_state}.", reply_to_message_id=message_id)
 
         elif action == "reject":
             ws = next((w for w in workspaces if w.state.ticket_id == ticket_id and w.state.current_state == "AWAITING_APPROVAL"), None)
@@ -779,7 +799,9 @@ class CommandHandler:
                 return
             ws.transition("FAILED")
             ws.update_state(error="Rejected by operator via Telegram")
-            await self._notifier.send_message(chat_id, f"Rejected {ticket_id}. Marked as FAILED.", reply_to_message_id=message_id)
+            _title = tg_format.read_ticket_title(ws)
+            _hdr = tg_format.tg_header("❌", ws.state.company_id, ws.state.ticket_id, _title)
+            await self._notifier.send_message(chat_id, f"{_hdr}\nRejected. Marked as FAILED.", reply_to_message_id=message_id)
 
         elif action == "reviewed":
             ws = next((w for w in workspaces if w.state.ticket_id == ticket_id and w.state.current_state == "PR_REVIEW"), None)
@@ -788,7 +810,9 @@ class CommandHandler:
                 return
             ws.state.human_input_reply = "reviewed"
             ws.save_state()
-            await self._notifier.send_message(chat_id, f"Got it. Fetching PR comments for {ticket_id} now.", reply_to_message_id=message_id)
+            _title = tg_format.read_ticket_title(ws)
+            _hdr = tg_format.tg_header("🔍", ws.state.company_id, ws.state.ticket_id, _title)
+            await self._notifier.send_message(chat_id, f"{_hdr}\nGot it. Fetching PR comments now.", reply_to_message_id=message_id)
             if hasattr(self, '_wake_fn') and self._wake_fn:
                 self._wake_fn()
 
@@ -802,7 +826,9 @@ class CommandHandler:
             target_state = ws.state.previous_state or Stage.ANALYSIS
             ws.transition(target_state)
             ws.save_state()
-            await self._notifier.send_message(chat_id, f"Retrying {ticket_id} from {target_state}.", reply_to_message_id=message_id)
+            _title = tg_format.read_ticket_title(ws)
+            _hdr = tg_format.tg_header("🔄", ws.state.company_id, ws.state.ticket_id, _title)
+            await self._notifier.send_message(chat_id, f"{_hdr}\nRetrying from {target_state}.", reply_to_message_id=message_id)
             if hasattr(self, '_wake_fn') and self._wake_fn:
                 self._wake_fn()
 
@@ -820,8 +846,10 @@ class CommandHandler:
                 freed = clear_gradle_transforms()
             except Exception as e:
                 logger.exception("Gradle cache clear failed for %s", ticket_id)
+                _title = tg_format.read_ticket_title(ws)
+                _hdr = tg_format.tg_header("⚠️", ws.state.company_id, ws.state.ticket_id, _title)
                 await self._notifier.send_message(
-                    chat_id, f"Failed to clear Gradle cache: {e}",
+                    chat_id, f"{_hdr}\nFailed to clear Gradle cache: {e}",
                     reply_to_message_id=message_id,
                 )
                 return
@@ -838,9 +866,11 @@ class CommandHandler:
                     ticket_id=ticket_id,
                     data={"bytes_freed": freed, "new_state": target},
                 )
+            _title = tg_format.read_ticket_title(ws)
+            _hdr = tg_format.tg_header("🧹", ws.state.company_id, ws.state.ticket_id, _title)
             await self._notifier.send_message(
                 chat_id,
-                f"Cleared {mb:.0f} MB of Gradle transforms cache. Retrying {ticket_id} from {target}.",
+                f"{_hdr}\nCleared {mb:.0f} MB of Gradle transforms cache. Retrying from {target}.",
                 reply_to_message_id=message_id,
             )
             if hasattr(self, '_wake_fn') and self._wake_fn:
@@ -885,7 +915,11 @@ class CommandHandler:
 
             ws.save_state()
             file_line = f"{matched_comment.get('file','?')}:{matched_comment.get('line','?')}"
+            _title = tg_format.read_ticket_title(ws)
+            _emoji = "✅" if action == "pr_fix" else "❌"
+            _hdr = tg_format.tg_header(_emoji, ws.state.company_id, ws.state.ticket_id, _title)
             confirm = (
+                f"{_hdr}\n"
                 f"✓ Recognized as {recorded_label} (matched: {btn_label}). "
                 f"{action_tail} on {file_line}."
             )

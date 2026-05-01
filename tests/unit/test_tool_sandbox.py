@@ -8,6 +8,7 @@ from pathlib import Path
 
 import pytest
 
+from orchestrator.constants import REPORT_BA
 from orchestrator.tool_sandbox import ToolError, ToolSandbox, get_tool_definitions
 
 
@@ -27,7 +28,7 @@ def workspace(tmp_path):
     (source / "utils" / "helper.py").write_text("def help(): pass\n")
 
     # Create a report
-    (reports / "ba.md").write_text("# BA Report\n")
+    (reports / REPORT_BA).write_text("# BA Report\n")
 
     return tmp_path
 

@@ -226,10 +226,11 @@ class TestHandleActionStage:
         )
 
     @pytest.mark.asyncio
-    async def test_action_failure_transitions_to_failed(self):
+    async def test_push_failure_escalates_not_failed(self):
         from orchestrator.orchestrator import Orchestrator
 
         orch = self._make_orchestrator()
+        orch._handle_escalate = AsyncMock()
         ws = _fake_workspace()
         orch._action_push_and_open_pr = AsyncMock(return_value=ActionResult(
             success=False, next_state="", error="No VCS configured", metadata={},
@@ -240,8 +241,9 @@ class TestHandleActionStage:
             await Orchestrator._handle_action_stage(orch, ws, "push", self._make_stage_def("push_and_open_pr"))
             sv.verify.assert_not_called()
 
-        ws.transition.assert_called_once_with(Stage.FAILED)
         ws.update_state.assert_called_once_with(error="No VCS configured")
+        orch._handle_escalate.assert_awaited_once_with(ws)
+        ws.transition.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_verify_failure_transitions_to_blocked(self):

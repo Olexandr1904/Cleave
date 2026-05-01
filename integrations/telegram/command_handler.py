@@ -12,6 +12,7 @@ from integrations.telegram.handlers.approval import ApprovalHandler
 from integrations.telegram.handlers.mode import ModeHandler
 from integrations.telegram.handlers.status import StatusHandler
 from integrations.telegram.intent_parser import IntentParser, ParsedIntent
+from orchestrator.constants import REPORT_BA, REPORT_DEV, REPORT_QA, REPORT_SCOPE_GUARD
 from workspace.workspace import Stage
 
 logger = logging.getLogger(__name__)
@@ -394,19 +395,24 @@ class CommandHandler:
         else:
             # Smart retry: detect furthest completed stage from artifacts
             reports = Path(ws.reports_dir) if hasattr(ws, 'reports_dir') else Path(ws.state.workspace_root) / "reports"
-            if (reports / "qa-agent-output.md").exists():
+            if (reports / REPORT_QA).exists():
                 target_state = Stage.PUSHED
-            elif (reports / "scope-guard-agent-output.md").exists():
+            elif (reports / REPORT_SCOPE_GUARD).exists():
                 target_state = Stage.QA
-            elif (reports / "dev-agent-output.md").exists():
+            elif (reports / REPORT_DEV).exists():
                 target_state = Stage.SCOPE_CHECK
-            elif (reports / "ba.md").exists() or (reports / "ba-agent-output.md").exists():
+            elif (reports / REPORT_BA).exists():
                 target_state = Stage.DEV
             else:
                 target_state = ws.state.previous_state or Stage.ANALYSIS
 
         ws.state.human_input_pending = False
         ws.state.error = None
+        # Clear iteration counter for the target stage so the cap check doesn't
+        # immediately re-escalate without running the agent.
+        stage_key = {v: k for k, v in self._VALID_RETRY_STATES.items()}.get(target_state)
+        if stage_key:
+            ws.state.stage_iterations[stage_key] = 0
         ws.transition(target_state)
         ws.save_state()
 

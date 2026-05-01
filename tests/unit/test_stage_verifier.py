@@ -7,6 +7,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
+from orchestrator.constants import RUNTIME_OUTPUT_QA, RUNTIME_OUTPUT_SCOPE_GUARD
 from orchestrator.stage_verifier import VerifyResult, verify, capture_stage_start
 
 
@@ -71,7 +72,7 @@ class TestScopeCheckVerifier:
     def test_report_file_exists_passes(self, tmp_path):
         reports = tmp_path / "reports"
         reports.mkdir()
-        (reports / "scope-guard-agent-output.md").write_text("status: pass\n")
+        (reports / RUNTIME_OUTPUT_SCOPE_GUARD).write_text("status: pass\n")
         ws = _fake_workspace(tmp_path / "src", reports)
         r = verify("scope_check", ws, None)
         assert r.ok is True
@@ -82,14 +83,14 @@ class TestScopeCheckVerifier:
         ws = _fake_workspace(tmp_path / "src", reports)
         r = verify("scope_check", ws, None)
         assert r.ok is False
-        assert "scope-guard-agent-output.md" in r.reason
+        assert RUNTIME_OUTPUT_SCOPE_GUARD in r.reason
 
 
 class TestQaVerifier:
     def test_report_file_exists_passes(self, tmp_path):
         reports = tmp_path / "reports"
         reports.mkdir()
-        (reports / "qa-agent-output.md").write_text("all gates passed")
+        (reports / RUNTIME_OUTPUT_QA).write_text("all gates passed")
         ws = _fake_workspace(tmp_path / "src", reports)
         r = verify("qa", ws, None)
         assert r.ok is True

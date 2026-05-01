@@ -11,6 +11,7 @@ from config.resource_registry import discover_resources
 from config.schemas import AgentBudget
 from integrations.llm.llm_interface import LLMResponse, ToolUseRequest
 from orchestrator.agent_runtime import AgentRuntime, HARD_SAFETY_RULES
+from orchestrator.constants import RUNTIME_OUTPUT_DEV
 from workspace.workspace import Workspace, WorkspaceState
 
 PROJECT_ROOT = str(Path(__file__).parent.parent.parent)
@@ -163,7 +164,7 @@ class TestExecute:
         assert result.duration_seconds > 0
 
         # Output written to reports
-        output_file = workspace.reports_dir / "dev-agent-output.md"
+        output_file = workspace.reports_dir / RUNTIME_OUTPUT_DEV
         assert output_file.exists()
         assert "login feature" in output_file.read_text()
 
@@ -556,7 +557,7 @@ class TestQuotaFailureClassification:
         assert result.error is not None
         assert result.error.startswith("token_budget_exceeded")
         # We still wrote the output — we already paid for it.
-        assert (workspace.reports_dir / "dev-agent-output.md").exists()
+        assert (workspace.reports_dir / RUNTIME_OUTPUT_DEV).exists()
 
     async def test_cli_timed_out_sets_failure_kind_quota_for_retry(
         self, registry, workspace

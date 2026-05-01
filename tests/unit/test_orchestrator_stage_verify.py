@@ -7,6 +7,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from orchestrator.constants import RUNTIME_OUTPUT_DEV
 from workspace.workspace import Stage
 
 
@@ -145,7 +146,7 @@ async def test_verification_fail_notifies_telegram_and_sets_escalation_fields(tm
 
     reports_dir = tmp_path / "reports"
     reports_dir.mkdir()
-    (reports_dir / "dev-agent-output.md").write_text(
+    (reports_dir / RUNTIME_OUTPUT_DEV).write_text(
         "---\n**Attempt: 2026-04-24 14:00 UTC**\n## Decision: Proceed\n"
         "\nTests pass but no commit was made.\n"
     )

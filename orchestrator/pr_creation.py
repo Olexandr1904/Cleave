@@ -9,6 +9,7 @@ from typing import Any
 from config.schemas import RepoConfig
 from integrations.base.tracker import TrackerInterface
 from integrations.base.vcs import VCSInterface
+from orchestrator.constants import REPORT_SCOPE_GUARD
 from workspace.workspace import Workspace
 
 logger = logging.getLogger(__name__)
@@ -58,7 +59,7 @@ async def create_pr(
         )
 
     # Check scope check passed (report or certificate)
-    scope_report = workspace.reports_dir / "scope-guard-agent-output.md"
+    scope_report = workspace.reports_dir / REPORT_SCOPE_GUARD
     scope_cert = workspace.meta_dir / "scope-certificate.md"
     scope_ok = scope_cert.exists()
     if not scope_ok and scope_report.exists():

@@ -68,8 +68,8 @@ def strip_markdown(text: str) -> str:
     # Italic: *text* (single asterisk, not touching **)
     text = re.sub(r"(?<!\*)\*([^*\n]+)\*(?!\*)", r"\1", text)
 
-    # Italic: _text_ (underscore)
-    text = re.sub(r"(?<!_)_([^_\n]+)_(?!_)", r"\1", text)
+    # Italic: _text_ (underscore, only when surrounded by non-word chars)
+    text = re.sub(r"(?<!\w)_([^_\n]+)_(?!\w)", r"\1", text)
 
     # Headings: ## Title → Title
     text = re.sub(r"(?m)^#{1,6}\s+", "", text)

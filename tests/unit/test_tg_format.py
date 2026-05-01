@@ -109,6 +109,12 @@ class TestStripMarkdown:
     def test_removes_underscore_italic_inline(self):
         assert strip_markdown("The _status_ is clear") == "The status is clear"
 
+    def test_preserves_snake_case_identifiers(self):
+        assert strip_markdown("my_private_field") == "my_private_field"
+
+    def test_preserves_snake_case_after_backtick_strip(self):
+        assert strip_markdown("`my_private_field`") == "my_private_field"
+
     def test_multiline_table(self):
         text = (
             "The diff was clean:\n\n"

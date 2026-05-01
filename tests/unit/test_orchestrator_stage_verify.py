@@ -199,8 +199,6 @@ async def test_verification_fail_notifies_telegram_and_sets_escalation_fields(tm
     orch._should_approval_gate = MagicMock(return_value=False)
     orch._advance_to_stage = MagicMock()
     orch._get_chat_id = MagicMock(return_value="chat-1")
-    orch._get_ticket_title = MagicMock(return_value="A ticket")
-    orch._tg_header = MagicMock(return_value="⚠️ [acme/acme-app] T-1")
     orch._log_pipeline = MagicMock()
 
     await orch._handle_agent_stage(ws, "dev", stage_def)

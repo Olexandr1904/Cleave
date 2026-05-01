@@ -40,6 +40,7 @@ from orchestrator.gradle_remediation import (
 )
 from orchestrator.pr_creation import create_pr
 from orchestrator import stage_verifier
+from orchestrator import tg_format
 from orchestrator.stage_verifier import ActionResult
 from orchestrator.ticket_prioritizer import PrioritizedTicket, filter_tickets, prioritize_tickets, route_tickets
 from orchestrator.workflow_router import (
@@ -345,26 +346,6 @@ class Orchestrator:
     @staticmethod
     def _now() -> str:
         return datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M")
-
-    @staticmethod
-    def _get_ticket_title(workspace: Workspace) -> str:
-        """Read ticket summary from meta/ticket.json, or return empty string."""
-        ticket_file = workspace.meta_dir / "ticket.json"
-        if ticket_file.exists():
-            try:
-                data = json.loads(ticket_file.read_text(encoding="utf-8"))
-                return data.get("summary", "")
-            except (json.JSONDecodeError, KeyError):
-                pass
-        return ""
-
-    @staticmethod
-    def _tg_header(emoji: str, state: Any, title: str) -> str:
-        """Build a standard TG message header line, including ticket title if available."""
-        header = f"{emoji} [{state.company_id}/{state.repo_id}] {state.ticket_id}"
-        if title:
-            header += f"\n{title}"
-        return header
 
     async def run(self) -> None:
         """Main async loop — poll and advance until shutdown."""
@@ -965,16 +946,13 @@ class Orchestrator:
             if warnings:
                 chat_id = self._get_chat_id(workspace)
                 if chat_id:
-                    sep = "─" * 30
-                    title = self._get_ticket_title(workspace)
-                    hdr = self._tg_header("⚠️", state, title)
+                    title = tg_format.read_ticket_title(workspace)
+                    hdr = tg_format.tg_header("⚠️", state.company_id, state.ticket_id, title)
                     await self._notifier.send_message(chat_id, (
                         f"{hdr}\n"
-                        f"{sep}\n"
                         f"QA passed but with warnings:\n"
                         + "\n".join(f"  • {w}" for w in warnings)
-                        + f"\n\nCI on GitHub will be the authoritative gate.\n"
-                        f"{sep}"
+                        + f"\n\nCI on GitHub will be the authoritative gate."
                     ))
 
         next_stage = get_next_stage(stage_id, self._workflow, outcome)
@@ -1052,8 +1030,8 @@ class Orchestrator:
             return
 
         chat_id = self._get_chat_id(workspace)
-        title = self._get_ticket_title(workspace)
-        hdr = self._tg_header("\u23f1", state, title)
+        title = tg_format.read_ticket_title(workspace)
+        hdr = tg_format.tg_header("\u23f1", state.company_id, state.ticket_id, title)
 
         # Pick a headline that names the actual cause.
         if is_real_quota:
@@ -1092,27 +1070,28 @@ class Orchestrator:
             return
         state = workspace.state
         chat_id = self._get_chat_id(workspace)
-        title = self._get_ticket_title(workspace)
-        hdr = self._tg_header("\u274c", state, title)
+        title = tg_format.read_ticket_title(workspace)
+        hdr = tg_format.tg_header("\u274c", state.company_id, state.ticket_id, title)
         first_line = (error or "").splitlines()[0] if error else ""
+        stage = state.previous_state or "?"
         buttons = [Button(label="Retry", action=f"retry:{state.ticket_id}")]
         # Architecture mismatch (x86-64 aapt2 on non-x86 host) is a host-setup
         # issue \u2014 the pipeline cannot apt-install or rewrite gradle.properties.
         # Surface a distinct message with concrete fix options and NO clear-
         # cache button (which loops forever on this failure).
         if looks_like_aapt2_arch_mismatch(error):
-            sep = "\u2500" * 30
+            sep_inner = "\u2500" * 30
             msg = (
                 f"{hdr}\n"
-                f"FAILED at {state.previous_state or '?'}.\n"
+                f"FAILED at {stage}.\n"
                 f"\u26a0\ufe0f Architecture mismatch (x86-64 aapt2 on non-x86 host).\n"
-                f"{sep}\n"
+                f"{sep_inner}\n"
                 f"{ARCH_MISMATCH_HELP}"
             )
         elif looks_like_gradle_cache_corruption(error):
             msg = (
                 f"{hdr}\n"
-                f"FAILED at {state.previous_state or '?'}. Error: {first_line}.\n"
+                f"FAILED at {stage}. Error: {first_line}.\n"
                 f"Detected Gradle cache corruption \u2014 tap below to clear it."
             )
             buttons.insert(
@@ -1122,7 +1101,11 @@ class Orchestrator:
         else:
             msg = (
                 f"{hdr}\n"
-                f"FAILED at {state.previous_state or '?'}. Error: {first_line}."
+                f"FAILED at {stage}.\n\n"
+                f"Reason: {first_line}\n\n"
+                f"Options:\n"
+                f"- Tap Retry to re-run from {stage}\n"
+                f"- Send \"retry {state.ticket_id} from dev\" to restart from an earlier stage"
             )
         try:
             await self._notifier.send_message(chat_id, msg, buttons=buttons)
@@ -1137,8 +1120,8 @@ class Orchestrator:
             return
         chat_id = self._get_chat_id(workspace)
         state = workspace.state
-        title = self._get_ticket_title(workspace)
-        hdr = self._tg_header("🔄", state, title)
+        title = tg_format.read_ticket_title(workspace)
+        hdr = tg_format.tg_header("🔄", state.company_id, state.ticket_id, title)
         first_line = reason.splitlines()[0][:80] if reason else ""
         msg = (
             f"{hdr}\n"
@@ -1329,15 +1312,17 @@ class Orchestrator:
         if action == "push_and_open_pr" and result.metadata.get("pr_url") and self._notifier:
             chat_id = self._get_chat_id(workspace)
             if chat_id:
-                sep = "─" * 30
                 pr_url = result.metadata["pr_url"]
-                title = self._get_ticket_title(workspace)
-                hdr = self._tg_header("🔗", state, title)
+                title = tg_format.read_ticket_title(workspace)
+                hdr = tg_format.tg_header("🔗", state.company_id, state.ticket_id, title)
                 msg = (
                     f"{hdr}\n"
-                    f"{sep}\n"
-                    f"PR created: {pr_url}\n\n"
-                    f"Please review the code."
+                    f"PR opened: {pr_url}\n\n"
+                    f"Review the diff and merge when ready. The pipeline will wait.\n\n"
+                    f"If there are review comments, Sickle will escalate them one by one "
+                    f"for your decision (Fix or Won't Fix). Reply to any escalation message "
+                    f"to provide context.\n\n"
+                    f"When done: tap Review Complete or reply to this message."
                 )
                 pr_buttons = [Button(label="Review Complete", action=f"reviewed:{state.ticket_id}")]
                 msg_id = await self._notifier.send_message(chat_id, msg, buttons=pr_buttons)
@@ -1401,11 +1386,16 @@ class Orchestrator:
                     if fail_count >= 2 and self._notifier:
                         chat_id = self._get_chat_id(workspace)
                         if chat_id:
+                            title = tg_format.read_ticket_title(workspace)
+                            hdr = tg_format.tg_header("⚠️", state.company_id, state.ticket_id, title)
                             await self._notifier.send_message(
                                 chat_id,
-                                f"⚠️ [{state.company_id}/{state.repo_id}] {state.ticket_id}\n"
-                                f"Dev-agent failed to fix comment #{cid} twice "
-                                f"({entry.get('file', '?')}:{entry.get('line', '?')})",
+                                f"{hdr}\n"
+                                f"Dev-agent failed to apply the fix for comment #{cid} twice.\n\n"
+                                f"File: {entry.get('file', '?')}:{entry.get('line', '?')}\n\n"
+                                f"Options:\n"
+                                f"- Reply \"fix\" to retry once more\n"
+                                f"- Reply \"won't fix: <reason>\" to close the comment without fixing",
                             )
 
             return ActionResult(
@@ -1658,11 +1648,16 @@ class Orchestrator:
                 if self._notifier:
                     chat_id = self._get_chat_id(workspace)
                     if chat_id:
+                        title = tg_format.read_ticket_title(workspace)
+                        hdr = tg_format.tg_header("⚠️", workspace.state.company_id, workspace.state.ticket_id, title)
                         await self._notifier.send_message(
                             chat_id,
-                            f"⚠ Re-investigation failed for @{c.get('author','?')} "
-                            f"on {c.get('file','?')}:{c.get('line','?')}. "
-                            f"Reply `fix` or `won't fix` to close.",
+                            f"{hdr}\n"
+                            f"Re-investigation failed for @{c.get('author','?')}'s comment "
+                            f"on {c.get('file','?')}:{c.get('line','?')}\n\n"
+                            f"The agent was unable to re-classify this comment after your hint. Options:\n"
+                            f"- Reply \"fix\" to send the dev-agent in anyway\n"
+                            f"- Reply \"won't fix: <reason>\" to close the comment on GitHub",
                         )
                 c["pending_reinvestigation"] = False
                 c["reinvestigation_retry_count"] = 0
@@ -1764,11 +1759,16 @@ class Orchestrator:
                     if fail_count >= 2 and self._notifier:
                         chat_id = self._get_chat_id(workspace)
                         if chat_id:
+                            title = tg_format.read_ticket_title(workspace)
+                            hdr = tg_format.tg_header("⚠️", state.company_id, state.ticket_id, title)
                             await self._notifier.send_message(
                                 chat_id,
-                                f"⚠️ [{state.company_id}/{state.repo_id}] {state.ticket_id}\n"
-                                f"Dev-agent failed to fix comment #{cid} twice "
-                                f"({entry.get('file', '?')}:{entry.get('line', '?')})",
+                                f"{hdr}\n"
+                                f"Dev-agent failed to apply the fix for comment #{cid} twice.\n\n"
+                                f"File: {entry.get('file', '?')}:{entry.get('line', '?')}\n\n"
+                                f"Options:\n"
+                                f"- Reply \"fix\" to retry once more\n"
+                                f"- Reply \"won't fix: <reason>\" to close the comment without fixing",
                             )
             # Advance the cursor so the next cycle diffs from here
             state.last_verified_sha = sha
@@ -1906,8 +1906,11 @@ class Orchestrator:
             chat_id = self._get_chat_id(workspace)
             if chat_id:
                 sep = "─" * 30
-                lines = [f"🤖 [{state.company_id}/{state.repo_id}] {state.ticket_id} — PR #{pr_number}"]
-                lines.append(f"Auto-processed {len(auto_fixed) + len(auto_rejected)} comment(s):")
+                title = tg_format.read_ticket_title(workspace)
+                hdr = tg_format.tg_header("🤖", state.company_id, state.ticket_id, title)
+                sep = "─" * 30
+                lines = [hdr]
+                lines.append(f"PR #{pr_number} — Auto-processed {len(auto_fixed) + len(auto_rejected)} comment(s):")
                 lines.append(sep)
                 for af in auto_fixed:
                     lines.append(f"✅ FIX: {af.reason} ({af.file}:{af.line or '?'})")
@@ -1939,7 +1942,7 @@ class Orchestrator:
 
         # Store escalated with TG msg_ids
         pending_comments = []
-        title = self._get_ticket_title(workspace)
+        title = tg_format.read_ticket_title(workspace)
         for cc in escalated:
             msg_id = await self._send_escalated_comment_tg(workspace, cc, pr_number)
             pending_comments.append({
@@ -1971,7 +1974,7 @@ class Orchestrator:
         from orchestrator.escalation_view import build_escalated_comment_message
 
         state = workspace.state
-        title = self._get_ticket_title(workspace)
+        title = tg_format.read_ticket_title(workspace)
         text, buttons = build_escalated_comment_message(
             state, cc, pr_number, ticket_title=title,
         )
@@ -2091,8 +2094,9 @@ class Orchestrator:
                 chat_id = self._get_chat_id(workspace)
                 if chat_id:
                     sep = "─" * 30
-                    lines = [f"⏸ [{state.company_id}/{state.repo_id}] {state.ticket_id} — PR review pause"]
-                    lines.append(sep)
+                    title = tg_format.read_ticket_title(workspace)
+                    hdr = tg_format.tg_header("⏸", state.company_id, state.ticket_id, title)
+                    lines = [hdr]
                     lines.append(f"{len(skipped_comments)} comment(s) marked Skip — still open on the PR:")
                     for sc in skipped_comments:
                         lines.append(f"  • @{sc.get('author','?')} on {sc.get('file','?')}:{sc.get('line','?')}")
@@ -2126,13 +2130,13 @@ class Orchestrator:
         if self._notifier:
             chat_id = self._get_chat_id(workspace)
             if chat_id:
-                sep = "─" * 30
+                title = tg_format.read_ticket_title(workspace)
+                hdr = tg_format.tg_header("✅", state.company_id, state.ticket_id, title)
                 await self._notifier.send_message(chat_id, (
-                    f"✅ [{state.company_id}/{state.repo_id}] {state.ticket_id}\n"
-                    f"{sep}\n"
-                    f"Pipeline complete. PR ready for merge:\n"
-                    f"{state.pr_url or 'N/A'}\n"
-                    f"{sep}"
+                    f"{hdr}\n"
+                    f"Pipeline complete.\n\n"
+                    f"PR ready for merge: {state.pr_url or 'N/A'}\n\n"
+                    f"Jira ticket moved to review status."
                 ))
 
         # Transition Jira ticket to review status
@@ -2279,24 +2283,24 @@ class Orchestrator:
 
         stage = state.previous_state or state.current_state
         sep = "─" * 30
-        title = self._get_ticket_title(workspace)
-        hdr = self._tg_header("🔔", state, title)
+        title = tg_format.read_ticket_title(workspace)
+        hdr = tg_format.tg_header("🔔", state.company_id, state.ticket_id, title)
         stage_id_str = stage.lower() if isinstance(stage, str) else str(stage).lower()
         if is_max_iterations:
             stage_def = self._workflow.stages.get(stage_id_str)
             cap = stage_def.max_iterations if stage_def else "?"
             iterations = state.stage_iterations.get(stage_id_str, 0)
-            header = f"{hdr}\nStage: {stage} — iteration limit reached ({iterations}/{cap})\n{sep}\n"
+            header = f"{hdr}\nStage: {stage} — iteration limit reached ({iterations}/{cap})\n"
         else:
-            header = f"{hdr}\nStage: {stage}\n{sep}\n"
+            header = f"{hdr}\nStage: {stage}\n"
 
-        reason = self._build_blocked_reason(workspace, stage_id_str)
+        reason = tg_format.strip_markdown(self._build_blocked_reason(workspace, stage_id_str))
         if is_max_iterations:
             hint = (
                 f"\n{sep}\n"
                 f"↩️ Reply with context to resume, or send:\n"
-                f"  `retry {state.ticket_id} from {stage_id_str}` — reset counter and re-run\n"
-                f"  `retry {state.ticket_id} from dev` — restart from dev"
+                f"  retry {state.ticket_id} from {stage_id_str} — reset counter and re-run\n"
+                f"  retry {state.ticket_id} from dev — restart from dev"
             )
         else:
             hint = f"\n{sep}\n↩️ Reply with your answer or additional context."
@@ -2339,11 +2343,11 @@ class Orchestrator:
             return
 
         sep = "─" * 30
-        title = self._get_ticket_title(workspace)
-        hdr = self._tg_header("⚠️", workspace.state, title)
-        header = f"{hdr}\nStage: {stage_id} — verification failed\n{sep}\n"
+        title = tg_format.read_ticket_title(workspace)
+        hdr = tg_format.tg_header("⚠️", workspace.state.company_id, workspace.state.ticket_id, title)
+        header = f"{hdr}\nStage: {stage_id} — verification failed\n"
 
-        agent_reason = self._build_blocked_reason(workspace, stage_id)
+        agent_reason = tg_format.strip_markdown(self._build_blocked_reason(workspace, stage_id))
         combined = f"Verification failed: {verify_reason}\n\n{agent_reason}"
         hint = f"\n{sep}\n↩️ Reply with your answer or additional context."
         message = f"{header}\n{combined}{hint}"
@@ -2372,10 +2376,10 @@ class Orchestrator:
             chat_id = self._get_chat_id(workspace)
             if chat_id:
                 pr_url = state.pr_url or "(no PR)"
-                title = self._get_ticket_title(workspace)
-                hdr = self._tg_header("✅", state, title)
+                title = tg_format.read_ticket_title(workspace)
+                hdr = tg_format.tg_header("✅", state.company_id, state.ticket_id, title)
                 message = (
-                    f"{hdr}\n\n"
+                    f"{hdr}\n"
                     f"PR ready for human merge: {pr_url}"
                 )
                 try:
@@ -2422,8 +2426,7 @@ class Orchestrator:
         """Build a summary message and buttons for an approval gate notification."""
         state = workspace.state
         tid = state.ticket_id
-        sep = "─" * 30
-        title = self._get_ticket_title(workspace)
+        title = tg_format.read_ticket_title(workspace)
         buttons = [
             Button(label="Approve", action=f"approve:{tid}"),
             Button(label="Reject", action=f"reject:{tid}"),
@@ -2448,10 +2451,9 @@ class Orchestrator:
                     summary = f"{count} comment(s) processed."
                 else:
                     summary = "No PR comments found."
-            hdr = self._tg_header("⏸", state, title)
+            hdr = tg_format.tg_header("⏸", state.company_id, state.ticket_id, title)
             text = (
                 f"{hdr}\n"
-                f"{sep}\n"
                 f"PR: {state.pr_url or 'N/A'}\n"
                 f"{summary}"
             )
@@ -2469,7 +2471,7 @@ class Orchestrator:
                     if line.startswith("## Summary") or line.startswith("## Fix") or line.startswith("## Root"):
                         continue
                     if line.strip() and not line.startswith("#"):
-                        summary = line.strip()[:200]
+                        summary = tg_format.strip_markdown(line.strip()[:200])
                         break
             gate_title = f"Analysis complete.\n{summary}" if summary else "Analysis complete."
             gate_title += "\n\nApprove = start coding. Reject = back to analysis."
@@ -2478,10 +2480,9 @@ class Orchestrator:
         else:
             gate_title = f"Awaiting approval at {gate_state}"
 
-        hdr = self._tg_header("⏸", state, title)
+        hdr = tg_format.tg_header("⏸", state.company_id, state.ticket_id, title)
         text = (
             f"{hdr}\n"
-            f"{sep}\n"
             f"{gate_title}"
         )
         return text, buttons

@@ -122,8 +122,6 @@ class TestOrchestratorReinvestigation:
         orch._notifier.send_message = AsyncMock(return_value=999)
         orch._events = None
         orch._get_chat_id = MagicMock(return_value="chat-1")
-        orch._get_ticket_title = MagicMock(return_value="Ticket")
-        orch._tg_header = MagicMock(return_value="hdr")
         orch._agent_runtime = MagicMock()
 
         ws = MagicMock()
@@ -211,8 +209,6 @@ class TestOrchestratorReinvestigation:
         orch._notifier.send_message = AsyncMock(side_effect=capture_send)
         orch._events = None
         orch._get_chat_id = MagicMock(return_value="chat-1")
-        orch._get_ticket_title = MagicMock(return_value="Ticket")
-        orch._tg_header = MagicMock(return_value="hdr")
         orch._agent_runtime = MagicMock()
 
         ws = MagicMock()
@@ -297,8 +293,6 @@ class TestOrchestratorReinvestigation:
         orch._notifier.send_message = AsyncMock()
         orch._events = None
         orch._get_chat_id = MagicMock(return_value="chat-1")
-        orch._get_ticket_title = MagicMock(return_value="Ticket")
-        orch._tg_header = MagicMock(return_value="hdr")
         orch._agent_runtime = MagicMock()
 
         ws = MagicMock()

@@ -203,6 +203,14 @@ Set `enabled: false` in `project.yaml` or `{repo-id}.yaml` to exclude it from th
 
 ## 6. Running Sickle
 
+### Foreground (development)
+
+```bash
+./run.sh
+```
+
+`run.sh` kills any existing instance, sources `.env`, and runs `main.py --config config-live`. Use this for local development. Once the daemon is up, the dashboard is available at [http://localhost:8080](http://localhost:8080).
+
 ### Dry run
 
 Polls Jira and logs what would happen — no side effects (no git push, no PRs, no Jira transitions):

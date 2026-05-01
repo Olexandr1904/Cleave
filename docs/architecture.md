@@ -1,8 +1,10 @@
-# Sickle — Architecture Document
+# Sickle — Architecture Document (v1, historical)
+
+> **Superseded.** This is the v1 architecture. The current architecture is [architecture-v2.md](architecture-v2.md). This file is kept for the change log and historical context only — do not use it as a reference for current code.
 
 ## Introduction
 
-This document outlines the complete system architecture for Sickle — an autonomous AI-driven development pipeline. It serves as the guiding blueprint for implementation, ensuring consistency across all components. No frontend exists; this is a backend daemon with CLI, file-based state, and external service integrations.
+This document outlined the complete system architecture for Sickle — an autonomous AI-driven development pipeline. It served as the guiding blueprint for the v1 implementation. The pipeline shape, agent roster, dashboard, and integrations have all evolved since; see v2.
 
 ### Starter Template or Existing Project
 

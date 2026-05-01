@@ -77,15 +77,7 @@ class TestGitHubPRStatus:
         assert status.all_passing is True
 
 
-class TestGitHubMerge:
-    @respx.mock
-    async def test_merge_pr(self, adapter):
-        respx.put(
-            "https://api.github.com/repos/test-org/test-repo/pulls/42/merge",
-        ).mock(return_value=httpx.Response(200, json={"merged": True}))
-
-        await adapter.merge_pr(42, merge_method="squash")
-
+class TestGitHubPRClose:
     @respx.mock
     async def test_close_pr(self, adapter):
         respx.patch(

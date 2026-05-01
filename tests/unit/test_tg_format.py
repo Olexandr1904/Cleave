@@ -103,6 +103,12 @@ class TestStripMarkdown:
         text = "Pipeline stuck at ANALYSIS. Check reports/ for details."
         assert strip_markdown(text) == text
 
+    def test_removes_underscore_italic(self):
+        assert strip_markdown("_status_") == "status"
+
+    def test_removes_underscore_italic_inline(self):
+        assert strip_markdown("The _status_ is clear") == "The status is clear"
+
     def test_multiline_table(self):
         text = (
             "The diff was clean:\n\n"

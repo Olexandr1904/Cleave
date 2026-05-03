@@ -80,6 +80,12 @@ class WorkspaceManager:
             self._base_dir / company_id / repo_id / "tickets" / ticket_id
         )
 
+        if not (clone_url.startswith("https://") or clone_url.startswith("git@")):
+            raise WorkspaceError(
+                f"Refusing to clone from non-remote URL: {clone_url!r}. "
+                f"Expected https:// or git@ scheme."
+            )
+
         try:
             # Create workspace directories
             workspace_root.mkdir(parents=True, exist_ok=True)
@@ -211,6 +217,12 @@ class WorkspaceManager:
         workspace.state.branch. Falls back to default_branch if the remote
         branch no longer exists. Returns the branch actually checked out.
         """
+        if not (clone_url.startswith("https://") or clone_url.startswith("git@")):
+            raise WorkspaceError(
+                f"Refusing to clone from non-remote URL: {clone_url!r}. "
+                f"Expected https:// or git@ scheme."
+            )
+
         source_dir = workspace.source_dir
         branch_name = workspace.state.branch or default_branch
 

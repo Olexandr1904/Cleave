@@ -92,7 +92,7 @@ class TestWorkspaceCreation:
         """Feature branch created with correct naming."""
         mock_run.return_value = MagicMock(returncode=0, stderr="")
 
-        ws = manager.create("co", "repo", "T-1", "url", default_branch="develop", branch_prefix="feature")
+        ws = manager.create("co", "repo", "T-1", "https://example.com/repo.git", default_branch="develop", branch_prefix="feature")
 
         assert ws.state.branch is not None
         assert ws.state.branch.startswith("feature/T-1")
@@ -102,7 +102,7 @@ class TestWorkspaceCreation:
         """Shallow clone depth is configurable."""
         mock_run.return_value = MagicMock(returncode=0, stderr="")
 
-        manager.create("co", "repo", "T-1", "url", clone_depth=1)
+        manager.create("co", "repo", "T-1", "https://example.com/repo.git", clone_depth=1)
 
         # First call is the clone
         cmd = mock_run.call_args_list[0][0][0]
@@ -114,7 +114,7 @@ class TestWorkspaceCreation:
         """depth=0 means full clone (no --depth flag)."""
         mock_run.return_value = MagicMock(returncode=0, stderr="")
 
-        manager.create("co", "repo", "T-1", "url", clone_depth=0)
+        manager.create("co", "repo", "T-1", "https://example.com/repo.git", clone_depth=0)
 
         cmd = mock_run.call_args_list[0][0][0]
         assert "--depth" not in cmd
@@ -127,7 +127,7 @@ class TestWorkspaceCreation:
         )
 
         with pytest.raises(WorkspaceError, match="Git clone failed"):
-            manager.create("co", "repo", "T-1", "bad-url")
+            manager.create("co", "repo", "T-1", "https://example.com/repo.git")
 
         # Workspace should be cleaned up
         workspace_dirs = list(base_dir.rglob("state.json"))

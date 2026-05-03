@@ -2280,22 +2280,25 @@ class Orchestrator:
         title = tg_format.read_ticket_title(workspace)
         hdr = tg_format.tg_header("🔔", state.company_id, state.ticket_id, title)
         stage_id_str = stage.lower() if isinstance(stage, str) else str(stage).lower()
+        is_agent_stage = stage_id_str in STAGE_RUNTIME_OUTPUT
         if is_max_iterations:
             stage_def = self._workflow.stages.get(stage_id_str)
             cap = stage_def.max_iterations if stage_def else "?"
             iterations = state.stage_iterations.get(stage_id_str, 0)
-            header = f"{hdr}\nStage: {stage} — iteration limit reached ({iterations}/{cap})\n"
+            header = f"{hdr}\nStage: {stage} — stuck after {iterations} attempts\n"
         else:
             header = f"{hdr}\nStage: {stage}\n"
 
         reason = tg_format.strip_markdown(self._build_blocked_reason(workspace, stage_id_str))
-        is_agent_stage = stage_id_str in STAGE_RUNTIME_OUTPUT
         if is_max_iterations:
             hint = (
                 f"\n{sep}\n"
-                f"↩️ Reply with context to resume, or send:\n"
-                f"  retry {state.ticket_id} from {stage_id_str} — reset counter and re-run\n"
-                f"  retry {state.ticket_id} from dev — restart from dev"
+                f"The agent ran {iterations} times without completing this stage. "
+                f"Last output is shown above — it may say PASS but something is still blocking progress.\n\n"
+                f"Options:\n"
+                f"  Reply with context — give the agent more information and resume\n"
+                f"  Send \"retry {state.ticket_id} from {stage_id_str}\" — reset counter and run again\n"
+                f"  Send \"retry {state.ticket_id} from dev\" — restart the dev agent from scratch"
             )
         elif is_agent_stage:
             hint = f"\n{sep}\n↩️ Reply with your answer or additional context."

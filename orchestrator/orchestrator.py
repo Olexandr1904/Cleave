@@ -2229,14 +2229,8 @@ class Orchestrator:
                 return f"{stage_id} agent produced no output (may have timed out or crashed). Check pipeline logs."
 
         if stage_output is None:
-            outputs = sorted(
-                reports.glob("*-output.md"),
-                key=lambda p: p.stat().st_mtime,
-                reverse=True,
-            )
-            if not outputs:
-                return f"Pipeline stuck at {stage_id}. Check reports/ for details."
-            stage_output = outputs[0]
+            # Stage has no known agent output — don't show an unrelated stage's file.
+            return f"Pipeline stuck at {stage_id}. Check pipeline logs for details."
 
         raw = stage_output.read_text(encoding="utf-8")
         # Strip leading boilerplate and blank lines.
@@ -2295,6 +2289,7 @@ class Orchestrator:
             header = f"{hdr}\nStage: {stage}\n"
 
         reason = tg_format.strip_markdown(self._build_blocked_reason(workspace, stage_id_str))
+        is_agent_stage = stage_id_str in STAGE_RUNTIME_OUTPUT
         if is_max_iterations:
             hint = (
                 f"\n{sep}\n"
@@ -2302,8 +2297,15 @@ class Orchestrator:
                 f"  retry {state.ticket_id} from {stage_id_str} — reset counter and re-run\n"
                 f"  retry {state.ticket_id} from dev — restart from dev"
             )
-        else:
+        elif is_agent_stage:
             hint = f"\n{sep}\n↩️ Reply with your answer or additional context."
+        else:
+            hint = (
+                f"\n{sep}\n"
+                f"Options:\n"
+                f"  Send \"retry {state.ticket_id}\" to retry from this stage\n"
+                f"  Send \"retry {state.ticket_id} from dev\" to restart from an earlier stage"
+            )
         message = f"{header}\n{reason}{hint}"
 
         try:

@@ -107,6 +107,10 @@ If missing, escalate immediately — the ticket cannot proceed without routing.
 
 Generate `reports/ba.md` containing:
 
+For tickets targeting a native Android repository (repo id contains `android`),
+you MUST include an **Android/Kotlin Checklist** section in the plan. Fill in
+each row — write N/A only if you can explain why the concern cannot arise.
+
 ```markdown
 # Implementation Plan — {ticket_id}
 
@@ -128,6 +132,18 @@ Step-by-step implementation approach.
 ## Edge Cases
 - Edge case 1: handling and expected behavior
 - Edge case 2: handling and expected behavior
+
+## Android/Kotlin Checklist
+*(Required for Android repos. Write N/A + reason if a concern cannot arise.)*
+
+| Concern | Plan |
+|---|---|
+| Shared mutable state | Does any new field need `@Volatile` or a lock? Which threads read/write it? |
+| Thread of execution | Which thread does each operation run on? (OkHttp callback, main thread, coroutine dispatcher) |
+| Lambda capture | Does any lambda capture `Activity`/`Fragment`? State the null-check strategy inside the lambda. |
+| Overlapping async ops | Can two async ops target the same resource concurrently? If yes, how are they distinguished? |
+| Error path parity | If the success path sets/clears state, does the error path mirror it? |
+| URL/redirect chains | Can the URL be rewritten mid-flight (e.g. `localNativeRedirect`)? If yes, track both original and rewritten values. |
 
 ## Dependencies
 - External libraries: none / list

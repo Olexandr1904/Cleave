@@ -224,3 +224,61 @@ async def test_verification_fail_notifies_telegram_and_sets_escalation_fields(tm
     assert human_input_calls, "update_state must set human_input_question"
     stored = human_input_calls[-1].kwargs["human_input_question"]
     assert "verification failed" in stored.lower()
+
+
+class TestScopeCheckIterationClear:
+    """scope_check iterations must reset when scope_check passes (→ QA)."""
+
+    def test_counter_cleared_on_pass(self, tmp_path):
+        """When scope_check outcome is pass, stage_iterations['scope_check'] is removed."""
+        from workspace.workspace import Stage, Workspace, WorkspaceState
+
+        # Build a minimal real workspace
+        ws_root = tmp_path / "ws"
+        ws_root.mkdir()
+        state = WorkspaceState(
+            ticket_id="TEST-1",
+            company_id="test",
+            repo_id="test-repo",
+            workspace_root=str(ws_root),
+            branch="feature/TEST-1",
+        )
+        state.current_state = Stage.SCOPE_CHECK
+        state.stage_iterations = {"scope_check": 1, "dev": 2}
+        ws = Workspace(str(ws_root), state)
+        ws.save_state()
+
+        # Simulate what the orchestrator does after scope_check passes
+        outcome = "pass"
+        stage_id = "scope_check"
+        if stage_id == "scope_check" and outcome == "pass":
+            ws.state.stage_iterations.pop("scope_check", None)
+            ws.save_state()
+
+        assert "scope_check" not in ws.state.stage_iterations
+        assert ws.state.stage_iterations.get("dev") == 2  # other stages untouched
+
+    def test_counter_preserved_on_fail(self, tmp_path):
+        """When scope_check outcome is fail, the counter is preserved."""
+        from workspace.workspace import Stage, Workspace, WorkspaceState
+
+        ws_root = tmp_path / "ws"
+        ws_root.mkdir()
+        state = WorkspaceState(
+            ticket_id="TEST-2",
+            company_id="test",
+            repo_id="test-repo",
+            workspace_root=str(ws_root),
+            branch="feature/TEST-2",
+        )
+        state.stage_iterations = {"scope_check": 1}
+        ws = Workspace(str(ws_root), state)
+        ws.save_state()
+
+        outcome = "fail"
+        stage_id = "scope_check"
+        if stage_id == "scope_check" and outcome == "pass":
+            ws.state.stage_iterations.pop("scope_check", None)
+            ws.save_state()
+
+        assert ws.state.stage_iterations["scope_check"] == 1

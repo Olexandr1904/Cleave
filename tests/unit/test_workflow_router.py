@@ -45,7 +45,7 @@ class TestLoadWorkflow:
         assert workflow.stages["done"].action == "finalize"
 
     def test_stage_iterations(self, workflow):
-        assert workflow.stages["scope_check"].max_iterations == 3
+        assert workflow.stages["scope_check"].max_iterations == 2
         assert workflow.stages["qa"].max_iterations == 2
         assert workflow.stages["pr_review"].max_iterations == 3
 
@@ -103,10 +103,10 @@ class TestGetNextStage:
 
 class TestShouldEscalate:
     def test_under_cap(self, workflow):
-        assert should_escalate("scope_check", workflow, 2) is False
+        assert should_escalate("scope_check", workflow, 1) is False
 
     def test_at_cap(self, workflow):
-        assert should_escalate("scope_check", workflow, 3) is True
+        assert should_escalate("scope_check", workflow, 2) is True
 
     def test_over_cap(self, workflow):
         assert should_escalate("scope_check", workflow, 5) is True

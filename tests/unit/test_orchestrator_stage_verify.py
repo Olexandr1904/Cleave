@@ -229,56 +229,77 @@ async def test_verification_fail_notifies_telegram_and_sets_escalation_fields(tm
 class TestScopeCheckIterationClear:
     """scope_check iterations must reset when scope_check passes (→ QA)."""
 
-    def test_counter_cleared_on_pass(self, tmp_path):
-        """When scope_check outcome is pass, stage_iterations['scope_check'] is removed."""
-        from workspace.workspace import Stage, Workspace, WorkspaceState
+    def _make_orch(self, tmp_path):
+        """Return a minimal Orchestrator and MagicMock workspace for scope_check tests."""
+        from orchestrator.orchestrator import Orchestrator
+        from orchestrator.constants import RUNTIME_OUTPUT_SCOPE_GUARD
 
-        # Build a minimal real workspace
-        ws_root = tmp_path / "ws"
-        ws_root.mkdir()
-        state = WorkspaceState(
+        reports_dir = tmp_path / "reports"
+        reports_dir.mkdir()
+        (reports_dir / RUNTIME_OUTPUT_SCOPE_GUARD).write_text("## Decision: Pass\n")
+
+        ws = MagicMock()
+        ws.source_dir = tmp_path  # not a real git repo; capture_stage_start returns None
+        ws.reports_dir = reports_dir
+        ws.state = SimpleNamespace(
             ticket_id="TEST-1",
             company_id="test",
             repo_id="test-repo",
-            workspace_root=str(ws_root),
+            current_state=Stage.SCOPE_CHECK,
+            previous_state=Stage.DEV,
+            stage_iterations={"scope_check": 1},
             branch="feature/TEST-1",
+            error=None,
         )
-        state.current_state = Stage.SCOPE_CHECK
-        state.stage_iterations = {"scope_check": 1, "dev": 2}
-        ws = Workspace(str(ws_root), state)
-        ws.save_state()
+        ws.transition = MagicMock()
+        ws.update_state = MagicMock()
+        ws.increment_iteration = MagicMock()
+        ws.save_state = MagicMock()
 
-        # Simulate what the orchestrator does after scope_check passes
-        outcome = "pass"
-        stage_id = "scope_check"
-        if stage_id == "scope_check" and outcome == "pass":
-            ws.state.stage_iterations.pop("scope_check", None)
-            ws.save_state()
+        workflow = MagicMock()
+        stage_def = SimpleNamespace(agent="scope-guard-agent", action=None, max_iterations=2)
+        workflow.stages = {"scope_check": stage_def}
+
+        orch = Orchestrator.__new__(Orchestrator)
+        orch._workflow = workflow
+        orch._dry_run = False
+        orch._events = None
+        orch._notifier = None
+        orch._agent_runtime = MagicMock()
+        orch._agent_runtime.execute = AsyncMock(
+            return_value=SimpleNamespace(
+                success=True, output="Decision: Pass", duration_seconds=1.0,
+                input_tokens=0, output_tokens=0, failure_kind=None, error=None, retry_at=None,
+            )
+        )
+        orch._get_repo_config = MagicMock(return_value=None)
+        orch._emit = MagicMock()
+        orch._should_approval_gate = MagicMock(return_value=False)
+        orch._advance_to_stage = MagicMock()
+
+        return orch, ws, stage_def
+
+    @pytest.mark.asyncio
+    async def test_counter_cleared_on_pass(self, tmp_path):
+        """When scope_check outcome is pass, stage_iterations['scope_check'] is removed."""
+        orch, ws, stage_def = self._make_orch(tmp_path)
+        ws.state.stage_iterations = {"scope_check": 1, "dev": 2}
+        orch._parse_agent_outcome = MagicMock(return_value="pass")
+
+        with patch("orchestrator.orchestrator.get_next_stage", return_value="qa"):
+            await orch._handle_agent_stage(ws, "scope_check", stage_def)
 
         assert "scope_check" not in ws.state.stage_iterations
         assert ws.state.stage_iterations.get("dev") == 2  # other stages untouched
 
-    def test_counter_preserved_on_fail(self, tmp_path):
+    @pytest.mark.asyncio
+    async def test_counter_preserved_on_fail(self, tmp_path):
         """When scope_check outcome is fail, the counter is preserved."""
-        from workspace.workspace import Stage, Workspace, WorkspaceState
+        orch, ws, stage_def = self._make_orch(tmp_path)
+        ws.state.stage_iterations = {"scope_check": 1}
+        orch._parse_agent_outcome = MagicMock(return_value="fail")
 
-        ws_root = tmp_path / "ws"
-        ws_root.mkdir()
-        state = WorkspaceState(
-            ticket_id="TEST-2",
-            company_id="test",
-            repo_id="test-repo",
-            workspace_root=str(ws_root),
-            branch="feature/TEST-2",
-        )
-        state.stage_iterations = {"scope_check": 1}
-        ws = Workspace(str(ws_root), state)
-        ws.save_state()
-
-        outcome = "fail"
-        stage_id = "scope_check"
-        if stage_id == "scope_check" and outcome == "pass":
-            ws.state.stage_iterations.pop("scope_check", None)
-            ws.save_state()
+        with patch("orchestrator.orchestrator.get_next_stage", return_value="dev"):
+            await orch._handle_agent_stage(ws, "scope_check", stage_def)
 
         assert ws.state.stage_iterations["scope_check"] == 1

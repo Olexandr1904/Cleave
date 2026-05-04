@@ -20,7 +20,7 @@ stages:
     description: "Validate diff against plan and arch rules"
     on_pass: "qa"
     on_fail: "dev"
-    max_iterations: 2
+    max_iterations: 2        # consecutive failures only — counter resets on pass (see orchestrator.py)
     on_max_iterations: "escalate"
 
   - id: "qa"

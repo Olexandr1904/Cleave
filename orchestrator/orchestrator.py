@@ -914,7 +914,10 @@ class Orchestrator:
             if sha != "unknown":
                 sha_info = f" Commit: {sha[:8]}."
         self._log_pipeline(workspace, f"{stage_id} ({stage_def.agent}) completed.{sha_info} Output: `reports/{stage_def.agent}-output.md`")
-        verify_result = stage_verifier.verify(stage_id, workspace, stage_start_commit)
+        verify_result = stage_verifier.verify(
+            stage_id, workspace, stage_start_commit,
+            duration_seconds=result.duration_seconds,
+        )
         if not verify_result.ok:
             agent_snippet = (result.output or "")[:200].replace("\n", " ")
             error_msg = f"{stage_id}: {verify_result.reason} (agent said: {agent_snippet})"
@@ -1937,6 +1940,9 @@ class Orchestrator:
                     fix_md += f"Comment by @{af.author}: {af.body[:200]}\n"
                     fix_md += f"What to do: {af.suggested_fix or af.reason}\n\n"
                 (workspace.reports_dir / "pr-comment-fixes.md").write_text(fix_md, encoding="utf-8")
+                for stage in ("dev", "scope_check", "qa"):
+                    state.stage_iterations.pop(stage, None)
+                workspace.save_state()
                 return ActionResult(success=True, next_state=Stage.DEV, error="", metadata={})
             return ActionResult(success=True, next_state=Stage.DONE, error="", metadata={})
 
@@ -2077,6 +2083,9 @@ class Orchestrator:
             (workspace.reports_dir / "pr-comment-fixes.md").write_text(fix_md, encoding="utf-8")
 
         state.pending_review_comments = None
+        if fixes_needed:
+            for stage in ("dev", "scope_check", "qa"):
+                state.stage_iterations.pop(stage, None)
         workspace.save_state()
 
         if fixes_needed:

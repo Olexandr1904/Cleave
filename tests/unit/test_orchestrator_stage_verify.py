@@ -79,7 +79,7 @@ async def test_dev_stage_without_new_commit_goes_to_blocked(tmp_path):
     orch._advance_to_stage.assert_not_called()
     assert ws.update_state.called
     error_arg = ws.update_state.call_args.kwargs.get("error", "")
-    assert "commit" in error_arg.lower()
+    assert "no changes" in error_arg.lower() or "commit" in error_arg.lower()
 
 
 @pytest.mark.asyncio

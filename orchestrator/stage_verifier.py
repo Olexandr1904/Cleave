@@ -64,10 +64,15 @@ def capture_stage_start(workspace: Any, stage_id: str) -> str | None:
     return _git_rev_parse(Path(workspace.source_dir))
 
 
-def verify(stage_id: str, workspace: Any, stage_start_commit: str | None) -> VerifyResult:
+def verify(
+    stage_id: str,
+    workspace: Any,
+    stage_start_commit: str | None,
+    duration_seconds: float | None = None,
+) -> VerifyResult:
     """Run the mechanical verifier for the given stage."""
     if stage_id == "dev":
-        return _verify_dev(workspace, stage_start_commit)
+        return _verify_dev(workspace, stage_start_commit, duration_seconds)
     if stage_id == "scope_check":
         return _verify_report_exists("scope_check", workspace, RUNTIME_OUTPUT_SCOPE_GUARD)
     if stage_id == "qa":
@@ -146,7 +151,11 @@ def _verify_pr_review(workspace: Any) -> VerifyResult:
     return VerifyResult(ok=True, stage_id="pr_review", reason="")
 
 
-def _verify_dev(workspace: Any, stage_start_commit: str | None) -> VerifyResult:
+def _verify_dev(
+    workspace: Any,
+    stage_start_commit: str | None,
+    duration_seconds: float | None = None,
+) -> VerifyResult:
     source = Path(workspace.source_dir)
     current = _git_rev_parse(source)
     if current is None:
@@ -180,6 +189,14 @@ def _verify_dev(workspace: Any, stage_start_commit: str | None) -> VerifyResult:
         except (subprocess.TimeoutExpired, OSError):
             pass
 
+    if duration_seconds is not None and duration_seconds < 60:
+        return VerifyResult(
+            ok=False, stage_id="dev",
+            reason=(
+                f"dev-agent completed in {duration_seconds:.0f}s with no changes"
+                " — likely could not map plan to code. Escalating for human review."
+            ),
+        )
     return VerifyResult(
         ok=False, stage_id="dev",
         reason=f"no new commit on feature branch (HEAD still at {current[:8]})",

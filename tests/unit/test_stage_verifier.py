@@ -67,6 +67,28 @@ class TestDevVerifier:
         assert r.stage_id == "dev"
         assert "commit" in r.reason.lower()
 
+    def test_fast_exit_no_commit_uses_diagnostic_reason(self, tmp_path):
+        """Sub-60s completion with no commit → specific fast-exit message."""
+        repo = _init_repo_with_commit(tmp_path)
+        ws = _fake_workspace(repo)
+        start = capture_stage_start(ws, "dev")
+
+        r = verify("dev", ws, start, duration_seconds=21.0)
+        assert r.ok is False
+        assert "21s" in r.reason
+        assert "map plan to code" in r.reason
+
+    def test_slow_no_commit_uses_generic_reason(self, tmp_path):
+        """≥60s completion with no commit → original generic message."""
+        repo = _init_repo_with_commit(tmp_path)
+        ws = _fake_workspace(repo)
+        start = capture_stage_start(ws, "dev")
+
+        r = verify("dev", ws, start, duration_seconds=120.0)
+        assert r.ok is False
+        assert "no new commit" in r.reason
+        assert "map plan to code" not in r.reason
+
 
 class TestScopeCheckVerifier:
     def test_report_file_exists_passes(self, tmp_path):

@@ -50,3 +50,4 @@ Agent that validates the developer's diff against the implementation plan and ar
 |------|-------------|
 | 2026-04-07 | Initial draft — seeded from PRD and architecture docs |
 | 2026-05-04 | Cap consecutive bounces at 2 (max_iterations: 3→2); clear iteration counter on pass so it tracks consecutive failures only |
+| 2026-05-04 | Add inline comment to workflow YAML clarifying reset-on-pass semantics; strengthen iteration-clear tests to exercise real orchestrator path |

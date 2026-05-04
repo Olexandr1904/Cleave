@@ -98,6 +98,7 @@ Central daemon process that continuously polls for work, manages isolated worksp
 | 2026-05-01 | Fixed `strip_markdown` regex to prevent snake_case corruption: underscore italic pattern now uses `(?<!\w)..._([^_\n]+)_...(?!\w)` (non-word-char lookbehind/lookahead) instead of `(?<!_)...(?!_)` (non-underscore only), so `my_private_field` is not corrupted by italic removal. |
 | 2026-05-01 | Fixed `_get_ticket_summary` in `pr_creation.py`: was reading `meta/ticket.json` (never written); now parses first line of `meta/ticket.md` in `# TICKET-ID: summary` format. |
 | 2026-05-04 | `stage_verifier.verify()` and `_verify_dev()` now accept an optional `duration_seconds` parameter. When the dev-agent exits in under 60 seconds with no commit, the BLOCKED reason is replaced with a specific diagnostic ("completed in Xs … likely could not map plan to code") to distinguish fast-fail exits from normal no-commit failures. |
+| 2026-05-04 | `_handle_agent_stage` now threads `result.duration_seconds` into the `stage_verifier.verify()` call, enabling the fast-exit detection path in `_verify_dev`. |
 
 
 

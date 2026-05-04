@@ -960,6 +960,12 @@ class Orchestrator:
 
         next_stage = get_next_stage(stage_id, self._workflow, outcome)
 
+        # Reset scope_check bounce counter on pass so max_iterations tracks
+        # consecutive failures only, not lifetime runs.
+        if stage_id == "scope_check" and outcome == "pass":
+            workspace.state.stage_iterations.pop("scope_check", None)
+            workspace.save_state()
+
         if next_stage:
             # Check for approval gate in manual mode. Only gate on happy-path
             # transitions — failure loops and escalations bypass the gate.

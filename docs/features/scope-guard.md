@@ -2,7 +2,7 @@
 
 **Status:** Implemented
 **Created:** 2026-04-07
-**Updated:** 2026-04-07
+**Updated:** 2026-05-04
 **Author:** Oleksandr Brazhenko
 
 ## Description
@@ -17,7 +17,7 @@ Agent that validates the developer's diff against the implementation plan and ar
 - FR4: Detects violations: unauthorized files, formatting-only changes, new unused imports, layer boundary violations, missing ticket ID in commits
 - FR5: If violations → writes `context/scope-report.md` with violation list and fix instructions, state returns to Dev Agent
 - FR6: If clean → writes `context/scope-certificate.md`, state advances to PR creation
-- FR7: Iteration count incremented on each pass; max from config triggers escalation
+- FR7: Iteration count incremented on each bounce (fail); max_iterations=2 triggers escalation after 2 consecutive failures; counter cleared on pass so only consecutive failures count
 
 ## Technical Approach
 
@@ -49,3 +49,4 @@ Agent that validates the developer's diff against the implementation plan and ar
 | Date | Description |
 |------|-------------|
 | 2026-04-07 | Initial draft — seeded from PRD and architecture docs |
+| 2026-05-04 | Cap consecutive bounces at 2 (max_iterations: 3→2); clear iteration counter on pass so it tracks consecutive failures only |

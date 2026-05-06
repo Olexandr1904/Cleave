@@ -83,6 +83,7 @@ async def test_valid_label_persists_model_and_no_comment(fake_ws):
 
     tracker = AsyncMock()
     tracker._request = AsyncMock(side_effect=Exception("skip jira fetch"))
+    tracker.get_ticket = AsyncMock(side_effect=Exception("skip jira fetch"))
     tracker.add_comment = AsyncMock()
 
     orch = _make_orchestrator(fake_ws, tracker)
@@ -104,6 +105,7 @@ async def test_no_label_snapshots_global_default(fake_ws):
 
     tracker = AsyncMock()
     tracker._request = AsyncMock(side_effect=Exception("skip jira fetch"))
+    tracker.get_ticket = AsyncMock(side_effect=Exception("skip jira fetch"))
     tracker.add_comment = AsyncMock()
 
     orch = _make_orchestrator(fake_ws, tracker, default_model="claude-haiku-4-5-20251001")
@@ -125,6 +127,7 @@ async def test_conflicting_labels_snapshot_default_and_post_comment(fake_ws):
 
     tracker = AsyncMock()
     tracker._request = AsyncMock(side_effect=Exception("skip jira fetch"))
+    tracker.get_ticket = AsyncMock(side_effect=Exception("skip jira fetch"))
     tracker.add_comment = AsyncMock()
 
     orch = _make_orchestrator(fake_ws, tracker, default_model="claude-sonnet-4-6")
@@ -152,6 +155,7 @@ async def test_comment_post_failure_does_not_abort_workspace_creation(fake_ws):
 
     tracker = AsyncMock()
     tracker._request = AsyncMock(side_effect=Exception("skip jira fetch"))
+    tracker.get_ticket = AsyncMock(side_effect=Exception("skip jira fetch"))
     tracker.add_comment = AsyncMock(side_effect=RuntimeError("Jira down"))
 
     orch = _make_orchestrator(fake_ws, tracker)

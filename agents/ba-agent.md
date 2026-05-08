@@ -83,7 +83,13 @@ If missing, escalate immediately — the ticket cannot proceed without routing.
 
 ### Step 3: Decision Gate
 
-**If requirements are UNCLEAR:**
+**Escalation threshold:** Escalate ONLY when an unresolved ambiguity could change the
+chosen approach in a way you can't reverse cheaply later — architecture, scope boundary,
+external contract, or data model. Naming, style, minor edge-case handling, and reasonable
+defaults are NOT grounds for escalation; pick a sensible default, record it under
+`## Assumptions` in the plan, and proceed.
+
+**If requirements are UNCLEAR (per the threshold above):**
 - Produce numbered questions targeting specific gaps
 - Each question must reference the specific AC or requirement that is unclear
 - Format:
@@ -105,6 +111,11 @@ If missing, escalate immediately — the ticket cannot proceed without routing.
 
 ### Step 4: Produce Implementation Plan
 
+Before drafting the plan, briefly weigh 2-3 viable approaches and pick one. You don't
+need to write out the rejected approaches — but having considered them prevents
+defaulting to the first idea. Capture the picked approach and its main trade-off in
+`## Summary`.
+
 Generate `ai_pipeline/{ticket_id}/ba.md` containing:
 
 For tickets targeting a native Android repository (repo id contains `android`),
@@ -115,7 +126,13 @@ each row — write N/A only if you can explain why the concern cannot arise.
 # Implementation Plan — {ticket_id}
 
 ## Summary
-One-paragraph description of what will be implemented.
+One-paragraph description of what will be implemented, including the picked approach
+and its main trade-off vs. alternatives considered.
+
+## Assumptions
+*(Defaults picked for ambiguities below the escalation threshold. One line each.)*
+- Assumption 1: chosen default — why this default is reasonable
+- Assumption 2: ...
 
 ## Files to Create
 - `path/to/new/file.py` — purpose

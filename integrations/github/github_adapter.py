@@ -132,7 +132,18 @@ class GitHubAdapter(VCSInterface):
         self, repo_dir: str, branch_name: str,
         force: bool = False, skip_hooks: bool = False,
     ) -> None:
-        """Push branch to origin."""
+        """Push branch to origin.
+
+        Rewrites the `origin` URL with the adapter's current token before
+        pushing so workspaces cloned with an older token still authenticate
+        after a token rotation. Without this, a stale token baked into the
+        existing remote URL is what reaches GitHub at push time.
+        """
+        canonical_url = (
+            f"https://{self._token}@github.com/{self._owner}/{self._repo}.git"
+        )
+        await self._run_git(repo_dir, "remote", "set-url", "origin", canonical_url)
+
         args = ["push", "-u", "origin", branch_name]
         if force:
             args.insert(1, "--force")
@@ -180,10 +191,20 @@ class GitHubAdapter(VCSInterface):
         return None
 
     async def get_pr_comments(self, pr_number: int) -> list[PRComment]:
-        """Get all review comments on a PR."""
-        data = await self._request(
-            "GET", f"{self._repo_path}/pulls/{pr_number}/comments"
-        )
+        """Get all review comments on a PR (handles pagination)."""
+        all_comments = []
+        page = 1
+        while True:
+            data = await self._request(
+                "GET", f"{self._repo_path}/pulls/{pr_number}/comments",
+                params={"per_page": 100, "page": page},
+            )
+            if not data:
+                break
+            all_comments.extend(data)
+            if len(data) < 100:
+                break
+            page += 1
         return [
             PRComment(
                 id=c["id"],
@@ -193,7 +214,7 @@ class GitHubAdapter(VCSInterface):
                 author=c.get("user", {}).get("login", ""),
                 in_reply_to_id=c.get("in_reply_to_id"),
             )
-            for c in data
+            for c in all_comments
         ]
 
     async def reply_to_comment(self, pr_number: int, comment_id: int, body: str) -> None:
@@ -232,23 +253,15 @@ class GitHubAdapter(VCSInterface):
             logger.warning("No node_id for comment %d", comment_id)
             return
 
-        # Find the review thread containing this comment
+        # Navigate directly from the comment to its thread (works regardless of
+        # whether the comment is part of a formal review submission or standalone)
         query = """
         query($nodeId: ID!) {
           node(id: $nodeId) {
             ... on PullRequestReviewComment {
-              pullRequestReview {
-                pullRequest {
-                  reviewThreads(last: 100) {
-                    nodes {
-                      id
-                      isResolved
-                      comments(first: 1) {
-                        nodes { id }
-                      }
-                    }
-                  }
-                }
+              pullRequestThread {
+                id
+                isResolved
               }
             }
           }
@@ -260,22 +273,16 @@ class GitHubAdapter(VCSInterface):
             logger.warning("GraphQL query failed for comment %d: %s", comment_id, e)
             return
 
-        threads = (
+        thread = (
             result.get("data", {}).get("node", {})
-            .get("pullRequestReview", {}).get("pullRequest", {})
-            .get("reviewThreads", {}).get("nodes", [])
+            .get("pullRequestThread") or {}
         )
-        thread_id = None
-        for thread in threads:
-            if thread.get("isResolved"):
-                continue
-            comment_nodes = thread.get("comments", {}).get("nodes", [])
-            if any(c.get("id") == node_id for c in comment_nodes):
-                thread_id = thread["id"]
-                break
+        if not thread or thread.get("isResolved"):
+            return
 
+        thread_id = thread.get("id")
         if not thread_id:
-            return  # Already resolved or not found
+            return
 
         mutation = """
         mutation($threadId: ID!) {

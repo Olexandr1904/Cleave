@@ -55,6 +55,27 @@ class TestGitHubPRComments:
         assert comments[0].body == "Consider using const here"
         assert comments[0].author == "copilot"
 
+    @respx.mock
+    async def test_get_comments_pagination(self, adapter):
+        """Comments beyond page 1 (>100) are fetched via pagination."""
+        page1 = [{"id": i, "body": f"c{i}", "path": "f.kt", "line": i,
+                   "user": {"login": "bot"}, "in_reply_to_id": None}
+                 for i in range(1, 101)]
+        page2 = [{"id": 101, "body": "c101", "path": "f.kt", "line": 101,
+                  "user": {"login": "bot"}, "in_reply_to_id": None}]
+
+        route = respx.get(
+            "https://api.github.com/repos/test-org/test-repo/pulls/42/comments",
+        )
+        route.side_effect = [
+            httpx.Response(200, json=page1),
+            httpx.Response(200, json=page2),
+        ]
+
+        comments = await adapter.get_pr_comments(42)
+        assert len(comments) == 101
+        assert comments[-1].id == 101
+
 
 class TestGitHubPRStatus:
     @respx.mock

@@ -68,3 +68,29 @@ async def test_push_with_force_and_skip_hooks_keeps_both():
     cmd = list(spawn.call_args.args)
     assert "--force" in cmd
     assert "--no-verify" in cmd
+
+
+@pytest.mark.asyncio
+async def test_push_refreshes_origin_url_with_current_token():
+    """Push must rewrite origin URL with the adapter's current token first.
+
+    Workspaces cloned before a token rotation have the old token baked into
+    their remote URL. Without this rewrite, the stale token reaches GitHub
+    at push time and fails (e.g. lacks workflow scope), even though .env has
+    a valid replacement.
+    """
+    adapter = _make_adapter()
+    adapter._token = "ghp_NEW_TOKEN"
+    with patch(
+        "integrations.github.github_adapter.asyncio.create_subprocess_exec",
+        new=AsyncMock(return_value=_ok_proc()),
+    ) as spawn:
+        await adapter.push("/tmp/repo", "feature/X")
+    calls = [list(c.args) for c in spawn.call_args_list]
+    assert len(calls) == 2, f"expected 2 git calls (set-url + push), got {calls}"
+    set_url_cmd, push_cmd = calls
+    assert set_url_cmd == [
+        "git", "-C", "/tmp/repo", "remote", "set-url", "origin",
+        "https://ghp_NEW_TOKEN@github.com/acme-org/acme-mobile.git",
+    ]
+    assert push_cmd[:4] == ["git", "-C", "/tmp/repo", "push"]

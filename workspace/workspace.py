@@ -43,8 +43,8 @@ VALID_TRANSITIONS: dict[Stage, set[Stage]] = {
     Stage.PUSHED:             {Stage.PR_REVIEW, Stage.BLOCKED, Stage.FAILED, Stage.DEFERRED, Stage.MANUAL_CONTROL, Stage.PAUSED},
     Stage.PR_REVIEW:          {Stage.DEV, Stage.DONE, Stage.BLOCKED, Stage.FAILED, Stage.DEFERRED, Stage.AWAITING_APPROVAL, Stage.MANUAL_CONTROL, Stage.PAUSED},
     Stage.DONE:               {Stage.ARCHIVED, Stage.ANALYSIS},
-    Stage.BLOCKED:            {Stage.ANALYSIS, Stage.DEV, Stage.SCOPE_CHECK, Stage.QA, Stage.PUSHED, Stage.PR_REVIEW, Stage.FAILED, Stage.MANUAL_CONTROL},
-    Stage.FAILED:             {Stage.ANALYSIS, Stage.DEV, Stage.SCOPE_CHECK, Stage.QA, Stage.PUSHED, Stage.PR_REVIEW, Stage.MANUAL_CONTROL, Stage.ARCHIVED},
+    Stage.BLOCKED:            {Stage.ANALYSIS, Stage.DEV, Stage.SCOPE_CHECK, Stage.QA, Stage.PUSHED, Stage.PR_REVIEW, Stage.AWAITING_APPROVAL, Stage.FAILED, Stage.MANUAL_CONTROL},
+    Stage.FAILED:             {Stage.ANALYSIS, Stage.DEV, Stage.SCOPE_CHECK, Stage.QA, Stage.PUSHED, Stage.PR_REVIEW, Stage.AWAITING_APPROVAL, Stage.MANUAL_CONTROL, Stage.ARCHIVED},
     Stage.ARCHIVED:           set(),
     Stage.AWAITING_APPROVAL:  {Stage.ANALYSIS, Stage.DEV, Stage.SCOPE_CHECK, Stage.QA, Stage.PUSHED, Stage.PR_REVIEW, Stage.DONE, Stage.FAILED, Stage.MANUAL_CONTROL},
     Stage.MANUAL_CONTROL:     {Stage.ANALYSIS},
@@ -248,6 +248,12 @@ class Workspace:
         # retry_at is meaningful only while in DEFERRED; clear on any other target
         if new_state != Stage.DEFERRED:
             updates["retry_at"] = None
+
+        # PR_REVIEW gate requires a fresh "reviewed" signal — clear any stale
+        # human_input_reply so an earlier "proceed"/"reviewed" unblock text
+        # doesn't bypass the wait.
+        if new_state == Stage.PR_REVIEW:
+            updates["human_input_reply"] = None
 
         updates.update(extra)
         self.update_state(**updates)

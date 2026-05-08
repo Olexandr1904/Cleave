@@ -223,7 +223,8 @@ class AgentRuntime:
             prompt_body = prompt_body.replace(f"{{{key}}}", str(value))
 
         # 3. Workspace context files (read from meta_dir)
-        # Note: reports/ is inside source/ — agent reads them directly via tools
+        # Note: pipeline reports live at source/ai_pipeline/<ticket>/ — agents
+        # read them directly via tools, not via this context block.
         context_sections: list[str] = []
         context_dir = workspace.meta_dir
         total_bytes = 0

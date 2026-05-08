@@ -148,9 +148,14 @@ def _scan_all_workspaces(
             data = json.loads(state_file.read_text(encoding="utf-8"))
             ws_root = state_file.parent
             title = _maybe_backfill_title(ws_root, data)
-            # List available reports
-            # Ticket workspaces keep reports inside source/; setup workspaces use root/reports/.
-            reports_dir = ws_root / "source" / "reports"
+            # List available reports.
+            # Ticket workspaces store reports at `source/ai_pipeline/<ticket>/`;
+            # legacy tickets used `source/reports/` or `reports/`; setup
+            # workspaces use root `reports/`. Try in order, take the first hit.
+            ticket_id = data.get("ticket_id", "")
+            reports_dir = ws_root / "source" / "ai_pipeline" / ticket_id
+            if not reports_dir.exists():
+                reports_dir = ws_root / "source" / "reports"
             if not reports_dir.exists():
                 reports_dir = ws_root / "reports"
             reports = sorted(f.name for f in reports_dir.iterdir() if f.is_file()) if reports_dir.exists() else []
@@ -268,8 +273,11 @@ def create_app(
             if ws["ticket_id"] == ticket_id:
                 ws_root = Path(ws["workspace_root"])
                 if folder == "reports":
-                    # Ticket workspaces store reports inside source/; setup workspaces at root level.
-                    candidate = ws_root / "source" / "reports" / filename
+                    # Try new layout first (`source/ai_pipeline/<ticket>/`),
+                    # then legacy locations.
+                    candidate = ws_root / "source" / "ai_pipeline" / ticket_id / filename
+                    if not candidate.exists():
+                        candidate = ws_root / "source" / "reports" / filename
                     if not candidate.exists():
                         candidate = ws_root / "reports" / filename
                     file_path = candidate

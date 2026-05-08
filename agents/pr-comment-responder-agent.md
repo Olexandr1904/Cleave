@@ -22,13 +22,13 @@ tools:
   - search_code
 
 inputs:
-  - reports/pr-review-comments.md
-  - reports/ba.md
+  - ai_pipeline/{ticket_id}/pr-review-comments.md
+  - ai_pipeline/{ticket_id}/ba.md
   - meta/ticket.md
   - rules/arch-rules.md
 
 outputs:
-  - reports/pr-comments.md
+  - ai_pipeline/{ticket_id}/pr-comments.md
 
 decision_policy:
   when_to_run: "State is PR_REVIEW, after comments are fetched"

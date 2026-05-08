@@ -913,7 +913,7 @@ class Orchestrator:
             sha = self._git_head_sha(workspace)
             if sha != "unknown":
                 sha_info = f" Commit: {sha[:8]}."
-        self._log_pipeline(workspace, f"{stage_id} ({stage_def.agent}) completed.{sha_info} Output: `reports/{stage_def.agent}-output.md`")
+        self._log_pipeline(workspace, f"{stage_id} ({stage_def.agent}) completed.{sha_info} Output: `ai_pipeline/{state.ticket_id}/{stage_def.agent}-output.md`")
         verify_result = stage_verifier.verify(
             stage_id, workspace, stage_start_commit,
             duration_seconds=result.duration_seconds,
@@ -1347,7 +1347,8 @@ class Orchestrator:
         # If PR already exists (from a previous cycle), just push new commits (no squash)
         if state.pr_number and state.pr_url:
             vcs, repo_config = self._get_vcs_for_workspace(workspace)
-            if vcs:
+            if vcs and repo_config:
+                self._commit_pipeline_artifacts(workspace, repo_config)
                 try:
                     branch = state.branch
                     if branch:
@@ -1429,6 +1430,11 @@ class Orchestrator:
         # develop and feature/...") and operators have to commit by hand.
         self._ensure_branch_has_commits(workspace, repo_config)
 
+        # Commit any pipeline artifacts the agents wrote after dev's commit
+        # (scope-guard, qa) so they ride along on this push. The squash below
+        # folds them into the single PR commit.
+        self._commit_pipeline_artifacts(workspace, repo_config)
+
         # Squash commits into one clean commit before the first PR
         self._squash_feature_commits(workspace, repo_config)
 
@@ -1441,6 +1447,70 @@ class Orchestrator:
         return ActionResult(
             success=False, next_state="", error=result.error, metadata={},
         )
+
+    def _commit_pipeline_artifacts(
+        self, workspace: Workspace, repo_config: RepoConfig,
+    ) -> None:
+        """Stage and commit any uncommitted files under `ai_pipeline/<ticket>/`.
+
+        Run before each push so agent reports written after the dev commit
+        (scope-guard, qa, pr-review-*) ride along with the code on the PR.
+        No-op when nothing is staged. On the first push the orchestrator
+        squashes feature commits, so this commit gets folded into the PR's
+        single squash commit. On subsequent pushes (PR-review cycle) it lands
+        as its own `chore({ticket}): pipeline artifacts` commit.
+        """
+        import subprocess
+        source = str(workspace.source_dir)
+        state = workspace.state
+        rel_dir = f"ai_pipeline/{state.ticket_id}"
+
+        if not (workspace.source_dir / "ai_pipeline" / state.ticket_id).exists():
+            return
+
+        try:
+            add_result = subprocess.run(
+                ["git", "-C", source, "add", "--", rel_dir],
+                capture_output=True, text=True, timeout=10,
+            )
+            if add_result.returncode != 0:
+                logger.warning(
+                    "Failed to git-add pipeline artifacts for %s: %s",
+                    state.ticket_id, add_result.stderr.strip()[:200],
+                )
+                return
+
+            staged = subprocess.run(
+                ["git", "-C", source, "diff", "--cached", "--name-only", "--", rel_dir],
+                capture_output=True, text=True, timeout=10,
+            )
+            files = [line for line in staged.stdout.splitlines() if line.strip()]
+            if not files:
+                return  # nothing to commit
+
+            commit_msg = f"chore({state.ticket_id}): pipeline artifacts"
+            commit_result = subprocess.run(
+                [
+                    "git", "-C", source,
+                    "-c", f"user.email={repo_config.git.commit_author_email}",
+                    "-c", f"user.name={repo_config.git.commit_author_name}",
+                    "commit", "-m", commit_msg, "--", rel_dir,
+                ],
+                capture_output=True, text=True, timeout=10,
+            )
+            if commit_result.returncode != 0:
+                logger.warning(
+                    "Failed to commit pipeline artifacts for %s: %s",
+                    state.ticket_id, commit_result.stderr.strip()[:200],
+                )
+                return
+
+            logger.info(
+                "Committed %d pipeline artifact(s) for %s",
+                len(files), state.ticket_id,
+            )
+        except Exception as e:
+            logger.warning("Pipeline-artifacts commit failed for %s: %s", state.ticket_id, e)
 
     def _ensure_branch_has_commits(
         self, workspace: Workspace, repo_config: RepoConfig,
@@ -1938,7 +2008,7 @@ class Orchestrator:
         # Phase 7: Handle escalated or collect FIX items
         if not escalated:
             summary = f"PR review cycle {state.review_cycle}: {len(auto_fixed)} fix, {len(auto_rejected)} rejected"
-            self._log_pipeline(workspace, f"{summary}. Report: `reports/pr-review-resolution.md`")
+            self._log_pipeline(workspace, f"{summary}. Report: `ai_pipeline/{state.ticket_id}/pr-review-resolution.md`")
             if auto_fixed:
                 # Write fix instructions for the dev agent
                 fix_md = "# PR Comment Fixes Required\n\n"
@@ -2216,15 +2286,17 @@ class Orchestrator:
     def _build_blocked_reason(self, workspace: Any, stage_id: str) -> str:
         """Extract a human-readable reason for why a workspace is blocked.
 
-        For analysis: prefer reports/ba-questions.md (the BA agent's numbered
-        questions). For other stages: prefer the stage-specific runtime output
-        file (e.g. qa-agent-output.md for the qa stage) so that a different
-        stage's more-recent output is never mistakenly shown as the block reason.
-        Falls back to latest *-output.md by mtime, then a generic message.
+        For analysis: prefer the BA agent's numbered questions
+        (`ai_pipeline/<ticket>/ba-questions.md`). For other stages: prefer the
+        stage-specific runtime output file (e.g. `qa-agent-output.md` for the
+        qa stage) so that a different stage's more-recent output is never
+        mistakenly shown as the block reason. Falls back to a generic message.
         """
         reports = workspace.reports_dir
+        ticket_id = workspace.state.ticket_id
+        artifact_path = f"ai_pipeline/{ticket_id}/"
         if not reports.exists():
-            return f"Pipeline stuck at {stage_id}. Check reports/ for details."
+            return f"Pipeline stuck at {stage_id}. Check {artifact_path} for details."
 
         if stage_id == "analysis":
             questions = reports / REPORT_BA_QUESTIONS
@@ -2261,11 +2333,11 @@ class Orchestrator:
             start = i
             break
         else:
-            return f"Pipeline stuck at {stage_id}. Check reports/ for details."
+            return f"Pipeline stuck at {stage_id}. Check {artifact_path} for details."
 
         body = "\n".join(lines[start:]).strip()
         if not body:
-            return f"Pipeline stuck at {stage_id}. Check reports/ for details."
+            return f"Pipeline stuck at {stage_id}. Check {artifact_path} for details."
         return self._truncate_reason(body)
 
     @classmethod
@@ -2437,7 +2509,7 @@ class Orchestrator:
 
     @staticmethod
     def _log_pipeline(workspace: Workspace, entry: str) -> None:
-        """Append a timestamped entry to reports/pipeline-log.md."""
+        """Append a timestamped entry to ai_pipeline/<ticket>/pipeline-log.md."""
         log_path = workspace.reports_dir / "pipeline-log.md"
         timestamp = datetime.now(timezone.utc).strftime("%H:%M")
         line = f"- **{timestamp}** {entry}\n"
@@ -2537,7 +2609,7 @@ class Orchestrator:
             if "unclear" in output_lower or "questions" in output_lower:
                 return "unclear"
             logger.warning(
-                "%s: BA completed but reports/ba.md missing — treating as unclear",
+                "%s: BA completed but ba.md missing in ai_pipeline/ — treating as unclear",
                 workspace.state.ticket_id,
             )
             return "unclear"

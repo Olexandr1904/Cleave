@@ -27,8 +27,8 @@ inputs:
   - rules/arch-rules.md
 
 outputs:
-  - reports/ba.md
-  - reports/ba-questions.md
+  - ai_pipeline/{ticket_id}/ba.md
+  - ai_pipeline/{ticket_id}/ba-questions.md
 
 decision_policy:
   when_to_run: "State is ANALYSIS"
@@ -100,12 +100,12 @@ If missing, escalate immediately — the ticket cannot proceed without routing.
 - Set workspace status to `waiting_for_human`
 
 **If requirements are CLEAR (or it's a bug with a clear description):**
-- You MUST write `reports/ba.md` — the pipeline will not advance without it
+- You MUST write `ai_pipeline/{ticket_id}/ba.md` — the pipeline will not advance without it
 - Proceed to Step 4
 
 ### Step 4: Produce Implementation Plan
 
-Generate `reports/ba.md` containing:
+Generate `ai_pipeline/{ticket_id}/ba.md` containing:
 
 For tickets targeting a native Android repository (repo id contains `android`),
 you MUST include an **Android/Kotlin Checklist** section in the plan. Fill in
@@ -152,7 +152,7 @@ Step-by-step implementation approach.
 
 ### Step 5: Produce Test Scenarios
 
-The test scenarios section is included in `reports/ba.md` below the implementation plan:
+The test scenarios section is included in `ai_pipeline/{ticket_id}/ba.md` below the implementation plan:
 
 ```markdown
 # Test Scenarios — {ticket_id}
@@ -170,8 +170,8 @@ The test scenarios section is included in `reports/ba.md` below the implementati
 
 ## Output
 
-- If unclear: `reports/ba-questions.md` with numbered questions
-- If clear: `reports/ba.md` (implementation plan + test scenarios combined)
+- If unclear: `ai_pipeline/{ticket_id}/ba-questions.md` with numbered questions
+- If clear: `ai_pipeline/{ticket_id}/ba.md` (implementation plan + test scenarios combined)
 
 ## Constraints
 

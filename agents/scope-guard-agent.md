@@ -22,12 +22,12 @@ tools:
   - git_operation
 
 inputs:
-  - reports/ba.md
+  - ai_pipeline/{ticket_id}/ba.md
   - meta/ticket.md
   - rules/arch-rules.md
 
 outputs:
-  - reports/scope-guard.md
+  - ai_pipeline/{ticket_id}/scope-guard.md
 
 decision_policy:
   when_to_run: "State is SCOPE_CHECK"
@@ -53,7 +53,7 @@ a violation that must be flagged.
 ## Input
 
 You receive:
-- `reports/ba.md` — the approved implementation plan (file allowlist source)
+- `ai_pipeline/{ticket_id}/ba.md` — the approved implementation plan (file allowlist source)
 - `meta/ticket.md` — ticket for requirement mapping
 - `rules/arch-rules.md` — architecture constraints
 - Git diff obtained via `git_operation` tool
@@ -62,7 +62,7 @@ You receive:
 
 ### Step 1: Parse the Plan
 
-Extract from `reports/ba.md`:
+Extract from `ai_pipeline/{ticket_id}/ba.md`:
 - **Allowed new files**: files the plan says to create
 - **Allowed modified files**: files the plan says to modify
 - **Protected files**: files the plan says NOT to touch
@@ -76,6 +76,11 @@ From the git diff (obtained via `git_operation` tool), extract:
 ### Step 3: Check Each Changed File
 
 For every file in the diff:
+
+0. **System-allowlisted paths**: Files under `ai_pipeline/{ticket_id}/**` are
+   pipeline artifacts (BA plan, dev/qa/scope-guard reports, agent outputs) that
+   the orchestrator and agents commit alongside code. They are always in scope
+   regardless of the BA plan — skip the remaining checks for these paths.
 
 1. **Unauthorized file check**: Is this file in the allowed list (create or modify)?
    If not → VIOLATION: "Unauthorized file modification: {path}"
@@ -108,7 +113,7 @@ For each commit message:
 ### Step 6: Verdict
 
 **If violations found:**
-Write `reports/scope-guard.md`:
+Write `ai_pipeline/{ticket_id}/scope-guard.md`:
 
 ```markdown
 # Scope Report — {ticket_id}
@@ -127,7 +132,7 @@ Write `reports/scope-guard.md`:
 ```
 
 **If no violations:**
-Write `reports/scope-guard.md` (with Status: PASS):
+Write `ai_pipeline/{ticket_id}/scope-guard.md` (with Status: PASS):
 
 ```markdown
 # Scope Certificate — {ticket_id}
@@ -146,8 +151,8 @@ Write `reports/scope-guard.md` (with Status: PASS):
 
 ## Output
 
-- `reports/scope-guard.md` with "Status: FAIL" + violation list (if violations found) — returns to Dev Agent
-- `reports/scope-guard.md` with "Status: PASS" + scope certificate (if clean) — advances to QA
+- `ai_pipeline/{ticket_id}/scope-guard.md` with "Status: FAIL" + violation list (if violations found) — returns to Dev Agent
+- `ai_pipeline/{ticket_id}/scope-guard.md` with "Status: PASS" + scope certificate (if clean) — advances to QA
 
 ## Constraints
 

@@ -688,7 +688,7 @@ def _build_claude_prompt(ws: Any) -> str:
     if state.error:
         parts.append(f"Error/escalation: {state.error}")
     if reports:
-        parts.append("Reports available in ../reports/:\n" + "\n".join(reports))
+        parts.append(f"Reports available in ai_pipeline/{state.ticket_id}/:\n" + "\n".join(reports))
     if meta:
         parts.append("Meta files in ../meta/:\n" + "\n".join(meta))
     parts.append(

@@ -49,10 +49,10 @@ def _seed_workspace(
     """Create a workspace directory on disk with state.json + reports/meta."""
     ws_root = base_dir / company / repo / "tickets" / ticket_id
     ws_root.mkdir(parents=True, exist_ok=True)
-    (ws_root / "reports").mkdir(exist_ok=True)
+    pipeline_dir = ws_root / "source" / "ai_pipeline" / ticket_id
+    pipeline_dir.mkdir(parents=True, exist_ok=True)
     (ws_root / "meta").mkdir(exist_ok=True)
     (ws_root / "logs").mkdir(exist_ok=True)
-    (ws_root / "source").mkdir(exist_ok=True)
 
     now = _now_iso()
     state_obj = WorkspaceState(
@@ -73,7 +73,7 @@ def _seed_workspace(
     (ws_root / "state.json").write_text(json.dumps(asdict(state_obj), indent=2))
 
     for r in reports or []:
-        (ws_root / "reports" / r).write_text(f"# {r}\n\nTest report content for {ticket_id}.\n")
+        (pipeline_dir / r).write_text(f"# {r}\n\nTest report content for {ticket_id}.\n")
     for m in meta or []:
         (ws_root / "meta" / m).write_text(f"# {m}\n\nTest meta content for {ticket_id}.\n")
 

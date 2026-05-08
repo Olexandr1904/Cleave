@@ -2313,15 +2313,24 @@ class Orchestrator:
                 f"Last output is shown above — it may say PASS but something is still blocking progress.\n\n"
                 f"Options:\n"
                 f"  Reply with context — give the agent more information and resume\n"
+                f"  Reply \"skip\" — advance past this stage to the next one\n"
+                f"  Reply \"retry\" — re-run this stage\n"
                 f"  Send \"retry {state.ticket_id} from {stage_id_str}\" — reset counter and run again\n"
                 f"  Send \"retry {state.ticket_id} from dev\" — restart the dev agent from scratch"
             )
         elif is_agent_stage:
-            hint = f"\n{sep}\n↩️ Reply with your answer or additional context."
+            hint = (
+                f"\n{sep}\n"
+                f"↩️ Reply with your answer or additional context, or:\n"
+                f"  Reply \"skip\" — advance past this stage to the next one\n"
+                f"  Reply \"retry\" — re-run this stage"
+            )
         else:
             hint = (
                 f"\n{sep}\n"
                 f"Options:\n"
+                f"  Reply \"skip\" — advance past this stage to the next one\n"
+                f"  Reply \"retry\" — re-run this stage\n"
                 f"  Send \"retry {state.ticket_id}\" to retry from this stage\n"
                 f"  Send \"retry {state.ticket_id} from dev\" to restart from an earlier stage"
             )
@@ -2370,7 +2379,12 @@ class Orchestrator:
 
         agent_reason = tg_format.strip_markdown(self._build_blocked_reason(workspace, stage_id))
         combined = f"Verification failed: {verify_reason}\n\n{agent_reason}"
-        hint = f"\n{sep}\n↩️ Reply with your answer or additional context."
+        hint = (
+            f"\n{sep}\n"
+            f"↩️ Reply with your answer or additional context, or:\n"
+            f"  Reply \"skip\" — advance past this stage to the next one\n"
+            f"  Reply \"retry\" — re-run this stage"
+        )
         message = f"{header}\n{combined}{hint}"
 
         try:

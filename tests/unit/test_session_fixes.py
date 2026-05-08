@@ -106,7 +106,7 @@ class TestIterationCapEscalates:
 
 class TestSmartRetry:
     def test_detects_qa_as_furthest(self, tmp_path):
-        """If qa.md (agent report) exists, retry goes to PUSHED."""
+        """If qa.md exists, retry routes to AWAITING_APPROVAL (not directly PUSHED)."""
         reports = tmp_path / "reports"
         reports.mkdir()
         (reports / REPORT_QA).write_text("QA pass")
@@ -114,7 +114,7 @@ class TestSmartRetry:
         (reports / REPORT_BA).write_text("done")
 
         if (reports / REPORT_QA).exists():
-            target = Stage.PUSHED
+            target = Stage.AWAITING_APPROVAL
         elif (reports / REPORT_SCOPE_GUARD).exists():
             target = Stage.QA
         elif (reports / REPORT_DEV).exists():
@@ -124,7 +124,7 @@ class TestSmartRetry:
         else:
             target = Stage.ANALYSIS
 
-        assert target == Stage.PUSHED
+        assert target == Stage.AWAITING_APPROVAL
 
     def test_detects_dev_as_furthest(self, tmp_path):
         reports = tmp_path / "reports"

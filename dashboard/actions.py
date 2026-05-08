@@ -131,11 +131,13 @@ def build_action_routes(
         if ws.state.current_state not in (Stage.BLOCKED, Stage.FAILED):
             return _error(f"Cannot retry: state is {ws.state.current_state}")
 
-        # Smart retry: detect furthest completed stage from existing artifacts
+        # Smart retry: detect furthest completed stage from existing artifacts.
+        # When QA has already passed, route through the approval gate instead of
+        # jumping straight to PUSHED — same gate the normal QA flow uses.
         target = ws.state.previous_state or Stage.ANALYSIS
         reports = Path(ws.reports_dir)
         if (reports / REPORT_QA).exists():
-            target = Stage.PUSHED
+            target = Stage.AWAITING_APPROVAL
         elif (reports / REPORT_SCOPE_GUARD).exists():
             target = Stage.QA
         elif (reports / REPORT_DEV).exists():
@@ -145,7 +147,10 @@ def build_action_routes(
 
         ws.state.human_input_pending = False
         ws.state.error = None
-        ws.transition(target)
+        # Restore QA as the gating stage so the approval summary and auto-resume
+        # logic both know which gate to present.
+        extra = {"previous_state": Stage.QA} if target == Stage.AWAITING_APPROVAL else {}
+        ws.transition(target, **extra)
         ws.save_state()
         if event_bus:
             event_bus.emit(
@@ -558,6 +563,7 @@ def build_action_routes(
         ws.state.last_verified_sha = ""
         ws.state.review_cycle = 0
         ws.state.pending_review_comments = None
+        ws.state.human_input_reply = None
         ws.state.error = None
         ws.state.stage_iterations = {}
         ws.transition(Stage.ANALYSIS)

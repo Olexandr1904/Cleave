@@ -1337,6 +1337,7 @@ class Orchestrator:
                 msg_id = await self._notifier.send_message(chat_id, msg, buttons=pr_buttons)
                 workspace.state.escalation_msg_id = msg_id
                 workspace.state.escalation_chat_id = chat_id
+                workspace.state.human_input_reply = None  # clear stale "reviewed" from any prior run
                 workspace.save_state()
 
     async def _action_push_and_open_pr(self, workspace: Workspace) -> ActionResult:

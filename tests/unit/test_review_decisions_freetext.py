@@ -30,6 +30,7 @@ def _make_workspace(tmp_path, pending_comments):
         current_state="PR_REVIEW",
         pending_review_comments=pending_comments,
         pr_number=42,
+        stage_iterations={"dev": 3, "scope_check": 3, "qa": 2},
     )
     ws.save_state = MagicMock()
     return ws

@@ -53,6 +53,12 @@ class AgentBudget:
     naturally bounded (e.g. scope-guard, pr-comment-responder).
     """
     max_tool_rounds: int = 25  # only applies to the in-process tool loop
+    # CLI-path turn cap (passed to `claude -p --max-turns`). Independent from
+    # max_tool_rounds because the CLI runs its own opaque tool loop. Sized for
+    # real feature work — 50 was tripping mid-size tickets (e.g. ACME-6941
+    # hit 51 turns at ~4 min / 4M tokens, well under the wall-clock and token
+    # caps). Tighten per-agent for naturally bounded agents.
+    max_cli_turns: int = 100
     wall_clock_seconds: int = 14_400  # 4 h — stuck runs in prod logged 9–13 h
     max_total_tokens: int = 15_000_000  # input + output combined
 

@@ -40,14 +40,18 @@ defaults:
   # overrides tighten only for naturally bounded agents.
   agent_budget:
     max_tool_rounds: 25
+    max_cli_turns: 100             # CLI --max-turns; mid-size dev tickets hit 50
     wall_clock_seconds: 14400      # 4 h — stuck runs in prod logged 9–13 h
     max_total_tokens: 15000000     # 15M; dev/qa fixes peak ~2.5M, features ≫
   # Tighter ceilings for agents whose work is bounded by inputs (diff size,
   # PR comment count) rather than by feature complexity. These are safe to
   # tighten because a bigger feature won't make scope-guard or
   # pr-comment-responder do more work — they'll always finish in <5 min and
-  # <500K tokens on real production runs.
+  # <500K tokens on real production runs. dev-agent gets a *higher* cap
+  # because feature work is naturally unbounded in turns.
   agent_budget_overrides:
+    dev-agent:
+      max_cli_turns: 200           # feature work; 100 trips on real tickets
     scope-guard-agent:
       wall_clock_seconds: 1200     # 20 min — biggest observed ~5 min
       max_total_tokens: 2000000    # 2M; max observed ~470K

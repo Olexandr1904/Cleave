@@ -432,6 +432,7 @@ class AgentRuntime:
                     cwd=str(workspace.source_dir),
                     allowed_tools=allowed_tools if allowed_tools else None,
                     model=model,
+                    max_turns=budget.max_cli_turns,
                     pid_callback=lambda pid: self.update_pid(ticket_id, pid),
                 ),
                 timeout=budget.wall_clock_seconds,

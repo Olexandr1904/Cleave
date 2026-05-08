@@ -89,7 +89,7 @@ def _verify_report_exists(stage_id: str, workspace: Any, filename: str) -> Verif
     if not (reports_dir / filename).exists():
         return VerifyResult(
             ok=False, stage_id=stage_id,
-            reason=f"{filename} was not produced in reports/",
+            reason=f"{filename} was not produced in ai_pipeline/<ticket>/",
         )
     return VerifyResult(ok=True, stage_id=stage_id, reason="")
 

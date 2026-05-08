@@ -17,8 +17,6 @@ def workspace(tmp_path):
     """Create a minimal workspace directory structure."""
     source = tmp_path / "source"
     source.mkdir()
-    reports = tmp_path / "reports"
-    reports.mkdir()
     meta = tmp_path / "meta"
     meta.mkdir()
 
@@ -27,8 +25,10 @@ def workspace(tmp_path):
     (source / "utils").mkdir()
     (source / "utils" / "helper.py").write_text("def help(): pass\n")
 
-    # Create a report
-    (reports / REPORT_BA).write_text("# BA Report\n")
+    # Create a report inside the new ai_pipeline/<ticket>/ layout
+    pipeline_dir = source / "ai_pipeline" / "TEST-1"
+    pipeline_dir.mkdir(parents=True)
+    (pipeline_dir / REPORT_BA).write_text("# BA Report\n")
 
     return tmp_path
 
@@ -98,7 +98,9 @@ class TestReadFile:
         assert "def help" in result
 
     def test_read_report(self, sandbox):
-        result = run(sandbox.execute_tool("read_file", {"path": "reports/ba.md"}))
+        result = run(sandbox.execute_tool(
+            "read_file", {"path": "ai_pipeline/TEST-1/ba.md"},
+        ))
         assert "BA Report" in result
 
     def test_read_missing_file(self, sandbox):
@@ -120,8 +122,11 @@ class TestWriteFile:
         assert (workspace / "source" / "deep" / "nested" / "file.py").exists()
 
     def test_write_report(self, sandbox, workspace):
-        run(sandbox.execute_tool("write_file", {"path": "reports/dev.md", "content": "# Dev\n"}))
-        assert (workspace / "reports" / "dev.md").read_text() == "# Dev\n"
+        run(sandbox.execute_tool(
+            "write_file",
+            {"path": "ai_pipeline/TEST-1/dev.md", "content": "# Dev\n"},
+        ))
+        assert (workspace / "source" / "ai_pipeline" / "TEST-1" / "dev.md").read_text() == "# Dev\n"
 
     def test_write_no_path(self, sandbox):
         with pytest.raises(ToolError, match="requires 'path'"):

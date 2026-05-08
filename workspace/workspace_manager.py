@@ -22,12 +22,12 @@ class WorkspaceError(Exception):
 class WorkspaceManager:
     """Manages workspace lifecycle: create, discover, cleanup.
 
-    Directory layout (architecture-v2 §3.1):
+    Directory layout:
         /<base_dir>/<company_id>/<repo_id>/tickets/<ticket_id>/
             meta/
-            reports/
             logs/
-            source/    (git clone — deleted after merge)
+            source/    (git clone — deleted after merge; contains
+                        ai_pipeline/<ticket_id>/ for tracked agent reports)
             state.json
     """
 
@@ -196,7 +196,10 @@ class WorkspaceManager:
     def cleanup_source(self, workspace: Workspace) -> None:
         """Delete only the source/ directory (after merge).
 
-        Preserves meta/, reports/, logs/, and state.json for history.
+        Preserves meta/, logs/, and state.json for history. Note that
+        pipeline reports live inside source/ (at `ai_pipeline/<ticket>/`),
+        so they are dropped from disk here — but they are committed to the
+        repo and recoverable via git.
         """
         source_dir = workspace.source_dir
         if source_dir.exists():

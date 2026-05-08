@@ -24,12 +24,12 @@ tools:
   - git_operation
 
 inputs:
-  - reports/ba.md
+  - ai_pipeline/{ticket_id}/ba.md
   - meta/ticket.md
   - rules/arch-rules.md
 
 outputs:
-  - reports/qa.md
+  - ai_pipeline/{ticket_id}/qa.md
 
 decision_policy:
   when_to_run: "State is QA"
@@ -55,7 +55,7 @@ to ensure everything passes before merge.
 ## Input
 
 You receive:
-- `reports/ba.md` — test scenarios section (derived from acceptance criteria)
+- `ai_pipeline/{ticket_id}/ba.md` — test scenarios section (derived from acceptance criteria)
 - `meta/ticket.md` — original ticket for AC reference
 - `rules/arch-rules.md` — architecture constraints
 - Source code and existing tests via tools
@@ -65,7 +65,7 @@ You receive:
 
 ### Step 1: Analyze Test Scenarios
 
-Read the test scenarios section from `reports/ba.md` and identify:
+Read the test scenarios section from `ai_pipeline/{ticket_id}/ba.md` and identify:
 - AC-derived tests (mandatory — every AC needs coverage)
 - Edge case tests (from BA agent analysis)
 - Integration point tests (if applicable)
@@ -111,7 +111,7 @@ test({ticket_id}): add tests for {feature description}
 
 ## Output
 
-- `reports/qa.md` — test results + quality gate status
+- `ai_pipeline/{ticket_id}/qa.md` — test results + quality gate status
 - New test files committed on the feature branch
 - All quality gates passing (tests, lint, build)
 - If any gate fails after max attempts → escalate via Telegram

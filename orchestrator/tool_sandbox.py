@@ -44,8 +44,9 @@ class ToolError(Exception):
 class ToolSandbox:
     """Executes tool calls within workspace restrictions.
 
-    All file operations are confined to the workspace's source/ and reports/
-    directories. Protected files cannot be written. Only tools in the agent's
+    All file operations are confined to the workspace's source/ directory
+    (which contains the cloned repo plus `ai_pipeline/<ticket>/` for pipeline
+    artifacts). Protected files cannot be written. Only tools in the agent's
     allowlist can be called.
     """
 
@@ -57,7 +58,6 @@ class ToolSandbox:
     ) -> None:
         self._root = Path(workspace_root).resolve()
         self._source_dir = self._root / "source"
-        self._reports_dir = self._root / "reports"
         self._allowed_tools = set(allowed_tools)
         self._protected_files = set(protected_files or [])
         self._call_log: list[dict[str, Any]] = []
@@ -123,58 +123,35 @@ class ToolSandbox:
 
     # --- Path validation ---
 
-    def _resolve_path(self, file_path: str, allow_reports: bool = False) -> Path:
-        """Resolve and validate a file path within workspace boundaries.
+    def _resolve_path(self, file_path: str) -> Path:
+        """Resolve and validate a file path within source/.
 
-        Args:
-            file_path: Relative path (from workspace source or reports root).
-            allow_reports: If True, also allow paths in reports/.
-
-        Returns:
-            Resolved absolute path.
+        All paths (including pipeline artifacts at `ai_pipeline/<ticket>/...`)
+        live under source/, so a single relative-to-source resolution suffices.
 
         Raises:
-            ToolError: If path escapes workspace boundaries.
+            ToolError: If path escapes source/.
         """
-        # Block absolute paths explicitly
         if file_path.startswith("/"):
             raise ToolError(
                 f"Path '{file_path}' escapes workspace boundaries. "
-                f"Files must be within source/ or reports/."
+                f"Files must be within source/."
             )
 
-        clean = file_path
-        resolved: Path | None = None
-
-        # Check if path starts with "reports/" explicitly
-        if clean.startswith("reports/") and allow_reports:
-            resolved = (self._reports_dir / clean[len("reports/"):]).resolve()
-            if self._is_within(resolved, self._reports_dir):
-                return resolved
-
-        # Default: resolve relative to source/
-        resolved = (self._source_dir / clean).resolve()
+        resolved = (self._source_dir / file_path).resolve()
         if self._is_within(resolved, self._source_dir):
             return resolved
 
-        # If allow_reports, also try reports/ as fallback
-        if allow_reports:
-            resolved = (self._reports_dir / clean).resolve()
-            if self._is_within(resolved, self._reports_dir):
-                return resolved
-
         raise ToolError(
             f"Path '{file_path}' escapes workspace boundaries. "
-            f"Files must be within source/ or reports/."
+            f"Files must be within source/."
         )
 
     def _resolve_read_path(self, file_path: str) -> Path:
-        """Resolve path for reading — allowed in source/ and reports/."""
-        return self._resolve_path(file_path, allow_reports=True)
+        return self._resolve_path(file_path)
 
     def _resolve_write_path(self, file_path: str) -> Path:
-        """Resolve path for writing — allowed in source/ and reports/."""
-        resolved = self._resolve_path(file_path, allow_reports=True)
+        resolved = self._resolve_path(file_path)
         self._check_protected(resolved)
         return resolved
 
@@ -203,7 +180,7 @@ class ToolSandbox:
     # --- Tool implementations ---
 
     async def _tool_read_file(self, params: dict[str, Any]) -> str:
-        """Read a file from workspace source/ or reports/."""
+        """Read a file from workspace source/."""
         file_path = params.get("path", "")
         if not file_path:
             raise ToolError("read_file requires 'path' parameter")
@@ -224,7 +201,7 @@ class ToolSandbox:
         return content
 
     async def _tool_write_file(self, params: dict[str, Any]) -> str:
-        """Write a file in workspace source/ or reports/."""
+        """Write a file in workspace source/."""
         file_path = params.get("path", "")
         content = params.get("content", "")
         if not file_path:

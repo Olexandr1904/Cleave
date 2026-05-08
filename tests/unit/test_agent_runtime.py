@@ -40,7 +40,7 @@ def workspace(tmp_path):
     ws_root.mkdir()
     (ws_root / "meta").mkdir()
     (ws_root / "logs").mkdir()
-    (ws_root / "source" / "reports").mkdir(parents=True)
+    (ws_root / "source" / "ai_pipeline" / "TEST-42").mkdir(parents=True)
 
     state = WorkspaceState(
         ticket_id="TEST-42",
@@ -594,7 +594,7 @@ class TestModelSelection:
         ws_root.mkdir()
         (ws_root / "meta").mkdir()
         (ws_root / "logs").mkdir()
-        (ws_root / "source" / "reports").mkdir(parents=True)
+        (ws_root / "source" / "ai_pipeline" / "TEST-99").mkdir(parents=True)
         state = WorkspaceState(
             ticket_id="TEST-99",
             company_id="p",

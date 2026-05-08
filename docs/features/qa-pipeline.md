@@ -48,3 +48,4 @@ QA Agent that writes tests covering all acceptance criteria and edge cases, then
 | Date | Description |
 |------|-------------|
 | 2026-04-07 | Initial draft — seeded from PRD and architecture docs |
+| 2026-05-08 | `agents/qa-agent.md` documents the `qa.md` ↔ orchestrator contract: the report MUST contain exactly `## Status: PASS` (advance to push) or `## Status: FAIL` (route back to dev with details). Variants like `Quality gates: PASS` or `Verdict: pass` silently classify as FAIL and bounce the ticket — making the literal status line explicit prevents that. |

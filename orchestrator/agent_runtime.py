@@ -434,6 +434,7 @@ class AgentRuntime:
                     allowed_tools=allowed_tools if allowed_tools else None,
                     model=model,
                     max_turns=budget.max_cli_turns,
+                    timeout=budget.wall_clock_seconds,
                     pid_callback=lambda pid: self.update_pid(ticket_id, pid),
                 ),
                 timeout=budget.wall_clock_seconds,

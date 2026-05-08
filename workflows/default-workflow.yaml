@@ -14,6 +14,11 @@ stages:
     agent: "dev-agent"
     description: "Implement code on feature branch"
     next: "scope_check"
+    # Counts every dev entry, including bounces from scope_check and qa.
+    # Was previously uncapped — runs that kept getting bounced (e.g.
+    # scope-guard fix → qa-bounce fix) burned unbounded $$.
+    max_iterations: 3
+    on_max_iterations: "escalate"
 
   - id: "scope_check"
     agent: "scope-guard-agent"

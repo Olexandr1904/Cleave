@@ -96,7 +96,9 @@ TOOL_MAP = {
 }
 
 DEFAULT_MAX_TURNS = 100
-DEFAULT_TIMEOUT = 2400  # 40 minutes — accommodates large QA suites (compile + tests + lint)
+# Wall-clock timeout is owned by AgentBudget.wall_clock_seconds and threaded
+# through execute_in_workspace(timeout=...) per call. The adapter no longer
+# carries a hardcoded default — see config/schemas.py:AgentBudget.
 
 
 class ClaudeCodeAdapter(LLMInterface):
@@ -106,12 +108,10 @@ class ClaudeCodeAdapter(LLMInterface):
         self,
         model_provider: Callable[[], str] | None = None,
         max_turns: int = DEFAULT_MAX_TURNS,
-        timeout: int = DEFAULT_TIMEOUT,
     ) -> None:
         self._claude_bin = shutil.which("claude") or "claude"
         self._model_provider = model_provider or (lambda: "")
         self._max_turns = max_turns
-        self._timeout = timeout
 
     async def send_message(
         self,
@@ -154,6 +154,7 @@ class ClaudeCodeAdapter(LLMInterface):
         model: str = "",
         system: str = "",
         max_turns: int | None = None,
+        timeout: int | None = None,
         pid_callback: Callable[[int], None] | None = None,
     ) -> LLMResponse:
         """Execute a prompt with Claude Code in a specific workspace directory.
@@ -172,6 +173,10 @@ class ClaudeCodeAdapter(LLMInterface):
             model: Model override (optional).
             system: System prompt (prepended to prompt).
             max_turns: Override max turns for this call.
+            timeout: Wall-clock cap (seconds) for the subprocess. Owned by
+                AgentBudget.wall_clock_seconds and passed by the runtime per
+                call. None = no inner cap (the outer asyncio.wait_for in
+                agent_runtime is the only enforcer).
 
         Returns:
             LLMResponse with the final text output and usage stats.
@@ -183,6 +188,7 @@ class ClaudeCodeAdapter(LLMInterface):
             cwd=cwd,
             allowed_tools=allowed_tools,
             max_turns=max_turns,
+            timeout=timeout,
             pid_callback=pid_callback,
         )
 
@@ -258,6 +264,7 @@ class ClaudeCodeAdapter(LLMInterface):
         cwd: str | None = None,
         allowed_tools: list[str] | None = None,
         max_turns: int | None = None,
+        timeout: int | None = None,
         pid_callback: Callable[[int], None] | None = None,
     ) -> LLMResponse:
         """Run claude CLI subprocess."""
@@ -307,15 +314,18 @@ class ClaudeCodeAdapter(LLMInterface):
                     pid_callback(proc.pid)
                 except Exception:
                     logger.exception("pid_callback raised; ignoring")
-            stdout, stderr = await asyncio.wait_for(
-                proc.communicate(input=full_prompt.encode("utf-8")),
-                timeout=self._timeout,
-            )
+            communicate_coro = proc.communicate(input=full_prompt.encode("utf-8"))
+            if timeout is not None:
+                stdout, stderr = await asyncio.wait_for(
+                    communicate_coro, timeout=timeout,
+                )
+            else:
+                stdout, stderr = await communicate_coro
         except asyncio.TimeoutError:
             proc.kill()
             await proc.wait()  # reap to avoid zombie + leaked pipes
             raise RuntimeError(
-                f"Claude Code CLI timed out after {self._timeout}s"
+                f"Claude Code CLI timed out after {timeout}s"
             )
 
         stdout_str = stdout.decode("utf-8", errors="replace").strip()

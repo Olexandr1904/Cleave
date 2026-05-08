@@ -95,7 +95,7 @@ TOOL_MAP = {
     "git_operation": "Bash",
 }
 
-DEFAULT_MAX_TURNS = 50
+DEFAULT_MAX_TURNS = 100
 DEFAULT_TIMEOUT = 2400  # 40 minutes — accommodates large QA suites (compile + tests + lint)
 
 

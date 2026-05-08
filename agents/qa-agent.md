@@ -111,7 +111,13 @@ test({ticket_id}): add tests for {feature description}
 
 ## Output
 
-- `ai_pipeline/{ticket_id}/qa.md` — test results + quality gate status
+- `ai_pipeline/{ticket_id}/qa.md` — test results + quality gate status. The
+  file MUST contain exactly one of these lines (matching scope-guard's
+  contract — the orchestrator routes on this line):
+    - `## Status: PASS` — all hard gates green; advances to push
+    - `## Status: FAIL` — any hard gate red; routes back to dev with details
+  Variants like "Quality gates: PASS" or "Verdict: pass" are NOT recognized
+  and will be treated as FAIL, bouncing the ticket unnecessarily.
 - New test files committed on the feature branch
 - All quality gates passing (tests, lint, build)
 - If any gate fails after max attempts → escalate via Telegram

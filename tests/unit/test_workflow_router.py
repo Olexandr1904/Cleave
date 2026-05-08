@@ -113,7 +113,7 @@ class TestShouldEscalate:
 
     def test_no_cap(self, workflow):
         """Stages without max_iterations never escalate."""
-        assert should_escalate("dev", workflow, 100) is False
+        assert should_escalate("push", workflow, 100) is False
 
     def test_unknown_stage(self, workflow):
         assert should_escalate("nonexistent", workflow, 100) is False

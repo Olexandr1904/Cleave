@@ -652,15 +652,17 @@ class Orchestrator:
                     "Failed to refetch comments/history for %s: %s", ticket_id, e
                 )
 
-        # Download attachments — skip files already present
+        # Download attachments — skip files already present.
+        # Keep text-like content (crash logs, JSON, source) and images.
+        # Skip video/audio (too large + AI can't analyze) and oversize binaries.
         if self._tracker and ticket_obj is not None and ticket_obj.attachments:
             attachments_dir = workspace.meta_dir / "attachments"
             attachments_dir.mkdir(exist_ok=True)
             for att in ticket_obj.attachments:
-                mime = att.get("mime_type", "")
-                if not mime.startswith("image/"):
-                    continue
                 filename = att.get("filename", "attachment")
+                mime = att.get("mime_type", "")
+                if not _attachment_is_keepable(filename, mime):
+                    continue
                 if (attachments_dir / filename).exists():
                     continue  # already downloaded, skip
                 try:
@@ -674,11 +676,17 @@ class Orchestrator:
                         headers = {"Authorization": f"Basic {creds}"}
                     async with httpx.AsyncClient(timeout=30) as client:
                         resp = await client.get(att["url"], headers=headers, follow_redirects=True)
-                        if resp.status_code == 200:
-                            (attachments_dir / filename).write_bytes(resp.content)
-                            logger.info("Downloaded attachment %s for %s", filename, ticket_id)
-                        else:
+                        if resp.status_code != 200:
                             logger.warning("Failed to download %s: HTTP %d", filename, resp.status_code)
+                            continue
+                        if len(resp.content) > _MAX_ATTACHMENT_BYTES:
+                            logger.info(
+                                "Skipping oversized attachment %s (%d bytes > %d)",
+                                filename, len(resp.content), _MAX_ATTACHMENT_BYTES,
+                            )
+                            continue
+                        (attachments_dir / filename).write_bytes(resp.content)
+                        logger.info("Downloaded attachment %s for %s", filename, ticket_id)
                 except Exception as e:
                     logger.warning("Failed to download attachment %s: %s", filename, e)
 
@@ -2668,6 +2676,48 @@ def _state_to_stage(state: str) -> str | None:
     return _STATE_TO_STAGE.get(state)
 
 
+# Attachment ingestion limits. The agent runtime caps each context file at
+# 5 KB, so most of a 1 MB log won't reach the model — but we still keep the
+# raw file on disk for tools to grep.
+_MAX_ATTACHMENT_BYTES = 1_000_000
+
+# Extensions we treat as text even when MIME is missing or generic.
+_TEXT_ATTACHMENT_EXTS = {
+    ".txt", ".log", ".json", ".xml", ".yaml", ".yml", ".csv", ".tsv",
+    ".md", ".html", ".htm", ".css",
+    ".kt", ".kts", ".java", ".swift", ".m", ".mm", ".h", ".c", ".cc", ".cpp",
+    ".py", ".rb", ".go", ".rs", ".js", ".jsx", ".ts", ".tsx",
+    ".gradle", ".properties", ".toml", ".ini", ".conf", ".sh",
+    ".stacktrace", ".trace", ".diff", ".patch",
+}
+
+
+def _attachment_is_keepable(filename: str, mime: str) -> bool:
+    """Decide whether to download an attachment for analysis.
+
+    Keep: text/*, image/*, application/json|xml|yaml, and files whose
+    extension matches a known textual format (covers Jira's habit of
+    serving crash logs as application/octet-stream).
+    Skip: video/*, audio/* — too large and not analyzable by the LLM.
+    """
+    mime = (mime or "").lower()
+    if mime.startswith(("video/", "audio/")):
+        return False
+    if mime.startswith(("text/", "image/")):
+        return True
+    if mime in {
+        "application/json", "application/xml",
+        "application/yaml", "application/x-yaml",
+        "application/javascript", "application/x-shellscript",
+    }:
+        return True
+    ext = ""
+    dot = filename.rfind(".")
+    if dot >= 0:
+        ext = filename[dot:].lower()
+    return ext in _TEXT_ATTACHMENT_EXTS
+
+
 def _ticket_to_markdown(ticket: TicketData) -> str:
     """Convert TicketData to a markdown document."""
     lines = [
@@ -2693,6 +2743,14 @@ def _ticket_to_markdown(ticket: TicketData) -> str:
         lines.extend(["", "## Linked Issues", ""])
         for link in ticket.linked_issues:
             lines.append(f"- {link.get('type', 'related')}: {link.get('key', '')}")
+
+    if ticket.attachments:
+        lines.extend(["", "## Attachments", ""])
+        for att in ticket.attachments:
+            fname = att.get("filename", "?")
+            mime = att.get("mime_type", "") or "?"
+            note = "" if _attachment_is_keepable(fname, mime) else " — skipped (binary/media)"
+            lines.append(f"- `{fname}` ({mime}){note}")
 
     return "\n".join(lines)
 

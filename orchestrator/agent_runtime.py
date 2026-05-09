@@ -225,32 +225,58 @@ class AgentRuntime:
         # 3. Workspace context files (read from meta_dir)
         # Note: pipeline reports live at source/ai_pipeline/<ticket>/ — agents
         # read them directly via tools, not via this context block.
+        # Ticket attachments are included from meta_dir/attachments/ — text
+        # files (crash logs, JSON, source) are inlined; binaries (images)
+        # raise UnicodeDecodeError on read and are silently skipped.
         context_sections: list[str] = []
         context_dir = workspace.meta_dir
         total_bytes = 0
+
+        def _include(path: Path, label: str) -> bool:
+            """Read path as text and append a context section. Returns False if budget exhausted."""
+            nonlocal total_bytes
+            if total_bytes >= _TOTAL_CONTEXT_BYTES:
+                return False
+            try:
+                file_content = path.read_text(encoding="utf-8")
+            except (UnicodeDecodeError, OSError):
+                return True  # skip this file but keep going
+            if len(file_content) > _PER_FILE_CONTEXT_BYTES:
+                file_content = file_content[:_PER_FILE_CONTEXT_BYTES] + "\n...(truncated)"
+            remaining = _TOTAL_CONTEXT_BYTES - total_bytes
+            if len(file_content) > remaining:
+                file_content = file_content[:remaining] + "\n...(budget exhausted)"
+            context_sections.append(
+                f"<context file=\"{label}\">\n{file_content}\n</context>"
+            )
+            total_bytes += len(file_content)
+            return True
+
         if context_dir.exists():
             for ctx_file in sorted(context_dir.iterdir()):
                 if not ctx_file.is_file():
                     continue
-                if total_bytes >= _TOTAL_CONTEXT_BYTES:
+                if not _include(ctx_file, ctx_file.name):
                     logger.warning(
                         "Context budget %d B exhausted; skipping remaining files in %s",
                         _TOTAL_CONTEXT_BYTES, context_dir,
                     )
                     break
-                try:
-                    file_content = ctx_file.read_text(encoding="utf-8")
-                except (UnicodeDecodeError, OSError):
-                    continue
-                if len(file_content) > _PER_FILE_CONTEXT_BYTES:
-                    file_content = file_content[:_PER_FILE_CONTEXT_BYTES] + "\n...(truncated)"
-                remaining = _TOTAL_CONTEXT_BYTES - total_bytes
-                if len(file_content) > remaining:
-                    file_content = file_content[:remaining] + "\n...(budget exhausted)"
-                context_sections.append(
-                    f"<context file=\"{ctx_file.name}\">\n{file_content}\n</context>"
-                )
-                total_bytes += len(file_content)
+            attachments_dir = context_dir / "attachments"
+            if (
+                total_bytes < _TOTAL_CONTEXT_BYTES
+                and attachments_dir.exists()
+                and attachments_dir.is_dir()
+            ):
+                for att_file in sorted(attachments_dir.iterdir()):
+                    if not att_file.is_file():
+                        continue
+                    if not _include(att_file, f"attachments/{att_file.name}"):
+                        logger.warning(
+                            "Context budget %d B exhausted; skipping remaining attachments in %s",
+                            _TOTAL_CONTEXT_BYTES, attachments_dir,
+                        )
+                        break
 
         if context_sections:
             prompt_body += "\n\n## Workspace Context\n\n" + "\n\n".join(context_sections)

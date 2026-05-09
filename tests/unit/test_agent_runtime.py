@@ -126,6 +126,32 @@ class TestAssemblePrompt:
         assert "Operator Profile" in prompt
         assert "Tech Lead" in prompt
 
+    def test_includes_text_attachments(self, registry, mock_llm, workspace):
+        """Text attachments under meta/attachments/ are inlined as context."""
+        attachments_dir = workspace.meta_dir / "attachments"
+        attachments_dir.mkdir()
+        (attachments_dir / "crash.txt").write_text("FATAL: NullPointerException at Foo.kt:42")
+
+        runtime = AgentRuntime(registry, mock_llm)
+        agent = registry.get_agent("dev-agent")
+        prompt = runtime.assemble_prompt(agent, workspace)
+
+        assert '<context file="attachments/crash.txt">' in prompt
+        assert "NullPointerException" in prompt
+
+    def test_skips_binary_attachments(self, registry, mock_llm, workspace):
+        """Binary attachments (e.g. images) are silently skipped, not crashed on."""
+        attachments_dir = workspace.meta_dir / "attachments"
+        attachments_dir.mkdir()
+        # PNG signature + non-utf8 garbage — read_text raises UnicodeDecodeError
+        (attachments_dir / "screenshot.png").write_bytes(b"\x89PNG\r\n\x1a\n\xff\xfe\xfd")
+
+        runtime = AgentRuntime(registry, mock_llm)
+        agent = registry.get_agent("dev-agent")
+        prompt = runtime.assemble_prompt(agent, workspace)
+
+        assert "screenshot.png" not in prompt
+
     def test_total_context_budget_caps_many_files(self, registry, mock_llm, workspace):
         """Many context files are truncated at the total budget, not unbounded.
 

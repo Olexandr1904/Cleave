@@ -111,54 +111,8 @@ Central daemon process that continuously polls for work, manages isolated worksp
 - `_on_ticket_done` uses `tracker.list_transitions` + `tracker.transition_ticket` (pipeline-side fuzzy keyword matching kept; transport-side moved into adapter).
 - Result: ZERO references to `tracker._request`, `_email`, or `_token` remain in `orchestrator/`.
 
+## Layer extraction (2026-05-11)
 
+Beginning the layer-cut of the monolithic `Orchestrator` class. Each extraction creates a new module under `orchestrator/` and leaves a thin method shim on the `Orchestrator` class for backward compatibility with existing call sites and tests.
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
+- `git_ops.py`: extracted `_git_diff_files` and `_git_head_sha` as module-level functions `git_diff_files` and `git_head_sha`.

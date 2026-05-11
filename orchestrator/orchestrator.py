@@ -311,37 +311,13 @@ class Orchestrator:
 
     @staticmethod
     def _git_diff_files(workspace: Workspace, since_sha: str = "") -> set[str]:
-        """Get set of files changed in `<since_sha>..HEAD` (or the latest commit if since_sha is empty)."""
-        import subprocess
-        if since_sha:
-            diff_arg = f"{since_sha}..HEAD"
-        else:
-            diff_arg = "HEAD~1"
-        try:
-            result = subprocess.run(
-                ["git", "-C", str(workspace.source_dir), "diff", diff_arg, "--name-only"],
-                capture_output=True, text=True, timeout=10,
-            )
-            if result.returncode == 0:
-                return set(result.stdout.strip().splitlines())
-        except Exception:
-            pass
-        return set()
+        from orchestrator.git_ops import git_diff_files
+        return git_diff_files(workspace, since_sha)
 
     @staticmethod
     def _git_head_sha(workspace: Workspace) -> str:
-        """Get current HEAD sha."""
-        import subprocess
-        try:
-            result = subprocess.run(
-                ["git", "-C", str(workspace.source_dir), "rev-parse", "HEAD"],
-                capture_output=True, text=True, timeout=5,
-            )
-            if result.returncode == 0:
-                return result.stdout.strip()
-        except Exception:
-            pass
-        return "unknown"
+        from orchestrator.git_ops import git_head_sha
+        return git_head_sha(workspace)
 
     @staticmethod
     def _now() -> str:

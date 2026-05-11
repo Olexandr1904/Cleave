@@ -180,8 +180,15 @@ class GitLabConfig:
 
 @dataclass
 class VCSConfig:
-    """VCS provider selection. Only one sub-config is used based on provider."""
+    """VCS provider selection. Only one sub-config is used based on provider.
+
+    `default_branch` and `branch_prefix` are shared across providers and live
+    here; the per-provider sub-configs keep them for backward compatibility
+    with existing config-live/ files but should not be the primary source.
+    """
     provider: str = "github"  # "github" or "gitlab"
+    default_branch: str = "develop"
+    branch_prefix: str = "feature"
     github: GitHubConfig = field(default_factory=GitHubConfig)
     gitlab: GitLabConfig = field(default_factory=GitLabConfig)
     # Pass `--no-verify` on `git push`. Use this when a project's local

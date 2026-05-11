@@ -672,12 +672,8 @@ class Orchestrator:
             ticket_id=pt.ticket.id,
             clone_url=repo_config.git.clone_url,
             clone_depth=repo_config.git.depth,
-            default_branch=repo_config.vcs.github.default_branch
-            if repo_config.vcs.provider == "github"
-            else repo_config.vcs.gitlab.default_branch,
-            branch_prefix=repo_config.vcs.github.branch_prefix
-            if repo_config.vcs.provider == "github"
-            else repo_config.vcs.gitlab.branch_prefix,
+            default_branch=repo_config.vcs.default_branch,
+            branch_prefix=repo_config.vcs.branch_prefix,
             title=pt.ticket.summary,
         )
 

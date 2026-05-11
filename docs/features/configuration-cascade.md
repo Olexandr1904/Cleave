@@ -52,3 +52,7 @@
 |------|-------------|
 | 2026-04-07 | Initial draft — seeded from PRD and architecture docs |
 | 2026-04-29 | `_parse_vcs_section` now passes through any top-level VCSConfig fields beyond `provider`/`github`/`gitlab` (e.g. `skip_pre_push_hook`). Earlier the loader only handled the three nested sub-configs and silently dropped everything else, so operators could set `vcs.skip_pre_push_hook: true` in yaml and the value would never reach the runtime config object — looked configured, did nothing. Validation against VCSConfig fields kept strict (a typo like `skip_pre_pus_hook` raises ConfigError). |
+
+## VCS default-branch hoisting (2026-05-11)
+
+`VCSConfig.default_branch` and `VCSConfig.branch_prefix` are now first-class fields (previously they were per-provider sub-config only). The loader copies up from the matching sub-config when the parent is empty, so existing config-live/ files keep working. The orchestrator no longer needs `provider == "github"` ternaries to pick the right branch name.

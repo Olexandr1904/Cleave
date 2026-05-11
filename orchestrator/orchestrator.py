@@ -877,10 +877,35 @@ class Orchestrator:
         repo_config = self._get_repo_config(workspace)
         protected = repo_config.architecture.protected_files if repo_config else []
 
+        iteration_now = workspace.state.stage_iterations.get(stage_id, 0)
+        max_iter = stage_def.max_iterations
+        start_sha_short = (stage_start_commit or "unknown")[:8]
+        logger.info(
+            "Stage entry: stage=%s ticket=%s agent=%s iteration=%d/%s "
+            "model=%s start_sha=%s protected_files=%d",
+            stage_id, state.ticket_id, stage_def.agent, iteration_now,
+            max_iter if max_iter > 0 else "uncapped",
+            getattr(workspace.state, "model", "unknown"),
+            start_sha_short, len(protected),
+        )
+
         self._emit("agent_dispatched", f"Dispatching {stage_def.agent} for {state.ticket_id}", project_id=state.company_id, ticket_id=state.ticket_id, agent_id=stage_def.agent, data={"stage": stage_id})
         state_before = workspace.state.current_state
         result = await self._agent_runtime.execute(
             stage_def.agent, workspace, protected_files=protected,
+        )
+        logger.info(
+            "Stage exit: stage=%s ticket=%s agent=%s success=%s "
+            "duration=%.1fs in_tok=%d out_tok=%d tool_calls=%d "
+            "tool_rounds=%d failure_kind=%s",
+            stage_id, state.ticket_id, stage_def.agent,
+            getattr(result, "success", False),
+            getattr(result, "duration_seconds", 0.0),
+            getattr(result, "input_tokens", 0),
+            getattr(result, "output_tokens", 0),
+            getattr(result, "tool_calls", 0),
+            getattr(result, "tool_rounds", 0),
+            getattr(result, "failure_kind", None),
         )
 
         # Operator intervened mid-flight (Pause / Take Control / etc.).

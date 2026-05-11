@@ -257,10 +257,10 @@ class Orchestrator:
         return result
 
     def _route_manual_ticket(self, ticket: TicketData) -> PrioritizedTicket | None:
-        """Find the project+repo that owns this ticket via jira_repo_label match."""
+        """Find the project+repo that owns this ticket via tracker_label match."""
         for project_id, project in self._projects.items():
             for repo_id, repo_config in project.repos.items():
-                if repo_config.jira_repo_label and repo_config.jira_repo_label in ticket.labels:
+                if repo_config.tracker_label and repo_config.tracker_label in ticket.labels:
                     return PrioritizedTicket(
                         ticket=ticket, repo_id=repo_id, project_id=project_id,
                     )

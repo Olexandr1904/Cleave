@@ -52,7 +52,7 @@ def _ticket(ticket_id: str, labels: list[str]) -> TicketData:
 def _project(repo_id: str, repo_label: str, max_parallel: int = 5):
     repo = SimpleNamespace(
         repo=SimpleNamespace(id=repo_id),
-        jira_repo_label=repo_label,
+        tracker_label=repo_label,
         git=SimpleNamespace(clone_url="https://x/y.git", depth=0),
         vcs=SimpleNamespace(
             provider="github",

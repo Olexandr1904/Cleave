@@ -308,6 +308,9 @@ class RepoConfig:
     testing: TestConfig = field(default_factory=TestConfig)
     build: BuildConfig = field(default_factory=BuildConfig)
     helpers: HelpersConfig = field(default_factory=HelpersConfig)
+    tracker_label: str = ""
+    # Deprecated alias — set by loader from `jira_repo_label`. Out of scope to
+    # remove until all live config files have migrated.
     jira_repo_label: str = ""
     pr_description_template: str = ""
     parallelism: ParallelismConfig = field(default_factory=ParallelismConfig)

@@ -82,7 +82,9 @@ async def test_valid_label_persists_model_and_no_comment(fake_ws):
     from orchestrator.ticket_prioritizer import PrioritizedTicket
 
     tracker = AsyncMock()
-    tracker._request = AsyncMock(side_effect=Exception("skip jira fetch"))
+    tracker.get_comments = AsyncMock(side_effect=Exception("skip jira fetch"))
+    tracker.get_status_history = AsyncMock(side_effect=Exception("skip jira fetch"))
+    tracker.download_attachment = AsyncMock(side_effect=Exception("skip jira fetch"))
     tracker.get_ticket = AsyncMock(side_effect=Exception("skip jira fetch"))
     tracker.add_comment = AsyncMock()
 
@@ -104,7 +106,9 @@ async def test_no_label_snapshots_global_default(fake_ws):
     from orchestrator.ticket_prioritizer import PrioritizedTicket
 
     tracker = AsyncMock()
-    tracker._request = AsyncMock(side_effect=Exception("skip jira fetch"))
+    tracker.get_comments = AsyncMock(side_effect=Exception("skip jira fetch"))
+    tracker.get_status_history = AsyncMock(side_effect=Exception("skip jira fetch"))
+    tracker.download_attachment = AsyncMock(side_effect=Exception("skip jira fetch"))
     tracker.get_ticket = AsyncMock(side_effect=Exception("skip jira fetch"))
     tracker.add_comment = AsyncMock()
 
@@ -126,7 +130,9 @@ async def test_conflicting_labels_snapshot_default_and_post_comment(fake_ws):
     from orchestrator.ticket_prioritizer import PrioritizedTicket
 
     tracker = AsyncMock()
-    tracker._request = AsyncMock(side_effect=Exception("skip jira fetch"))
+    tracker.get_comments = AsyncMock(side_effect=Exception("skip jira fetch"))
+    tracker.get_status_history = AsyncMock(side_effect=Exception("skip jira fetch"))
+    tracker.download_attachment = AsyncMock(side_effect=Exception("skip jira fetch"))
     tracker.get_ticket = AsyncMock(side_effect=Exception("skip jira fetch"))
     tracker.add_comment = AsyncMock()
 
@@ -154,7 +160,9 @@ async def test_comment_post_failure_does_not_abort_workspace_creation(fake_ws):
     from orchestrator.ticket_prioritizer import PrioritizedTicket
 
     tracker = AsyncMock()
-    tracker._request = AsyncMock(side_effect=Exception("skip jira fetch"))
+    tracker.get_comments = AsyncMock(side_effect=Exception("skip jira fetch"))
+    tracker.get_status_history = AsyncMock(side_effect=Exception("skip jira fetch"))
+    tracker.download_attachment = AsyncMock(side_effect=Exception("skip jira fetch"))
     tracker.get_ticket = AsyncMock(side_effect=Exception("skip jira fetch"))
     tracker.add_comment = AsyncMock(side_effect=RuntimeError("Jira down"))
 

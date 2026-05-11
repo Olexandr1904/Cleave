@@ -52,3 +52,7 @@ Jira adapter behind the TrackerInterface. Polls Jira for tickets matching config
 | 2026-04-07 | Initial draft — seeded from PRD and architecture docs |
 | 2026-04-15 | trigger_label renamed to trigger_labels (list, AND semantics) |
 | 2026-04-16 | Fix integration tests: poll_tickets uses POST /search/jql (Jira Cloud API); update mocks from GET /search |
+
+## Tracker abstraction expansion (2026-05-11)
+
+`TrackerInterface` extended with `get_comments`, `get_status_history`, `download_attachment`, and `list_transitions` to remove Jira-specific HTTP plumbing from the orchestrator (formerly accessed via `_tracker._request`, `_email`, `_token`). New `TicketComment` and `StatusChange` dataclasses standardize the return shapes. Future Trello/GitLab adapters implement the same surface.

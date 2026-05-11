@@ -127,7 +127,7 @@ async def test_dev_stage_with_new_commit_advances_normally(tmp_path):
     orch._should_approval_gate = MagicMock(return_value=False)
     orch._advance_to_stage = MagicMock()
 
-    with patch("orchestrator.orchestrator.get_next_stage", return_value="scope_check"):
+    with patch("orchestrator.pipeline.agent_stage.get_next_stage", return_value="scope_check"):
         await orch._handle_agent_stage(ws, "dev", stage_def)
 
     orch._advance_to_stage.assert_called_once()
@@ -284,9 +284,9 @@ class TestScopeCheckIterationClear:
         """When scope_check outcome is pass, stage_iterations['scope_check'] is removed."""
         orch, ws, stage_def = self._make_orch(tmp_path)
         ws.state.stage_iterations = {"scope_check": 1, "dev": 2}
-        orch._parse_agent_outcome = MagicMock(return_value="pass")
 
-        with patch("orchestrator.orchestrator.get_next_stage", return_value="qa"):
+        with patch("orchestrator.pipeline.agent_stage.parse_agent_outcome", return_value="pass"), \
+             patch("orchestrator.pipeline.agent_stage.get_next_stage", return_value="qa"):
             await orch._handle_agent_stage(ws, "scope_check", stage_def)
 
         assert "scope_check" not in ws.state.stage_iterations
@@ -297,9 +297,9 @@ class TestScopeCheckIterationClear:
         """When scope_check outcome is fail, the counter is preserved."""
         orch, ws, stage_def = self._make_orch(tmp_path)
         ws.state.stage_iterations = {"scope_check": 1}
-        orch._parse_agent_outcome = MagicMock(return_value="fail")
 
-        with patch("orchestrator.orchestrator.get_next_stage", return_value="dev"):
+        with patch("orchestrator.pipeline.agent_stage.parse_agent_outcome", return_value="fail"), \
+             patch("orchestrator.pipeline.agent_stage.get_next_stage", return_value="dev"):
             await orch._handle_agent_stage(ws, "scope_check", stage_def)
 
         assert ws.state.stage_iterations["scope_check"] == 1

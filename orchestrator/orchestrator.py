@@ -20,20 +20,18 @@ from config.resource_registry import ResourceRegistry
 from integrations.base.notifier import Button, NotifierInterface
 from integrations.base.tracker import TicketData, TrackerInterface
 from integrations.base.vcs import VCSInterface
-from integrations.telegram.handlers.analyze import AnalyzeHandler
 from integrations.telegram.handlers.mode import ModeHandler
 from orchestrator.agent_runtime import AgentRuntime
 from orchestrator.constants import (
     REPORT_BA_QUESTIONS,
     STAGE_REPORT_FILE,
 )
-from orchestrator.model_resolver import resolve_ticket_model
 from orchestrator.gradle_remediation import (
     clear_gradle_transforms,
 )
 from orchestrator import stage_verifier
 from orchestrator.stage_verifier import ActionResult
-from orchestrator.ticket_prioritizer import PrioritizedTicket, filter_tickets, prioritize_tickets, route_tickets
+from orchestrator.ticket_prioritizer import PrioritizedTicket
 from orchestrator.workflow_router import (
     WorkflowDefinition,
     load_workflow,
@@ -190,73 +188,29 @@ class Orchestrator:
     async def analyze_ticket_ids(self, ticket_ids: list[str]) -> dict[str, list[str]]:
         """Manually queue tickets for analysis (Telegram /analyze callback).
 
-        Validates each ticket via AnalyzeHandler, skips duplicates, then
-        creates a workspace for each valid one by matching its labels to a
-        configured repo. Returns {"valid": [...], "invalid": [...]} where
-        invalid entries are "TICKET: reason" strings.
+        Thin shim — see orchestrator/ingest.py for the implementation.
         """
-        result: dict[str, list[str]] = {"valid": [], "invalid": []}
-
-        if not self._tracker:
-            for tid in ticket_ids:
-                result["invalid"].append(f"{tid}: no tracker configured")
-            return result
-
-        handler = AnalyzeHandler(self._tracker)
-        validation = await handler.validate_tickets(ticket_ids)
-        result["invalid"].extend(validation.invalid)
-
-        for ticket in validation.valid:
-            if handler.is_already_active(ticket.id, self._active_workspaces):
-                result["invalid"].append(f"{ticket.id}: already active")
-                continue
-
-            pt = self._route_manual_ticket(ticket)
-            if not pt:
-                result["invalid"].append(
-                    f"{ticket.id}: no matching repo label in any project",
-                )
-                continue
-
-            project = self._projects.get(pt.project_id)
-            if not project:
-                result["invalid"].append(f"{ticket.id}: project {pt.project_id} not loaded")
-                continue
-            repo_config = project.repos.get(pt.repo_id)
-            if not repo_config:
-                result["invalid"].append(f"{ticket.id}: repo {pt.repo_id} not loaded")
-                continue
-
-            if self._dry_run:
-                logger.info("[DRY RUN] Would create manual workspace for %s", ticket.id)
-                result["valid"].append(ticket.id)
-                continue
-
-            try:
-                ws = await self._create_workspace_for_ticket(
-                    pt, pt.project_id, repo_config,
-                )
-                self._active_workspaces.append(ws)
-                result["valid"].append(ticket.id)
-                logger.info(
-                    "Manually queued %s (%s/%s)",
-                    ticket.id, pt.project_id, pt.repo_id,
-                )
-            except Exception as e:
-                logger.error("Manual workspace creation failed for %s: %s", ticket.id, e)
-                result["invalid"].append(f"{ticket.id}: {e}")
-
-        return result
+        from orchestrator.ingest import analyze_ticket_ids as _impl
+        return await _impl(
+            ticket_ids,
+            tracker=getattr(self, "_tracker", None),
+            projects=self._projects,
+            active_workspaces=self._active_workspaces,
+            workspace_manager=self._workspace_manager,
+            default_model_provider=getattr(self, "_default_model_provider", None),
+            repo_vcs=getattr(self, "_repo_vcs", {}),
+            dry_run=self._dry_run,
+            notifier=getattr(self, "_notifier", None),
+            create_workspace_fn=self._create_workspace_for_ticket,
+        )
 
     def _route_manual_ticket(self, ticket: TicketData) -> PrioritizedTicket | None:
-        """Find the project+repo that owns this ticket via tracker_label match."""
-        for project_id, project in self._projects.items():
-            for repo_id, repo_config in project.repos.items():
-                if repo_config.tracker_label and repo_config.tracker_label in ticket.labels:
-                    return PrioritizedTicket(
-                        ticket=ticket, repo_id=repo_id, project_id=project_id,
-                    )
-        return None
+        """Find the project+repo that owns this ticket via tracker_label match.
+
+        Thin shim — see orchestrator/ingest.py for the implementation.
+        """
+        from orchestrator.ingest import route_manual_ticket
+        return route_manual_ticket(ticket, self._projects)
 
     def _should_approval_gate(
         self, completed_state: str, next_stage: str | None = None,
@@ -411,86 +365,25 @@ class Orchestrator:
             logger.info("Cleaned up %d old workspace(s)", len(deleted))
 
     async def _poll_and_create_workspaces(self) -> None:
-        """Poll tracker for new tickets and create workspaces."""
-        for project_id, project in self._projects.items():
-            jira_config = project.config.jira
-            if not jira_config.url:
-                continue
+        """Poll tracker for new tickets and create workspaces.
 
-            try:
-                tickets = await self._tracker.poll_tickets()
-            except Exception as e:
-                logger.error("Failed to poll tickets for %s: %s", project_id, e)
-                continue
-
-            if not tickets:
-                continue
-
-            # Filter, route to repos, then prioritize
-            filtered = filter_tickets(
-                tickets,
-                trigger_labels=jira_config.trigger_labels,
-                ignore_labels=jira_config.ignore_labels,
-            )
-            routed = route_tickets(filtered, project)
-            prioritized = prioritize_tickets(routed)
-            max_parallel = project.config.parallelism.max_concurrent_tickets
-
-            # Count active workspaces for this project
-            active_count = sum(
-                1 for ws in self._active_workspaces
-                if ws.state.company_id == project_id
-            )
-
-            for pt in prioritized:
-                if active_count >= max_parallel:
-                    logger.info(
-                        "Project %s at max capacity (%d/%d), skipping remaining",
-                        project_id, active_count, max_parallel,
-                    )
-                    break
-
-                # Check if workspace already exists (in memory or on disk)
-                already_exists = any(
-                    ws.state.ticket_id == pt.ticket.id
-                    for ws in self._active_workspaces
-                )
-                if already_exists:
-                    continue
-                # Also check disk — workspace may be DONE/ARCHIVED but still on disk
-                from pathlib import Path
-                ws_dir = Path(self._global_config.workspaces.base_dir) / project_id / pt.repo_id / "tickets" / pt.ticket.id
-                if ws_dir.exists():
-                    logger.debug("Workspace on disk for %s — skipping", pt.ticket.id)
-                    continue
-
-                repo_config = project.repos.get(pt.repo_id)
-                if not repo_config:
-                    continue
-
-                if self._dry_run:
-                    logger.info(
-                        "[DRY RUN] Would create workspace for %s -> %s/%s",
-                        pt.ticket.id, project_id, pt.repo_id,
-                    )
-                    continue
-
-                try:
-                    ws = await self._create_workspace_for_ticket(
-                        pt, project_id, repo_config,
-                    )
-                    self._active_workspaces.append(ws)
-                    active_count += 1
-                    logger.info(
-                        "Created workspace for %s (%s/%s)",
-                        pt.ticket.id, project_id, pt.repo_id,
-                    )
-                    self._emit("workspace_created", f"Created workspace for {pt.ticket.id}", project_id=project_id, ticket_id=pt.ticket.id, data={"repo_id": pt.repo_id})
-                except Exception as e:
-                    logger.error(
-                        "Failed to create workspace for %s: %s",
-                        pt.ticket.id, e,
-                    )
+        Thin shim — see orchestrator/ingest.py for the implementation.
+        """
+        from orchestrator.ingest import poll_and_create_workspaces
+        new_workspaces = await poll_and_create_workspaces(
+            tracker=self._tracker,
+            projects=self._projects,
+            active_workspaces=self._active_workspaces,
+            global_config=self._global_config,
+            workspace_manager=self._workspace_manager,
+            default_model_provider=getattr(self, "_default_model_provider", None),
+            repo_vcs=getattr(self, "_repo_vcs", {}),
+            notifier=getattr(self, "_notifier", None),
+            dry_run=self._dry_run,
+            event_bus=getattr(self, "_events", None),
+            create_workspace_fn=self._create_workspace_for_ticket,
+        )
+        self._active_workspaces.extend(new_workspaces)
 
     async def _refetch_ticket_data(self, workspace: Workspace) -> None:
         """Refetch ticket data from tracker; write/append meta files.
@@ -506,83 +399,19 @@ class Orchestrator:
         project_id: str,
         repo_config: RepoConfig,
     ) -> Workspace:
-        """Create workspace, clone repo, write ticket data."""
-        ws = self._workspace_manager.create(
-            company_id=project_id,
-            repo_id=pt.repo_id,
-            ticket_id=pt.ticket.id,
-            clone_url=repo_config.git.clone_url,
-            clone_depth=repo_config.git.depth,
-            default_branch=repo_config.vcs.default_branch,
-            branch_prefix=repo_config.vcs.branch_prefix,
-            title=pt.ticket.summary,
+        """Create workspace, clone repo, write ticket data.
+
+        Thin shim — see orchestrator/ingest.py for the implementation.
+        """
+        from orchestrator.ingest import create_workspace_for_ticket
+        return await create_workspace_for_ticket(
+            pt, project_id, repo_config,
+            workspace_manager=self._workspace_manager,
+            tracker=getattr(self, "_tracker", None),
+            default_model_provider=getattr(self, "_default_model_provider", None),
+            repo_vcs=getattr(self, "_repo_vcs", {}),
+            notifier=getattr(self, "_notifier", None),
         )
-
-        # Per-ticket model snapshot — single source of truth for this workspace.
-        # Resolves to a non-empty Claude model id at workspace creation and is
-        # used by every agent dispatched against this ticket. See
-        # docs/superpowers/specs/2026-04-30-per-ticket-model-label-design.md.
-        resolution = resolve_ticket_model(pt.ticket.labels)
-        ws.state.model = resolution.model or self._default_model_provider()
-        ws.save_state()
-        if resolution.warning and self._tracker is not None:
-            try:
-                await self._tracker.add_comment(pt.ticket.id, resolution.warning)
-            except Exception as e:
-                logger.warning(
-                    "Failed to post model-label warning to %s: %s",
-                    pt.ticket.id, e,
-                )
-
-        # Write ticket metadata — calls tracker for ticket description, comments, and history
-        await self._refetch_ticket_data(ws)
-
-        # Fetch and write parent ticket if linked
-        if self._tracker and pt.ticket.linked_issues:
-            for link in pt.ticket.linked_issues:
-                parent_key = link.get("key", "")
-                if parent_key and link.get("type", "").lower() in ("is child of", "parent"):
-                    try:
-                        from orchestrator.ticket_sync import ticket_to_markdown
-                        parent = await self._tracker.get_ticket(parent_key)
-                        parent_md = ticket_to_markdown(parent)
-                        (ws.meta_dir / "parent.md").write_text(parent_md, encoding="utf-8")
-                    except Exception as e:
-                        logger.warning("Failed to fetch parent %s: %s", parent_key, e)
-                    break
-
-        # Transition Jira to In Progress
-        if self._tracker:
-            try:
-                await self._tracker.transition_ticket(
-                    pt.ticket.id, repo_config.jira.statuses.in_progress,
-                )
-            except Exception as e:
-                logger.warning("Failed to transition %s: %s", pt.ticket.id, e)
-
-        # Check if a PR already exists for this ticket's branch
-        vcs_entry = self._repo_vcs.get(pt.repo_id)
-        if vcs_entry:
-            vcs_adapter, _ = vcs_entry
-            branch = ws.state.branch
-            if branch:
-                try:
-                    pr_info = await vcs_adapter.find_pr_by_branch(branch)
-                    if pr_info:
-                        pr_number, pr_url = pr_info
-                        ws.update_state(pr_number=pr_number, pr_url=pr_url)
-                        ws.transition(Stage.PR_REVIEW)
-                        logger.info(
-                            "Found existing PR #%d for %s — resuming from PR_REVIEW",
-                            pr_number, pt.ticket.id,
-                        )
-                        return ws
-                except Exception as e:
-                    logger.warning("Failed to check for existing PR for %s: %s", pt.ticket.id, e)
-
-        # No existing PR — start from ANALYSIS
-        ws.transition(Stage.ANALYSIS)
-        return ws
 
     async def advance_workspace(
         self, workspace: Workspace, _resume_depth: int = 0,

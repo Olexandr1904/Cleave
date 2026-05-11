@@ -227,3 +227,25 @@ async def test_get_status_history_returns_status_changes() -> None:
     assert history[0].to_status == "In Progress"
     assert history[0].created == "2026-05-10"
     assert history[1].to_status == "In Review"
+
+
+@pytest.mark.asyncio
+async def test_download_attachment_returns_bytes(monkeypatch) -> None:
+    adapter = JiraAdapter(url="https://x", email="e", token="t", project_key="P")
+    response = MagicMock()
+    response.status_code = 200
+    response.content = b"file bytes"
+    response.request = MagicMock()
+
+    class DummyClient:
+        def __init__(self, *a, **kw): pass
+        async def __aenter__(self):
+            return self
+        async def __aexit__(self, *a):
+            return None
+        async def get(self, url, headers=None, follow_redirects=False):
+            return response
+
+    monkeypatch.setattr("integrations.jira.jira_adapter.httpx.AsyncClient", DummyClient)
+    data = await adapter.download_attachment("https://x/file")
+    assert data == b"file bytes"

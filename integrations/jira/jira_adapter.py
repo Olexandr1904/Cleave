@@ -256,6 +256,22 @@ class JiraAdapter(TrackerInterface):
             ))
         return out
 
+    async def download_attachment(self, url: str) -> bytes:
+        """Fetch an attachment. Uses adapter-owned basic-auth credentials."""
+        import base64
+        creds = base64.b64encode(
+            f"{self._email}:{self._token}".encode()
+        ).decode()
+        headers = {"Authorization": f"Basic {creds}"}
+        async with httpx.AsyncClient(timeout=TIMEOUT) as client:
+            resp = await client.get(url, headers=headers, follow_redirects=True)
+            if resp.status_code != 200:
+                raise httpx.HTTPStatusError(
+                    f"attachment fetch HTTP {resp.status_code}",
+                    request=resp.request, response=resp,
+                )
+            return resp.content
+
     async def get_status_history(self, ticket_id: str) -> list[StatusChange]:
         """Walk Jira's changelog and return only status transitions."""
         data = await self._request(

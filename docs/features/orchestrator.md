@@ -117,3 +117,4 @@ Beginning the layer-cut of the monolithic `Orchestrator` class. Each extraction 
 
 - `git_ops.py`: extracted `_git_diff_files` and `_git_head_sha` as module-level functions `git_diff_files` and `git_head_sha`.
 - `ticket_sync.py`: extracted `_refetch_ticket_data`, `_attachment_is_keepable`, `_ticket_to_markdown`, and their constants. Orchestrator keeps a shim on `_refetch_ticket_data`.
+- `notify.py`: extracted 4 standalone notification methods (`_notify_deferred`, `_notify_failed`, `_notify_rerun`, `_notify_verification_blocked`). Inline `notifier.send_message` calls inside stage handlers stay where they are.

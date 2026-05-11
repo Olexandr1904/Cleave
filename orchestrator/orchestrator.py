@@ -33,10 +33,7 @@ from orchestrator.constants import (
 )
 from orchestrator.model_resolver import resolve_ticket_model
 from orchestrator.gradle_remediation import (
-    ARCH_MISMATCH_HELP,
     clear_gradle_transforms,
-    looks_like_aapt2_arch_mismatch,
-    looks_like_gradle_cache_corruption,
 )
 from orchestrator.pr_creation import create_pr
 from orchestrator import stage_verifier
@@ -863,146 +860,28 @@ class Orchestrator:
         self, workspace: Workspace, retry_at: datetime,
         reason: str | None = None,
     ) -> None:
-        """Send a one-shot Telegram notification for transient agent failure
-        deferrals.
-
-        Picks a headline from the actual cause \u2014 not all DEFERREDs are quota
-        hits, even though the pipeline reuses the quota retry path for any
-        transient CLI failure. Hard-coding "Quota exhausted" misled operators
-        when the real cause was, e.g., the agent hitting `max_turns`.
-
-        Quota-window debouncing only applies when the cause IS a real
-        usage-limit hit; other transient failures skip the silence window so
-        each ticket's distinct reason still surfaces.
-        """
-        state = workspace.state
-        is_real_quota = bool(
-            reason and (
-                "usage limit" in reason.lower()
-                or "api_error_status\":429" in reason
-                or '"api_error_status": 429' in reason
-            )
+        from orchestrator.notify import notify_deferred
+        chat_id = self._get_chat_id(workspace)
+        self._quota_window_end = await notify_deferred(
+            self._notifier, chat_id, workspace, retry_at, reason,
+            self._quota_window_end,
         )
 
-        # Window debouncing is for the case where one quota hit cascades
-        # across many tickets \u2014 silence the same announcement.
-        now = datetime.now(timezone.utc)
-        if (
-            is_real_quota
-            and self._quota_window_end is not None
-            and now < self._quota_window_end
-        ):
-            return
-
-        if self._notifier is None:
-            if is_real_quota:
-                self._quota_window_end = retry_at
-            return
-
-        chat_id = self._get_chat_id(workspace)
-        title = tg_format.read_ticket_title(workspace)
-        hdr = tg_format.tg_header("\u23f1", state.company_id, state.ticket_id, title)
-
-        # Pick a headline that names the actual cause.
-        if is_real_quota:
-            headline = (
-                f"Quota exhausted at {state.previous_state or '?'}, deferred "
-                f"until {retry_at.strftime('%Y-%m-%d %H:%M')} UTC. "
-                f"Other tickets hitting the same quota will defer silently."
-            )
-        elif reason and "error_max_turns" in reason:
-            headline = (
-                f"Agent hit max-turns limit at {state.previous_state or '?'}, "
-                f"deferred until {retry_at.strftime('%H:%M')} UTC for retry. "
-                f"If this recurs the agent task may be too complex \u2014 consider "
-                f"raising `max_turns` or splitting the work."
-            )
-        else:
-            short = (reason or "").splitlines()[0][:200] if reason else "no detail captured"
-            headline = (
-                f"Transient agent failure at {state.previous_state or '?'}, "
-                f"deferred until {retry_at.strftime('%H:%M')} UTC. "
-                f"Reason: {short}"
-            )
-
-        msg = f"{hdr}\n{headline}"
-        buttons = [Button(label="Retry Now", action=f"retry:{state.ticket_id}")]
-        try:
-            await self._notifier.send_message(chat_id, msg, buttons=buttons)
-            if is_real_quota:
-                self._quota_window_end = retry_at
-        except Exception as e:
-            logger.warning("Failed to send deferred notification: %s", e)
-
     async def _notify_failed(self, workspace: Workspace, error: str) -> None:
-        """Send a one-shot Telegram notification for a permanent failure."""
         if self._notifier is None:
             return
-        state = workspace.state
+        from orchestrator.notify import notify_failed
         chat_id = self._get_chat_id(workspace)
-        title = tg_format.read_ticket_title(workspace)
-        hdr = tg_format.tg_header("\u274c", state.company_id, state.ticket_id, title)
-        first_line = (error or "").splitlines()[0] if error else ""
-        stage = state.previous_state or "?"
-        buttons = [Button(label="Retry", action=f"retry:{state.ticket_id}")]
-        # Architecture mismatch (x86-64 aapt2 on non-x86 host) is a host-setup
-        # issue \u2014 the pipeline cannot apt-install or rewrite gradle.properties.
-        # Surface a distinct message with concrete fix options and NO clear-
-        # cache button (which loops forever on this failure).
-        if looks_like_aapt2_arch_mismatch(error):
-            sep_inner = "\u2500" * 30
-            msg = (
-                f"{hdr}\n"
-                f"FAILED at {stage}.\n"
-                f"\u26a0\ufe0f Architecture mismatch (x86-64 aapt2 on non-x86 host).\n"
-                f"{sep_inner}\n"
-                f"{ARCH_MISMATCH_HELP}"
-            )
-        elif looks_like_gradle_cache_corruption(error):
-            msg = (
-                f"{hdr}\n"
-                f"FAILED at {stage}. Error: {first_line}.\n"
-                f"Detected Gradle cache corruption \u2014 tap below to clear it."
-            )
-            buttons.insert(
-                0,
-                Button(label="🧹 Clear cache & retry", action=f"clear_gradle:{state.ticket_id}"),
-            )
-        else:
-            msg = (
-                f"{hdr}\n"
-                f"FAILED at {stage}.\n\n"
-                f"Reason: {first_line}\n\n"
-                f"Options:\n"
-                f"- Tap Retry to re-run from {stage}\n"
-                f"- Send \"retry {state.ticket_id} from dev\" to restart from an earlier stage"
-            )
-        try:
-            await self._notifier.send_message(chat_id, msg, buttons=buttons)
-        except Exception as e:
-            logger.warning("Failed to send failure notification: %s", e)
+        await notify_failed(self._notifier, chat_id, workspace, error)
 
     async def _notify_rerun(
         self, workspace: Workspace, branch: str, reason: str
     ) -> None:
-        """Send Telegram notification when a rerun is triggered from the dashboard."""
         if self._notifier is None:
             return
+        from orchestrator.notify import notify_rerun
         chat_id = self._get_chat_id(workspace)
-        state = workspace.state
-        title = tg_format.read_ticket_title(workspace)
-        hdr = tg_format.tg_header("🔄", state.company_id, state.ticket_id, title)
-        first_line = reason.splitlines()[0][:80] if reason else ""
-        msg = (
-            f"{hdr}\n"
-            f"Rerun started from dashboard.\n"
-            f"Branch: {branch}\n"
-            f"Reason: {first_line}"
-        )
-        try:
-            await self._notifier.send_message(chat_id, msg)
-        except Exception as e:
-            logger.warning("Failed to send rerun notification: %s", e)
+        await notify_rerun(self._notifier, chat_id, workspace, branch, reason)
 
     def _reconcile_disk_workspaces(self) -> None:
         """Sync in-memory workspace state with disk.
@@ -2286,49 +2165,14 @@ class Orchestrator:
     async def _notify_verification_blocked(
         self, workspace: Workspace, stage_id: str, verify_reason: str,
     ) -> None:
-        """Send a TG notification for a stage that just failed verification.
-
-        Mirrors _handle_escalate semantics (populates escalation_msg_id so the
-        reply flow in command_handler.handle_reply can unblock), but uses a
-        distinct header to flag that this is a mechanical verification failure
-        rather than an agent-requested escalation.
-        """
         if not self._notifier:
             return
+        from orchestrator.notify import notify_verification_blocked
         chat_id = self._get_chat_id(workspace)
-        if not chat_id:
-            return
-
-        sep = "─" * 30
-        title = tg_format.read_ticket_title(workspace)
-        hdr = tg_format.tg_header("⚠️", workspace.state.company_id, workspace.state.ticket_id, title)
-        header = f"{hdr}\nStage: {stage_id} — verification failed\n"
-
-        agent_reason = tg_format.strip_markdown(self._build_blocked_reason(workspace, stage_id))
-        combined = f"Verification failed: {verify_reason}\n\n{agent_reason}"
-        hint = (
-            f"\n{sep}\n"
-            f"↩️ Reply with your answer or additional context, or:\n"
-            f"  Reply \"skip\" — advance past this stage to the next one\n"
-            f"  Reply \"retry\" — re-run this stage"
+        await notify_verification_blocked(
+            self._notifier, chat_id, workspace, stage_id, verify_reason,
+            self._build_blocked_reason,
         )
-        message = f"{header}\n{combined}{hint}"
-
-        try:
-            msg_id = await self._notifier.send_message(chat_id, message)
-            workspace.update_state(human_input_question=combined)
-            workspace.state.escalation_msg_id = msg_id
-            workspace.state.escalation_chat_id = chat_id
-            workspace.save_state()
-            logger.info(
-                "Verification-blocked %s via Telegram (msg_id=%d)",
-                workspace.state.ticket_id, msg_id,
-            )
-        except Exception as e:
-            logger.warning(
-                "Failed to send verification-blocked notification for %s: %s",
-                workspace.state.ticket_id, e,
-            )
 
     async def _action_finalize(self, workspace: Workspace) -> ActionResult:
         """Finalize a completed ticket. Returns ActionResult — caller transitions."""

@@ -119,3 +119,4 @@ Beginning the layer-cut of the monolithic `Orchestrator` class. Each extraction 
 - `ticket_sync.py`: extracted `_refetch_ticket_data`, `_attachment_is_keepable`, `_ticket_to_markdown`, and their constants. Orchestrator keeps a shim on `_refetch_ticket_data`.
 - `notify.py`: extracted 4 standalone notification methods (`_notify_deferred`, `_notify_failed`, `_notify_rerun`, `_notify_verification_blocked`). Inline `notifier.send_message` calls inside stage handlers stay where they are.
 - `approval_gate.py`: extracted `_should_approval_gate` and the `APPROVAL_GATE_STATES` / `GATE_HAPPY_PATH_NEXT_STAGE` constants. Orchestrator keeps a shim method and the constants as class-level aliases.
+- `escalation.py`: extracted `_handle_escalate`, `_build_blocked_reason`, `_truncate_reason`, and their two regex/length constants. `notify.py`'s `notify_verification_blocked` now imports `build_blocked_reason` directly (no longer needs a callable injection from the orchestrator).

@@ -5,8 +5,6 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-import signal
-import time
 from collections import deque
 from collections.abc import Callable
 from datetime import datetime, timedelta, timezone
@@ -30,6 +28,7 @@ from orchestrator.gradle_remediation import (
     clear_gradle_transforms,
 )
 from orchestrator import stage_verifier
+from orchestrator.runtime import Runtime
 from orchestrator.stage_verifier import ActionResult
 from orchestrator.ticket_prioritizer import PrioritizedTicket
 from orchestrator.workflow_router import (
@@ -90,28 +89,34 @@ class Orchestrator:
         self._notifier = notifier
         self._dry_run = dry_run
         self._events = event_bus
-        self._active_workspaces: list[Workspace] = []
-        self._shutdown_event = asyncio.Event()
         # Map repo_id -> (VCSInterface, RepoConfig) for per-repo VCS
         self._repo_vcs: dict[str, tuple[VCSInterface, RepoConfig]] = {}
         # Mode handler — initialized later via set_mode_handler or from config default
         self._mode_handler: ModeHandler | None = None
-        # Ring buffer of recently-terminated workspaces for /status visibility.
-        # Each entry is (ticket_id, final_state, timestamp_epoch).
-        self._recent_completions: deque[tuple[str, str, float]] = deque(maxlen=20)
         # In-memory debounce for Claude CLI quota notifications.
         # Stores the retry_at of the first notification in the current window;
         # further quota hits while now < _quota_window_end are silenced.
         self._quota_window_end: datetime | None = None
         self._config_dir = config_dir
         self._on_project_added = on_project_added
-        self._wake_event = asyncio.Event()
-        # Limit concurrent agent executions to avoid quota exhaustion
-        try:
-            max_parallel = int(global_config.defaults.max_parallel_tickets)
-        except (TypeError, ValueError, AttributeError):
-            max_parallel = 3
-        self._agent_semaphore = asyncio.Semaphore(max_parallel)
+        # Runtime owns the long-running daemon state (active workspaces,
+        # recent completions, semaphore, shutdown/wake events). Orchestrator
+        # delegates lifecycle methods to it via properties / shims below.
+        # Callbacks resolve through self.* on each call so tests can patch
+        # the bound methods (e.g. orch._rescan_projects_from_disk = AsyncMock())
+        # after construction.
+        self._runtime = Runtime(
+            global_config=global_config,
+            workspace_manager=workspace_manager,
+            poll_callback=lambda: self._poll_and_create_workspaces(),
+            advance_callback=lambda ws: self.advance_workspace(ws),
+            rescan_callback=lambda: self._rescan_projects_from_disk(),
+            sweep_quota_window_callback=self._sweep_quota_window,
+            get_tracker=lambda: self._tracker,
+            get_mode_handler=lambda: self._mode_handler,
+            event_bus=event_bus,
+            dry_run=dry_run,
+        )
 
     def register_repo_vcs(
         self, repo_id: str, vcs: VCSInterface, repo_config: RepoConfig,
@@ -166,7 +171,7 @@ class Orchestrator:
                     logger.exception("on_project_added hook failed for %s", pid)
         if added:
             logger.info("Rescan added projects: %s", added)
-            self._wake_event.set()
+            self._runtime.wake()
         return added
 
     def set_mode_handler(self, handler: ModeHandler) -> None:
@@ -175,7 +180,7 @@ class Orchestrator:
 
     def get_active_workspaces(self) -> list[Workspace]:
         """Return the current active workspace list (for CommandHandler status)."""
-        return list(self._active_workspaces)
+        return list(self._runtime.active_workspaces)
 
     def get_recent_completions(self) -> list[tuple[str, str, float]]:
         """Return recently-terminated workspaces (ticket_id, final_state, epoch).
@@ -183,7 +188,87 @@ class Orchestrator:
         Used by /status to show DONE / FAILED tickets after they've been
         removed from the active list.
         """
-        return list(self._recent_completions)
+        return self._runtime.recent_completions
+
+    # --- Runtime-state property accessors -----------------------------------
+    # These delegate to the Runtime instance for normal use, but fall back to
+    # __dict__ for tests that construct Orchestrator via __new__ without a
+    # runtime (and assign these attrs directly).
+
+    @property
+    def _active_workspaces(self) -> list[Workspace]:
+        runtime = self.__dict__.get("_runtime")
+        if runtime is not None:
+            return runtime._active_workspaces
+        return self.__dict__.setdefault("_active_workspaces", [])
+
+    @_active_workspaces.setter
+    def _active_workspaces(self, value: list[Workspace]) -> None:
+        runtime = self.__dict__.get("_runtime")
+        if runtime is not None:
+            runtime._active_workspaces = value
+        else:
+            self.__dict__["_active_workspaces"] = value
+
+    @property
+    def _recent_completions(self):
+        runtime = self.__dict__.get("_runtime")
+        if runtime is not None:
+            return runtime._recent_completions
+        return self.__dict__.setdefault("_recent_completions", deque(maxlen=20))
+
+    @_recent_completions.setter
+    def _recent_completions(self, value) -> None:
+        runtime = self.__dict__.get("_runtime")
+        if runtime is not None:
+            runtime._recent_completions = value
+        else:
+            self.__dict__["_recent_completions"] = value
+
+    @property
+    def _shutdown_event(self) -> asyncio.Event:
+        runtime = self.__dict__.get("_runtime")
+        if runtime is not None:
+            return runtime._shutdown_event
+        return self.__dict__["_shutdown_event"]
+
+    @_shutdown_event.setter
+    def _shutdown_event(self, value) -> None:
+        runtime = self.__dict__.get("_runtime")
+        if runtime is not None:
+            runtime._shutdown_event = value
+        else:
+            self.__dict__["_shutdown_event"] = value
+
+    @property
+    def _wake_event(self) -> asyncio.Event:
+        runtime = self.__dict__.get("_runtime")
+        if runtime is not None:
+            return runtime._wake_event
+        return self.__dict__["_wake_event"]
+
+    @_wake_event.setter
+    def _wake_event(self, value) -> None:
+        runtime = self.__dict__.get("_runtime")
+        if runtime is not None:
+            runtime._wake_event = value
+        else:
+            self.__dict__["_wake_event"] = value
+
+    @property
+    def _agent_semaphore(self) -> asyncio.Semaphore:
+        runtime = self.__dict__.get("_runtime")
+        if runtime is not None:
+            return runtime._agent_semaphore
+        return self.__dict__["_agent_semaphore"]
+
+    @_agent_semaphore.setter
+    def _agent_semaphore(self, value) -> None:
+        runtime = self.__dict__.get("_runtime")
+        if runtime is not None:
+            runtime._agent_semaphore = value
+        else:
+            self.__dict__["_agent_semaphore"] = value
 
     async def analyze_ticket_ids(self, ticket_ids: list[str]) -> dict[str, list[str]]:
         """Manually queue tickets for analysis (Telegram /analyze callback).
@@ -258,111 +343,11 @@ class Orchestrator:
 
     async def run(self) -> None:
         """Main async loop — poll and advance until shutdown."""
-        loop = asyncio.get_event_loop()
-        for sig in (signal.SIGTERM, signal.SIGINT):
-            loop.add_signal_handler(sig, self._handle_shutdown)
-
-        # Discover existing workspaces on startup
-        self._active_workspaces = self._workspace_manager.discover_workspaces()
-        if self._active_workspaces:
-            logger.info(
-                "Resumed %d active workspace(s) from disk",
-                len(self._active_workspaces),
-            )
-
-        poll_interval = self._global_config.defaults.poll_interval_seconds
-        logger.info(
-            "Orchestrator started (poll_interval=%ds, dry_run=%s)",
-            poll_interval, self._dry_run,
-        )
-        self._emit("daemon_started", f"Orchestrator started (mode={self._mode_handler.get_mode() if self._mode_handler else 'auto'}, dry_run={self._dry_run})")
-
-        while not self._shutdown_event.is_set():
-            try:
-                await self.poll_cycle()
-            except Exception as e:
-                logger.error("Poll cycle error: %s", e, exc_info=True)
-
-            try:
-                self._wake_event.clear()
-                done, pending = await asyncio.wait(
-                    [
-                        asyncio.create_task(self._shutdown_event.wait()),
-                        asyncio.create_task(self._wake_event.wait()),
-                    ],
-                    timeout=poll_interval,
-                    return_when=asyncio.FIRST_COMPLETED,
-                )
-                # Cancel and reap the loser(s) so they don't leak across cycles.
-                for t in pending:
-                    t.cancel()
-                for t in pending:
-                    try:
-                        await t
-                    except (asyncio.CancelledError, Exception):
-                        pass
-                for t in done:
-                    t.result()  # suppress unhandled-task warnings
-            except asyncio.TimeoutError:
-                pass
-
-        logger.info("Orchestrator shutting down gracefully")
+        await self._runtime.run()
 
     async def poll_cycle(self) -> None:
         """Single poll + advance cycle."""
-        # Pick up any projects added to config-live/ since last cycle (wizard or hand-edit).
-        await self._rescan_projects_from_disk()
-        self._emit("poll_cycle", "Poll cycle started")
-        # 0. Re-adopt workspaces that exist on disk but fell out of the active list
-        self._reconcile_disk_workspaces()
-        # 0b. Resume any DEFERRED workspaces whose retry_at has passed
-        await self._sweep_deferred()
-        # 1. Poll for new tickets and create workspaces
-        if self._tracker:
-            await self._poll_and_create_workspaces()
-
-        # 2. Advance active workspaces in parallel (bounded by semaphore)
-        async def _safe_advance(ws: Workspace) -> None:
-            async with self._agent_semaphore:
-                try:
-                    await self.advance_workspace(ws)
-                except Exception as e:
-                    logger.error(
-                        "Workspace %s error: %s",
-                        ws.state.ticket_id, e, exc_info=True,
-                    )
-                    try:
-                        ws.transition(Stage.FAILED)
-                        ws.update_state(error=str(e))
-                    except Exception:
-                        pass
-
-        # Skip workspaces in terminal or clearly waiting states
-        _SKIP = {Stage.DONE, Stage.ARCHIVED, Stage.BLOCKED,
-                 Stage.MANUAL_CONTROL, Stage.DEFERRED, Stage.FAILED, Stage.PAUSED}
-        active = [ws for ws in self._active_workspaces if ws.state.current_state not in _SKIP]
-        if active:
-            await asyncio.gather(*[_safe_advance(ws) for ws in active])
-
-        # 3. Cleanup terminal workspaces from active list and record them for
-        # /status to show recent completions even after they leave the list.
-        terminal = {Stage.DONE, Stage.ARCHIVED}
-        still_active: list[Workspace] = []
-        now = time.time()
-        for ws in self._active_workspaces:
-            if ws.state.current_state in terminal:
-                self._recent_completions.append(
-                    (ws.state.ticket_id, ws.state.current_state, now),
-                )
-            else:
-                still_active.append(ws)
-        self._active_workspaces = still_active
-
-        # 4. Workspace cleanup
-        max_age = self._global_config.workspaces.max_age_days
-        deleted = self._workspace_manager.cleanup_old_workspaces(max_age)
-        if deleted:
-            logger.info("Cleaned up %d old workspace(s)", len(deleted))
+        await self._runtime.poll_cycle()
 
     async def _poll_and_create_workspaces(self) -> None:
         """Poll tracker for new tickets and create workspaces.
@@ -482,69 +467,61 @@ class Orchestrator:
         await notify_rerun(self._notifier, chat_id, workspace, branch, reason)
 
     def _reconcile_disk_workspaces(self) -> None:
-        """Sync in-memory workspace state with disk.
-
-        - Re-adopt workspaces on disk that fell out of the active list
-        - Refresh state for active workspaces (picks up dashboard retries,
-          manual edits, TG replies that wrote to state.json)
-        """
-        disk_workspaces = {ws.state.ticket_id: ws for ws in self._workspace_manager.discover_workspaces()}
-        active_ids = {ws.state.ticket_id for ws in self._active_workspaces}
-
-        # Re-adopt orphans
-        for tid, ws in disk_workspaces.items():
-            if tid not in active_ids:
-                self._active_workspaces.append(ws)
-                logger.warning(
-                    "Re-adopted orphaned workspace: %s (state=%s)",
-                    tid, ws.state.current_state,
-                )
-
-        # Refresh state from disk for all active workspaces
-        for i, ws in enumerate(self._active_workspaces):
-            disk_ws = disk_workspaces.get(ws.state.ticket_id)
-            if disk_ws and disk_ws.state.current_state != ws.state.current_state:
-                logger.info(
-                    "Refreshed %s state from disk: %s -> %s",
-                    ws.state.ticket_id, ws.state.current_state, disk_ws.state.current_state,
-                )
-                self._active_workspaces[i] = disk_ws
+        """Sync in-memory workspace state with disk (delegates to Runtime)."""
+        self._ensure_runtime_for_tests().reconcile_disk_workspaces()
 
     async def _sweep_deferred(self) -> None:
-        """Resume DEFERRED workspaces whose retry_at has passed.
+        """Resume DEFERRED workspaces whose retry_at has passed (delegates)."""
+        await self._ensure_runtime_for_tests().sweep_deferred()
 
-        Called at the top of each poll cycle. Also clears the in-memory
-        quota debounce window once its retry_at has passed.
+    def _sweep_quota_window(self, now: datetime) -> None:
+        """Clear in-memory quota debounce window once its retry_at has passed.
+
+        Called by Runtime.sweep_deferred so the window state stays on the
+        Orchestrator (alongside the rest of the quota debounce machinery).
         """
-        now = datetime.now(timezone.utc)
-
         if self._quota_window_end is not None and now >= self._quota_window_end:
             self._quota_window_end = None
 
-        for ws in list(self._active_workspaces):
-            if ws.state.current_state != Stage.DEFERRED:
-                continue
-            retry_at_str = ws.state.retry_at
-            if not retry_at_str:
-                continue
-            try:
-                retry_at = datetime.fromisoformat(retry_at_str)
-            except ValueError:
-                logger.warning(
-                    "Workspace %s has malformed retry_at: %s",
-                    ws.state.ticket_id, retry_at_str,
-                )
-                continue
-            if retry_at <= now:
-                target = ws.state.previous_state or Stage.ANALYSIS
-                ws.transition(target)
-                self._emit(
-                    "deferred_resumed",
-                    f"Resumed {ws.state.ticket_id} from DEFERRED to {target}",
-                    project_id=ws.state.company_id,
-                    ticket_id=ws.state.ticket_id,
-                    data={"target_state": target},
-                )
+    def _ensure_runtime_for_tests(self) -> Runtime:
+        """Return the Runtime, lazily constructing a minimal one if missing.
+
+        Tests sometimes build Orchestrator via __new__ and skip __init__.
+        For those, build a Runtime on demand from whatever attrs the test
+        set (workspace_manager, events). Production always goes through
+        __init__ which constructs the full Runtime up front.
+        """
+        runtime = self.__dict__.get("_runtime")
+        if runtime is not None:
+            return runtime
+        # Pull the workspace list / completions out of __dict__ so the
+        # newly-built Runtime sees the same instances the test populated.
+        existing_active = self.__dict__.pop("_active_workspaces", [])
+        existing_recent = self.__dict__.pop("_recent_completions", None)
+        global_config = getattr(self, "_global_config", None) or SimpleNamespace(
+            defaults=SimpleNamespace(max_parallel_tickets=3, poll_interval_seconds=900),
+            workspaces=SimpleNamespace(max_age_days=7),
+        )
+        runtime = Runtime(
+            global_config=global_config,
+            workspace_manager=getattr(self, "_workspace_manager", None),
+            poll_callback=lambda: self._poll_and_create_workspaces(),
+            advance_callback=lambda ws: self.advance_workspace(ws),
+            rescan_callback=lambda: self._rescan_projects_from_disk(),
+            sweep_quota_window_callback=self._sweep_quota_window,
+            get_tracker=lambda: getattr(self, "_tracker", None),
+            get_mode_handler=lambda: getattr(self, "_mode_handler", None),
+            event_bus=getattr(self, "_events", None),
+            dry_run=getattr(self, "_dry_run", False),
+        )
+        runtime._active_workspaces = list(existing_active)
+        if existing_recent is not None:
+            # Preserve any list/deque the test set up so identity-based
+            # assertions keep working when possible.
+            for entry in list(existing_recent):
+                runtime._recent_completions.append(entry)
+        self.__dict__["_runtime"] = runtime
+        return runtime
 
     async def _handle_action_stage(
         self, workspace: Workspace, stage_id: str, stage_def: Any,
@@ -732,16 +709,23 @@ class Orchestrator:
         return parse_agent_outcome(stage_id, output, workspace)
 
     def shutdown(self) -> None:
-        """Trigger graceful shutdown."""
-        self._shutdown_event.set()
+        """Trigger graceful shutdown (delegates to Runtime)."""
+        runtime = self.__dict__.get("_runtime")
+        if runtime is not None:
+            runtime.shutdown()
+        else:
+            self._shutdown_event.set()
 
     def _handle_shutdown(self) -> None:
         logger.info("Shutdown signal received")
         self.shutdown()
 
     def _emit(self, event_type: str, message: str, **kwargs: Any) -> None:
-        """Emit an event if the event bus is available."""
-        if self._events:
+        """Emit an event if the event bus is available (delegates)."""
+        runtime = self.__dict__.get("_runtime")
+        if runtime is not None:
+            runtime.emit(event_type, message, **kwargs)
+        elif getattr(self, "_events", None) is not None:
             self._events.emit(event_type, message, **kwargs)
 
 

@@ -8,6 +8,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from integrations.base.tracker import StatusChange, TicketComment
 from orchestrator.orchestrator import Orchestrator
 from workspace.workspace import Workspace, WorkspaceState
 
@@ -34,7 +35,7 @@ def _make_ws(tmp_path: Path, ticket_id: str = "T-1") -> Workspace:
     return ws
 
 
-def _make_tracker(ticket_summary="Summary", comments=None, changelog=None):
+def _make_tracker(ticket_summary="Summary", comments=None, history=None):
     tracker = MagicMock()
     ticket = SimpleNamespace(
         id="T-1",
@@ -54,12 +55,8 @@ def _make_tracker(ticket_summary="Summary", comments=None, changelog=None):
         acceptance_criteria=None,
     )
     tracker.get_ticket = AsyncMock(return_value=ticket)
-    tracker._request = AsyncMock(return_value={
-        "fields": {
-            "comment": {"comments": comments or []},
-        },
-        "changelog": {"histories": changelog or []},
-    })
+    tracker.get_comments = AsyncMock(return_value=comments or [])
+    tracker.get_status_history = AsyncMock(return_value=history or [])
     return tracker
 
 
@@ -92,24 +89,24 @@ async def test_appends_refresh_block_on_rerun(tmp_path):
 
 @pytest.mark.asyncio
 async def test_appends_only_new_comments(tmp_path):
-    existing_comment = {
-        "id": "100",
-        "author": {"displayName": "Alice"},
-        "created": "2026-04-01T10:00:00Z",
-        "body": "First comment",
-    }
-    new_comment = {
-        "id": "101",
-        "author": {"displayName": "Bob"},
-        "created": "2026-05-01T10:00:00Z",
-        "body": "New comment after rerun",
-    }
+    existing_comment = TicketComment(
+        id="100",
+        author="Alice",
+        created="2026-04-01",
+        body="First comment",
+    )
+    new_comment = TicketComment(
+        id="101",
+        author="Bob",
+        created="2026-05-01",
+        body="New comment after rerun",
+    )
     tracker = _make_tracker(comments=[existing_comment, new_comment])
     orch = _make_orch(tracker)
     ws = _make_ws(tmp_path)
     # Simulate existing comments.md with comment 100 already written
     (ws.meta_dir / "comments.md").write_text(
-        "# Jira Comments\n\n<!-- comment:100 -->\n## Alice (2026-04-01)\n\nFirst comment\n"
+        "# Ticket Comments\n\n<!-- comment:100 -->\n## Alice (2026-04-01)\n\nFirst comment\n"
     )
 
     await orch._refetch_ticket_data(ws)
@@ -123,19 +120,21 @@ async def test_appends_only_new_comments(tmp_path):
 
 @pytest.mark.asyncio
 async def test_appends_only_new_history_entries(tmp_path):
-    histories = [
-        {
-            "created": "2026-04-01T09:00:00Z",
-            "author": {"displayName": "PM"},
-            "items": [{"field": "status", "fromString": "To Do", "toString": "In Progress"}],
-        },
-        {
-            "created": "2026-05-01T09:00:00Z",
-            "author": {"displayName": "QA"},
-            "items": [{"field": "status", "fromString": "In Progress", "toString": "Done"}],
-        },
+    history = [
+        StatusChange(
+            created="2026-04-01",
+            from_status="To Do",
+            to_status="In Progress",
+            author="PM",
+        ),
+        StatusChange(
+            created="2026-05-01",
+            from_status="In Progress",
+            to_status="Done",
+            author="QA",
+        ),
     ]
-    tracker = _make_tracker(changelog=histories)
+    tracker = _make_tracker(history=history)
     orch = _make_orch(tracker)
     ws = _make_ws(tmp_path)
     # Existing history has first entry only

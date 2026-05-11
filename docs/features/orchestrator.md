@@ -116,3 +116,4 @@ Central daemon process that continuously polls for work, manages isolated worksp
 Beginning the layer-cut of the monolithic `Orchestrator` class. Each extraction creates a new module under `orchestrator/` and leaves a thin method shim on the `Orchestrator` class for backward compatibility with existing call sites and tests.
 
 - `git_ops.py`: extracted `_git_diff_files` and `_git_head_sha` as module-level functions `git_diff_files` and `git_head_sha`.
+- `ticket_sync.py`: extracted `_refetch_ticket_data`, `_attachment_is_keepable`, `_ticket_to_markdown`, and their constants. Orchestrator keeps a shim on `_refetch_ticket_data`.

@@ -249,3 +249,16 @@ async def test_download_attachment_returns_bytes(monkeypatch) -> None:
     monkeypatch.setattr("integrations.jira.jira_adapter.httpx.AsyncClient", DummyClient)
     data = await adapter.download_attachment("https://x/file")
     assert data == b"file bytes"
+
+
+@pytest.mark.asyncio
+async def test_list_transitions_returns_to_names() -> None:
+    adapter = JiraAdapter(url="https://x", email="e", token="t", project_key="P")
+    raw = {"transitions": [
+        {"id": "21", "name": "Start Review", "to": {"name": "In Review"}},
+        {"id": "31", "name": "Send Back",    "to": {"name": "To Do"}},
+        {"id": "41", "name": "Close",        "to": {"name": ""}},  # falls back to name
+    ]}
+    with patch.object(adapter, "_request", AsyncMock(return_value=raw)):
+        names = await adapter.list_transitions("PROJ-1")
+    assert names == ["In Review", "To Do", "Close"]

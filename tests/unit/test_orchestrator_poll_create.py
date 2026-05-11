@@ -92,10 +92,16 @@ async def test_poll_routes_by_repo_label(tmp_path: Path) -> None:
 
     await orc._poll_and_create_workspaces()
 
+    tracker.poll_tickets.assert_awaited_once()
     orc._create_workspace_for_ticket.assert_called_once()
     pt_arg = orc._create_workspace_for_ticket.call_args.args[0]
     assert pt_arg.ticket.id == "PROJ-1"
     assert pt_arg.repo_id == "android"
+    args = orc._create_workspace_for_ticket.call_args.args
+    assert args[1] == "acme", f"project_id should be 'acme', got {args[1]!r}"
+    # repo_config identity — same object the project's repos dict holds
+    project = orc._projects["acme"]
+    assert args[2] is project.repos["android"], "repo_config arg must be the routed repo"
 
 
 @pytest.mark.asyncio
@@ -115,6 +121,7 @@ async def test_poll_dedupes_in_memory(tmp_path: Path) -> None:
 
     await orc._poll_and_create_workspaces()
 
+    tracker.poll_tickets.assert_awaited_once()
     orc._create_workspace_for_ticket.assert_not_called()
 
 
@@ -134,6 +141,7 @@ async def test_poll_dedupes_on_disk(tmp_path: Path) -> None:
 
     await orc._poll_and_create_workspaces()
 
+    tracker.poll_tickets.assert_awaited_once()
     orc._create_workspace_for_ticket.assert_not_called()
 
 
@@ -158,6 +166,7 @@ async def test_poll_respects_parallel_cap(tmp_path: Path) -> None:
 
     await orc._poll_and_create_workspaces()
 
+    tracker.poll_tickets.assert_awaited_once()
     # Already at cap (2/2) — no new workspaces
     orc._create_workspace_for_ticket.assert_not_called()
 
@@ -176,4 +185,5 @@ async def test_poll_dry_run_no_create(tmp_path: Path) -> None:
 
     await orc._poll_and_create_workspaces()
 
+    tracker.poll_tickets.assert_awaited_once()
     orc._create_workspace_for_ticket.assert_not_called()

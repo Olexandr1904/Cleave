@@ -1146,64 +1146,20 @@ class Orchestrator:
 
 
     async def _on_ticket_done(self, workspace: Workspace) -> None:
-        """Handle ticket completion: TG notification + Jira status transition."""
-        state = workspace.state
-
-        # TG notification
-        if self._notifier:
-            chat_id = self._get_chat_id(workspace)
-            if chat_id:
-                title = tg_format.read_ticket_title(workspace)
-                hdr = tg_format.tg_header("✅", state.company_id, state.ticket_id, title)
-                await self._notifier.send_message(chat_id, (
-                    f"{hdr}\n"
-                    f"Pipeline complete.\n\n"
-                    f"PR ready for merge: {state.pr_url or 'N/A'}\n\n"
-                    f"Jira ticket moved to review status."
-                ))
-
-        # Transition tracker ticket to in-review status (Jira: "In Review",
-        # Trello: a list-name match). Fuzzy keywords are pipeline policy and
-        # stay on this side of the port.
-        if self._tracker:
-            project = self._projects.get(state.company_id)
-            if project:
-                target_status = project.config.jira.statuses.in_review
-                if target_status:
-                    try:
-                        available = await self._tracker.list_transitions(
-                            state.ticket_id,
-                        )
-                        matched = None
-                        target_lower = target_status.lower()
-                        for name in available:
-                            if target_lower in name.lower():
-                                matched = name
-                                break
-                        if matched is None:
-                            for name in available:
-                                if any(kw in name.lower() for kw in (
-                                    "review", "qa", "verification", "ready for qa",
-                                )):
-                                    matched = name
-                                    break
-                        if matched is not None:
-                            await self._tracker.transition_ticket(
-                                state.ticket_id, matched,
-                            )
-                            logger.info(
-                                "Transitioned %s to '%s'", state.ticket_id, matched,
-                            )
-                        else:
-                            logger.warning(
-                                "Cannot transition %s to '%s' — available: %s",
-                                state.ticket_id, target_status, available,
-                            )
-                    except Exception as e:
-                        logger.warning(
-                            "Failed to transition %s on tracker: %s",
-                            state.ticket_id, e,
-                        )
+        from orchestrator.pipeline.actions.finalize import on_ticket_done
+        chat_id = self._get_chat_id(workspace)
+        projects = getattr(self, "_projects", None) or {}
+        project = projects.get(workspace.state.company_id)
+        in_review_status = (
+            project.config.jira.statuses.in_review if project else ""
+        )
+        await on_ticket_done(
+            workspace,
+            getattr(self, "_notifier", None),
+            chat_id,
+            getattr(self, "_tracker", None),
+            in_review_status,
+        )
 
     def _build_blocked_reason(self, workspace: Any, stage_id: str) -> str:
         from orchestrator.escalation import build_blocked_reason
@@ -1240,35 +1196,13 @@ class Orchestrator:
         )
 
     async def _action_finalize(self, workspace: Workspace) -> ActionResult:
-        """Finalize a completed ticket. Returns ActionResult — caller transitions."""
-        state = workspace.state
-
-        if self._notifier:
-            chat_id = self._get_chat_id(workspace)
-            if chat_id:
-                pr_url = state.pr_url or "(no PR)"
-                title = tg_format.read_ticket_title(workspace)
-                hdr = tg_format.tg_header("✅", state.company_id, state.ticket_id, title)
-                message = (
-                    f"{hdr}\n"
-                    f"PR ready for human merge: {pr_url}"
-                )
-                try:
-                    await self._notifier.send_message(chat_id, message)
-                except Exception as e:
-                    logger.warning("Finalize notification failed: %s", e)
-
-        if self._tracker:
-            try:
-                await self._tracker.add_comment(
-                    state.ticket_id,
-                    f"Pipeline complete. PR ready for merge: {state.pr_url or 'N/A'}",
-                )
-            except Exception as e:
-                logger.warning("Finalize Jira comment failed: %s", e)
-
-        return ActionResult(
-            success=True, next_state=Stage.DONE, error="", metadata={},
+        from orchestrator.pipeline.actions.finalize import action_finalize
+        chat_id = self._get_chat_id(workspace)
+        return await action_finalize(
+            workspace,
+            getattr(self, "_notifier", None),
+            chat_id,
+            getattr(self, "_tracker", None),
         )
 
     @staticmethod

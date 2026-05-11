@@ -367,10 +367,10 @@ class TestPausedSkipped:
         """The poll cycle's _SKIP set must include PAUSED so the
         orchestrator never advances paused workspaces. We verify by
         inspecting the source — the constant lives inline inside
-        _poll_cycle, so we read the file."""
+        poll_cycle, which now lives in orchestrator/runtime.py."""
         from pathlib import Path
-        src = Path("orchestrator/orchestrator.py").read_text()
-        assert "Stage.PAUSED" in src, "Stage.PAUSED must appear in orchestrator.py"
+        src = Path("orchestrator/runtime.py").read_text()
+        assert "Stage.PAUSED" in src, "Stage.PAUSED must appear in runtime.py"
         import re
         m = re.search(r"_SKIP\s*=\s*\{([^}]*)\}", src)
         assert m, "Expected an _SKIP = {...} set literal"

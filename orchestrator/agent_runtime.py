@@ -371,14 +371,19 @@ class AgentRuntime:
             # (quota, network, timeout) — treat as deferrable, not permanent
             error_str = str(e).lower()
             if "cli exited" in error_str or "cli returned" in error_str or "returned error" in error_str or "timeout" in error_str or "timed out" in error_str:
-                logger.warning("Agent '%s' CLI error (transient): %s", agent_id, e)
+                retry_at = datetime.now(timezone.utc) + timedelta(minutes=10)
+                logger.warning(
+                    "Agent '%s' CLI error classified transient -> deferred until %s "
+                    "(reuses quota retry path). Error: %s",
+                    agent_id, retry_at.isoformat(timespec="seconds"), e,
+                )
                 return AgentResult(
                     agent_id=agent_id,
                     success=False,
                     output="",
                     error=str(e),
                     failure_kind="quota",  # reuse quota path for auto-retry
-                    retry_at=datetime.now(timezone.utc) + timedelta(minutes=10),
+                    retry_at=retry_at,
                 )
             logger.error("Agent '%s' failed: %s", agent_id, e)
             return AgentResult(
@@ -452,6 +457,18 @@ class AgentRuntime:
 
         ticket_id = workspace.state.ticket_id
         self.register_running(ticket_id, agent_id, pid=0)
+        # Per-call structured progress log (heartbeats, events, post-kill dump).
+        # Lives next to the existing summary log; each call appends.
+        progress_log_path = workspace.logs_dir / f"{agent_id}.events.log"
+        # Raw stream-json tee so we can replay protocol forensics on bad runs.
+        raw_stream_path = workspace.logs_dir / f"{agent_id}.stream.jsonl"
+        logger.info(
+            "Dispatching CLI agent='%s' ticket=%s model=%s budget(wall=%ds, turns=%d, tokens=%d) "
+            "prompt_chars=%d allowed_tools=%s events_log=%s",
+            agent_id, ticket_id, model,
+            budget.wall_clock_seconds, budget.max_cli_turns, budget.max_total_tokens,
+            len(prompt), allowed_tools, progress_log_path,
+        )
         try:
             response = await asyncio.wait_for(
                 adapter.execute_in_workspace(
@@ -462,6 +479,8 @@ class AgentRuntime:
                     max_turns=budget.max_cli_turns,
                     timeout=budget.wall_clock_seconds,
                     pid_callback=lambda pid: self.update_pid(ticket_id, pid),
+                    progress_log_path=progress_log_path,
+                    raw_stream_path=raw_stream_path,
                 ),
                 timeout=budget.wall_clock_seconds,
             )

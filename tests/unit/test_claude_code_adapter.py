@@ -12,6 +12,39 @@ import pytest
 from integrations.llm.claude_code_adapter import ClaudeCodeAdapter, QuotaExhaustedError
 
 
+def _make_streaming_proc(stdout_lines, stderr_lines, rc):
+    """Build a fake asyncio subprocess that emits stream-json line-by-line.
+
+    `stdout_lines` and `stderr_lines` are lists of bytes (without trailing
+    newlines — readline() keeps them, so we add them here). After the last
+    line, readline() returns b"" to signal EOF, the same way the real
+    StreamReader does when the child closes the pipe.
+    """
+    proc = MagicMock()
+    proc.pid = 12345
+    proc.returncode = rc
+
+    proc.stdin = MagicMock()
+    proc.stdin.write = MagicMock()
+    proc.stdin.drain = AsyncMock()
+    proc.stdin.close = MagicMock()
+
+    def _make_reader(lines):
+        queue = [ln + b"\n" for ln in lines] + [b""]
+        async def _readline():
+            return queue.pop(0) if queue else b""
+        return _readline
+
+    proc.stdout = MagicMock()
+    proc.stdout.readline = AsyncMock(side_effect=_make_reader(stdout_lines))
+    proc.stderr = MagicMock()
+    proc.stderr.readline = AsyncMock(side_effect=_make_reader(stderr_lines))
+
+    proc.wait = AsyncMock(return_value=rc)
+    proc.kill = MagicMock()
+    return proc
+
+
 class TestQuickQuery:
     @pytest.fixture
     def adapter(self):
@@ -95,14 +128,14 @@ class TestRunCliQuotaRaises:
         return ClaudeCodeAdapter(model_provider=lambda: "claude-sonnet-4-5")
 
     async def test_non_zero_rc_with_quota_marker_raises_quota(self, adapter):
-        # epoch ms for 2026-04-14T20:00:00 UTC
-        mock_stdout = json.dumps({
+        # Stream-json: a single terminal `result` event carrying is_error.
+        result_event = json.dumps({
+            "type": "result",
+            "subtype": "success",
             "is_error": True,
             "result": "Claude AI usage limit reached|1776196800000",
         }).encode()
-        mock_proc = AsyncMock()
-        mock_proc.communicate = AsyncMock(return_value=(mock_stdout, b""))
-        mock_proc.returncode = 1
+        mock_proc = _make_streaming_proc([result_event], [], rc=1)
 
         with patch("asyncio.create_subprocess_exec", return_value=mock_proc):
             with pytest.raises(QuotaExhaustedError) as exc_info:
@@ -114,9 +147,9 @@ class TestRunCliQuotaRaises:
         )
 
     async def test_non_zero_rc_unrelated_raises_runtime(self, adapter):
-        mock_proc = AsyncMock()
-        mock_proc.communicate = AsyncMock(return_value=(b"", b"file not found"))
-        mock_proc.returncode = 1
+        # Empty stdout (no result event) + non-quota stderr + non-zero rc
+        # falls through to the RuntimeError branch.
+        mock_proc = _make_streaming_proc([], [b"file not found"], rc=1)
 
         with patch("asyncio.create_subprocess_exec", return_value=mock_proc):
             with pytest.raises(RuntimeError) as exc_info:
@@ -127,14 +160,14 @@ class TestRunCliQuotaRaises:
         assert "exited with code 1" in str(exc_info.value)
 
     async def test_zero_rc_with_is_error_quota_raises_quota(self, adapter):
-        mock_stdout = json.dumps({
+        result_event = json.dumps({
+            "type": "result",
+            "subtype": "success",
             "is_error": True,
             "result": "Claude AI usage limit reached|1776196800000",
             "usage": {"input_tokens": 0, "output_tokens": 0},
         }).encode()
-        mock_proc = AsyncMock()
-        mock_proc.communicate = AsyncMock(return_value=(mock_stdout, b""))
-        mock_proc.returncode = 0
+        mock_proc = _make_streaming_proc([result_event], [], rc=0)
 
         with patch("asyncio.create_subprocess_exec", return_value=mock_proc):
             with pytest.raises(QuotaExhaustedError):
@@ -143,14 +176,14 @@ class TestRunCliQuotaRaises:
                 )
 
     async def test_zero_rc_with_is_error_unrelated_raises_runtime(self, adapter):
-        mock_stdout = json.dumps({
+        result_event = json.dumps({
+            "type": "result",
+            "subtype": "success",
             "is_error": True,
             "result": "Tool execution failed",
             "usage": {"input_tokens": 0, "output_tokens": 0},
         }).encode()
-        mock_proc = AsyncMock()
-        mock_proc.communicate = AsyncMock(return_value=(mock_stdout, b""))
-        mock_proc.returncode = 0
+        mock_proc = _make_streaming_proc([result_event], [], rc=0)
 
         with patch("asyncio.create_subprocess_exec", return_value=mock_proc):
             with pytest.raises(RuntimeError) as exc_info:

@@ -50,12 +50,18 @@ class TestActionPushAndOpenPr:
         orch._get_vcs_for_workspace = MagicMock(
             return_value=(MagicMock(), MagicMock()),
         )
+        orch._get_chat_id = MagicMock(return_value="")
         orch._tracker = MagicMock()
+        orch._notifier = None
         orch._events = None
         pr_result = SimpleNamespace(
             success=True, pr_url="https://github.com/x/1", pr_number=42, error="",
         )
-        with patch("orchestrator.orchestrator.create_pr", new=AsyncMock(return_value=pr_result)):
+        mod = "orchestrator.pipeline.actions.push_and_open_pr"
+        with patch(f"{mod}.create_pr", new=AsyncMock(return_value=pr_result)), \
+             patch(f"{mod}.ensure_branch_has_commits"), \
+             patch(f"{mod}.commit_pipeline_artifacts"), \
+             patch(f"{mod}.squash_feature_commits"):
             result = await Orchestrator._action_push_and_open_pr(orch, _fake_workspace())
 
         assert isinstance(result, ActionResult)
@@ -69,6 +75,10 @@ class TestActionPushAndOpenPr:
 
         orch = MagicMock(spec=Orchestrator)
         orch._get_vcs_for_workspace = MagicMock(return_value=(None, None))
+        orch._get_chat_id = MagicMock(return_value="")
+        orch._tracker = MagicMock()
+        orch._notifier = None
+        orch._events = None
 
         result = await Orchestrator._action_push_and_open_pr(orch, _fake_workspace())
 
@@ -84,13 +94,19 @@ class TestActionPushAndOpenPr:
         orch._get_vcs_for_workspace = MagicMock(
             return_value=(MagicMock(), MagicMock()),
         )
+        orch._get_chat_id = MagicMock(return_value="")
         orch._tracker = MagicMock()
+        orch._notifier = None
         orch._events = None
         pr_result = SimpleNamespace(
             success=True, pr_url="https://github.com/x/1", pr_number=42, error="",
         )
         ws = _fake_workspace()
-        with patch("orchestrator.orchestrator.create_pr", new=AsyncMock(return_value=pr_result)):
+        mod = "orchestrator.pipeline.actions.push_and_open_pr"
+        with patch(f"{mod}.create_pr", new=AsyncMock(return_value=pr_result)), \
+             patch(f"{mod}.ensure_branch_has_commits"), \
+             patch(f"{mod}.commit_pipeline_artifacts"), \
+             patch(f"{mod}.squash_feature_commits"):
             await Orchestrator._action_push_and_open_pr(orch, ws)
 
         ws.transition.assert_not_called()

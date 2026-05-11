@@ -263,7 +263,7 @@ def _parse_vcs_section(data: dict, file_path: str) -> VCSConfig:
     github_data = vcs_data.pop("github", None) or {}
     gitlab_data = vcs_data.pop("gitlab", None) or {}
     try:
-        return VCSConfig(
+        vcs = VCSConfig(
             provider=provider,
             github=GitHubConfig(**github_data) if github_data else GitHubConfig(),
             gitlab=GitLabConfig(**gitlab_data) if gitlab_data else GitLabConfig(),
@@ -271,6 +271,17 @@ def _parse_vcs_section(data: dict, file_path: str) -> VCSConfig:
         )
     except TypeError as e:
         raise ConfigError(f"Invalid fields in 'vcs': {e}", file_path=file_path, field="vcs") from e
+
+    # Backward compat: if hoisted fields are not set at the top level but the
+    # provider sub-config has them, copy up. We check the raw YAML rather than
+    # the dataclass value (which has non-empty defaults).
+    if "default_branch" not in vcs_data:
+        sub = vcs.github if vcs.provider == "github" else vcs.gitlab
+        vcs.default_branch = sub.default_branch or "develop"
+    if "branch_prefix" not in vcs_data:
+        sub = vcs.github if vcs.provider == "github" else vcs.gitlab
+        vcs.branch_prefix = sub.branch_prefix or "feature"
+    return vcs
 
 
 def _parse_ci_section(data: dict, file_path: str) -> CIConfig:

@@ -56,6 +56,8 @@ def _project(repo_id: str, repo_label: str, max_parallel: int = 5):
         git=SimpleNamespace(clone_url="https://x/y.git", depth=0),
         vcs=SimpleNamespace(
             provider="github",
+            default_branch="develop",
+            branch_prefix="feature",
             github=SimpleNamespace(default_branch="develop", branch_prefix="feature"),
             gitlab=SimpleNamespace(default_branch="develop", branch_prefix="feature"),
         ),

@@ -103,6 +103,10 @@ Central daemon process that continuously polls for work, manages isolated worksp
 | 2026-05-08 | `workflows/default-workflow.yaml` `dev` stage gains `max_iterations: 3` / `on_max_iterations: "escalate"`. Bounces from `scope_check` and `qa` re-enter `dev` and previously had no cap, so fix → bounce → fix loops could burn unbounded budget. `tests/unit/test_workflow_router.py` no-cap assertion moved off `dev` (now capped) onto `push` (still uncapped). |
 | 2026-05-09 | `_refetch_ticket_data` attachment download now keeps text (crash logs, JSON, source) alongside images, not just images — Jira often serves logs as `application/octet-stream`, so the filter falls back to a text-extension allowlist (`.txt`, `.log`, `.kt`, `.json`, `.stacktrace`, …). Video/audio still rejected; downloads capped at 1 MB. `_ticket_to_markdown` gained an `## Attachments` section so agents see the file list even when content is too large to inline. `agent_runtime.assemble_prompt` now recurses one level into `meta/attachments/`, applying the same per-file 5 KB and total 100 KB context budgets — binaries (images) raise `UnicodeDecodeError` on `read_text` and are silently skipped. |
 
+## Tracker port deleakage (2026-05-11)
+
+`_refetch_ticket_data` no longer reaches into `tracker._request(...)`; it now uses the public `tracker.get_comments` and `tracker.get_status_history` methods, returning `TicketComment` and `StatusChange` dataclasses. The deliberate side effect: newly-created `comments.md` files are headed `# Ticket Comments` instead of `# Jira Comments` (existing files keep their heading).
+
 
 
 

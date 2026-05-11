@@ -566,16 +566,9 @@ class Orchestrator:
                     "Failed to refetch ticket description for %s: %s", ticket_id, e
                 )
 
-        if self._tracker and hasattr(self._tracker, "_request"):
+        if self._tracker:
             try:
-                data = await self._tracker._request(
-                    "GET", f"/issue/{ticket_id}?expand=changelog&fields=comment",
-                )
-
-                # Comments — write fresh on first run, append only new ones on rerun
-                comments = (
-                    data.get("fields", {}).get("comment", {}).get("comments", [])
-                )
+                comments = await self._tracker.get_comments(ticket_id)
                 if comments:
                     comments_file = workspace.meta_dir / "comments.md"
                     existing_ids: set[str] = set()
@@ -588,53 +581,39 @@ class Orchestrator:
                         )
                     new_lines: list[str] = []
                     for c in comments:
-                        cid = str(c.get("id", ""))
-                        if cid and cid in existing_ids:
+                        if c.id and c.id in existing_ids:
                             continue
-                        author = c.get("author", {}).get("displayName", "?")
-                        created = c.get("created", "")[:10]
-                        body = c.get("body", "")
-                        if isinstance(body, dict):
-                            from integrations.jira.jira_adapter import _extract_adf_text
-                            body = _extract_adf_text(body)
-                        marker = f"<!-- comment:{cid} -->\n" if cid else ""
+                        marker = f"<!-- comment:{c.id} -->\n" if c.id else ""
                         new_lines.append(
-                            f"{marker}## {author} ({created})\n\n{body}\n"
+                            f"{marker}## {c.author} ({c.created})\n\n{c.body}\n"
                         )
                     if new_lines:
                         block = "\n".join(new_lines)
                         if comments_file.exists():
                             comments_file.write_text(
                                 comments_file.read_text(encoding="utf-8")
-                                + "\n"
-                                + block,
+                                + "\n" + block,
                                 encoding="utf-8",
                             )
                         else:
                             comments_file.write_text(
-                                "# Jira Comments\n\n" + block, encoding="utf-8"
+                                "# Ticket Comments\n\n" + block, encoding="utf-8",
                             )
 
-                # History — write fresh on first run, append only new lines on rerun
-                changelog = data.get("changelog", {}).get("histories", [])
+                history = await self._tracker.get_status_history(ticket_id)
                 history_file = workspace.meta_dir / "history.md"
                 existing_history = (
                     history_file.read_text(encoding="utf-8")
-                    if history_file.exists()
-                    else ""
+                    if history_file.exists() else ""
                 )
                 new_changes: list[str] = []
-                for h in changelog:
-                    for item in h.get("items", []):
-                        if item.get("field") == "status":
-                            line = (
-                                f"- {h.get('created', '')[:10]}: "
-                                f"{item.get('fromString', '?')} → "
-                                f"{item.get('toString', '?')} "
-                                f"by {h.get('author', {}).get('displayName', '?')}"
-                            )
-                            if line not in existing_history:
-                                new_changes.append(line)
+                for h in history:
+                    line = (
+                        f"- {h.created}: {h.from_status} → "
+                        f"{h.to_status} by {h.author}"
+                    )
+                    if line not in existing_history:
+                        new_changes.append(line)
                 if new_changes:
                     new_block = "\n".join(new_changes) + "\n"
                     if history_file.exists():
@@ -644,12 +623,12 @@ class Orchestrator:
                         )
                     else:
                         history_file.write_text(
-                            "# Status History\n\n" + new_block, encoding="utf-8"
+                            "# Status History\n\n" + new_block, encoding="utf-8",
                         )
 
             except Exception as e:
                 logger.warning(
-                    "Failed to refetch comments/history for %s: %s", ticket_id, e
+                    "Failed to refetch comments/history for %s: %s", ticket_id, e,
                 )
 
         # Download attachments — skip files already present.

@@ -108,6 +108,8 @@ Central daemon process that continuously polls for work, manages isolated worksp
 `_refetch_ticket_data` no longer reaches into `tracker._request(...)`; it now uses the public `tracker.get_comments` and `tracker.get_status_history` methods, returning `TicketComment` and `StatusChange` dataclasses. The deliberate side effect: newly-created `comments.md` files are headed `# Ticket Comments` instead of `# Jira Comments` (existing files keep their heading).
 
 - Attachment download now goes through `tracker.download_attachment` instead of raw `httpx` + `tracker._email/_token`.
+- `_on_ticket_done` uses `tracker.list_transitions` + `tracker.transition_ticket` (pipeline-side fuzzy keyword matching kept; transport-side moved into adapter).
+- Result: ZERO references to `tracker._request`, `_email`, or `_token` remain in `orchestrator/`.
 
 
 

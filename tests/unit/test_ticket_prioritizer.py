@@ -50,11 +50,11 @@ def _project(**repo_overrides: dict) -> LoadedProject:
     repos = {
         "android-app": RepoConfig(
             repo=RepoInfo(id="android-app"),
-            jira_repo_label="android",
+            tracker_label="android",
         ),
         "ios-app": RepoConfig(
             repo=RepoInfo(id="ios-app"),
-            jira_repo_label="ios",
+            tracker_label="ios",
         ),
     }
     return LoadedProject(

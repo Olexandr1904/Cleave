@@ -321,7 +321,7 @@ def _load_repo_config(repo_path: Path, project_config: ProjectConfig, global_def
     data = _load_yaml_file(repo_path)
     file_str = str(repo_path)
 
-    return RepoConfig(
+    repo_cfg = RepoConfig(
         repo=_parse_section(data, "repo", RepoInfo, file_str),
         vcs=_parse_vcs_section(data, file_str),
         ci=_parse_ci_section(data, file_str),
@@ -331,6 +331,7 @@ def _load_repo_config(repo_path: Path, project_config: ProjectConfig, global_def
         testing=_parse_section(data, "testing", TestConfig, file_str),
         build=_parse_section(data, "build", BuildConfig, file_str),
         helpers=_parse_section(data, "helpers", HelpersConfig, file_str),
+        tracker_label=data.get("tracker_label", ""),
         jira_repo_label=data.get("jira_repo_label", ""),
         pr_description_template=data.get("pr_description_template", ""),
         parallelism=_parse_section(data, "parallelism", ParallelismConfig, file_str),
@@ -339,6 +340,12 @@ def _load_repo_config(repo_path: Path, project_config: ProjectConfig, global_def
         telegram=project_config.telegram if project_config.telegram.default_chat_id or project_config.telegram.bot_token else TelegramConfig(),
         defaults=_parse_defaults_section(data, file_str) if data.get("defaults") else project_config.defaults,
     )
+
+    # Backward-compat: accept the old `jira_repo_label` key.
+    if repo_cfg.jira_repo_label and not repo_cfg.tracker_label:
+        repo_cfg.tracker_label = repo_cfg.jira_repo_label
+
+    return repo_cfg
 
 
 def load_config(

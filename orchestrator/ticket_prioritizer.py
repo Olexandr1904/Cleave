@@ -65,17 +65,17 @@ def route_tickets(
     tickets: list[TicketData],
     project: LoadedProject,
 ) -> list[PrioritizedTicket]:
-    """Route each ticket to its target repo via jira_repo_label matching.
+    """Route each ticket to its target repo via tracker_label matching.
 
-    AC4: Each repo has a jira_repo_label. A ticket is routed to the repo
+    AC4: Each repo has a tracker_label. A ticket is routed to the repo
     whose label appears in the ticket's labels list.
     """
     # Build label → (repo_id, project_id) map
     label_map: dict[str, tuple[str, str]] = {}
     project_id = project.config.project.id
     for repo_id, repo_config in project.repos.items():
-        if repo_config.jira_repo_label:
-            label_map[repo_config.jira_repo_label] = (repo_id, project_id)
+        if repo_config.tracker_label:
+            label_map[repo_config.tracker_label] = (repo_id, project_id)
 
     result = []
     for ticket in tickets:

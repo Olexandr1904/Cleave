@@ -8,6 +8,7 @@ from typing import Any
 import httpx
 
 from integrations.base.tracker import (
+    StatusChange,
     TicketComment,
     TicketData,
     TrackerInterface,
@@ -253,6 +254,27 @@ class JiraAdapter(TrackerInterface):
                 created=(c.get("created") or "")[:10],
                 body=str(body),
             ))
+        return out
+
+    async def get_status_history(self, ticket_id: str) -> list[StatusChange]:
+        """Walk Jira's changelog and return only status transitions."""
+        data = await self._request(
+            "GET", f"/issue/{ticket_id}?expand=changelog&fields=comment",
+        )
+        histories = data.get("changelog", {}).get("histories", []) or []
+        out: list[StatusChange] = []
+        for h in histories:
+            created = (h.get("created") or "")[:10]
+            author = (h.get("author") or {}).get("displayName", "?")
+            for item in h.get("items", []) or []:
+                if item.get("field") != "status":
+                    continue
+                out.append(StatusChange(
+                    created=created,
+                    from_status=item.get("fromString", "?") or "?",
+                    to_status=item.get("toString", "?") or "?",
+                    author=author,
+                ))
         return out
 
     async def close(self) -> None:

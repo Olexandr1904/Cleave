@@ -58,3 +58,4 @@ Jira adapter behind the TrackerInterface. Polls Jira for tickets matching config
 `TrackerInterface` extended with `get_comments`, `get_status_history`, `download_attachment`, and `list_transitions` to remove Jira-specific HTTP plumbing from the orchestrator (formerly accessed via `_tracker._request`, `_email`, `_token`). New `TicketComment` and `StatusChange` dataclasses standardize the return shapes. Future Trello/GitLab adapters implement the same surface.
 
 - `get_comments` implemented on `JiraAdapter`: walks `fields.comment.comments`, stripping ADF.
+- `get_status_history` implemented on `JiraAdapter`: walks `changelog.histories[].items[]`, filters `field=status`.

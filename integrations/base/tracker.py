@@ -26,6 +26,24 @@ class TicketData:
     # Each: {"filename": "...", "url": "...", "mime_type": "..."}
 
 
+@dataclass
+class TicketComment:
+    """A comment on a ticket — provider-neutral."""
+    id: str
+    author: str
+    created: str        # ISO date "YYYY-MM-DD" suffices
+    body: str           # plain text; adapter strips formatting markup
+
+
+@dataclass
+class StatusChange:
+    """One step in a ticket's status history."""
+    created: str
+    from_status: str
+    to_status: str
+    author: str
+
+
 class TrackerInterface(ABC):
     """Abstract interface for ticket tracking systems (Jira, Linear, etc.)."""
 
@@ -48,3 +66,19 @@ class TrackerInterface(ABC):
     @abstractmethod
     async def add_comment(self, ticket_id: str, comment: str) -> None:
         """Post a comment to a ticket."""
+
+    @abstractmethod
+    async def get_comments(self, ticket_id: str) -> list[TicketComment]:
+        """Return all comments on a ticket, oldest first."""
+
+    @abstractmethod
+    async def get_status_history(self, ticket_id: str) -> list[StatusChange]:
+        """Return the status-transition history of a ticket, oldest first."""
+
+    @abstractmethod
+    async def download_attachment(self, url: str) -> bytes:
+        """Fetch an attachment's bytes. Adapter owns its auth headers."""
+
+    @abstractmethod
+    async def list_transitions(self, ticket_id: str) -> list[str]:
+        """Return human-readable names of currently available transitions/lists."""

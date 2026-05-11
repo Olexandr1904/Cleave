@@ -65,10 +65,10 @@ async def test_advance_max_iterations_escalates(monkeypatch) -> None:
 
     # Patch routing helpers to deterministic answers
     monkeypatch.setattr(
-        "orchestrator.orchestrator.should_escalate", lambda *a, **k: True,
+        "orchestrator.pipeline.driver.workflow_should_escalate", lambda *a, **k: True,
     )
     monkeypatch.setattr(
-        "orchestrator.orchestrator.get_next_stage", lambda *a, **k: "escalate",
+        "orchestrator.pipeline.driver.get_next_stage", lambda *a, **k: "escalate",
     )
 
     await orc.advance_workspace(ws)

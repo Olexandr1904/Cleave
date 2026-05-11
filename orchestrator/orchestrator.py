@@ -2227,54 +2227,48 @@ class Orchestrator:
                     f"Jira ticket moved to review status."
                 ))
 
-        # Transition Jira ticket to review status
+        # Transition tracker ticket to in-review status (Jira: "In Review",
+        # Trello: a list-name match). Fuzzy keywords are pipeline policy and
+        # stay on this side of the port.
         if self._tracker:
             project = self._projects.get(state.company_id)
             if project:
                 target_status = project.config.jira.statuses.in_review
                 if target_status:
                     try:
-                        # First check available transitions
-                        trans_data = await self._tracker._request("GET", f"/issue/{state.ticket_id}/transitions")
-                        available = trans_data.get("transitions", [])
-                        avail_names = [t.get("to", {}).get("name", t.get("name", "")) for t in available]
-
-                        # Try exact match first, then fuzzy match on "review"/"qa"
-                        matched = False
-                        for t in available:
-                            to_name = t.get("to", {}).get("name", "").lower()
-                            t_name = t.get("name", "").lower()
-                            if target_status.lower() in (to_name, t_name):
-                                await self._tracker._request(
-                                    "POST", f"/issue/{state.ticket_id}/transitions",
-                                    json={"transition": {"id": t["id"]}},
-                                )
-                                logger.info("Transitioned %s to '%s' on Jira", state.ticket_id, target_status)
-                                matched = True
+                        available = await self._tracker.list_transitions(
+                            state.ticket_id,
+                        )
+                        matched = None
+                        target_lower = target_status.lower()
+                        for name in available:
+                            if target_lower in name.lower():
+                                matched = name
                                 break
-
-                        if not matched:
-                            # Try fuzzy: any transition with "review", "qa", "verification" in name
-                            for t in available:
-                                to_name = t.get("to", {}).get("name", "").lower()
-                                t_name = t.get("name", "").lower()
-                                if any(kw in to_name or kw in t_name for kw in ("review", "qa", "verification", "ready for qa")):
-                                    await self._tracker._request(
-                                        "POST", f"/issue/{state.ticket_id}/transitions",
-                                        json={"transition": {"id": t["id"]}},
-                                    )
-                                    actual = t.get("to", {}).get("name", t.get("name", "?"))
-                                    logger.info("Transitioned %s to '%s' (fuzzy match for '%s')", state.ticket_id, actual, target_status)
-                                    matched = True
+                        if matched is None:
+                            for name in available:
+                                if any(kw in name.lower() for kw in (
+                                    "review", "qa", "verification", "ready for qa",
+                                )):
+                                    matched = name
                                     break
-
-                        if not matched:
+                        if matched is not None:
+                            await self._tracker.transition_ticket(
+                                state.ticket_id, matched,
+                            )
+                            logger.info(
+                                "Transitioned %s to '%s'", state.ticket_id, matched,
+                            )
+                        else:
                             logger.warning(
                                 "Cannot transition %s to '%s' — available: %s",
-                                state.ticket_id, target_status, avail_names,
+                                state.ticket_id, target_status, available,
                             )
                     except Exception as e:
-                        logger.warning("Failed to transition %s on Jira: %s", state.ticket_id, e)
+                        logger.warning(
+                            "Failed to transition %s on tracker: %s",
+                            state.ticket_id, e,
+                        )
 
     _BLOCKED_REASON_MAX_CHARS = 800
 

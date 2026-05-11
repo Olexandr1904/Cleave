@@ -1,8 +1,8 @@
-"""Characterization tests for _on_ticket_done fuzzy Jira transition.
+"""Characterization tests for _on_ticket_done fuzzy tracker transition.
 
-The matching logic walks tracker._request('GET', '/issue/.../transitions')
-output and POSTs the first matching transition. After refactor this same
-logic must work via tracker.list_transitions() + tracker.transition_ticket().
+The matching logic uses tracker.list_transitions() to fetch available
+transition names and tracker.transition_ticket() to apply the first match
+(exact, then fuzzy on "review"/"qa"/"verification" keywords).
 """
 from __future__ import annotations
 
@@ -58,54 +58,36 @@ def _project(in_review="In Review"):
 @pytest.mark.asyncio
 async def test_exact_match_transition_fires(monkeypatch) -> None:
     tracker = AsyncMock()
-    tracker._request.side_effect = [
-        # GET /issue/T-1/transitions
-        {"transitions": [
-            {"id": "21", "name": "Start Review", "to": {"name": "In Review"}},
-        ]},
-        # POST /issue/T-1/transitions
-        {},
-    ]
+    tracker.list_transitions.return_value = ["In Review"]
     orc = _orc(tracker, _project("In Review"), monkeypatch)
     await orc._on_ticket_done(_ws())
-    # GET then POST = 2 requests
-    assert tracker._request.await_count == 2
-    post_call = tracker._request.await_args_list[1]
-    assert post_call.args[0] == "POST"
+    tracker.transition_ticket.assert_awaited_once()
+    assert tracker.transition_ticket.await_args.args[1] == "In Review"
 
 
 @pytest.mark.asyncio
 async def test_fuzzy_match_on_review_keyword(monkeypatch) -> None:
     tracker = AsyncMock()
-    tracker._request.side_effect = [
-        {"transitions": [
-            {"id": "31", "name": "Ready for Review", "to": {"name": "Reviewing"}},
-        ]},
-        {},
-    ]
+    tracker.list_transitions.return_value = ["Reviewing"]
     orc = _orc(tracker, _project("Nonexistent Status"), monkeypatch)
     await orc._on_ticket_done(_ws())
-    assert tracker._request.await_count == 2
+    tracker.transition_ticket.assert_awaited_once()
+    assert tracker.transition_ticket.await_args.args[1] == "Reviewing"
 
 
 @pytest.mark.asyncio
 async def test_no_matching_transition_does_nothing_fatal(monkeypatch) -> None:
     tracker = AsyncMock()
-    tracker._request.return_value = {"transitions": [
-        {"id": "11", "name": "Close as Won't Do", "to": {"name": "Closed"}},
-    ]}
+    tracker.list_transitions.return_value = ["Closed"]
     orc = _orc(tracker, _project("In Review"), monkeypatch)
-    # Should not raise
     await orc._on_ticket_done(_ws())
-    # GET happened; POST did not
-    assert tracker._request.await_count == 1
+    tracker.transition_ticket.assert_not_awaited()
 
 
 @pytest.mark.asyncio
 async def test_done_sends_completion_message(monkeypatch) -> None:
     """_on_ticket_done sends a TG message containing pipeline-complete copy."""
     tracker = AsyncMock()
-    tracker._request.return_value = {"transitions": []}
     project = SimpleNamespace(
         config=SimpleNamespace(
             jira=SimpleNamespace(statuses=SimpleNamespace(in_review="")),
@@ -120,3 +102,6 @@ async def test_done_sends_completion_message(monkeypatch) -> None:
     assert chat_id == "chat-1"
     assert "Pipeline complete" in message
     assert "https://g/pr/42" in message
+    # With empty target_status, transition lookups are skipped entirely.
+    tracker.list_transitions.assert_not_awaited()
+    tracker.transition_ticket.assert_not_awaited()

@@ -62,6 +62,9 @@ class Orchestrator:
     # represents the "happy path" past the gate. Gating should ONLY fire when
     # the workflow would move forward past the gate — not on failure loops
     # (QA fail → dev) or escalation (analysis unclear → escalate).
+    # Source of truth lives in orchestrator.approval_gate; mirrored here as
+    # class attributes for backward compat with any callers/tests that reach
+    # in via Orchestrator._APPROVAL_GATE_STATES.
     _APPROVAL_GATE_STATES = {Stage.ANALYSIS, Stage.QA}
     _GATE_HAPPY_PATH_NEXT_STAGE = {
         Stage.ANALYSIS: "dev",
@@ -266,22 +269,9 @@ class Orchestrator:
     def _should_approval_gate(
         self, completed_state: str, next_stage: str | None = None,
     ) -> bool:
-        """Check if the workspace should pause for approval after this state.
-
-        When next_stage is provided, the gate only fires on happy-path
-        transitions (ANALYSIS→dev, QA→push, PR_REVIEW→done). Failure loops
-        and escalations bypass the gate. When next_stage is None, the gate
-        fires if the completed_state is in the gate set — used by callers
-        (e.g., the PR_REVIEW "no comments" branch) that have already
-        established they are on the happy path.
-        """
-        if not self._mode_handler or self._mode_handler.get_mode() != "manual":
-            return False
-        if completed_state not in self._APPROVAL_GATE_STATES:
-            return False
-        if next_stage is None:
-            return True
-        return next_stage == self._GATE_HAPPY_PATH_NEXT_STAGE.get(completed_state)
+        """Shim — see orchestrator.approval_gate.should_approval_gate."""
+        from orchestrator.approval_gate import should_approval_gate
+        return should_approval_gate(self._mode_handler, completed_state, next_stage)
 
     def _get_repo_config(self, workspace: Workspace) -> RepoConfig | None:
         """Find the RepoConfig matching a workspace."""

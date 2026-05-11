@@ -139,7 +139,7 @@ class TrackerInterface(ABC):
 | `download_attachment` | Raw `httpx.get` with `Basic base64(tracker._email:tracker._token)` headers | Trello attachments + API key/token in URL |
 | `list_transitions` | `_tracker._request("GET", "/issue/{id}/transitions")` | Returns Trello list names; same shape |
 
-**Fuzzy-match policy stays in orchestrator.** `_action_finalize` does "find a transition whose name contains 'review' / 'qa' / 'verification'". That's a pipeline policy, not a transport detail. It moves to `pipeline/actions/finalize.py` and calls `tracker.list_transitions()` + `tracker.transition_ticket(id, name)` — identical for Jira and Trello.
+**Fuzzy-match policy stays in orchestrator.** `_on_ticket_done` does "find a transition whose name contains 'review' / 'qa' / 'verification'". That's a pipeline policy, not a transport detail. It moves to `pipeline/actions/finalize.py` alongside `_action_finalize`, and calls `tracker.list_transitions()` + `tracker.transition_ticket(id, name)` — identical for Jira and Trello.
 
 **Notifier interface:** no changes.
 **VCSInterface:** no changes. GitLab adapter will be a drop-in implementation when written.
@@ -224,7 +224,7 @@ Sequence the diff so each step is small enough to reason about. Run `pytest test
 
 ### Step B — Cut orchestrator's direct `_request` / `_email` / `_token` access
 1. `_refetch_ticket_data` (orchestrator.py:540–691): replace the 4 `_request` calls and the raw `httpx` attachment download with the new tracker methods.
-2. `_action_finalize` (orchestrator.py:2260+): replace the 3 `_request` calls with `list_transitions` + `transition_ticket`.
+2. `_on_ticket_done` (orchestrator.py:2244–2308): replace the 3 `_request` calls with `list_transitions` + `transition_ticket`.
 3. ✅ Tests still pass — `orchestrator.py` is still one file, just no longer Jira-shaped.
 
 ### Step C — Config schema tightening

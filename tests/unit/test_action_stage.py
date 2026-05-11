@@ -210,9 +210,9 @@ class TestHandleActionStage:
 
         orch = MagicMock(spec=Orchestrator)
         orch._dry_run = False
-        orch._emit = MagicMock()
+        orch._workflow = None
+        orch._events = MagicMock()
         orch._mode_handler = None
-        orch._should_approval_gate = MagicMock(return_value=False)
         orch._rollback_iteration = MagicMock()
         orch._notifier = None
         return orch
@@ -231,14 +231,15 @@ class TestHandleActionStage:
             metadata={"pr_url": "https://github.com/x/1", "pr_number": 42},
         ))
 
-        with patch("orchestrator.orchestrator.stage_verifier") as sv:
+        with patch("orchestrator.pipeline.action_stage.stage_verifier") as sv, \
+             patch("orchestrator.pipeline.action_stage.should_approval_gate", return_value=False):
             sv.capture_stage_start = MagicMock(return_value="abc123")
             sv.verify = MagicMock(return_value=SimpleNamespace(ok=True, stage_id="push", reason=""))
             await Orchestrator._handle_action_stage(orch, ws, "push", self._make_stage_def("push_and_open_pr"))
 
         ws.update_state.assert_any_call(pr_url="https://github.com/x/1", pr_number=42)
         ws.transition.assert_called_with(Stage.PR_REVIEW)
-        orch._emit.assert_any_call(
+        orch._events.emit.assert_any_call(
             "action_completed", ANY,
             project_id="test-co", ticket_id="T-1",
             data={"stage": "push", "pr_url": "https://github.com/x/1", "pr_number": 42},
@@ -249,19 +250,19 @@ class TestHandleActionStage:
         from orchestrator.orchestrator import Orchestrator
 
         orch = self._make_orchestrator()
-        orch._handle_escalate = AsyncMock()
         ws = _fake_workspace()
         orch._action_push_and_open_pr = AsyncMock(return_value=ActionResult(
             success=False, next_state="", error="No VCS configured", metadata={},
         ))
 
-        with patch("orchestrator.orchestrator.stage_verifier") as sv:
+        with patch("orchestrator.pipeline.action_stage.stage_verifier") as sv, \
+             patch("orchestrator.pipeline.action_stage.handle_escalate", new=AsyncMock()) as esc:
             sv.capture_stage_start = MagicMock(return_value="abc123")
             await Orchestrator._handle_action_stage(orch, ws, "push", self._make_stage_def("push_and_open_pr"))
             sv.verify.assert_not_called()
 
         ws.update_state.assert_called_once_with(error="No VCS configured")
-        orch._handle_escalate.assert_awaited_once_with(ws)
+        esc.assert_awaited_once()
         ws.transition.assert_not_called()
 
     @pytest.mark.asyncio
@@ -275,7 +276,7 @@ class TestHandleActionStage:
             metadata={"pr_url": "https://github.com/x/1", "pr_number": 42},
         ))
 
-        with patch("orchestrator.orchestrator.stage_verifier") as sv:
+        with patch("orchestrator.pipeline.action_stage.stage_verifier") as sv:
             sv.capture_stage_start = MagicMock(return_value="abc123")
             sv.verify = MagicMock(return_value=SimpleNamespace(
                 ok=False, stage_id="push",
@@ -285,7 +286,7 @@ class TestHandleActionStage:
 
         ws.transition.assert_called_once_with(Stage.BLOCKED)
         assert "branch not pushed" in ws.update_state.call_args[1]["error"]
-        orch._emit.assert_any_call(
+        orch._events.emit.assert_any_call(
             "stage_verification_failed", ANY,
             project_id="test-co", ticket_id="T-1",
             data={"stage": "push", "reason": "remote has no ref refs/heads/feature/t-1 (branch not pushed)"},
@@ -301,33 +302,34 @@ class TestHandleActionStage:
             success=False, next_state="", error="", metadata={}, skipped=True,
         ))
 
-        with patch("orchestrator.orchestrator.stage_verifier") as sv:
+        with patch("orchestrator.pipeline.action_stage.stage_verifier") as sv, \
+             patch("orchestrator.pipeline.action_stage.rollback_iteration") as rb:
             sv.capture_stage_start = MagicMock(return_value=None)
             await Orchestrator._handle_action_stage(orch, ws, "pr_review", self._make_stage_def("fetch_pr_comments"))
             sv.verify.assert_not_called()
 
         ws.transition.assert_not_called()
-        orch._rollback_iteration.assert_called_once_with(ws, "pr_review")
+        rb.assert_called_once_with(ws, "pr_review")
 
     @pytest.mark.asyncio
     async def test_approval_gate_after_verify(self):
         from orchestrator.orchestrator import Orchestrator
 
         orch = self._make_orchestrator()
-        orch._should_approval_gate = MagicMock(return_value=True)
         orch._notifier = None
         ws = _fake_workspace(state=Stage.PR_REVIEW, pr_number=10)
         orch._action_fetch_pr_comments = AsyncMock(return_value=ActionResult(
             success=True, next_state=Stage.DONE, error="", metadata={},
         ))
 
-        with patch("orchestrator.orchestrator.stage_verifier") as sv:
+        with patch("orchestrator.pipeline.action_stage.stage_verifier") as sv, \
+             patch("orchestrator.pipeline.action_stage.should_approval_gate", return_value=True):
             sv.capture_stage_start = MagicMock(return_value=None)
             sv.verify = MagicMock(return_value=SimpleNamespace(ok=True, stage_id="pr_review", reason=""))
             await Orchestrator._handle_action_stage(orch, ws, "pr_review", self._make_stage_def("fetch_pr_comments"))
 
         ws.transition.assert_called_once_with(Stage.AWAITING_APPROVAL)
-        orch._emit.assert_any_call(
+        orch._events.emit.assert_any_call(
             "approval_requested", ANY,
             project_id="test-co", ticket_id="T-1",
             data={"gate": "PR_REVIEW"},

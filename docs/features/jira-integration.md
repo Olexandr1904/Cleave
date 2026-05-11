@@ -60,3 +60,4 @@ Jira adapter behind the TrackerInterface. Polls Jira for tickets matching config
 - `get_comments` implemented on `JiraAdapter`: walks `fields.comment.comments`, stripping ADF.
 - `get_status_history` implemented on `JiraAdapter`: walks `changelog.histories[].items[]`, filters `field=status`.
 - `download_attachment` implemented on `JiraAdapter`: adapter-owned basic auth, no leakage of `_email`/`_token`.
+- `list_transitions` implemented on `JiraAdapter`: prefers `to.name`, falls back to `name`.

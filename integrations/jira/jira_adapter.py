@@ -256,6 +256,20 @@ class JiraAdapter(TrackerInterface):
             ))
         return out
 
+    async def list_transitions(self, ticket_id: str) -> list[str]:
+        """Return human-readable target names of currently available transitions.
+
+        For each transition Jira returns both an action name (e.g. "Start
+        Review") and a target state (`to.name`, e.g. "In Review"). Prefer the
+        target name; fall back to the action name when the target is empty.
+        """
+        data = await self._request("GET", f"/issue/{ticket_id}/transitions")
+        names: list[str] = []
+        for t in data.get("transitions", []) or []:
+            to_name = (t.get("to") or {}).get("name", "") or ""
+            names.append(to_name or t.get("name", ""))
+        return names
+
     async def download_attachment(self, url: str) -> bytes:
         """Fetch an attachment. Uses adapter-owned basic-auth credentials."""
         import base64

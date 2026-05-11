@@ -121,6 +121,9 @@ class TestActionFetchPrComments:
         from orchestrator.orchestrator import Orchestrator
 
         orch = MagicMock(spec=Orchestrator)
+        # Post-refactor: shim materializes (vcs, repo_config) once at entry,
+        # so the mock must return an unpackable 2-tuple.
+        orch._get_vcs_for_workspace = MagicMock(return_value=(None, None))
         ws = _fake_workspace(state=Stage.PR_REVIEW, pr_number=10)
         stage_def = self._make_stage_def()
 

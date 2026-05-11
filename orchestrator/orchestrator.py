@@ -645,29 +645,19 @@ class Orchestrator:
                 if (attachments_dir / filename).exists():
                     continue  # already downloaded, skip
                 try:
-                    import httpx
-                    headers = {}
-                    if hasattr(self._tracker, '_email') and hasattr(self._tracker, '_token'):
-                        import base64
-                        creds = base64.b64encode(
-                            f"{self._tracker._email}:{self._tracker._token}".encode()
-                        ).decode()
-                        headers = {"Authorization": f"Basic {creds}"}
-                    async with httpx.AsyncClient(timeout=30) as client:
-                        resp = await client.get(att["url"], headers=headers, follow_redirects=True)
-                        if resp.status_code != 200:
-                            logger.warning("Failed to download %s: HTTP %d", filename, resp.status_code)
-                            continue
-                        if len(resp.content) > _MAX_ATTACHMENT_BYTES:
-                            logger.info(
-                                "Skipping oversized attachment %s (%d bytes > %d)",
-                                filename, len(resp.content), _MAX_ATTACHMENT_BYTES,
-                            )
-                            continue
-                        (attachments_dir / filename).write_bytes(resp.content)
-                        logger.info("Downloaded attachment %s for %s", filename, ticket_id)
+                    content = await self._tracker.download_attachment(att["url"])
+                    if len(content) > _MAX_ATTACHMENT_BYTES:
+                        logger.info(
+                            "Skipping oversized attachment %s (%d bytes > %d)",
+                            filename, len(content), _MAX_ATTACHMENT_BYTES,
+                        )
+                        continue
+                    (attachments_dir / filename).write_bytes(content)
+                    logger.info("Downloaded attachment %s for %s", filename, ticket_id)
                 except Exception as e:
-                    logger.warning("Failed to download attachment %s: %s", filename, e)
+                    logger.warning(
+                        "Failed to download attachment %s: %s", filename, e,
+                    )
 
     async def _create_workspace_for_ticket(
         self,

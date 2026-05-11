@@ -190,3 +190,40 @@ async def test_get_comments_returns_ticketcomment_list() -> None:
     assert comments[0].body == "first comment"
     assert comments[0].created == "2026-05-10"
     assert comments[1].body == "ADF comment"
+
+
+@pytest.mark.asyncio
+async def test_get_status_history_returns_status_changes() -> None:
+    adapter = JiraAdapter(url="https://x", email="e", token="t", project_key="P")
+    raw = {
+        "changelog": {
+            "histories": [
+                {
+                    "created": "2026-05-10T08:00:00.000+0000",
+                    "author": {"displayName": "Alice"},
+                    "items": [
+                        {"field": "status", "fromString": "To Do",
+                         "toString": "In Progress"},
+                        {"field": "labels", "fromString": "", "toString": "x"},
+                    ],
+                },
+                {
+                    "created": "2026-05-11T15:00:00.000+0000",
+                    "author": {"displayName": "Bob"},
+                    "items": [
+                        {"field": "status", "fromString": "In Progress",
+                         "toString": "In Review"},
+                    ],
+                },
+            ],
+        },
+    }
+    with patch.object(adapter, "_request", AsyncMock(return_value=raw)):
+        history = await adapter.get_status_history("PROJ-1")
+
+    assert len(history) == 2  # non-status items skipped
+    assert all(isinstance(h, StatusChange) for h in history)
+    assert history[0].from_status == "To Do"
+    assert history[0].to_status == "In Progress"
+    assert history[0].created == "2026-05-10"
+    assert history[1].to_status == "In Review"

@@ -7,7 +7,11 @@ from typing import Any
 
 import httpx
 
-from integrations.base.tracker import TicketData, TrackerInterface
+from integrations.base.tracker import (
+    TicketComment,
+    TicketData,
+    TrackerInterface,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -229,6 +233,27 @@ class JiraAdapter(TrackerInterface):
             },
         )
         logger.info("Added comment to %s", ticket_id)
+
+    async def get_comments(self, ticket_id: str) -> list[TicketComment]:
+        """Fetch all comments on a ticket. ADF bodies are stripped to plain text."""
+        data = await self._request(
+            "GET", f"/issue/{ticket_id}?expand=changelog&fields=comment",
+        )
+        raw_comments = (
+            data.get("fields", {}).get("comment", {}).get("comments", []) or []
+        )
+        out: list[TicketComment] = []
+        for c in raw_comments:
+            body = c.get("body", "")
+            if isinstance(body, dict):
+                body = _extract_adf_text(body)
+            out.append(TicketComment(
+                id=str(c.get("id", "")),
+                author=(c.get("author") or {}).get("displayName", "?"),
+                created=(c.get("created") or "")[:10],
+                body=str(body),
+            ))
+        return out
 
     async def close(self) -> None:
         """Close the HTTP client."""

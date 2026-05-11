@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+from unittest.mock import AsyncMock, MagicMock, patch
+
 import httpx
 import pytest
 import respx
 
+from integrations.base.tracker import StatusChange, TicketComment
 from integrations.jira.jira_adapter import JiraAdapter
 
 
@@ -145,3 +148,45 @@ def test_build_jql_ands_multiple_trigger_labels():
     assert 'labels = "ai-pipeline"' in jql
     assert 'labels = "acme-mobile"' in jql
     assert jql.count("AND") >= 3  # project AND label1 AND label2 AND status
+
+
+@pytest.mark.asyncio
+async def test_get_comments_returns_ticketcomment_list() -> None:
+    adapter = JiraAdapter(
+        url="https://x", email="e", token="t", project_key="P",
+    )
+    raw = {
+        "fields": {
+            "comment": {
+                "comments": [
+                    {
+                        "id": "1001",
+                        "author": {"displayName": "Alice"},
+                        "created": "2026-05-10T12:00:00.000+0000",
+                        "body": "first comment",
+                    },
+                    {
+                        "id": "1002",
+                        "author": {"displayName": "Bob"},
+                        "created": "2026-05-11T09:00:00.000+0000",
+                        "body": {
+                            "type": "doc", "version": 1,
+                            "content": [{"type": "paragraph", "content": [
+                                {"type": "text", "text": "ADF comment"},
+                            ]}],
+                        },
+                    },
+                ],
+            },
+        },
+    }
+    with patch.object(adapter, "_request", AsyncMock(return_value=raw)):
+        comments = await adapter.get_comments("PROJ-1")
+
+    assert len(comments) == 2
+    assert isinstance(comments[0], TicketComment)
+    assert comments[0].id == "1001"
+    assert comments[0].author == "Alice"
+    assert comments[0].body == "first comment"
+    assert comments[0].created == "2026-05-10"
+    assert comments[1].body == "ADF comment"

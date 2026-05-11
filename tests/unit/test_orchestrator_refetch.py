@@ -162,7 +162,7 @@ async def test_no_op_when_no_tracker(tmp_path):
 
 
 class TestAttachmentFilter:
-    """_attachment_is_keepable governs which Jira attachments we download."""
+    """attachment_is_keepable governs which Jira attachments we download."""
 
     @pytest.mark.parametrize("filename,mime", [
         ("crash.txt", "text/plain"),
@@ -173,8 +173,8 @@ class TestAttachmentFilter:
         ("stack.stacktrace", ""),
     ])
     def test_keeps_text_and_image_attachments(self, filename, mime):
-        from orchestrator.orchestrator import _attachment_is_keepable
-        assert _attachment_is_keepable(filename, mime) is True
+        from orchestrator.ticket_sync import attachment_is_keepable
+        assert attachment_is_keepable(filename, mime) is True
 
     @pytest.mark.parametrize("filename,mime", [
         ("repro.mp4", "video/mp4"),
@@ -183,13 +183,13 @@ class TestAttachmentFilter:
         ("archive.zip", "application/zip"),
     ])
     def test_skips_video_audio_and_unknown_binary(self, filename, mime):
-        from orchestrator.orchestrator import _attachment_is_keepable
-        assert _attachment_is_keepable(filename, mime) is False
+        from orchestrator.ticket_sync import attachment_is_keepable
+        assert attachment_is_keepable(filename, mime) is False
 
 
 def test_ticket_md_lists_attachments():
     """ticket.md surfaces the attachment list so agents know what's available."""
-    from orchestrator.orchestrator import _ticket_to_markdown
+    from orchestrator.ticket_sync import ticket_to_markdown
     from integrations.base.tracker import TicketData
 
     ticket = TicketData(
@@ -210,7 +210,7 @@ def test_ticket_md_lists_attachments():
             {"filename": "repro.mp4", "url": "u2", "mime_type": "video/mp4"},
         ],
     )
-    md = _ticket_to_markdown(ticket)
+    md = ticket_to_markdown(ticket)
     assert "## Attachments" in md
     assert "crash.txt" in md
     # Video is listed but flagged as skipped so agents don't expect content.

@@ -567,10 +567,8 @@ class TestRerunEndpoint:
     def test_rerun_transitions_to_analysis(self, bus, store, orchestrator, mode_handler, tmp_path):
         ws = self._make_done_workspace(tmp_path)
         orchestrator.get_active_workspaces.return_value = [ws]
-        orchestrator._refetch_ticket_data = AsyncMock()
         orchestrator._workspace_manager = MagicMock()
         orchestrator._workspace_manager.reset_source = MagicMock(return_value="feature/T-1-t-1")
-        orchestrator._notify_rerun = AsyncMock()
         client = self._make_client(bus, store, orchestrator, mode_handler, tmp_path)
 
         resp = client.post("/api/workspaces/T-1/rerun", json={"reason": "QA found login bug"})
@@ -610,10 +608,8 @@ class TestRerunEndpoint:
     def test_rerun_writes_rerun_history(self, bus, store, orchestrator, mode_handler, tmp_path):
         ws = self._make_done_workspace(tmp_path)
         orchestrator.get_active_workspaces.return_value = [ws]
-        orchestrator._refetch_ticket_data = AsyncMock()
         orchestrator._workspace_manager = MagicMock()
         orchestrator._workspace_manager.reset_source = MagicMock(return_value="develop")
-        orchestrator._notify_rerun = AsyncMock()
         client = self._make_client(bus, store, orchestrator, mode_handler, tmp_path)
 
         client.post("/api/workspaces/T-1/rerun", json={"reason": "Post-QA regression"})
@@ -627,10 +623,8 @@ class TestRerunEndpoint:
     def test_rerun_clears_stale_pr_fields(self, bus, store, orchestrator, mode_handler, tmp_path):
         ws = self._make_done_workspace(tmp_path)
         orchestrator.get_active_workspaces.return_value = [ws]
-        orchestrator._refetch_ticket_data = AsyncMock()
         orchestrator._workspace_manager = MagicMock()
         orchestrator._workspace_manager.reset_source = MagicMock(return_value="feature/T-1-t-1")
-        orchestrator._notify_rerun = AsyncMock()
         client = self._make_client(bus, store, orchestrator, mode_handler, tmp_path)
 
         client.post("/api/workspaces/T-1/rerun", json={"reason": "retry"})

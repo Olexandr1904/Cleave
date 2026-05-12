@@ -9,34 +9,26 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+from orchestrator.pipeline.actions.fetch_pr_comments import (
+    action_fetch_pr_comments,
+    execute_review_decisions,
+)
 
-def _orch():
-    from orchestrator.orchestrator import Orchestrator
-    o = Orchestrator.__new__(Orchestrator)
-    o._notifier = MagicMock()
-    o._notifier.send_message = AsyncMock(return_value=999)
-    o._events = None
-    o._get_chat_id = MagicMock(return_value="chat-1")
-    o._agent_runtime = MagicMock()
-    o._log_pipeline = MagicMock()
-    o._now = MagicMock(return_value="2026-04-30T10:00:00Z")
-    o._git_diff_files = MagicMock(return_value=set())
-    o._git_head_sha = MagicMock(return_value="abcdef0000000000")
-    return o
+
+def _notifier():
+    n = MagicMock()
+    n.send_message = AsyncMock(return_value=999)
+    return n
 
 
 class TestAutoFixReply:
     @pytest.mark.asyncio
     async def test_auto_fix_posts_will_fix_reply_at_classification_time(self, tmp_path, monkeypatch):
         from orchestrator.comment_classifier import ClassifiedComment
-        import orchestrator.orchestrator as omod
-
-        orch = _orch()
 
         vcs = MagicMock()
         vcs.reply_to_comment = AsyncMock()
         vcs.resolve_comment = AsyncMock()
-        orch._get_vcs_for_workspace = MagicMock(return_value=(vcs, None))
 
         async def fake_classify(comments, ws, runtime, *, operator_hint=""):
             return [ClassifiedComment(
@@ -64,7 +56,15 @@ class TestAutoFixReply:
             )]
         vcs.get_pr_comments = fake_get_comments
 
-        await orch._action_fetch_pr_comments(ws, stage_def=None)
+        await action_fetch_pr_comments(
+            ws, None,
+            get_vcs=lambda: (vcs, None),
+            get_chat_id=lambda: "chat-1",
+            tracker=None,
+            notifier=_notifier(),
+            agent_runtime=MagicMock(),
+            event_bus=None,
+        )
 
         # AUTO_FIX must post 'Will fix: ...' on GitHub at classification time
         vcs.reply_to_comment.assert_awaited()
@@ -86,12 +86,9 @@ class TestGitHubReplyFailureAudit:
         from orchestrator.comment_classifier import ClassifiedComment
         import orchestrator.comment_classifier as cc_mod
 
-        orch = _orch()
-
         vcs = MagicMock()
         vcs.reply_to_comment = AsyncMock(side_effect=RuntimeError("GitHub down"))
         vcs.resolve_comment = AsyncMock()
-        orch._get_vcs_for_workspace = MagicMock(return_value=(vcs, None))
 
         async def fake_classify(comments, ws, runtime, *, operator_hint=""):
             return [ClassifiedComment(
@@ -117,7 +114,15 @@ class TestGitHubReplyFailureAudit:
             )]
         vcs.get_pr_comments = fake_get_comments
 
-        await orch._action_fetch_pr_comments(ws, stage_def=None)
+        await action_fetch_pr_comments(
+            ws, None,
+            get_vcs=lambda: (vcs, None),
+            get_chat_id=lambda: "chat-1",
+            tracker=None,
+            notifier=_notifier(),
+            agent_runtime=MagicMock(),
+            event_bus=None,
+        )
 
         # Audit log must reflect the failure
         report_path = tmp_path / "pr-review-resolution.md"
@@ -130,12 +135,9 @@ class TestGitHubReplyFailureAudit:
 class TestEscalateFixDecisionReply:
     @pytest.mark.asyncio
     async def test_operator_fix_decision_posts_will_fix_reply(self, tmp_path):
-        orch = _orch()
-
         vcs = MagicMock()
         vcs.reply_to_comment = AsyncMock()
         vcs.resolve_comment = AsyncMock()
-        orch._get_vcs_for_workspace = MagicMock(return_value=(vcs, None))
 
         ws = MagicMock()
         ws.reports_dir = tmp_path
@@ -151,7 +153,12 @@ class TestEscalateFixDecisionReply:
         )
         ws.save_state = MagicMock()
 
-        await orch._execute_review_decisions(ws)
+        await execute_review_decisions(
+            ws,
+            get_vcs=lambda: (vcs, None),
+            get_chat_id=lambda: "chat-1",
+            notifier=_notifier(),
+        )
 
         vcs.reply_to_comment.assert_awaited()
         called_with = vcs.reply_to_comment.call_args.args

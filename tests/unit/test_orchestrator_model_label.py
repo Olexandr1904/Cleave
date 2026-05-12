@@ -56,24 +56,32 @@ def _make_repo_config() -> MagicMock:
 
 
 def _make_orchestrator(fake_ws, tracker_mock, default_model="claude-sonnet-4-6"):
-    """Build a real Orchestrator with the heavy deps stubbed.
+    """Build a minimal stand-in carrying the deps create_workspace_for_ticket needs.
 
-    Bypasses __init__ and injects the attributes _create_workspace_for_ticket
-    accesses. The stubs are minimal — we only need the method to reach the
-    end without crashing so we can inspect state.model and add_comment calls.
+    Tests call `_create_workspace(orch, pt, ...)` which forwards to the module
+    function.
     """
-    from orchestrator.orchestrator import Orchestrator
-
-    orch = Orchestrator.__new__(Orchestrator)
+    orch = MagicMock()
     orch._workspace_manager = MagicMock()
     orch._workspace_manager.create.return_value = fake_ws
     orch._tracker = tracker_mock
-    orch._global_config = MagicMock()
-    orch._emit = MagicMock()
-    orch._repo_vcs = {}  # empty -> no existing-PR check
-    orch._mode_handler = None
+    orch._repo_vcs = {}
     orch._default_model_provider = lambda: default_model
+    orch._notifier = None
     return orch
+
+
+async def _create_workspace(orch, pt, project_id, repo_config):
+    """Bridge — call the module function with deps from orch."""
+    from orchestrator.ingest import create_workspace_for_ticket
+    return await create_workspace_for_ticket(
+        pt, project_id, repo_config,
+        workspace_manager=orch._workspace_manager,
+        tracker=orch._tracker,
+        default_model_provider=orch._default_model_provider,
+        repo_vcs=orch._repo_vcs,
+        notifier=orch._notifier,
+    )
 
 
 @pytest.mark.asyncio
@@ -93,7 +101,7 @@ async def test_valid_label_persists_model_and_no_comment(fake_ws):
         ticket=_make_ticket(["model-opus"]), repo_id="r", project_id="p",
     )
 
-    await orch._create_workspace_for_ticket(pt, "p", _make_repo_config())
+    await _create_workspace(orch, pt, "p", _make_repo_config())
 
     reloaded = Workspace(str(fake_ws.root))
     assert reloaded.state.model == SHORT_NAME_TO_MODEL["opus"]
@@ -117,7 +125,7 @@ async def test_no_label_snapshots_global_default(fake_ws):
         ticket=_make_ticket(["ai-pipeline"]), repo_id="r", project_id="p",
     )
 
-    await orch._create_workspace_for_ticket(pt, "p", _make_repo_config())
+    await _create_workspace(orch, pt, "p", _make_repo_config())
 
     reloaded = Workspace(str(fake_ws.root))
     assert reloaded.state.model == "claude-haiku-4-5-20251001"
@@ -142,7 +150,7 @@ async def test_conflicting_labels_snapshot_default_and_post_comment(fake_ws):
         repo_id="r", project_id="p",
     )
 
-    await orch._create_workspace_for_ticket(pt, "p", _make_repo_config())
+    await _create_workspace(orch, pt, "p", _make_repo_config())
 
     reloaded = Workspace(str(fake_ws.root))
     assert reloaded.state.model == "claude-sonnet-4-6"
@@ -172,6 +180,6 @@ async def test_comment_post_failure_does_not_abort_workspace_creation(fake_ws):
         repo_id="r", project_id="p",
     )
 
-    ws = await orch._create_workspace_for_ticket(pt, "p", _make_repo_config())
+    ws = await _create_workspace(orch, pt, "p", _make_repo_config())
     assert ws is fake_ws
     tracker.add_comment.assert_called_once()

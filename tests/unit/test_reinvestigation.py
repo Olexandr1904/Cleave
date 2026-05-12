@@ -109,6 +109,19 @@ class TestStageReinvestigation:
         assert event_name == "pr_comment_hint_exhausted"
 
 
+
+
+def _invoke_reinvestigate(orch, ws):
+    """Bridge helper — call the module function with orch deps."""
+    from orchestrator.pipeline.actions.fetch_pr_comments import reinvestigate_pending
+    return reinvestigate_pending(
+        ws,
+        agent_runtime=getattr(orch, "_agent_runtime", None),
+        notifier=getattr(orch, "_notifier", None),
+        get_chat_id=lambda: orch._get_chat_id(ws),
+        event_bus=getattr(orch, "_events", None),
+    )
+
 class TestOrchestratorReinvestigation:
     """Tests _action_fetch_pr_comments re-investigation phase."""
 
@@ -152,7 +165,7 @@ class TestOrchestratorReinvestigation:
         import orchestrator.orchestrator as orch_mod
         monkeypatch.setattr(orch_mod, "classify_comments", fake_classify, raising=False)
 
-        await orch._reinvestigate_pending(ws)
+        await _invoke_reinvestigate(orch, ws)
 
         c = ws.state.pending_review_comments[0]
         assert c["verdict"] == "Not valid"
@@ -186,7 +199,7 @@ class TestOrchestratorReinvestigation:
         )
         ws.save_state = MagicMock()
         # Operator already decided — flag must be cleared, classifier not called
-        await orch._reinvestigate_pending(ws)
+        await _invoke_reinvestigate(orch, ws)
         c = ws.state.pending_review_comments[0]
         assert c["hint_rounds"] == 0
         assert c["pending_reinvestigation"] is False  # cleared since operator already decided
@@ -236,7 +249,7 @@ class TestOrchestratorReinvestigation:
 
         monkeypatch.setattr(orch_mod, "classify_comments", fake_classify, raising=False)
 
-        await orch._reinvestigate_pending(ws)
+        await _invoke_reinvestigate(orch, ws)
 
         assert any("Not valid — reviewer was wrong" in m for m in sent_messages)
 
@@ -272,7 +285,7 @@ class TestOrchestratorReinvestigation:
             raise RuntimeError("agent crash")
         monkeypatch.setattr(orch_mod, "classify_comments", fake_classify_fail, raising=False)
 
-        await orch._reinvestigate_pending(ws)
+        await _invoke_reinvestigate(orch, ws)
 
         c = ws.state.pending_review_comments[0]
         assert c["pending_reinvestigation"] is True  # left for retry
@@ -317,7 +330,7 @@ class TestOrchestratorReinvestigation:
             return []
         monkeypatch.setattr(orch_mod, "classify_comments", fake_classify, raising=False)
 
-        await orch._reinvestigate_pending(ws)
+        await _invoke_reinvestigate(orch, ws)
 
         c = ws.state.pending_review_comments[0]
         assert c["pending_reinvestigation"] is False  # cleared
@@ -356,7 +369,7 @@ class TestOrchestratorReinvestigation:
             raise RuntimeError("agent crash again")
         monkeypatch.setattr(orch_mod, "classify_comments", fake_classify_fail, raising=False)
 
-        await orch._reinvestigate_pending(ws)
+        await _invoke_reinvestigate(orch, ws)
 
         c = ws.state.pending_review_comments[0]
         assert c["pending_reinvestigation"] is False  # cleared

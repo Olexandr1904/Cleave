@@ -55,7 +55,6 @@ async def test_advance_skips_terminal_states() -> None:
 async def test_advance_max_iterations_escalates(monkeypatch) -> None:
     """When iteration count >= max_iterations, escalate is triggered."""
     orc = _orc()
-    orc._handle_escalate = AsyncMock()
     ws = _ws(Stage.DEV)
     ws.state.stage_iterations = {"dev": 5}
 
@@ -70,9 +69,11 @@ async def test_advance_max_iterations_escalates(monkeypatch) -> None:
     monkeypatch.setattr(
         "orchestrator.pipeline.driver.get_next_stage", lambda *a, **k: "escalate",
     )
+    escalate_mock = AsyncMock()
+    monkeypatch.setattr("orchestrator.escalation.handle_escalate", escalate_mock)
 
     await orc.advance_workspace(ws)
-    orc._handle_escalate.assert_awaited_once()
+    escalate_mock.assert_awaited_once()
 
 
 @pytest.mark.asyncio

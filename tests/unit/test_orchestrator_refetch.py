@@ -1,4 +1,4 @@
-"""Tests for Orchestrator._refetch_ticket_data()."""
+"""Tests for orchestrator.ticket_sync.refetch_ticket_data()."""
 from __future__ import annotations
 
 import re
@@ -9,14 +9,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from integrations.base.tracker import StatusChange, TicketComment
-from orchestrator.orchestrator import Orchestrator
+from orchestrator.ticket_sync import refetch_ticket_data
 from workspace.workspace import Workspace, WorkspaceState
-
-
-def _make_orch(tracker=None):
-    orch = Orchestrator.__new__(Orchestrator)
-    orch._tracker = tracker
-    return orch
 
 
 def _make_ws(tmp_path: Path, ticket_id: str = "T-1") -> Workspace:
@@ -63,10 +57,9 @@ def _make_tracker(ticket_summary="Summary", comments=None, history=None):
 @pytest.mark.asyncio
 async def test_writes_fresh_ticket_md_on_first_run(tmp_path):
     tracker = _make_tracker(ticket_summary="Login screen flickers")
-    orch = _make_orch(tracker)
     ws = _make_ws(tmp_path)
 
-    await orch._refetch_ticket_data(ws)
+    await refetch_ticket_data(ws, tracker)
 
     content = (ws.meta_dir / "ticket.md").read_text()
     assert "Login screen flickers" in content
@@ -75,11 +68,10 @@ async def test_writes_fresh_ticket_md_on_first_run(tmp_path):
 @pytest.mark.asyncio
 async def test_appends_refresh_block_on_rerun(tmp_path):
     tracker = _make_tracker(ticket_summary="Updated description")
-    orch = _make_orch(tracker)
     ws = _make_ws(tmp_path)
     (ws.meta_dir / "ticket.md").write_text("# T-1\n\nOriginal description\n")
 
-    await orch._refetch_ticket_data(ws)
+    await refetch_ticket_data(ws, tracker)
 
     content = (ws.meta_dir / "ticket.md").read_text()
     assert "Original description" in content
@@ -102,14 +94,13 @@ async def test_appends_only_new_comments(tmp_path):
         body="New comment after rerun",
     )
     tracker = _make_tracker(comments=[existing_comment, new_comment])
-    orch = _make_orch(tracker)
     ws = _make_ws(tmp_path)
     # Simulate existing comments.md with comment 100 already written
     (ws.meta_dir / "comments.md").write_text(
         "# Ticket Comments\n\n<!-- comment:100 -->\n## Alice (2026-04-01)\n\nFirst comment\n"
     )
 
-    await orch._refetch_ticket_data(ws)
+    await refetch_ticket_data(ws, tracker)
 
     content = (ws.meta_dir / "comments.md").read_text()
     assert "First comment" in content
@@ -135,14 +126,13 @@ async def test_appends_only_new_history_entries(tmp_path):
         ),
     ]
     tracker = _make_tracker(history=history)
-    orch = _make_orch(tracker)
     ws = _make_ws(tmp_path)
     # Existing history has first entry only
     (ws.meta_dir / "history.md").write_text(
         "# Status History\n\n- 2026-04-01: To Do → In Progress by PM\n"
     )
 
-    await orch._refetch_ticket_data(ws)
+    await refetch_ticket_data(ws, tracker)
 
     content = (ws.meta_dir / "history.md").read_text()
     assert "To Do → In Progress" in content
@@ -152,11 +142,10 @@ async def test_appends_only_new_history_entries(tmp_path):
 
 @pytest.mark.asyncio
 async def test_no_op_when_no_tracker(tmp_path):
-    orch = _make_orch(tracker=None)
     ws = _make_ws(tmp_path)
 
     # Should not raise
-    await orch._refetch_ticket_data(ws)
+    await refetch_ticket_data(ws, None)
 
     assert not (ws.meta_dir / "ticket.md").exists()
 

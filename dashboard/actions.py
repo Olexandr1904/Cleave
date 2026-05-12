@@ -531,7 +531,8 @@ def build_action_routes(
 
         # Refresh ticket data (appends to meta files)
         try:
-            await orchestrator._refetch_ticket_data(ws)
+            from orchestrator.ticket_sync import refetch_ticket_data
+            await refetch_ticket_data(ws, orchestrator._tracker)
         except Exception as e:
             logger.warning("Failed to refetch ticket data for %s: %s", ticket_id, e)
 
@@ -570,7 +571,12 @@ def build_action_routes(
 
         # Telegram notification
         try:
-            await orchestrator._notify_rerun(ws, branch, reason)
+            from orchestrator.notify import notify_rerun
+            notifier = orchestrator._notifier
+            chat_id = (
+                orchestrator._get_chat_id(ws) if notifier is not None else ""
+            )
+            await notify_rerun(notifier, chat_id, ws, branch, reason)
         except Exception as e:
             logger.warning(
                 "Failed to send rerun notification for %s: %s", ticket_id, e

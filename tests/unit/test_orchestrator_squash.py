@@ -17,7 +17,7 @@ from config.schemas import (
     RepoInfo,
     VCSConfig,
 )
-from orchestrator.orchestrator import Orchestrator
+from orchestrator.pipeline.actions.push_and_open_pr import squash_feature_commits
 
 
 def _init_repo(tmp_path: Path) -> Path:
@@ -68,10 +68,9 @@ def test_squashes_three_commits_into_one(tmp_path):
     """Happy path: three commits on the feature branch get squashed into
     one commit using the first commit's message as the squash message."""
     repo = _init_repo(tmp_path)
-    orch = Orchestrator.__new__(Orchestrator)
 
     ws = _workspace(repo)
-    orch._squash_feature_commits(ws, _repo_config_with_author())
+    squash_feature_commits(ws, _repo_config_with_author())
 
     # One commit ahead of origin/main, with the first feature's message
     log = subprocess.run(
@@ -95,9 +94,8 @@ def test_passes_author_via_git_dash_c(tmp_path, monkeypatch):
     subprocess.run(["git", "-C", str(repo), "config", "--unset", "user.email"], check=False)
     subprocess.run(["git", "-C", str(repo), "config", "--unset", "user.name"], check=False)
 
-    orch = Orchestrator.__new__(Orchestrator)
     ws = _workspace(repo)
-    orch._squash_feature_commits(ws, _repo_config_with_author())
+    squash_feature_commits(ws, _repo_config_with_author())
 
     # Squash succeeded with our explicit author
     author = subprocess.run(
@@ -133,9 +131,8 @@ def test_atomic_rollback_when_commit_step_fails(tmp_path):
     hook.write_text("#!/usr/bin/env bash\nexit 1\n")
     hook.chmod(0o755)
 
-    orch = Orchestrator.__new__(Orchestrator)
     ws = _workspace(repo)
-    orch._squash_feature_commits(ws, _repo_config_with_author())
+    squash_feature_commits(ws, _repo_config_with_author())
 
     # Branch must be back at HEAD_before (not at HEAD~3)
     head_after = subprocess.run(
@@ -170,9 +167,8 @@ def test_skips_when_only_one_commit_ahead(tmp_path):
     subprocess.run(["git", "add", "b.txt"], cwd=repo, check=True)
     subprocess.run(["git", "commit", "-qm", "feat: only one"], cwd=repo, check=True)
 
-    orch = Orchestrator.__new__(Orchestrator)
     ws = _workspace(repo)
-    orch._squash_feature_commits(ws, _repo_config_with_author())
+    squash_feature_commits(ws, _repo_config_with_author())
 
     log = subprocess.run(
         ["git", "-C", str(repo), "log", "origin/main..HEAD", "--format=%s"],

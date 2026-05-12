@@ -1,11 +1,18 @@
 # GitLab Integration
 
-VCS adapter for GitLab. Implements the same VCSInterface as GitHub adapter. Supports MR creation, comment fetching, and comment resolving. Wraps existing helper scripts as subprocesses.
+VCS adapter for GitLab. Implements the same `VCSInterface` as the GitHub adapter so a project configured with `vcs.provider: gitlab` runs the full pipeline end-to-end. Single-file adapter using direct httpx REST calls against GitLab API v4 plus async git CLI subprocesses (mirrors the GitHub adapter shape).
+
+## Status
+
+- **Task 1 (in progress):** package scaffolded — `GitLabAdapter` constructor with URL normalization, project-id URL-encoding, and shared `httpx.AsyncClient`; all `VCSInterface` methods are `NotImplementedError` stubs filled in by later tasks.
 
 ## Key Decisions
 - Configured via `vcs.provider: gitlab` in repo config
-- Reuses existing helpers: fetch.py, resolve.py, review.sh, post-comments.sh
+- Direct httpx REST (no shelling out to `glab` / helper scripts) — same shape as GitHub adapter
+- `project_id` accepts either numeric id or `group/sub/project` path; URL-encoded once at init for use in `/api/v4/projects/{id}/...` routes
 
 ## References
+- Spec: `docs/superpowers/specs/2026-05-12-gitlab-vcs-adapter-design.md`
+- Plan: `docs/superpowers/plans/2026-05-12-gitlab-vcs-adapter.md`
 - Architecture: `docs/architecture-v2.md` §8.2 (VCS Abstraction)
 - Implementation: `integrations/gitlab/gitlab_adapter.py`

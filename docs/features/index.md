@@ -16,7 +16,7 @@
 | 9 | [Scope Guard](scope-guard.md) | Implemented | Validate diff against plan and architecture rules, prevent scope creep; agent and stage routing live |
 | 10 | [Tool Sandbox](tool-sandbox.md) | Implemented | Sandboxed tool execution for agents with path restrictions and per-agent allowlists |
 | 11 | [PR Comment Responder](pr-comment-responder.md) | In Progress | Classify and respond to PR review comments with extreme skepticism; resolution report module implemented |
-| 12 | [GitLab Integration](gitlab-integration.md) | Planned | MR creation, comment fetching/resolving via GitLab API |
+| 12 | [GitLab Integration](gitlab-integration.md) | In Progress | MR creation, comment fetching/resolving via GitLab API; adapter package scaffolded (Task 1) |
 | 13 | [Jenkins Integration](jenkins-integration.md) | Planned | Build status and failure log retrieval from Jenkins |
 | 14 | [CLI Entry Point](cli-entry-point.md) | Implemented | CLI argument parsing, startup diagnostics, and version logging |
 | 15 | [Project Setup Agent (Atlas)](project-setup-agent.md) | Implemented | BMAD-style agent that onboards new projects with guided Q&A, credential validation, and YAML config generation; production atlas wired into dashboard |

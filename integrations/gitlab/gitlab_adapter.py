@@ -262,10 +262,39 @@ class GitLabAdapter(VCSInterface):
         )
 
     async def check_pr_status(self, pr_number: int) -> PRStatus:
-        raise NotImplementedError
+        """CI gate = latest pipeline's status.
+
+        A "passing" MR has a latest pipeline with status == "success".
+        No pipeline → not passing (matches GitHub's behavior when there
+        are zero check_runs).
+        """
+        pipelines = await self._request(
+            "GET",
+            f"/projects/{self._project_path}/merge_requests/{pr_number}/pipelines",
+        )
+        if not pipelines:
+            return PRStatus(all_passing=False, checks=[])
+        latest = max(pipelines, key=lambda p: p.get("created_at", ""))
+        return PRStatus(
+            all_passing=(latest.get("status") == "success"),
+            checks=[
+                {
+                    "name": f"pipeline {p.get('id')}",
+                    "status": p.get("status"),
+                    "conclusion": p.get("status"),
+                }
+                for p in pipelines
+            ],
+        )
 
     async def close_pr(self, pr_number: int) -> None:
-        raise NotImplementedError
+        """Close an MR without merging."""
+        await self._request(
+            "PUT",
+            f"/projects/{self._project_path}/merge_requests/{pr_number}",
+            json={"state_event": "close"},
+        )
+        logger.info("Closed MR !%d", pr_number)
 
     async def close(self) -> None:
         await self._client.aclose()

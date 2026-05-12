@@ -5,6 +5,7 @@ VCS adapter for GitLab. Implements the same `VCSInterface` as the GitHub adapter
 ## Status
 
 - **Task 1 (in progress):** package scaffolded — `GitLabAdapter` constructor with URL normalization, project-id URL-encoding, and shared `httpx.AsyncClient`; all `VCSInterface` methods are `NotImplementedError` stubs filled in by later tasks.
+- **Task 2 (in progress):** `_request` wired — retries with backoff, 401/403 no-retry, response body surfaced on final failure.
 
 ## Key Decisions
 - Configured via `vcs.provider: gitlab` in repo config

@@ -55,7 +55,7 @@ Jira adapter behind the TrackerInterface. Polls Jira for tickets matching config
 
 ## Provider-aware in_review_status (2026-05-12)
 
-`_on_ticket_done` in the orchestrator now reads `jira.statuses.in_review` only when `tracker.provider == "jira"`. For other providers (e.g. Trello) the value defaults to `""`, which `on_ticket_done` treats as a no-op transition. Previously the jira field was read unconditionally (harmless but incorrect abstraction).
+`_on_ticket_done` in the orchestrator now reads `jira.statuses.in_review` only when `tracker.provider == "jira"`. For other providers (e.g. Trello) the value defaults to `""`, which `on_ticket_done` treats as a no-op transition. Previously the jira field was read unconditionally (harmless but incorrect abstraction). The inline rationale comment points at the adapter (not the config object) as the source of Trello transitions.
 
 ## TrackerConfig wrapper (2026-05-12)
 

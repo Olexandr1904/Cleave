@@ -117,14 +117,16 @@ async def create_pr(
         # AC3: Store in state
         workspace.update_state(pr_number=pr_number, pr_url=pr_url)
 
-        # AC4: Transition Jira and comment
+        # AC4: Transition tracker and comment (provider-aware)
+        provider = repo_config.tracker.provider
+        if provider == "jira":
+            in_review_status = repo_config.tracker.jira.statuses.in_review
+        else:  # trello and any future provider keyed on schema names
+            in_review_status = "in_review"
         try:
-            await tracker.transition_ticket(
-                state.ticket_id,
-                repo_config.tracker.jira.statuses.in_review,
-            )
+            await tracker.transition_ticket(state.ticket_id, in_review_status)
         except Exception as e:
-            logger.warning("Failed to transition %s to In Review: %s", state.ticket_id, e)
+            logger.warning("Failed to transition %s to in_review: %s", state.ticket_id, e)
 
         try:
             await tracker.add_comment(

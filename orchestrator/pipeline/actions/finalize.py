@@ -42,7 +42,7 @@ async def action_finalize(
                 f"Pipeline complete. PR ready for merge: {state.pr_url or 'N/A'}",
             )
         except Exception as e:
-            logger.warning("Finalize Jira comment failed: %s", e)
+            logger.warning("Finalize tracker comment failed: %s", e)
 
     return ActionResult(
         success=True, next_state=Stage.DONE, error="", metadata={},
@@ -68,7 +68,7 @@ async def on_ticket_done(
                 f"{hdr}\n"
                 f"Pipeline complete.\n\n"
                 f"PR ready for merge: {state.pr_url or 'N/A'}\n\n"
-                f"Jira ticket moved to review status."
+                f"Ticket moved to review status."
             ))
 
     # Transition tracker ticket to in-review status (Jira: "In Review",

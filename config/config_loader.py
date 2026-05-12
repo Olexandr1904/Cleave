@@ -214,7 +214,13 @@ def _parse_trello_section(data: dict, file_path: str) -> TrelloConfig:
     """Parse a trello section dict into TrelloConfig."""
     trello_data = dict(data or {})
     lists_data = trello_data.pop("lists", None) or {}
-    lists = TrelloListMapping(**lists_data) if lists_data else TrelloListMapping()
+    try:
+        lists = TrelloListMapping(**lists_data) if lists_data else TrelloListMapping()
+    except TypeError as e:
+        raise ConfigError(
+            f"Invalid fields in 'tracker.trello.lists': {e}",
+            file_path=file_path, field="tracker.trello.lists",
+        ) from e
     try:
         return TrelloConfig(**trello_data, lists=lists)
     except TypeError as e:
@@ -264,6 +270,11 @@ def _parse_tracker_section(data: dict, file_path: str) -> TrackerConfig:
         )
     jira_block = tracker_data.pop("jira", None) or {}
     trello_block = tracker_data.pop("trello", None) or {}
+    if tracker_data:
+        raise ConfigError(
+            f"Unexpected fields in 'tracker': {sorted(tracker_data)}",
+            file_path=file_path, field="tracker",
+        )
     return TrackerConfig(
         provider=provider,
         jira=_parse_jira_section(jira_block, file_path) if jira_block else JiraConfig(),

@@ -42,12 +42,14 @@ jira:
   project_key: ACME
   trigger_labels: [ai-pipeline]
 """)
-    _, projects = load_config(str(config_dir))
+    with caplog.at_level("INFO"):
+        _, projects = load_config(str(config_dir))
     cfg = projects["acme"].config.tracker
     assert cfg.provider == "jira"
     assert cfg.jira.url == "https://acme.atlassian.net"
     assert cfg.jira.project_key == "ACME"
     assert cfg.trello.api_key == ""   # default
+    assert any("migrated legacy" in rec.message for rec in caplog.records)
 
 
 def test_new_tracker_block_jira(make_project):
@@ -162,3 +164,38 @@ tracker:
     from config.config_loader import ConfigError
     with pytest.raises(ConfigError):
         load_config(str(config_dir))
+
+
+def test_invalid_trello_lists_key_raises_clean_error(make_project):
+    """An unknown key under tracker.trello.lists surfaces as ConfigError, not bare TypeError."""
+    from config.config_loader import ConfigError
+    config_dir = make_project("marketing", """
+project: {id: marketing, name: Marketing}
+tracker:
+  provider: trello
+  trello:
+    api_key: k
+    token: t
+    board_id: b
+    lists:
+      todo: L1
+      bogus_status: L9
+""")
+    with pytest.raises(ConfigError) as exc:
+        load_config(str(config_dir))
+    assert "tracker.trello.lists" in str(exc.value) or "lists" in str(exc.value)
+
+
+def test_unknown_tracker_top_level_key_raises(make_project):
+    """A misspelled top-level key under `tracker:` raises ConfigError instead of loading empty."""
+    from config.config_loader import ConfigError
+    config_dir = make_project("acme", """
+project: {id: acme, name: Acme}
+tracker:
+  provider: jira
+  jora:
+    url: https://acme.atlassian.net
+""")
+    with pytest.raises(ConfigError) as exc:
+        load_config(str(config_dir))
+    assert "tracker" in str(exc.value)

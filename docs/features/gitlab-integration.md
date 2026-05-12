@@ -11,6 +11,7 @@ VCS adapter for GitLab. Implements the same `VCSInterface` as the GitHub adapter
 - **Task 5 (in progress):** `open_pr` and `find_pr_by_branch` wired — MR create via POST `/merge_requests` (returns `iid`/`web_url`); branch lookup via `?source_branch=&state=opened`, errors swallowed to `None`.
 - **Task 6 (in progress):** `get_pr_comments` wired — paginates MR discussions, surfaces only diff-anchored notes (with `position`), populates `_discussion_cache[pr_number] = {note_id: discussion_id}` for Task 7's reply/resolve.
 - **Task 7 (in progress):** `reply_to_comment` and `resolve_comment` wired — `_lookup_discussion` resolves a note's discussion via cache → refetch once → raise; reply POSTs to `/discussions/:id/notes`, resolve PUTs `/discussions/:id?resolved=true`.
+- **Task 8 (in progress):** `check_pr_status` and `close_pr` wired — status reads `/merge_requests/:iid/pipelines` and gates on latest pipeline's `status == "success"` (empty list → not passing); close PUTs `state_event: close` to `/merge_requests/:iid`.
 
 ## Key Decisions
 - Configured via `vcs.provider: gitlab` in repo config

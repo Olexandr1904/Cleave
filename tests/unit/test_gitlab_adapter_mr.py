@@ -209,3 +209,54 @@ async def test_resolve_comment_uses_cached_discussion_id():
     assert method == "PUT"
     assert path == "/projects/group%2Fproj/merge_requests/42/discussions/disc-X"
     assert kwargs["params"] == {"resolved": "true"}
+
+
+@pytest.mark.asyncio
+async def test_check_pr_status_passing_when_latest_pipeline_success():
+    adapter = _make_adapter()
+    pipelines = [
+        {"id": 1, "status": "failed", "created_at": "2026-05-12T10:00:00Z"},
+        {"id": 2, "status": "success", "created_at": "2026-05-12T11:00:00Z"},
+    ]
+    adapter._request = AsyncMock(return_value=pipelines)
+
+    status = await adapter.check_pr_status(42)
+
+    assert status.all_passing is True
+    assert len(status.checks) == 2
+
+
+@pytest.mark.asyncio
+async def test_check_pr_status_failing_when_latest_pipeline_failed():
+    adapter = _make_adapter()
+    pipelines = [
+        {"id": 2, "status": "failed", "created_at": "2026-05-12T11:00:00Z"},
+        {"id": 1, "status": "success", "created_at": "2026-05-12T10:00:00Z"},
+    ]
+    adapter._request = AsyncMock(return_value=pipelines)
+
+    status = await adapter.check_pr_status(42)
+    assert status.all_passing is False
+
+
+@pytest.mark.asyncio
+async def test_check_pr_status_no_pipelines_returns_not_passing():
+    adapter = _make_adapter()
+    adapter._request = AsyncMock(return_value=[])
+    status = await adapter.check_pr_status(42)
+    assert status.all_passing is False
+    assert status.checks == []
+
+
+@pytest.mark.asyncio
+async def test_close_pr_sends_state_event_close():
+    adapter = _make_adapter()
+    adapter._request = AsyncMock(return_value={})
+
+    await adapter.close_pr(42)
+
+    method, path = adapter._request.await_args.args[:2]
+    kwargs = adapter._request.await_args.kwargs
+    assert method == "PUT"
+    assert path == "/projects/group%2Fproj/merge_requests/42"
+    assert kwargs["json"] == {"state_event": "close"}

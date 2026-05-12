@@ -76,6 +76,7 @@ def orchestrator(mock_llm, workspace, tmp_path):
         workflow=workflow,
         workspace_manager=workspace_manager,
         agent_runtime=agent_runtime,
+        default_model_provider=lambda: "claude-sonnet-4-6",
         dry_run=True,
     )
     orch._active_workspaces = [workspace]

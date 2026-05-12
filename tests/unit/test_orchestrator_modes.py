@@ -73,7 +73,7 @@ class TestModeAwarePollCycle:
         orch._mode_handler = MagicMock()
         orch._mode_handler.get_mode.return_value = "auto"
         orch._projects = {"test": MagicMock()}
-        orch._projects["test"].config.jira.url = "https://jira.example.com"
+        orch._projects["test"].config.tracker.jira.url = "https://jira.example.com"
         orch._tracker.poll_tickets.return_value = []
 
         await orch.poll_cycle()

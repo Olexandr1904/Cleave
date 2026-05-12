@@ -8,7 +8,7 @@
 | 1 | [Agent System (BMAD-style)](agent-system.md) | Implemented | Pluggable prompt-file agents with persona, tools, constraints via Claude tool_use |
 | 2 | [Orchestrator](orchestrator.md) | Implemented | Main loop, slot management, workspace spawning, workflow router with agent + action stages, quota-deferral recovery (DEFERRED state auto-resumes) |
 | 3 | [Workspace Isolation](workspace-isolation.md) | Implemented | Per-ticket workspaces with multi-company hierarchy: base/company/repo/tickets/id/ |
-| 4 | [Configuration Cascade](configuration-cascade.md) | Implemented | 3-level config hierarchy with VCS/CI provider abstraction and helper script paths |
+| 4 | [Configuration Cascade](configuration-cascade.md) | Implemented | 3-level config hierarchy with VCS/CI/tracker provider abstraction and helper script paths |
 | 5 | [Jira Integration](jira-integration.md) | Implemented | Poll tickets with AND semantics on trigger_labels, sync status, transition on completion |
 | 6 | [GitHub Integration](github-integration.md) | Implemented | Branch creation, PR management, review handling (no auto-merge) |
 | 7 | [Telegram Notifications](telegram-notifications.md) | In Progress | Alert human when stuck, receive threaded replies to unblock; IntentParser classifies free-text commands |

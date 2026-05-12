@@ -258,10 +258,10 @@ def main(argv: list[str] | None = None) -> int:
 
     # Jira adapter — use first project's Jira config
     first_project = next(iter(projects.values()), None)
-    if first_project and first_project.config.jira.url:
+    if first_project and first_project.config.tracker.jira.url:
         from integrations.jira.jira_adapter import JiraAdapter
 
-        jira_cfg = first_project.config.jira
+        jira_cfg = first_project.config.tracker.jira
         tracker = JiraAdapter(
             url=jira_cfg.url,
             email=jira_cfg.email,
@@ -315,7 +315,7 @@ def main(argv: list[str] | None = None) -> int:
         log = logging.getLogger(__name__)
         _build_repo_adapters(new_project, log)
 
-        jira_cfg = new_project.config.jira
+        jira_cfg = new_project.config.tracker.jira
         if orchestrator._tracker is None and jira_cfg.url:
             from integrations.jira.jira_adapter import JiraAdapter
             new_tracker = JiraAdapter(
@@ -401,8 +401,8 @@ def main(argv: list[str] | None = None) -> int:
             )
 
             jira_base_url = ""
-            if first_project and first_project.config.jira.url:
-                jira_base_url = first_project.config.jira.url
+            if first_project and first_project.config.tracker.jira.url:
+                jira_base_url = first_project.config.tracker.jira.url
 
             # Build the chat-id allowlist from global + per-project configs so
             # the bot ignores commands from other chats. An empty set disables

@@ -39,7 +39,8 @@ def _build_external_links(
     project = projects.get(company_id) if projects else None
 
     # Jira ticket link
-    jira = getattr(project.config, "jira", None) if project else None
+    tracker = getattr(project.config, "tracker", None) if project else None
+    jira = tracker.jira if (tracker and tracker.provider == "jira") else None
     if jira and jira.url and ticket_id:
         base = jira.url.rstrip("/")
         links.append({

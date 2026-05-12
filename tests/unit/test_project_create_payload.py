@@ -109,3 +109,12 @@ def test_redact_to_input_md_contains_var_names_not_secrets():
     assert "ACME_JIRA_TOKEN" in md
     assert "ACME_GITHUB_TOKEN" in md
     assert "trigger_labels: [ai-pipeline, acme-app]" in md
+
+
+def test_redact_to_input_md_uses_tracker_label_not_jira_repo_label():
+    """The schema field is `tracker_label` post-refactor; the redacted
+    input.md the atlas agent reads must use the current name."""
+    md = redact_to_input_md(VALID_PAYLOAD)
+    assert "tracker_label:" in md
+    assert "tracker_label in repo YAML" in md
+    assert "jira_repo_label" not in md

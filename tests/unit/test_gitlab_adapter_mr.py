@@ -147,3 +147,65 @@ async def test_get_pr_comments_paginates_until_short_page():
     comments = await adapter.get_pr_comments(42)
     assert len(comments) == 101
     assert adapter._request.await_count == 2
+
+
+@pytest.mark.asyncio
+async def test_reply_to_comment_uses_cached_discussion_id():
+    adapter = _make_adapter()
+    adapter._discussion_cache = {42: {101: "disc-X"}}
+    adapter._request = AsyncMock(return_value={})
+
+    await adapter.reply_to_comment(42, 101, "looks good")
+
+    method, path = adapter._request.await_args.args[:2]
+    kwargs = adapter._request.await_args.kwargs
+    assert method == "POST"
+    assert path == "/projects/group%2Fproj/merge_requests/42/discussions/disc-X/notes"
+    assert kwargs["json"] == {"body": "looks good"}
+
+
+@pytest.mark.asyncio
+async def test_reply_to_comment_refetches_discussions_on_cache_miss():
+    adapter = _make_adapter()
+    # Cache is empty — adapter must refetch and then post.
+    discussions_page = [
+        {"id": "disc-Y", "notes": [
+            {"id": 555, "body": "x", "author": {}, "position": {"new_path": "f", "new_line": 1}},
+        ]},
+    ]
+    # Sequence: discussions GET (page 1, short → break), then POST reply
+    adapter._request = AsyncMock(side_effect=[discussions_page, {}])
+
+    await adapter.reply_to_comment(42, 555, "thanks")
+
+    assert adapter._request.await_count == 2
+    final_call = adapter._request.await_args_list[-1]
+    method, path = final_call.args[:2]
+    assert method == "POST"
+    assert "/discussions/disc-Y/notes" in path
+
+
+@pytest.mark.asyncio
+async def test_reply_to_comment_raises_on_hard_miss():
+    adapter = _make_adapter()
+    # Refetch returns no matching note; adapter must raise.
+    adapter._request = AsyncMock(side_effect=[[], []])  # both pages empty
+
+    with pytest.raises(RuntimeError) as exc:
+        await adapter.reply_to_comment(42, 9999, "hi")
+    assert "9999" in str(exc.value)
+
+
+@pytest.mark.asyncio
+async def test_resolve_comment_uses_cached_discussion_id():
+    adapter = _make_adapter()
+    adapter._discussion_cache = {42: {101: "disc-X"}}
+    adapter._request = AsyncMock(return_value={})
+
+    await adapter.resolve_comment(42, 101)
+
+    method, path = adapter._request.await_args.args[:2]
+    kwargs = adapter._request.await_args.kwargs
+    assert method == "PUT"
+    assert path == "/projects/group%2Fproj/merge_requests/42/discussions/disc-X"
+    assert kwargs["params"] == {"resolved": "true"}

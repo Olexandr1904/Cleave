@@ -228,11 +228,38 @@ class GitLabAdapter(VCSInterface):
         self._discussion_cache[pr_number] = cache
         return all_comments
 
+    async def _lookup_discussion(self, pr_number: int, note_id: int) -> str:
+        """Return discussion_id for a note. Cache → refetch once → raise."""
+        cached = self._discussion_cache.get(pr_number, {}).get(note_id)
+        if cached:
+            return cached
+        # Refetch the MR's discussions (also refreshes the cache as a side effect).
+        await self.get_pr_comments(pr_number)
+        cached = self._discussion_cache.get(pr_number, {}).get(note_id)
+        if cached:
+            return cached
+        raise RuntimeError(
+            f"GitLab note {note_id} not found in MR !{pr_number} discussions; "
+            f"cannot reply/resolve."
+        )
+
     async def reply_to_comment(self, pr_number: int, comment_id: int, body: str) -> None:
-        raise NotImplementedError
+        """Reply to a note by posting to its owning discussion."""
+        disc_id = await self._lookup_discussion(pr_number, comment_id)
+        await self._request(
+            "POST",
+            f"/projects/{self._project_path}/merge_requests/{pr_number}/discussions/{disc_id}/notes",
+            json={"body": body},
+        )
 
     async def resolve_comment(self, pr_number: int, comment_id: int) -> None:
-        raise NotImplementedError
+        """Mark a discussion thread resolved. Idempotent."""
+        disc_id = await self._lookup_discussion(pr_number, comment_id)
+        await self._request(
+            "PUT",
+            f"/projects/{self._project_path}/merge_requests/{pr_number}/discussions/{disc_id}",
+            params={"resolved": "true"},
+        )
 
     async def check_pr_status(self, pr_number: int) -> PRStatus:
         raise NotImplementedError

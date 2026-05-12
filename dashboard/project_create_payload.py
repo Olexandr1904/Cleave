@@ -33,6 +33,16 @@ def _require_slug(errors: dict[str, str], value: Any, path: str) -> None:
 
 
 def validate_payload(payload: dict[str, Any]) -> None:
+    """Validate a project-create payload.
+
+    Raises PayloadValidationError with a dict of field-path → reason if any
+    required fields are missing or values are invalid.
+
+    Mutates `payload` in place when a legacy top-level `jira:` key is present
+    and no `tracker:` key exists — lifting `payload["jira"]` into
+    `payload["tracker"]["jira"]` with `provider="jira"`. Callers expecting a
+    pure check should validate a copy.
+    """
     errors: dict[str, str] = {}
 
     identity = payload.get("identity") or {}

@@ -183,7 +183,24 @@ def test_legacy_jira_top_level_lifted():
         "trigger_labels": ["ai-pipeline"],
     }
     validate_payload(p)
+    # Provider correctly set
     assert p["tracker"]["provider"] == "jira"
+    # Contents are preserved — same dict, no transformation
+    assert p["tracker"]["jira"]["url"] == "https://acme.atlassian.net"
+    assert p["tracker"]["jira"]["project_key"] == "ACME"
+    assert p["tracker"]["jira"]["token"] == "secret"
+    assert p["tracker"]["jira"]["trigger_labels"] == ["ai-pipeline"]
+
+
+def test_legacy_jira_empty_dict_raises():
+    """Lifting an empty `jira: {}` produces tracker.jira={} which then fails required-field validation."""
+    p = _trello_payload()
+    del p["tracker"]
+    p["jira"] = {}
+    with pytest.raises(PayloadValidationError) as exc:
+        validate_payload(p)
+    # The empty dict gets lifted, then the Jira required-fields check fires
+    assert "tracker.jira.url" in exc.value.field_errors
 
 
 def test_derive_env_vars_trello():

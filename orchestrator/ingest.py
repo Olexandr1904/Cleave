@@ -292,12 +292,12 @@ async def analyze_ticket_ids(
     notifier: NotifierInterface | None = None,
     create_workspace_fn: Any = None,
 ) -> dict[str, list[str]]:
-    """Manually queue tickets for analysis (Telegram /analyze callback).
+    """Look up each ticket across all configured trackers (first-match wins),
+    filter out duplicates of already-active workspaces, then create workspaces
+    for the remainder.
 
-    Validates each ticket via AnalyzeHandler, skips duplicates, then
-    creates a workspace for each valid one by matching its labels to a
-    configured repo. Returns {"valid": [...], "invalid": [...]} where
-    invalid entries are "TICKET: reason" strings.
+    Returns a dict with keys 'valid' (list of ticket ids) and 'invalid'
+    (list of 'ticket_id: reason' strings).
 
     Mutates `active_workspaces` by appending newly created workspaces.
     """
@@ -312,12 +312,10 @@ async def analyze_ticket_ids(
         # Try each tracker; the first one to return a ticket wins.
         found_ticket = None
         found_tracker = None
-        found_project_id = None
         for project_id, tracker in trackers.items():
             try:
                 found_ticket = await tracker.get_ticket(tid)
                 found_tracker = tracker
-                found_project_id = project_id
                 break
             except Exception:
                 continue
@@ -347,9 +345,9 @@ async def analyze_ticket_ids(
             continue
 
         if create_workspace_fn is None:
-            async def _create_ws(pt, project_id, repo_config, _t=found_tracker):  # type: ignore[no-redef]
+            async def _create_ws(pt, pid, repo_cfg, _t=found_tracker):  # type: ignore[no-redef]
                 return await create_workspace_for_ticket(
-                    pt, project_id, repo_config,
+                    pt, pid, repo_cfg,
                     workspace_manager=workspace_manager,
                     tracker=_t,
                     default_model_provider=default_model_provider,

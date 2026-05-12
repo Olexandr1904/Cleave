@@ -17,6 +17,7 @@ core_principles:
 
 tools:
   - validate_jira
+  - validate_trello
   - validate_github
   - validate_gitlab
   - validate_jenkins
@@ -77,21 +78,25 @@ references (`${VAR_NAME}`). Never write raw secrets into config files.
    - Show the existing project details
    - Ask: overwrite, pick a different ID, or abort?
 
-### Phase 2 — Jira Integration
+### Phase 2 — Tracker Integration
 
-3. Ask for **Jira URL** (e.g. `https://company.atlassian.net`)
-4. Ask for **Jira project key** (e.g. `ACME`)
-5. Ask for **Jira email** for API auth (e.g. `bot@company.com`)
-6. Ask for **env var name** for the Jira token (default: `JIRA_TOKEN`)
-7. Ask for **trigger labels (comma-separated, default: ai-pipeline)** and any **ignore labels** (comma-separated, optional)
-8. Ask for **Jira status mappings** — provide defaults:
-   - todo: "To Do"
-   - in_progress: "In Progress"
-   - in_review: "In Review"
-   - done: "Done"
-9. Call `validate_jira` with the provided URL, resolved token, email, and project key
-   - On success: report project name and proceed
-   - On failure: report the specific error, ask user to fix, offer to skip validation
+3. Ask: **Jira or Trello?**
+4. **If Jira:**
+   - Ask for **Jira URL** (e.g. `https://company.atlassian.net`)
+   - Ask for **Jira project key** (e.g. `ACME`)
+   - Ask for **Jira email** for API auth (e.g. `bot@company.com`)
+   - Ask for **env var name** for the Jira token (default: `JIRA_TOKEN`)
+   - Ask for **trigger labels** and **ignore labels**
+   - Ask for **Jira status mappings** — defaults: To Do / In Progress / In Review / Done
+   - Call `validate_jira` with URL, resolved token, email, and project key
+5. **If Trello:**
+   - Ask for **API key** (https://trello.com/app-key) and **token**
+   - Ask for **board ID** (URL or short ID)
+   - Ask for **env var names** (defaults: `TRELLO_KEY`, `TRELLO_TOKEN`)
+   - Ask for **trigger labels** and **ignore labels**
+   - Call `validate_trello` with key, token, and board ID — returns the board's lists
+   - For each Cleave status (todo/in_progress/in_review/done), auto-detect a matching list by name (To Do, Doing, Review, Done patterns); if no match, prompt for explicit pick. Store the four list IDs.
+6. On validation failure: report the error, ask user to fix, offer to skip.
 
 ### Phase 3 — VCS Setup
 
@@ -145,25 +150,56 @@ references (`${VAR_NAME}`). Never write raw secrets into config files.
 27. Ask for explicit confirmation before writing
 28. Generate the `project.yaml` content following this structure:
 
+For Jira projects, emit:
+
 ```yaml
 project:
   id: "{project_id}"
   name: "{display_name}"
   enabled: true
 
-jira:
-  url: "{jira_url}"
-  token: "${JIRA_TOKEN_VAR}"
-  email: "{jira_email}"
-  project_key: "{project_key}"
-  trigger_labels: [{trigger_labels}]
-  ignore_labels: [{ignore_labels}]
-  statuses:
-    todo: "{status_todo}"
-    in_progress: "{status_in_progress}"
-    in_review: "{status_in_review}"
-    done: "{status_done}"
+tracker:
+  provider: jira
+  jira:
+    url: "{jira_url}"
+    token: "${JIRA_TOKEN_VAR}"
+    email: "{jira_email}"
+    project_key: "{project_key}"
+    trigger_labels: [{trigger_labels}]
+    ignore_labels: [{ignore_labels}]
+    statuses:
+      todo: "{status_todo}"
+      in_progress: "{status_in_progress}"
+      in_review: "{status_in_review}"
+      done: "{status_done}"
+```
 
+For Trello projects, emit:
+
+```yaml
+project:
+  id: "{project_id}"
+  name: "{display_name}"
+  enabled: true
+
+tracker:
+  provider: trello
+  trello:
+    api_key: "${TRELLO_KEY_VAR}"
+    token: "${TRELLO_TOKEN_VAR}"
+    board_id: "{board_id}"
+    trigger_labels: [{trigger_labels}]
+    ignore_labels: [{ignore_labels}]
+    lists:
+      todo: "{list_id_todo}"
+      in_progress: "{list_id_in_progress}"
+      in_review: "{list_id_in_review}"
+      done: "{list_id_done}"
+```
+
+Then continue with the shared sections:
+
+```yaml
 telegram:
   bot_token: "${TELEGRAM_BOT_TOKEN}"
   default_chat_id: "{telegram_chat_id_or_inherit}"
@@ -233,7 +269,9 @@ parallelism:
 30. Call `write_project_config` and `write_repo_config`
 31. Report what was written
 32. List which environment variables need to be set:
-    - `{JIRA_TOKEN_VAR}` — Jira API token
+    - `{JIRA_TOKEN_VAR}` — Jira API token (Jira projects only)
+    - `{TRELLO_KEY_VAR}` — Trello API key (Trello projects only)
+    - `{TRELLO_TOKEN_VAR}` — Trello token (Trello projects only)
     - `{VCS_TOKEN_VAR}` — GitHub/GitLab token
     - `{JENKINS_*}` — if Jenkins was selected
 
@@ -245,16 +283,15 @@ questions. Instead:
 1. Read `meta/input.md` and parse the key-value pairs under each section.
 2. Read env vars referenced as `token_var:` — they are already set in the
    process environment by the dashboard handler.
-3. For each credential, call the matching validator (`validate_jira`,
-   `validate_github` or `validate_gitlab`). On failure, write
-   `reports/project-setup-output.md` with the validation error and raise —
+3. For each credential, call the matching validator (`validate_jira` or
+   `validate_trello`, then `validate_github` or `validate_gitlab`). On failure,
+   write `reports/project-setup-output.md` with the validation error and raise —
    the supervising handler will transition state to `SETUP_FAILED`.
 4. Write `project.yaml` and `repos/{repo_id}.yaml` in the current working
-   directory using `${TOKEN_VAR}` references (never raw values). Use
-   `trigger_labels` (plural list) in the Jira block. Set `tracker_label`
-   in the repo YAML to the second trigger label (the repo-specific one, not
-   `ai-pipeline`). The handler will copy these into the config directory
-   automatically.
+   directory using `${TOKEN_VAR}` references (never raw values). Use the
+   provider-branched YAML template above. Set `tracker_label` in the repo YAML
+   to the second trigger label (the repo-specific one, not `ai-pipeline`). The
+   handler will copy these into the config directory automatically.
 5. Do NOT write a `ci:` block (CI/CD is out of scope for the web flow).
 6. Write `reports/project-setup-output.md` with a summary of what was created,
    including the list of env var names that must remain set for the project
@@ -287,7 +324,7 @@ Before declaring setup complete, you MUST run all applicable health
 checks and include the results in your output report. Do not proceed
 past any failing check.
 
-1. Call `validate_jira` with the project's Jira URL, email, token, and project key.
+1. If `tracker.provider == "jira"`, call `validate_jira` with the project's Jira URL, email, token, and project key. If `tracker.provider == "trello"`, call `validate_trello` with the API key, token, and board ID.
 2. If `vcs.provider == "github"`, call `validate_github` with the repo's token, owner, and repo name.
 3. If `vcs.provider == "gitlab"`, call `validate_gitlab` with the repo's token, URL, and project id.
 4. Call `validate_git_identity` with the planned workspace root for each repo.

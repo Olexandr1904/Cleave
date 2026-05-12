@@ -17,7 +17,7 @@ from workspace.workspace import Stage
 
 class _OrcStub:
     """Minimal stand-in carrying the deps poll_and_create_workspaces needs."""
-    _tracker = None
+    _trackers: dict = {}
     _projects: dict = {}
     _active_workspaces: list = []
     _dry_run = False
@@ -40,7 +40,7 @@ def _make_orchestrator(
 ):
     """Build a minimal stub carrying the dependencies the ingest module reads."""
     orc = _OrcStub()
-    orc._tracker = tracker
+    orc._trackers = {"acme": tracker} if tracker is not None else {}
     orc._projects = projects or {}
     orc._active_workspaces = active or []
     orc._dry_run = dry_run
@@ -60,8 +60,9 @@ def _make_orchestrator(
 async def _poll(orc):
     """Bridge — call the module function with deps from orc."""
     from orchestrator.ingest import poll_and_create_workspaces
+    tracker = next(iter(orc._trackers.values()), None)
     new_workspaces = await poll_and_create_workspaces(
-        tracker=orc._tracker,
+        tracker=tracker,
         projects=orc._projects,
         active_workspaces=orc._active_workspaces,
         global_config=orc._global_config,

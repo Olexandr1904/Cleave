@@ -40,7 +40,7 @@ class Runtime:
         rescan_callback: Callable | None = None,
         cleanup_callback: Callable | None = None,
         sweep_quota_window_callback: Callable | None = None,
-        get_tracker: Callable | None = None,
+        get_trackers: Callable | None = None,
         get_mode_handler: Callable | None = None,
         event_bus: Any | None = None,
         dry_run: bool = False,
@@ -52,7 +52,7 @@ class Runtime:
         self._rescan_callback = rescan_callback
         self._cleanup_callback = cleanup_callback
         self._sweep_quota_window_callback = sweep_quota_window_callback
-        self._get_tracker = get_tracker
+        self._get_trackers = get_trackers
         self._get_mode_handler = get_mode_handler
         self._events = event_bus
         self._dry_run = dry_run
@@ -166,8 +166,8 @@ class Runtime:
         # 0b. Resume any DEFERRED workspaces whose retry_at has passed
         await self.sweep_deferred()
         # 1. Poll for new tickets and create workspaces
-        tracker = self._get_tracker() if self._get_tracker is not None else None
-        if tracker is not None:
+        trackers = self._get_trackers() if self._get_trackers is not None else None
+        if trackers:
             await self._poll_callback()
 
         # 2. Advance active workspaces in parallel (bounded by semaphore)

@@ -22,7 +22,7 @@ def _orc():
     orc._events = None
     orc._agent_runtime = MagicMock()
     orc._notifier = None
-    orc._tracker = None
+    orc._trackers = {}
     orc._projects = {}
     orc._global_config = SimpleNamespace(telegram=SimpleNamespace(default_chat_id=""))
     orc._workspace_manager = MagicMock()

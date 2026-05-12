@@ -83,7 +83,7 @@ class Orchestrator:
         workspace_manager: WorkspaceManager,
         agent_runtime: AgentRuntime,
         default_model_provider: Callable[[], str],
-        tracker: TrackerInterface | None = None,
+        trackers: dict[str, TrackerInterface] | None = None,
         vcs: VCSInterface | None = None,
         notifier: NotifierInterface | None = None,
         dry_run: bool = False,
@@ -98,7 +98,7 @@ class Orchestrator:
         self._workspace_manager = workspace_manager
         self._agent_runtime = agent_runtime
         self._default_model_provider = default_model_provider
-        self._tracker = tracker
+        self._trackers: dict[str, TrackerInterface] = dict(trackers or {})
         self._vcs = vcs
         self._notifier = notifier
         self._dry_run = dry_run
@@ -126,7 +126,7 @@ class Orchestrator:
             advance_callback=lambda ws: self.advance_workspace(ws),
             rescan_callback=lambda: self._rescan_projects_from_disk(),
             sweep_quota_window_callback=self._sweep_quota_window,
-            get_tracker=lambda: self._tracker,
+            get_trackers=lambda: dict(self._trackers),
             get_mode_handler=lambda: self._mode_handler,
             event_bus=event_bus,
             dry_run=dry_run,
@@ -138,9 +138,16 @@ class Orchestrator:
         """Register a VCS adapter for a specific repo."""
         self._repo_vcs[repo_id] = (vcs, repo_config)
 
-    def set_tracker(self, tracker: TrackerInterface) -> None:
-        """Attach a tracker after startup (used by wizard hot-reload)."""
-        self._tracker = tracker
+    def register_tracker(self, project_id: str, tracker: TrackerInterface) -> None:
+        """Attach a tracker for a project. Called from main.py at startup and
+        from the wizard hot-reload path."""
+        self._trackers[project_id] = tracker
+
+    def get_tracker_for_project(self, project_id: str) -> TrackerInterface | None:
+        return self._trackers.get(project_id)
+
+    def get_tracker_for_workspace(self, ws: Workspace) -> TrackerInterface | None:
+        return self._trackers.get(ws.state.company_id)
 
     async def rescan_projects(self) -> list[str]:
         """Re-read config from disk; add new projects; invoke hook for each.
@@ -151,7 +158,7 @@ class Orchestrator:
         added = await self._rescan_projects_from_disk()
         # Force an immediate ticket poll for newly added projects so the user
         # sees tickets right away, even in manual mode.
-        if added and self._tracker:
+        if added and self._trackers:
             await self._poll_and_create_workspaces()
         return added
 
@@ -221,9 +228,12 @@ class Orchestrator:
         Thin shim — see orchestrator/ingest.py for the implementation.
         """
         from orchestrator.ingest import analyze_ticket_ids as _impl
+        # TODO Task 3: pass the full trackers dict; for now use the first tracker
+        # so existing analyze_ticket_ids signature works.
+        legacy_tracker = next(iter(getattr(self, "_trackers", {}).values()), None)
         return await _impl(
             ticket_ids,
-            tracker=getattr(self, "_tracker", None),
+            tracker=legacy_tracker,
             projects=self._projects,
             active_workspaces=self._active_workspaces,
             workspace_manager=self._workspace_manager,
@@ -268,8 +278,11 @@ class Orchestrator:
     async def _poll_and_create_workspaces(self) -> None:
         """Poll tracker for new tickets, create workspaces, append to active list."""
         from orchestrator.ingest import poll_and_create_workspaces
+        # TODO Task 3: pass the full trackers dict; for now use the first tracker
+        # so existing poll_and_create_workspaces signature works.
+        legacy_tracker = next(iter(self._trackers.values()), None)
         new_workspaces = await poll_and_create_workspaces(
-            tracker=self._tracker,
+            tracker=legacy_tracker,
             projects=self._projects,
             active_workspaces=self._active_workspaces,
             global_config=self._global_config,
@@ -291,7 +304,7 @@ class Orchestrator:
         return await create_workspace_for_ticket(
             pt, project_id, repo_config,
             workspace_manager=self._workspace_manager,
-            tracker=getattr(self, "_tracker", None),
+            tracker=self.get_tracker_for_project(project_id),
             default_model_provider=getattr(self, "_default_model_provider", None),
             repo_vcs=getattr(self, "_repo_vcs", {}),
             notifier=getattr(self, "_notifier", None),
@@ -335,7 +348,7 @@ class Orchestrator:
             workspace,
             getattr(self, "_notifier", None),
             self._get_chat_id(workspace),
-            getattr(self, "_tracker", None),
+            self.get_tracker_for_workspace(workspace),
             in_review_status,
         )
 
@@ -434,7 +447,7 @@ class Orchestrator:
             advance_callback=lambda ws: self.advance_workspace(ws),
             rescan_callback=lambda: self._rescan_projects_from_disk(),
             sweep_quota_window_callback=self._sweep_quota_window,
-            get_tracker=lambda: getattr(self, "_tracker", None),
+            get_trackers=lambda: getattr(self, "_trackers", {}),
             get_mode_handler=lambda: getattr(self, "_mode_handler", None),
             event_bus=getattr(self, "_events", None),
             dry_run=getattr(self, "_dry_run", False),
@@ -455,7 +468,7 @@ class Orchestrator:
         from orchestrator.pipeline.driver import advance_to_stage, build_gate_summary
         event_bus = getattr(self, "_events", None)
         notifier = getattr(self, "_notifier", None)
-        tracker = getattr(self, "_tracker", None)
+        tracker = self.get_tracker_for_workspace(workspace)
 
         async def _push(ws):
             vcs, repo_config = self._get_vcs_for_workspace(ws)

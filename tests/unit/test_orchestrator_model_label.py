@@ -64,7 +64,7 @@ def _make_orchestrator(fake_ws, tracker_mock, default_model="claude-sonnet-4-6")
     orch = MagicMock()
     orch._workspace_manager = MagicMock()
     orch._workspace_manager.create.return_value = fake_ws
-    orch._tracker = tracker_mock
+    orch._trackers = {"test": tracker_mock}
     orch._repo_vcs = {}
     orch._default_model_provider = lambda: default_model
     orch._notifier = None
@@ -77,7 +77,7 @@ async def _create_workspace(orch, pt, project_id, repo_config):
     return await create_workspace_for_ticket(
         pt, project_id, repo_config,
         workspace_manager=orch._workspace_manager,
-        tracker=orch._tracker,
+        tracker=next(iter(orch._trackers.values()), None),
         default_model_provider=orch._default_model_provider,
         repo_vcs=orch._repo_vcs,
         notifier=orch._notifier,

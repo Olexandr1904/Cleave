@@ -185,7 +185,48 @@ class GitLabAdapter(VCSInterface):
         return None
 
     async def get_pr_comments(self, pr_number: int) -> list[PRComment]:
-        raise NotImplementedError
+        """Fetch all diff-position notes across the MR's discussions.
+
+        General MR notes (no `position` field) are skipped — only diff-anchored
+        review comments are surfaced, matching the GitHub adapter's behavior
+        of pulling from /pulls/:n/comments (not /issues/:n/comments).
+
+        Populates self._discussion_cache[pr_number] so reply_to_comment and
+        resolve_comment can look up a note's owning discussion_id without
+        another round-trip.
+        """
+        cache: dict[int, str] = {}
+        all_comments: list[PRComment] = []
+        page = 1
+        while True:
+            data = await self._request(
+                "GET",
+                f"/projects/{self._project_path}/merge_requests/{pr_number}/discussions",
+                params={"per_page": 100, "page": page},
+            )
+            if not data:
+                break
+            for disc in data:
+                disc_id = disc.get("id", "")
+                for note in disc.get("notes", []) or []:
+                    if note.get("position") is None:
+                        continue
+                    note_id = int(note["id"])
+                    cache[note_id] = disc_id
+                    pos = note.get("position") or {}
+                    all_comments.append(PRComment(
+                        id=note_id,
+                        body=note.get("body", ""),
+                        path=pos.get("new_path") or pos.get("old_path") or "",
+                        line=pos.get("new_line") or pos.get("old_line"),
+                        author=(note.get("author") or {}).get("username", ""),
+                    ))
+            if len(data) < 100:
+                break
+            page += 1
+
+        self._discussion_cache[pr_number] = cache
+        return all_comments
 
     async def reply_to_comment(self, pr_number: int, comment_id: int, body: str) -> None:
         raise NotImplementedError

@@ -76,3 +76,74 @@ async def test_find_pr_by_branch_swallows_errors_and_returns_none():
     adapter = _make_adapter()
     adapter._request = AsyncMock(side_effect=RuntimeError("boom"))
     assert await adapter.find_pr_by_branch("feature/x") is None
+
+
+def _diff_note(note_id: int, body: str, path: str = "a.py", line: int = 5):
+    return {
+        "id": note_id,
+        "body": body,
+        "author": {"username": "alice"},
+        "position": {"new_path": path, "new_line": line},
+    }
+
+
+def _plain_note(note_id: int, body: str):
+    return {
+        "id": note_id,
+        "body": body,
+        "author": {"username": "alice"},
+        # No "position" => general MR note, must be filtered out
+    }
+
+
+@pytest.mark.asyncio
+async def test_get_pr_comments_returns_only_diff_position_notes():
+    adapter = _make_adapter()
+    discussions_page = [
+        {
+            "id": "abc123",
+            "notes": [_diff_note(101, "fix indentation"), _diff_note(102, "rename var")],
+        },
+        {
+            "id": "def456",
+            "notes": [_plain_note(200, "LGTM overall")],
+        },
+    ]
+    # 2 pages: first returns 2 discussions, second returns empty -> stop
+    adapter._request = AsyncMock(side_effect=[discussions_page, []])
+
+    comments = await adapter.get_pr_comments(42)
+
+    assert len(comments) == 2
+    assert all(isinstance(c, PRComment) for c in comments)
+    assert {c.id for c in comments} == {101, 102}
+    assert comments[0].path == "a.py"
+    assert comments[0].line == 5
+    assert comments[0].author == "alice"
+
+
+@pytest.mark.asyncio
+async def test_get_pr_comments_populates_discussion_cache():
+    adapter = _make_adapter()
+    discussions_page = [
+        {"id": "disc-a", "notes": [_diff_note(11, "x")]},
+        {"id": "disc-b", "notes": [_diff_note(22, "y"), _diff_note(23, "z")]},
+    ]
+    adapter._request = AsyncMock(side_effect=[discussions_page, []])
+
+    await adapter.get_pr_comments(42)
+    cache = adapter._discussion_cache[42]
+    assert cache == {11: "disc-a", 22: "disc-b", 23: "disc-b"}
+
+
+@pytest.mark.asyncio
+async def test_get_pr_comments_paginates_until_short_page():
+    """Loop until a page returns fewer than 100 items."""
+    adapter = _make_adapter()
+    page1 = [{"id": f"d{i}", "notes": [_diff_note(i, "x")]} for i in range(100)]
+    page2 = [{"id": "last", "notes": [_diff_note(999, "z")]}]
+    adapter._request = AsyncMock(side_effect=[page1, page2])
+
+    comments = await adapter.get_pr_comments(42)
+    assert len(comments) == 101
+    assert adapter._request.await_count == 2

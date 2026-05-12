@@ -76,11 +76,47 @@ class GitLabAdapter(VCSInterface):
 
     # --- VCSInterface methods (filled in by later tasks) ----------------
 
+    @staticmethod
+    async def _run_git(repo_dir: str, *args: str) -> tuple[str, str]:
+        """Run a git command inside repo_dir. Returns (stdout, stderr)."""
+        cmd = ["git", "-C", repo_dir] + list(args)
+        proc = await asyncio.create_subprocess_exec(
+            *cmd,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        try:
+            stdout_b, stderr_b = await asyncio.wait_for(
+                proc.communicate(), timeout=SUBPROCESS_TIMEOUT,
+            )
+        except asyncio.TimeoutError:
+            proc.kill()
+            await proc.wait()
+            raise RuntimeError(
+                f"Git command timed out after {SUBPROCESS_TIMEOUT}s: {' '.join(cmd)}"
+            )
+        stdout = stdout_b.decode("utf-8", errors="replace")
+        stderr = stderr_b.decode("utf-8", errors="replace")
+        if proc.returncode != 0:
+            raise RuntimeError(f"Git command failed: {' '.join(cmd)}\n{stderr.strip()}")
+        return stdout, stderr
+
     async def clone_repo(self, url: str, dest: str, depth: int = 0) -> None:
-        raise NotImplementedError
+        cmd = ["git", "clone"]
+        if depth > 0:
+            cmd.extend(["--depth", str(depth)])
+        cmd.extend([url, dest])
+
+        proc = await asyncio.create_subprocess_exec(
+            *cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
+        )
+        _, stderr = await asyncio.wait_for(proc.communicate(), timeout=SUBPROCESS_TIMEOUT)
+        if proc.returncode != 0:
+            raise RuntimeError(f"Git clone failed: {stderr.decode().strip()}")
 
     async def create_branch(self, repo_dir: str, branch_name: str) -> None:
-        raise NotImplementedError
+        await self._run_git(repo_dir, "checkout", "-b", branch_name)
+        logger.info("Created branch: %s", branch_name)
 
     async def push(
         self, repo_dir: str, branch_name: str,

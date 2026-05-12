@@ -53,7 +53,7 @@ You receive:
 - `poll_data/project_config.md` — project and repo configuration including:
   - `trigger_labels` — labels that mark a ticket as pipeline-ready (ticket must have ALL)
   - `ignore_labels` — labels that exclude a ticket
-  - `repos` — list of repos with their `jira_repo_label`
+  - `repos` — list of repos with their `tracker_label`
 
 ## Process
 
@@ -70,7 +70,7 @@ For each ticket, apply these filters in order:
 Match each ticket to a repository:
 
 1. For each remaining ticket, scan its labels.
-2. Compare against each repo's `jira_repo_label`.
+2. Compare against each repo's `tracker_label`.
 3. First match wins — assign the ticket to that repo.
 4. If no repo label matches, flag the ticket for human review (escalate via Telegram).
 

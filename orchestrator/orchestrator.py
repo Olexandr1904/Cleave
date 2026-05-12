@@ -338,8 +338,8 @@ class Orchestrator:
         in_review_status = ""
         if project is not None and project.config.tracker.provider == "jira":
             in_review_status = project.config.tracker.jira.statuses.in_review
-        # For Trello, the per-workspace list mapping in TrackerConfig.trello.lists
-        # handles status transitions; no string-based "in_review" name is needed.
+        # Trello transitions are driven by the adapter via its configured list-id
+        # mapping; there is no string status name to pass here.
         await on_ticket_done(
             workspace,
             getattr(self, "_notifier", None),

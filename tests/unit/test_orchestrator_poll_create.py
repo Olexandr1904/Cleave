@@ -99,8 +99,10 @@ def _project(repo_id: str, repo_label: str, max_parallel: int = 5):
     return SimpleNamespace(
         config=SimpleNamespace(
             project=SimpleNamespace(id="acme"),
-            jira=SimpleNamespace(
-                url="https://x", trigger_labels=["ai-pipeline"], ignore_labels=[],
+            tracker=SimpleNamespace(
+                jira=SimpleNamespace(
+                    url="https://x", trigger_labels=["ai-pipeline"], ignore_labels=[],
+                ),
             ),
             parallelism=SimpleNamespace(max_concurrent_tickets=max_parallel),
         ),

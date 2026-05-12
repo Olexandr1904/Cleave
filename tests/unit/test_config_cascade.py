@@ -51,9 +51,9 @@ class TestLoadConfig:
         proj = projects["test-project"]
         assert proj.config.project.id == "test-project"
         assert proj.config.project.name == "Test Project"
-        assert proj.config.jira.url == "https://test.atlassian.net"
-        assert proj.config.jira.project_key == "TEST"
-        assert proj.config.jira.trigger_labels == ["ai-ready"]
+        assert proj.config.tracker.jira.url == "https://test.atlassian.net"
+        assert proj.config.tracker.jira.project_key == "TEST"
+        assert proj.config.tracker.jira.trigger_labels == ["ai-ready"]
 
     def test_repo_config_loaded(self):
         """AC3: repo yaml is loaded and merged on top of project config."""
@@ -82,8 +82,8 @@ class TestLoadConfig:
         """Repo inherits jira config from project."""
         _, projects = load_config(FIXTURES_DIR)
         repo = projects["test-project"].repos["test-repo"]
-        assert repo.jira.url == "https://test.atlassian.net"
-        assert repo.jira.project_key == "TEST"
+        assert repo.tracker.jira.url == "https://test.atlassian.net"
+        assert repo.tracker.jira.project_key == "TEST"
 
     def test_disabled_project(self, tmp_path):
         """AC5: enabled: false excludes project from discovery."""

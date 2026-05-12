@@ -107,7 +107,7 @@ async def create_workspace_for_ticket(
     if tracker:
         try:
             await tracker.transition_ticket(
-                pt.ticket.id, repo_config.jira.statuses.in_progress,
+                pt.ticket.id, repo_config.tracker.jira.statuses.in_progress,
             )
         except Exception as e:
             logger.warning("Failed to transition %s: %s", pt.ticket.id, e)
@@ -174,7 +174,7 @@ async def poll_and_create_workspaces(
     new_workspaces: list[Workspace] = []
 
     for project_id, project in projects.items():
-        jira_config = project.config.jira
+        jira_config = project.config.tracker.jira
         if not jira_config.url:
             continue
 

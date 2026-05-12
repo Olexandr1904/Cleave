@@ -329,7 +329,7 @@ class Orchestrator:
         projects = getattr(self, "_projects", None) or {}
         project = projects.get(workspace.state.company_id)
         in_review_status = (
-            project.config.jira.statuses.in_review if project else ""
+            project.config.tracker.jira.statuses.in_review if project else ""
         )
         await on_ticket_done(
             workspace,

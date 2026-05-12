@@ -184,7 +184,7 @@ def prioritize_and_route(
     Returns:
         Ordered list of (ticket, repo_id, project_id) ready for workspace creation.
     """
-    jira_config = project.config.jira
+    jira_config = project.config.tracker.jira
 
     # AC3: Filter by labels and assignee
     filtered = filter_tickets(

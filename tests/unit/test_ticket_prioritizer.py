@@ -11,6 +11,7 @@ from config.schemas import (
     ProjectInfo,
     RepoConfig,
     RepoInfo,
+    TrackerConfig,
 )
 from integrations.base.tracker import TicketData
 from orchestrator.ticket_prioritizer import (
@@ -60,10 +61,10 @@ def _project(**repo_overrides: dict) -> LoadedProject:
     return LoadedProject(
         config=ProjectConfig(
             project=ProjectInfo(id="test-project"),
-            jira=JiraConfig(
+            tracker=TrackerConfig(jira=JiraConfig(
                 trigger_labels=["ai-ready"],
                 ignore_labels=["do-not-automate", "manual"],
-            ),
+            )),
         ),
         repos=repos,
     )

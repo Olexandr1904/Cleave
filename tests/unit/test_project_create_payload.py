@@ -15,18 +15,21 @@ VALID_PAYLOAD = {
         "repo_id": "acme-app",
         "repo_display_name": "Acme App",
     },
-    "jira": {
-        "url": "https://acme.atlassian.net",
-        "project_key": "ACME",
-        "email": "bot@acme.com",
-        "token": "jira-raw",
-        "trigger_labels": ["ai-pipeline", "acme-app"],
-        "ignore_labels": [],
-        "statuses": {
-            "todo": "To Do",
-            "in_progress": "In Progress",
-            "in_review": "In Review",
-            "done": "Done",
+    "tracker": {
+        "provider": "jira",
+        "jira": {
+            "url": "https://acme.atlassian.net",
+            "project_key": "ACME",
+            "email": "bot@acme.com",
+            "token": "jira-raw",
+            "trigger_labels": ["ai-pipeline", "acme-app"],
+            "ignore_labels": [],
+            "statuses": {
+                "todo": "To Do",
+                "in_progress": "In Progress",
+                "in_review": "In Review",
+                "done": "Done",
+            },
         },
     },
     "vcs": {
@@ -75,10 +78,13 @@ def test_validate_payload_rejects_bad_slug():
 
 
 def test_validate_payload_rejects_empty_trigger_labels():
-    p = {**VALID_PAYLOAD, "jira": {**VALID_PAYLOAD["jira"], "trigger_labels": []}}
+    p = {**VALID_PAYLOAD, "tracker": {
+        "provider": "jira",
+        "jira": {**VALID_PAYLOAD["tracker"]["jira"], "trigger_labels": []},
+    }}
     with pytest.raises(PayloadValidationError) as exc:
         validate_payload(p)
-    assert "jira.trigger_labels" in exc.value.field_errors
+    assert "tracker.jira.trigger_labels" in exc.value.field_errors
 
 
 def test_validate_payload_rejects_bad_vcs_provider():
@@ -111,10 +117,87 @@ def test_redact_to_input_md_contains_var_names_not_secrets():
     assert "trigger_labels: [ai-pipeline, acme-app]" in md
 
 
-def test_redact_to_input_md_uses_tracker_label_not_jira_repo_label():
-    """The schema field is `tracker_label` post-refactor; the redacted
-    input.md the atlas agent reads must use the current name."""
+def test_redact_to_input_md_uses_tracker_repo_label():
+    """The redacted input.md uses tracker_repo_label for the label key."""
     md = redact_to_input_md(VALID_PAYLOAD)
-    assert "tracker_label:" in md
-    assert "tracker_label in repo YAML" in md
+    assert "tracker_repo_label:" in md
     assert "jira_repo_label" not in md
+
+
+def _trello_payload():
+    return {
+        "identity": {
+            "project_id": "marketing",
+            "display_name": "Marketing",
+            "repo_id": "main",
+            "repo_display_name": "Marketing site",
+        },
+        "tracker": {
+            "provider": "trello",
+            "trello": {
+                "api_key": "kkk",
+                "token": "ttt",
+                "board_id": "board-xyz",
+                "trigger_labels": ["ai-pipeline"],
+                "ignore_labels": [],
+                "lists": {
+                    "todo": "L1", "in_progress": "L2", "in_review": "L3", "done": "L4",
+                },
+            },
+        },
+        "vcs": {
+            "provider": "github",
+            "github": {"owner": "acme", "repo": "site", "token": "gh"},
+        },
+    }
+
+
+def test_validate_trello_payload_passes():
+    validate_payload(_trello_payload())
+
+
+def test_validate_trello_missing_in_review_errors():
+    p = _trello_payload()
+    p["tracker"]["trello"]["lists"]["in_review"] = ""
+    with pytest.raises(PayloadValidationError) as exc:
+        validate_payload(p)
+    assert "tracker.trello.lists.in_review" in exc.value.field_errors
+
+
+def test_validate_unknown_provider_errors():
+    p = _trello_payload()
+    p["tracker"]["provider"] = "linear"
+    with pytest.raises(PayloadValidationError) as exc:
+        validate_payload(p)
+    assert "tracker.provider" in exc.value.field_errors
+
+
+def test_legacy_jira_top_level_lifted():
+    p = _trello_payload()
+    del p["tracker"]
+    p["jira"] = {
+        "url": "https://acme.atlassian.net",
+        "project_key": "ACME",
+        "email": "bot@acme.com",
+        "token": "secret",
+        "trigger_labels": ["ai-pipeline"],
+    }
+    validate_payload(p)
+    assert p["tracker"]["provider"] == "jira"
+
+
+def test_derive_env_vars_trello():
+    vars = derive_env_vars(_trello_payload())
+    assert vars["MARKETING_TRELLO_KEY"] == "kkk"
+    assert vars["MARKETING_TRELLO_TOKEN"] == "ttt"
+    assert vars["MARKETING_GITHUB_TOKEN"] == "gh"
+    assert "MARKETING_JIRA_TOKEN" not in vars
+
+
+def test_redact_trello_input_md_has_tracker_section():
+    md = redact_to_input_md(_trello_payload())
+    assert "## Tracker" in md
+    assert "- provider: trello" in md
+    assert "- board_id: board-xyz" in md
+    assert "kkk" not in md
+    assert "ttt" not in md

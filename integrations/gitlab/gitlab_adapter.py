@@ -38,6 +38,42 @@ class GitLabAdapter(VCSInterface):
         # get_pr_comments and used by reply_to_comment / resolve_comment.
         self._discussion_cache: dict[int, dict[int, str]] = {}
 
+    async def _request(self, method: str, path: str, **kwargs: Any) -> dict | list:
+        """HTTP request with retries; surfaces response body on final failure."""
+        last_error: Exception | None = None
+        for attempt in range(MAX_RETRIES):
+            try:
+                response = await self._client.request(method, path, **kwargs)
+                if response.status_code in (401, 403):
+                    raise httpx.HTTPStatusError(
+                        f"Authentication failed: {response.status_code}",
+                        request=response.request, response=response,
+                    )
+                response.raise_for_status()
+                if response.status_code == 204:
+                    return {}
+                return response.json()
+            except (httpx.TimeoutException, httpx.HTTPStatusError) as e:
+                last_error = e
+                if isinstance(e, httpx.HTTPStatusError) and e.response.status_code in (401, 403):
+                    raise
+                if attempt < MAX_RETRIES - 1:
+                    await asyncio.sleep(RETRY_BACKOFF[attempt])
+                    logger.warning(
+                        "GitLab request retry %d/%d for %s %s: %s",
+                        attempt + 1, MAX_RETRIES, method, path, e,
+                    )
+        if isinstance(last_error, httpx.HTTPStatusError) and last_error.response is not None:
+            body = last_error.response.text[:1500]
+            logger.error(
+                "GitLab %s %s failed after %d retries → %d: %s",
+                method, path, MAX_RETRIES, last_error.response.status_code, body[:500],
+            )
+            raise RuntimeError(
+                f"GitLab {method} {path} → {last_error.response.status_code}: {body[:500]}"
+            ) from last_error
+        raise last_error  # type: ignore[misc]
+
     # --- VCSInterface methods (filled in by later tasks) ----------------
 
     async def clone_repo(self, url: str, dest: str, depth: int = 0) -> None:

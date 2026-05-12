@@ -103,12 +103,15 @@ async def create_workspace_for_ticket(
                     logger.warning("Failed to fetch parent %s: %s", parent_key, e)
                 break
 
-    # Transition Jira to In Progress
+    # Transition tracker ticket to In Progress (provider-aware)
     if tracker:
+        provider = repo_config.tracker.provider
+        if provider == "jira":
+            status_arg = repo_config.tracker.jira.statuses.in_progress
+        else:  # trello and any future provider keyed on schema names
+            status_arg = "in_progress"
         try:
-            await tracker.transition_ticket(
-                pt.ticket.id, repo_config.tracker.jira.statuses.in_progress,
-            )
+            await tracker.transition_ticket(pt.ticket.id, status_arg)
         except Exception as e:
             logger.warning("Failed to transition %s: %s", pt.ticket.id, e)
 

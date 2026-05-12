@@ -15,6 +15,46 @@ from config.schemas import RepoConfig
 from integrations.base.vcs import VCSInterface
 
 
+def _build_tracker_for_project(cfg, project_id):
+    """Build a TrackerInterface from a TrackerConfig.
+
+    Returns None if the provider's credentials are missing (lenient behavior —
+    a project can be partially configured during setup).
+    """
+    if cfg.provider == "jira" and cfg.jira.url:
+        from integrations.jira.jira_adapter import JiraAdapter
+        j = cfg.jira
+        return JiraAdapter(
+            url=j.url, email=j.email, token=j.token,
+            project_key=j.project_key,
+            trigger_labels=j.trigger_labels,
+            ignore_labels=j.ignore_labels,
+            statuses={
+                "todo": j.statuses.todo,
+                "in_progress": j.statuses.in_progress,
+                "in_review": j.statuses.in_review,
+                "done": j.statuses.done,
+            },
+        )
+    if cfg.provider == "trello" and cfg.trello.api_key and cfg.trello.token and cfg.trello.board_id:
+        from integrations.trello.trello_adapter import TrelloAdapter
+        t = cfg.trello
+        return TrelloAdapter(
+            api_key=t.api_key,
+            token=t.token,
+            board_id=t.board_id,
+            trigger_labels=t.trigger_labels,
+            ignore_labels=t.ignore_labels,
+            list_mapping={
+                "todo": t.lists.todo,
+                "in_progress": t.lists.in_progress,
+                "in_review": t.lists.in_review,
+                "done": t.lists.done,
+            },
+        )
+    return None
+
+
 def _build_vcs_adapter(repo_cfg: RepoConfig) -> VCSInterface | None:
     """Return the VCS adapter for this repo, or None if the provider is
     unsupported or required credentials are missing."""
@@ -252,31 +292,19 @@ def main(argv: list[str] | None = None) -> int:
     )
 
     # Initialize integration adapters
-    tracker = None
     vcs = None
     notifier = None
 
-    # Jira adapter — use first project's Jira config
     first_project = next(iter(projects.values()), None)
-    if first_project and first_project.config.tracker.jira.url:
-        from integrations.jira.jira_adapter import JiraAdapter
 
-        jira_cfg = first_project.config.tracker.jira
-        tracker = JiraAdapter(
-            url=jira_cfg.url,
-            email=jira_cfg.email,
-            token=jira_cfg.token,
-            project_key=jira_cfg.project_key,
-            trigger_labels=jira_cfg.trigger_labels,
-            ignore_labels=jira_cfg.ignore_labels,
-            statuses={
-                "todo": jira_cfg.statuses.todo,
-                "in_progress": jira_cfg.statuses.in_progress,
-                "in_review": jira_cfg.statuses.in_review,
-                "done": jira_cfg.statuses.done,
-            },
-        )
-        print("  Jira adapter initialized")
+    # Build a tracker per project. Provider is dispatched on tracker.provider.
+    from integrations.base.tracker import TrackerInterface
+    trackers: dict[str, TrackerInterface] = {}
+    for project_id, project in projects.items():
+        tracker = _build_tracker_for_project(project.config.tracker, project_id)
+        if tracker is not None:
+            trackers[project_id] = tracker
+            print(f"  Tracker for {project_id}: {project.config.tracker.provider}")
 
     # VCS adapter — per-repo; first non-None adapter becomes the daemon
     # default (used as fallback when a workspace has no repo-scoped adapter).
@@ -315,35 +343,22 @@ def main(argv: list[str] | None = None) -> int:
         log = logging.getLogger(__name__)
         _build_repo_adapters(new_project, log)
 
-        jira_cfg = new_project.config.tracker.jira
-        if jira_cfg.url and orchestrator.get_tracker_for_project(project_id) is None:
-            from integrations.jira.jira_adapter import JiraAdapter
-            new_tracker = JiraAdapter(
-                url=jira_cfg.url,
-                email=jira_cfg.email,
-                token=jira_cfg.token,
-                project_key=jira_cfg.project_key,
-                trigger_labels=jira_cfg.trigger_labels,
-                ignore_labels=jira_cfg.ignore_labels,
-                statuses={
-                    "todo": jira_cfg.statuses.todo,
-                    "in_progress": jira_cfg.statuses.in_progress,
-                    "in_review": jira_cfg.statuses.in_review,
-                    "done": jira_cfg.statuses.done,
-                },
+        if orchestrator.get_tracker_for_project(project_id) is None:
+            new_tracker = _build_tracker_for_project(
+                new_project.config.tracker, project_id,
             )
-            orchestrator.register_tracker(project_id, new_tracker)
-            log.info("Jira tracker registered for project %s", project_id)
+            if new_tracker is not None:
+                orchestrator.register_tracker(project_id, new_tracker)
+                log.info(
+                    "Tracker (%s) registered for project %s",
+                    new_project.config.tracker.provider, project_id,
+                )
 
         if command_handler is not None:
             pcid = new_project.config.telegram.default_chat_id
             if pcid:
                 command_handler.add_allowed_chat_id(pcid)
-            # TODO Task 5: CommandHandler will be updated to use per-project trackers.
-            # For now pass the first available tracker to keep existing behavior.
-            first_tracker = next(iter(orchestrator._trackers.values()), None)
-            if first_tracker is not None:
-                command_handler.set_tracker(first_tracker)
+            command_handler.set_trackers_resolver(lambda: dict(orchestrator._trackers))
 
         for rid, repo in new_project.repos.items():
             event_bus.emit(
@@ -364,7 +379,7 @@ def main(argv: list[str] | None = None) -> int:
         workspace_manager=workspace_manager,
         agent_runtime=agent_runtime,
         default_model_provider=_read_model,
-        trackers={},          # populated by register_tracker calls below
+        trackers=trackers,
         vcs=vcs,
         notifier=notifier,
         dry_run=args.dry_run,
@@ -372,12 +387,6 @@ def main(argv: list[str] | None = None) -> int:
         config_dir=args.config,
         on_project_added=on_project_added,
     )
-
-    # Register the tracker for the first project (Task 5 will make this per-project).
-    if tracker is not None and first_project is not None:
-        first_project_id = next(iter(projects))
-        orchestrator.register_tracker(first_project_id, tracker)
-        print(f"  Tracker registered for {first_project_id}")
 
     # Register per-repo VCS adapters
     for repo_id, (adapter, repo_cfg) in vcs_adapters.items():
@@ -410,8 +419,11 @@ def main(argv: list[str] | None = None) -> int:
             )
 
             jira_base_url = ""
-            if first_project and first_project.config.tracker.jira.url:
-                jira_base_url = first_project.config.tracker.jira.url
+            if first_project:
+                cfg = first_project.config.tracker
+                if cfg.provider == "jira" and cfg.jira.url:
+                    jira_base_url = cfg.jira.url
+                # Trello: card-specific shortUrl; no daemon-level base needed.
 
             # Build the chat-id allowlist from global + per-project configs so
             # the bot ignores commands from other chats. An empty set disables
@@ -431,7 +443,7 @@ def main(argv: list[str] | None = None) -> int:
                 active_workspaces_fn=orchestrator.get_active_workspaces,
                 jira_base_url=jira_base_url,
                 started_at=datetime.now(timezone.utc).isoformat(),
-                tracker=tracker,
+                get_trackers=lambda: dict(orchestrator._trackers),
                 analyze_callback=orchestrator.analyze_ticket_ids,
                 recent_completions_fn=orchestrator.get_recent_completions,
                 allowed_chat_ids=allowed_chat_ids or None,

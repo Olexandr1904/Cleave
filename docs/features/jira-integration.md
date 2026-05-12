@@ -2,7 +2,7 @@
 
 **Status:** Implemented
 **Created:** 2026-04-07
-**Updated:** 2026-04-15
+**Updated:** 2026-05-12
 **Author:** Oleksandr Brazhenko
 
 ## Description
@@ -70,3 +70,7 @@ Jira adapter behind the TrackerInterface. Polls Jira for tickets matching config
 - `download_attachment` implemented on `JiraAdapter`: adapter-owned basic auth, no leakage of `_email`/`_token`.
 - `list_transitions` implemented on `JiraAdapter`: prefers `to.name`, falls back to `name`.
 - `RepoConfig.jira_repo_label` renamed to `tracker_label` (loader accepts old key as alias).
+
+## Per-project tracker build with provider dispatch (2026-05-12)
+
+`main.py` now builds one tracker per configured project at startup using the module-level `_build_tracker_for_project(cfg, project_id)` helper, which dispatches on `cfg.provider`. The old single-first-project Jira block is replaced with a loop over all projects; `Orchestrator(trackers=...)` receives the completed dict directly. `on_project_added` calls the same helper so hot-reload behavior is consistent with startup. A stub Trello branch is present but lazy-imports `TrelloAdapter` — it will only fire once Task 6 lands. `CommandHandler` gains a `get_trackers` resolver kwarg and `set_trackers_resolver()` method; the legacy `set_tracker(tracker)` becomes a deprecated shim wrapping the tracker in a lambda. Phase 1 (Checkpoint A) complete.

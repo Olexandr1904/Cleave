@@ -189,7 +189,7 @@ repo:
   name: "{repo_display_name}"
   enabled: true
 
-jira_repo_label: "{repo_label}"  # one of the trigger_labels that identifies this repo
+tracker_label: "{repo_label}"  # one of the trigger_labels that identifies this repo
 
 vcs:
   provider: "github"
@@ -251,7 +251,7 @@ questions. Instead:
    the supervising handler will transition state to `SETUP_FAILED`.
 4. Write `project.yaml` and `repos/{repo_id}.yaml` in the current working
    directory using `${TOKEN_VAR}` references (never raw values). Use
-   `trigger_labels` (plural list) in the Jira block. Set `jira_repo_label`
+   `trigger_labels` (plural list) in the Jira block. Set `tracker_label`
    in the repo YAML to the second trigger label (the repo-specific one, not
    `ai-pipeline`). The handler will copy these into the config directory
    automatically.

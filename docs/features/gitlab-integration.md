@@ -9,6 +9,7 @@ VCS adapter for GitLab. Implements the same `VCSInterface` as the GitHub adapter
 - **Task 3 (in progress):** git CLI wrappers wired — `_run_git` staticmethod plus `clone_repo` and `create_branch` via `asyncio.create_subprocess_exec` with `SUBPROCESS_TIMEOUT`.
 - **Task 4 (in progress):** `push` wired — rewrites `origin` to GitLab `oauth2:<token>` form before pushing; supports `force` and `skip_hooks`.
 - **Task 5 (in progress):** `open_pr` and `find_pr_by_branch` wired — MR create via POST `/merge_requests` (returns `iid`/`web_url`); branch lookup via `?source_branch=&state=opened`, errors swallowed to `None`.
+- **Task 6 (in progress):** `get_pr_comments` wired — paginates MR discussions, surfaces only diff-anchored notes (with `position`), populates `_discussion_cache[pr_number] = {note_id: discussion_id}` for Task 7's reply/resolve.
 
 ## Key Decisions
 - Configured via `vcs.provider: gitlab` in repo config

@@ -122,7 +122,30 @@ class GitLabAdapter(VCSInterface):
         self, repo_dir: str, branch_name: str,
         force: bool = False, skip_hooks: bool = False,
     ) -> None:
-        raise NotImplementedError
+        """Push branch to origin. Rewrites origin URL with current token
+        first so workspaces cloned before a rotation still authenticate.
+
+        Uses GitLab's oauth2 username form for token-in-URL auth:
+            https://oauth2:<token>@<host>/<namespace>/<project>.git
+        """
+        host = self._url.replace("https://", "").replace("http://", "")
+        canonical_url = (
+            f"https://oauth2:{self._token}@{host}/{self._project_id}.git"
+        )
+        await self._run_git(repo_dir, "remote", "set-url", "origin", canonical_url)
+
+        args = ["push", "-u", "origin", branch_name]
+        if force:
+            args.insert(1, "--force")
+        if skip_hooks:
+            args.insert(1, "--no-verify")
+        await self._run_git(repo_dir, *args)
+        suffix = ""
+        if force:
+            suffix += " (force)"
+        if skip_hooks:
+            suffix += " (no-verify)"
+        logger.info("Pushed branch: %s%s", branch_name, suffix)
 
     async def open_pr(
         self, title: str, body: str, head_branch: str, base_branch: str,

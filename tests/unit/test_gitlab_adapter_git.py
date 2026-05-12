@@ -63,3 +63,64 @@ async def test_create_branch_runs_checkout_b():
         await adapter.create_branch("/tmp/r", "feature/X")
     cmd = list(spawn.call_args.args)
     assert cmd == ["git", "-C", "/tmp/r", "checkout", "-b", "feature/X"]
+
+
+@pytest.mark.asyncio
+async def test_push_default_no_force_no_no_verify():
+    adapter = _make_adapter()
+    with patch(
+        "integrations.gitlab.gitlab_adapter.asyncio.create_subprocess_exec",
+        new=AsyncMock(return_value=_ok_proc()),
+    ) as spawn:
+        await adapter.push("/tmp/r", "feature/X")
+    calls = [list(c.args) for c in spawn.call_args_list]
+    assert len(calls) == 2  # set-url then push
+    _, push_cmd = calls
+    assert push_cmd == ["git", "-C", "/tmp/r", "push", "-u", "origin", "feature/X"]
+
+
+@pytest.mark.asyncio
+async def test_push_with_skip_hooks_adds_no_verify():
+    adapter = _make_adapter()
+    with patch(
+        "integrations.gitlab.gitlab_adapter.asyncio.create_subprocess_exec",
+        new=AsyncMock(return_value=_ok_proc()),
+    ) as spawn:
+        await adapter.push("/tmp/r", "feature/X", skip_hooks=True)
+    push_cmd = list(spawn.call_args_list[-1].args)
+    assert "--no-verify" in push_cmd
+    assert "--force" not in push_cmd
+
+
+@pytest.mark.asyncio
+async def test_push_with_force_and_skip_hooks_keeps_both():
+    adapter = _make_adapter()
+    with patch(
+        "integrations.gitlab.gitlab_adapter.asyncio.create_subprocess_exec",
+        new=AsyncMock(return_value=_ok_proc()),
+    ) as spawn:
+        await adapter.push("/tmp/r", "feature/X", force=True, skip_hooks=True)
+    push_cmd = list(spawn.call_args_list[-1].args)
+    assert "--force" in push_cmd
+    assert "--no-verify" in push_cmd
+
+
+@pytest.mark.asyncio
+async def test_push_refreshes_origin_url_with_oauth2_token():
+    """Workspaces cloned before a token rotation have a stale token in
+    origin. Rewrite first so push uses the adapter's current token, in
+    the GitLab oauth2 form."""
+    adapter = _make_adapter()
+    adapter._token = "glpat_NEW"
+    adapter._url = "https://gitlab.example.com"
+    adapter._project_id = "group/proj"
+    with patch(
+        "integrations.gitlab.gitlab_adapter.asyncio.create_subprocess_exec",
+        new=AsyncMock(return_value=_ok_proc()),
+    ) as spawn:
+        await adapter.push("/tmp/r", "feature/X")
+    set_url_cmd = list(spawn.call_args_list[0].args)
+    assert set_url_cmd == [
+        "git", "-C", "/tmp/r", "remote", "set-url", "origin",
+        "https://oauth2:glpat_NEW@gitlab.example.com/group/proj.git",
+    ]

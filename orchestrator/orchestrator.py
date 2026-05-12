@@ -228,12 +228,9 @@ class Orchestrator:
         Thin shim — see orchestrator/ingest.py for the implementation.
         """
         from orchestrator.ingest import analyze_ticket_ids as _impl
-        # TODO Task 3: pass the full trackers dict; for now use the first tracker
-        # so existing analyze_ticket_ids signature works.
-        legacy_tracker = next(iter(getattr(self, "_trackers", {}).values()), None)
         return await _impl(
             ticket_ids,
-            tracker=legacy_tracker,
+            trackers=self._trackers,
             projects=self._projects,
             active_workspaces=self._active_workspaces,
             workspace_manager=self._workspace_manager,
@@ -278,11 +275,8 @@ class Orchestrator:
     async def _poll_and_create_workspaces(self) -> None:
         """Poll tracker for new tickets, create workspaces, append to active list."""
         from orchestrator.ingest import poll_and_create_workspaces
-        # TODO Task 3: pass the full trackers dict; for now use the first tracker
-        # so existing poll_and_create_workspaces signature works.
-        legacy_tracker = next(iter(self._trackers.values()), None)
         new_workspaces = await poll_and_create_workspaces(
-            tracker=legacy_tracker,
+            trackers=self._trackers,
             projects=self._projects,
             active_workspaces=self._active_workspaces,
             global_config=self._global_config,

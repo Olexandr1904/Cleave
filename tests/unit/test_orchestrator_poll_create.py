@@ -60,9 +60,8 @@ def _make_orchestrator(
 async def _poll(orc):
     """Bridge — call the module function with deps from orc."""
     from orchestrator.ingest import poll_and_create_workspaces
-    tracker = next(iter(orc._trackers.values()), None)
     new_workspaces = await poll_and_create_workspaces(
-        tracker=tracker,
+        trackers=orc._trackers,
         projects=orc._projects,
         active_workspaces=orc._active_workspaces,
         global_config=orc._global_config,
@@ -101,6 +100,7 @@ def _project(repo_id: str, repo_label: str, max_parallel: int = 5):
         config=SimpleNamespace(
             project=SimpleNamespace(id="acme"),
             tracker=SimpleNamespace(
+                provider="jira",
                 jira=SimpleNamespace(
                     url="https://x", trigger_labels=["ai-pipeline"], ignore_labels=[],
                 ),

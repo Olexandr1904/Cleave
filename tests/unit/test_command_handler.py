@@ -284,13 +284,11 @@ def test_set_tracker_attaches_after_init():
         allowed_chat_ids=None,
         event_bus=None,
     )
-    assert handler._tracker is None
     assert handler._get_trackers() == {}
 
     new_tracker = MagicMock()
     handler.set_tracker(new_tracker)
-    assert handler._tracker is new_tracker
-    # Resolver should also return the tracker wrapped under _legacy key
+    # Resolver should return the tracker wrapped under _legacy key
     assert handler._get_trackers() == {"_legacy": new_tracker}
 
 

@@ -11,6 +11,8 @@ import argparse
 import logging
 import sys
 
+logger = logging.getLogger(__name__)
+
 from config.schemas import RepoConfig
 from integrations.base.vcs import VCSInterface
 
@@ -52,6 +54,12 @@ def _build_tracker_for_project(cfg, project_id):
                 "done": t.lists.done,
             },
         )
+    # No matching provider configured or credentials missing — caller will
+    # treat this project as "no tracker".
+    logger.warning(
+        "No tracker built for project %s (provider=%s); check credentials.",
+        project_id, cfg.provider,
+    )
     return None
 
 
@@ -295,7 +303,6 @@ def main(argv: list[str] | None = None) -> int:
     vcs = None
     notifier = None
 
-    first_project = next(iter(projects.values()), None)
 
     # Build a tracker per project. Provider is dispatched on tracker.provider.
     from integrations.base.tracker import TrackerInterface
@@ -419,11 +426,12 @@ def main(argv: list[str] | None = None) -> int:
             )
 
             jira_base_url = ""
-            if first_project:
-                cfg = first_project.config.tracker
+            for proj in projects.values():
+                cfg = proj.config.tracker
                 if cfg.provider == "jira" and cfg.jira.url:
                     jira_base_url = cfg.jira.url
-                # Trello: card-specific shortUrl; no daemon-level base needed.
+                    break
+            # Trello: card-specific shortUrl; no daemon-level base needed.
 
             # Build the chat-id allowlist from global + per-project configs so
             # the bot ignores commands from other chats. An empty set disables

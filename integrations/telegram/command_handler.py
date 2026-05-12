@@ -116,8 +116,6 @@ class CommandHandler:
             self._get_trackers = lambda: {"_legacy": tracker}
         else:
             self._get_trackers = lambda: {}
-        # Keep _tracker as a shim so existing code that reads it still works.
-        self._tracker = tracker
         self._analyze_callback = analyze_callback
         self._recent_completions_fn = recent_completions_fn
         # None or empty set disables the allowlist — use an empty set to block
@@ -145,7 +143,6 @@ class CommandHandler:
             self._get_trackers = lambda: {}
         else:
             self._get_trackers = lambda: {"_legacy": tracker}
-        self._tracker = tracker
 
     def add_allowed_chat_id(self, chat_id: str) -> None:
         """Extend the chat allowlist with a new id.

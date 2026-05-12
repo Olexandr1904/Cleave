@@ -335,9 +335,11 @@ class Orchestrator:
         from orchestrator.pipeline.actions.finalize import on_ticket_done
         projects = getattr(self, "_projects", None) or {}
         project = projects.get(workspace.state.company_id)
-        in_review_status = (
-            project.config.tracker.jira.statuses.in_review if project else ""
-        )
+        in_review_status = ""
+        if project is not None and project.config.tracker.provider == "jira":
+            in_review_status = project.config.tracker.jira.statuses.in_review
+        # For Trello, the per-workspace list mapping in TrackerConfig.trello.lists
+        # handles status transitions; no string-based "in_review" name is needed.
         await on_ticket_done(
             workspace,
             getattr(self, "_notifier", None),

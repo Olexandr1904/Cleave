@@ -11,6 +11,30 @@ import argparse
 import logging
 import sys
 
+from config.schemas import RepoConfig
+from integrations.base.vcs import VCSInterface
+
+
+def _build_vcs_adapter(repo_cfg: RepoConfig) -> VCSInterface | None:
+    """Return the VCS adapter for this repo, or None if the provider is
+    unsupported or required credentials are missing."""
+    provider = repo_cfg.vcs.provider
+    if provider == "github" and repo_cfg.vcs.github.token:
+        from integrations.github.github_adapter import GitHubAdapter
+        return GitHubAdapter(
+            token=repo_cfg.vcs.github.token,
+            owner=repo_cfg.vcs.github.owner,
+            repo=repo_cfg.vcs.github.repo,
+        )
+    if provider == "gitlab" and repo_cfg.vcs.gitlab.token:
+        from integrations.gitlab.gitlab_adapter import GitLabAdapter
+        return GitLabAdapter(
+            token=repo_cfg.vcs.gitlab.token,
+            project_id=repo_cfg.vcs.gitlab.project_id,
+            url=repo_cfg.vcs.gitlab.url or "https://gitlab.com",
+        )
+    return None
+
 
 def get_version() -> str:
     """Read version from package metadata, falling back to pyproject.toml."""
@@ -254,22 +278,18 @@ def main(argv: list[str] | None = None) -> int:
         )
         print("  Jira adapter initialized")
 
-    # VCS adapter — per-repo, default to first GitHub repo
-    github_adapters = {}
+    # VCS adapter — per-repo; first non-None adapter becomes the daemon
+    # default (used as fallback when a workspace has no repo-scoped adapter).
+    vcs_adapters: dict[str, tuple[VCSInterface, RepoConfig]] = {}
     for proj_id, proj in projects.items():
         for repo_id, repo_cfg in proj.repos.items():
-            if repo_cfg.vcs.provider == "github" and repo_cfg.vcs.github.token:
-                from integrations.github.github_adapter import GitHubAdapter
-
-                gh = GitHubAdapter(
-                    token=repo_cfg.vcs.github.token,
-                    owner=repo_cfg.vcs.github.owner,
-                    repo=repo_cfg.vcs.github.repo,
-                )
-                github_adapters[repo_id] = (gh, repo_cfg)
-                if vcs is None:
-                    vcs = gh
-                print(f"  GitHub adapter for {repo_id}: {repo_cfg.vcs.github.owner}/{repo_cfg.vcs.github.repo}")
+            adapter = _build_vcs_adapter(repo_cfg)
+            if adapter is None:
+                continue
+            vcs_adapters[repo_id] = (adapter, repo_cfg)
+            if vcs is None:
+                vcs = adapter
+            print(f"  {repo_cfg.vcs.provider} adapter for {repo_id}")
 
     # Telegram notifier
     tg_config = global_config.telegram
@@ -282,19 +302,14 @@ def main(argv: list[str] | None = None) -> int:
     def _build_repo_adapters(project, logger_):
         """Build + register VCS adapters for each repo in a single project."""
         for repo_id, repo_cfg in project.repos.items():
-            provider = repo_cfg.vcs.provider
-            if provider == "github" and repo_cfg.vcs.github.token:
-                from integrations.github.github_adapter import GitHubAdapter
-                gh = GitHubAdapter(
-                    token=repo_cfg.vcs.github.token,
-                    owner=repo_cfg.vcs.github.owner,
-                    repo=repo_cfg.vcs.github.repo,
-                )
-                orchestrator.register_repo_vcs(repo_id, gh, repo_cfg)
-                logger_.info(
-                    "Hot-reload: registered GitHub adapter for %s: %s/%s",
-                    repo_id, repo_cfg.vcs.github.owner, repo_cfg.vcs.github.repo,
-                )
+            adapter = _build_vcs_adapter(repo_cfg)
+            if adapter is None:
+                continue
+            orchestrator.register_repo_vcs(repo_id, adapter, repo_cfg)
+            logger_.info(
+                "Hot-reload: registered %s adapter for %s",
+                repo_cfg.vcs.provider, repo_id,
+            )
 
     def on_project_added(project_id, new_project):
         log = logging.getLogger(__name__)
@@ -356,8 +371,8 @@ def main(argv: list[str] | None = None) -> int:
     )
 
     # Register per-repo VCS adapters
-    for repo_id, (gh_adapter, repo_cfg) in github_adapters.items():
-        orchestrator.register_repo_vcs(repo_id, gh_adapter, repo_cfg)
+    for repo_id, (adapter, repo_cfg) in vcs_adapters.items():
+        orchestrator.register_repo_vcs(repo_id, adapter, repo_cfg)
 
     # Initialize mode handler (auto/manual pipeline mode)
     from integrations.telegram.handlers.mode import ModeHandler

@@ -274,7 +274,9 @@ class GitLabAdapter(VCSInterface):
         )
         if not pipelines:
             return PRStatus(all_passing=False, checks=[])
-        latest = max(pipelines, key=lambda p: p.get("created_at", ""))
+        # Sort by pipeline id (monotonic) rather than created_at so simultaneous
+        # retries with identical timestamps still pick the last-created run.
+        latest = max(pipelines, key=lambda p: p.get("id", 0))
         return PRStatus(
             all_passing=(latest.get("status") == "success"),
             checks=[

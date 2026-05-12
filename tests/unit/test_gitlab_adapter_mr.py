@@ -240,6 +240,26 @@ async def test_check_pr_status_failing_when_latest_pipeline_failed():
 
 
 @pytest.mark.asyncio
+async def test_check_pr_status_picks_higher_id_on_identical_timestamps():
+    """When two pipelines share a created_at (rapid retry), the higher id wins.
+
+    This is the difference from the original created_at-sort: id is monotonic
+    per project, so a retry that lands in the same wall-clock second still gets
+    selected as latest.
+    """
+    adapter = _make_adapter()
+    pipelines = [
+        {"id": 9, "status": "success", "created_at": "2026-05-12T11:00:00Z"},
+        {"id": 10, "status": "failed", "created_at": "2026-05-12T11:00:00Z"},
+    ]
+    adapter._request = AsyncMock(return_value=pipelines)
+
+    status = await adapter.check_pr_status(42)
+    # Higher id (10, failed) is latest → gate fails.
+    assert status.all_passing is False
+
+
+@pytest.mark.asyncio
 async def test_check_pr_status_no_pipelines_returns_not_passing():
     adapter = _make_adapter()
     adapter._request = AsyncMock(return_value=[])

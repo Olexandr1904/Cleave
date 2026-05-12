@@ -12,6 +12,7 @@ VCS adapter for GitLab. Implements the same `VCSInterface` as the GitHub adapter
 - **Task 6 (in progress):** `get_pr_comments` wired — paginates MR discussions, surfaces only diff-anchored notes (with `position`), populates `_discussion_cache[pr_number] = {note_id: discussion_id}` for Task 7's reply/resolve.
 - **Task 7 (in progress):** `reply_to_comment` and `resolve_comment` wired — `_lookup_discussion` resolves a note's discussion via cache → refetch once → raise; reply POSTs to `/discussions/:id/notes`, resolve PUTs `/discussions/:id?resolved=true`.
 - **Task 8 (in progress):** `check_pr_status` and `close_pr` wired — status reads `/merge_requests/:iid/pipelines` and gates on latest pipeline's `status == "success"` (empty list → not passing); close PUTs `state_event: close` to `/merge_requests/:iid`.
+- **Task 9 (in progress):** `main.py` wired via module-scope `_build_vcs_adapter(repo_cfg)` helper — initial-load loop and `_build_repo_adapters` hot-reload both dispatch on `vcs.provider` (github | gitlab); `github_adapters` renamed to `vcs_adapters`.
 
 ## Key Decisions
 - Configured via `vcs.provider: gitlab` in repo config

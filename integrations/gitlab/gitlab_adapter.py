@@ -147,13 +147,42 @@ class GitLabAdapter(VCSInterface):
             suffix += " (no-verify)"
         logger.info("Pushed branch: %s%s", branch_name, suffix)
 
+    @property
+    def _mr_path(self) -> str:
+        return f"/projects/{self._project_path}/merge_requests"
+
     async def open_pr(
         self, title: str, body: str, head_branch: str, base_branch: str,
     ) -> tuple[int, str]:
-        raise NotImplementedError
+        """Open a merge request. Returns (iid, web_url)."""
+        data = await self._request(
+            "POST",
+            self._mr_path,
+            json={
+                "source_branch": head_branch,
+                "target_branch": base_branch,
+                "title": title,
+                "description": body,
+            },
+        )
+        iid = data["iid"]
+        web_url = data["web_url"]
+        logger.info("Opened MR !%d: %s", iid, web_url)
+        return iid, web_url
 
     async def find_pr_by_branch(self, branch: str) -> tuple[int, str] | None:
-        raise NotImplementedError
+        """Find an open MR with the given source_branch."""
+        try:
+            data = await self._request(
+                "GET", self._mr_path,
+                params={"source_branch": branch, "state": "opened"},
+            )
+            if data and isinstance(data, list) and len(data) > 0:
+                mr = data[0]
+                return mr["iid"], mr["web_url"]
+        except Exception as e:
+            logger.warning("Failed to find MR for branch %s: %s", branch, e)
+        return None
 
     async def get_pr_comments(self, pr_number: int) -> list[PRComment]:
         raise NotImplementedError

@@ -32,3 +32,4 @@ Trello adapter behind the TrackerInterface. Polls Trello board cards matching co
 ## Change Log
 
 - 2026-05-12: Task 6 — TrelloAdapter implementing all 9 TrackerInterface methods; list_autodetect helper; unit + integration tests
+- 2026-05-12: Fix rate-limit exhaustion TypeError; tighten OAuth host check to reject suffix-spoofed names; parse Retry-After header safely

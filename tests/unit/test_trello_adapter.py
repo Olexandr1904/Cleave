@@ -251,3 +251,59 @@ def test_card_created_at_decoded_from_id():
     # 0x60000000 == 1610612736 == 2021-01-14T08:25:36Z
     result = _card_created_at("60000000abcdefabcdefabcd")
     assert result.startswith("2021-01-14")
+
+
+@pytest.mark.asyncio
+async def test_request_raises_on_sustained_429():
+    """After MAX_RETRIES of 429, _request raises a real HTTPStatusError, not TypeError."""
+    import httpx
+    from integrations.trello.trello_adapter import TrelloAdapter
+
+    a = _adapter()
+    # Replace the underlying client so every call returns 429
+    request_obj = httpx.Request("GET", "https://api.trello.com/1/boards/board-abc/cards")
+
+    class _AlwaysRateLimited:
+        async def request(self, method, path, **kwargs):
+            return httpx.Response(429, headers={"Retry-After": "0.01"}, request=request_obj)
+
+    a._client = _AlwaysRateLimited()
+    with pytest.raises(httpx.HTTPStatusError, match="Rate limited"):
+        await a.poll_tickets()
+
+
+def test_is_trello_host_rejects_spoofed_names():
+    """Host-suffix check must NOT accept nottrello.com or atlassian.com.evil.tld."""
+    from integrations.trello.trello_adapter import _is_trello_host
+    assert _is_trello_host("trello.com") is True
+    assert _is_trello_host("download.trello.com") is True
+    assert _is_trello_host("api.trello.com") is True
+    assert _is_trello_host("atlassian.com") is True
+    assert _is_trello_host("download.atlassian.com") is True
+    assert _is_trello_host("nottrello.com") is False
+    assert _is_trello_host("trello.com.evil.tld") is False
+    assert _is_trello_host("evil-trello.com") is False
+    assert _is_trello_host("") is False
+
+
+@pytest.mark.asyncio
+async def test_request_handles_malformed_retry_after():
+    """Empty or non-numeric Retry-After falls back to 1.0s, doesn't crash."""
+    import httpx
+    from integrations.trello.trello_adapter import TrelloAdapter
+
+    a = _adapter()
+    request_obj = httpx.Request("GET", "https://api.trello.com/1/boards/board-abc/cards")
+    calls = {"n": 0}
+
+    class _OneBadRetryAfterThenOK:
+        async def request(self, method, path, **kwargs):
+            calls["n"] += 1
+            if calls["n"] == 1:
+                return httpx.Response(429, headers={"Retry-After": "bogus"}, request=request_obj)
+            return httpx.Response(200, content=b"[]", request=request_obj)
+
+    a._client = _OneBadRetryAfterThenOK()
+    result = await a.poll_tickets()
+    assert calls["n"] == 2
+    assert result == []

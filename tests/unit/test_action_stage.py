@@ -190,7 +190,7 @@ class TestHandleActionStage:
         orch._events = MagicMock()
         orch._mode_handler = None
         orch._notifier = None
-        orch._tracker = None
+        orch._trackers = {}
         orch._get_vcs_for_workspace = MagicMock(return_value=(MagicMock(), MagicMock()))
         orch._get_chat_id = MagicMock(return_value="")
         return orch

@@ -48,7 +48,7 @@ def orchestrator_with_stubs(tmp_path, monkeypatch):
     orch._active_workspaces = []
     orch._workspace_manager = MagicMock()
     orch._workspace_manager.cleanup_old_workspaces = MagicMock(return_value=[])
-    orch._tracker = None
+    orch._trackers = {}
     orch._vcs = None
     orch._repo_vcs = {}
     orch._notifier = AsyncMock()

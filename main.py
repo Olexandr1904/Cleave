@@ -316,7 +316,7 @@ def main(argv: list[str] | None = None) -> int:
         _build_repo_adapters(new_project, log)
 
         jira_cfg = new_project.config.tracker.jira
-        if orchestrator._tracker is None and jira_cfg.url:
+        if jira_cfg.url and orchestrator.get_tracker_for_project(project_id) is None:
             from integrations.jira.jira_adapter import JiraAdapter
             new_tracker = JiraAdapter(
                 url=jira_cfg.url,
@@ -332,15 +332,18 @@ def main(argv: list[str] | None = None) -> int:
                     "done": jira_cfg.statuses.done,
                 },
             )
-            orchestrator.set_tracker(new_tracker)
-            log.info("Jira tracker attached from project %s", project_id)
+            orchestrator.register_tracker(project_id, new_tracker)
+            log.info("Jira tracker registered for project %s", project_id)
 
         if command_handler is not None:
             pcid = new_project.config.telegram.default_chat_id
             if pcid:
                 command_handler.add_allowed_chat_id(pcid)
-            if orchestrator._tracker is not None:
-                command_handler.set_tracker(orchestrator._tracker)
+            # TODO Task 5: CommandHandler will be updated to use per-project trackers.
+            # For now pass the first available tracker to keep existing behavior.
+            first_tracker = next(iter(orchestrator._trackers.values()), None)
+            if first_tracker is not None:
+                command_handler.set_tracker(first_tracker)
 
         for rid, repo in new_project.repos.items():
             event_bus.emit(
@@ -361,7 +364,7 @@ def main(argv: list[str] | None = None) -> int:
         workspace_manager=workspace_manager,
         agent_runtime=agent_runtime,
         default_model_provider=_read_model,
-        tracker=tracker,
+        trackers={},          # populated by register_tracker calls below
         vcs=vcs,
         notifier=notifier,
         dry_run=args.dry_run,
@@ -369,6 +372,12 @@ def main(argv: list[str] | None = None) -> int:
         config_dir=args.config,
         on_project_added=on_project_added,
     )
+
+    # Register the tracker for the first project (Task 5 will make this per-project).
+    if tracker is not None and first_project is not None:
+        first_project_id = next(iter(projects))
+        orchestrator.register_tracker(first_project_id, tracker)
+        print(f"  Tracker registered for {first_project_id}")
 
     # Register per-repo VCS adapters
     for repo_id, (adapter, repo_cfg) in vcs_adapters.items():

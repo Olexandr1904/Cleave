@@ -1,4 +1,4 @@
-"""Tests for Orchestrator hot-reload helpers: set_tracker, rescan_projects, poll_cycle wiring."""
+"""Tests for Orchestrator hot-reload helpers: register_tracker, rescan_projects, poll_cycle wiring."""
 
 from __future__ import annotations
 
@@ -11,7 +11,7 @@ from orchestrator.orchestrator import Orchestrator
 
 def _make_orch(
     projects=None,
-    tracker=None,
+    trackers=None,
     on_project_added=None,
     config_dir="/tmp/cfg",
 ):
@@ -23,7 +23,7 @@ def _make_orch(
         workspace_manager=MagicMock(discover_workspaces=lambda: []),
         agent_runtime=MagicMock(),
         default_model_provider=lambda: "claude-sonnet-4-6",
-        tracker=tracker,
+        trackers=trackers,
         vcs=None,
         notifier=None,
         dry_run=False,
@@ -33,20 +33,20 @@ def _make_orch(
     )
 
 
-def test_set_tracker_attaches_after_init():
-    orch = _make_orch(tracker=None)
-    assert orch._tracker is None
+def test_register_tracker_attaches_after_init():
+    orch = _make_orch(trackers=None)
+    assert not orch._trackers
     new_tracker = MagicMock()
-    orch.set_tracker(new_tracker)
-    assert orch._tracker is new_tracker
+    orch.register_tracker("acme", new_tracker)
+    assert orch._trackers == {"acme": new_tracker}
 
 
-def test_set_tracker_replaces_existing():
+def test_register_tracker_replaces_existing():
     old = MagicMock(name="old")
-    orch = _make_orch(tracker=old)
+    orch = _make_orch(trackers={"acme": old})
     new = MagicMock(name="new")
-    orch.set_tracker(new)
-    assert orch._tracker is new
+    orch.register_tracker("acme", new)
+    assert orch._trackers["acme"] is new
 
 
 @pytest.mark.asyncio

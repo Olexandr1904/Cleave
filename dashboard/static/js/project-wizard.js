@@ -252,7 +252,7 @@ function renderTrelloFields(container, d, e) {
           ${blank}
           ${d._detected_lists.map(l => opt(l.id, l.name, d.lists[statusKey])).join('')}
         </select>
-        ${d.lists[statusKey] ? '<small class="check-pass">auto-detected</small>' : '<small class="check-fail">please pick</small>'}
+        ${d.lists[statusKey] ? '<small class="check-pass">auto-detected</small>' : '<small class="hint">please pick</small>'}
       </div>
     `;
     return `
@@ -689,7 +689,8 @@ function buildPayload() {
   if (d.tracker.provider === 'jira') {
     tracker.jira = { ...d.tracker.jira, trigger_labels: [...d.tracker.jira.trigger_labels], ignore_labels: [...d.tracker.jira.ignore_labels] };
   } else {
-    tracker.trello = { ...d.tracker.trello, trigger_labels: [...d.tracker.trello.trigger_labels], ignore_labels: [...d.tracker.trello.ignore_labels] };
+    const { _detected_lists, ...trelloOut } = d.tracker.trello;
+    tracker.trello = { ...trelloOut, trigger_labels: [...d.tracker.trello.trigger_labels], ignore_labels: [...d.tracker.trello.ignore_labels] };
   }
   return {
     identity: { ...d.identity },

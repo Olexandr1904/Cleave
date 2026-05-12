@@ -27,6 +27,15 @@ MAX_RETRY_AFTER = 30
 API_BASE = "https://api.trello.com/1"
 
 
+def _is_trello_host(host: str) -> bool:
+    """Match trello.com and *.trello.com / atlassian.com and *.atlassian.com.
+    Rejects names like nottrello.com that would slip past endswith()."""
+    return (
+        host == "trello.com" or host.endswith(".trello.com")
+        or host == "atlassian.com" or host.endswith(".atlassian.com")
+    )
+
+
 def _card_created_at(card_id: str) -> str:
     """Decode the first 8 hex chars of a Trello card ID as unix timestamp.
     Returns ISO 8601 ('YYYY-MM-DDTHH:MM:SS+00:00')."""
@@ -83,11 +92,19 @@ class TrelloAdapter(TrackerInterface):
             try:
                 response = await self._client.request(method, path, **kwargs)
                 if response.status_code == 429:
-                    retry_after = float(response.headers.get("Retry-After", "1"))
+                    raw = response.headers.get("Retry-After", "1")
+                    try:
+                        retry_after = float(raw)
+                    except ValueError:
+                        retry_after = 1.0
                     delay = min(retry_after, MAX_RETRY_AFTER)
                     logger.warning(
                         "Trello rate limit on %s %s; sleeping %.1fs",
                         method, path, delay,
+                    )
+                    last_error = httpx.HTTPStatusError(
+                        f"Rate limited after {attempt + 1} attempts",
+                        request=response.request, response=response,
                     )
                     await asyncio.sleep(delay)
                     continue
@@ -229,7 +246,7 @@ class TrelloAdapter(TrackerInterface):
         """Fetch attachment bytes. Trello-hosted URLs need OAuth1 headers."""
         host = urlparse(url).hostname or ""
         headers: dict[str, str] = {}
-        if host.endswith("trello.com") or host.endswith("atlassian.com"):
+        if _is_trello_host(host):
             headers["Authorization"] = (
                 f'OAuth oauth_consumer_key="{self._key}", '
                 f'oauth_token="{self._token}"'

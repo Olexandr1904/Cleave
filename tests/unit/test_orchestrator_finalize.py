@@ -1,4 +1,4 @@
-"""Characterization tests for _on_ticket_done fuzzy tracker transition.
+"""Characterization tests for on_ticket_done fuzzy tracker transition.
 
 The matching logic uses tracker.list_transitions() to fetch available
 transition names and tracker.transition_ticket() to apply the first match
@@ -11,27 +11,8 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from orchestrator.orchestrator import Orchestrator
+from orchestrator.pipeline.actions.finalize import on_ticket_done
 from workspace.workspace import Stage
-
-
-def _orc(tracker, project, monkeypatch):
-    orc = Orchestrator.__new__(Orchestrator)
-    orc._tracker = tracker
-    orc._notifier = AsyncMock()
-    orc._projects = {"acme": project}
-    orc._global_config = SimpleNamespace(
-        telegram=SimpleNamespace(default_chat_id="chat-1"),
-    )
-    orc._events = None
-    orc._workflow = SimpleNamespace(stages={})
-    orc._repo_vcs = {}
-    # Bypass repo config lookup; just return the global chat id.
-    orc._get_chat_id = lambda ws: "chat-1"
-    monkeypatch.setattr(
-        "orchestrator.tg_format.read_ticket_title", lambda w: "Sample title",
-    )
-    return orc
 
 
 def _ws():
@@ -44,23 +25,15 @@ def _ws():
     return ws
 
 
-def _project(in_review="In Review"):
-    return SimpleNamespace(
-        config=SimpleNamespace(
-            jira=SimpleNamespace(
-                statuses=SimpleNamespace(in_review=in_review),
-            ),
-        ),
-        repos={},
-    )
-
-
 @pytest.mark.asyncio
 async def test_exact_match_transition_fires(monkeypatch) -> None:
     tracker = AsyncMock()
     tracker.list_transitions.return_value = ["In Review"]
-    orc = _orc(tracker, _project("In Review"), monkeypatch)
-    await orc._on_ticket_done(_ws())
+    notifier = AsyncMock()
+    monkeypatch.setattr(
+        "orchestrator.tg_format.read_ticket_title", lambda w: "Sample title",
+    )
+    await on_ticket_done(_ws(), notifier, "chat-1", tracker, "In Review")
     tracker.transition_ticket.assert_awaited_once()
     assert tracker.transition_ticket.await_args.args[1] == "In Review"
 
@@ -69,8 +42,11 @@ async def test_exact_match_transition_fires(monkeypatch) -> None:
 async def test_fuzzy_match_on_review_keyword(monkeypatch) -> None:
     tracker = AsyncMock()
     tracker.list_transitions.return_value = ["Reviewing"]
-    orc = _orc(tracker, _project("Nonexistent Status"), monkeypatch)
-    await orc._on_ticket_done(_ws())
+    notifier = AsyncMock()
+    monkeypatch.setattr(
+        "orchestrator.tg_format.read_ticket_title", lambda w: "Sample title",
+    )
+    await on_ticket_done(_ws(), notifier, "chat-1", tracker, "Nonexistent Status")
     tracker.transition_ticket.assert_awaited_once()
     assert tracker.transition_ticket.await_args.args[1] == "Reviewing"
 
@@ -79,26 +55,26 @@ async def test_fuzzy_match_on_review_keyword(monkeypatch) -> None:
 async def test_no_matching_transition_does_nothing_fatal(monkeypatch) -> None:
     tracker = AsyncMock()
     tracker.list_transitions.return_value = ["Closed"]
-    orc = _orc(tracker, _project("In Review"), monkeypatch)
-    await orc._on_ticket_done(_ws())
+    notifier = AsyncMock()
+    monkeypatch.setattr(
+        "orchestrator.tg_format.read_ticket_title", lambda w: "Sample title",
+    )
+    await on_ticket_done(_ws(), notifier, "chat-1", tracker, "In Review")
     tracker.transition_ticket.assert_not_awaited()
 
 
 @pytest.mark.asyncio
 async def test_done_sends_completion_message(monkeypatch) -> None:
-    """_on_ticket_done sends a TG message containing pipeline-complete copy."""
+    """on_ticket_done sends a TG message containing pipeline-complete copy."""
     tracker = AsyncMock()
-    project = SimpleNamespace(
-        config=SimpleNamespace(
-            jira=SimpleNamespace(statuses=SimpleNamespace(in_review="")),
-        ),
-        repos={},
+    notifier = AsyncMock()
+    monkeypatch.setattr(
+        "orchestrator.tg_format.read_ticket_title", lambda w: "Sample title",
     )
-    orc = _orc(tracker, project, monkeypatch)
-    await orc._on_ticket_done(_ws())
+    await on_ticket_done(_ws(), notifier, "chat-1", tracker, "")
 
-    assert orc._notifier.send_message.await_count == 1
-    chat_id, message = orc._notifier.send_message.await_args.args[:2]
+    assert notifier.send_message.await_count == 1
+    chat_id, message = notifier.send_message.await_args.args[:2]
     assert chat_id == "chat-1"
     assert "Pipeline complete" in message
     assert "https://g/pr/42" in message

@@ -67,16 +67,14 @@ async def test_dev_stage_without_new_commit_goes_to_blocked(tmp_path):
     )
     orch._get_repo_config = MagicMock(return_value=None)
     orch._emit = MagicMock()
-    orch._parse_agent_outcome = MagicMock(return_value="default")
-    orch._should_approval_gate = MagicMock(return_value=False)
-    orch._advance_to_stage = MagicMock()
 
-    await orch._handle_agent_stage(ws, "dev", stage_def)
+    with patch("orchestrator.pipeline.driver.advance_to_stage") as advance_mock:
+        await orch._handle_agent_stage(ws, "dev", stage_def)
 
     ws.transition.assert_called_once()
     args, kwargs = ws.transition.call_args
     assert args[0] == "BLOCKED"
-    orch._advance_to_stage.assert_not_called()
+    advance_mock.assert_not_called()
     assert ws.update_state.called
     error_arg = ws.update_state.call_args.kwargs.get("error", "")
     assert "no changes" in error_arg.lower() or "commit" in error_arg.lower()
@@ -123,14 +121,12 @@ async def test_dev_stage_with_new_commit_advances_normally(tmp_path):
     orch._agent_runtime.execute = AsyncMock(side_effect=fake_execute)
     orch._get_repo_config = MagicMock(return_value=None)
     orch._emit = MagicMock()
-    orch._parse_agent_outcome = MagicMock(return_value="default")
-    orch._should_approval_gate = MagicMock(return_value=False)
-    orch._advance_to_stage = MagicMock()
 
-    with patch("orchestrator.pipeline.agent_stage.get_next_stage", return_value="scope_check"):
+    with patch("orchestrator.pipeline.agent_stage.get_next_stage", return_value="scope_check"), \
+         patch("orchestrator.pipeline.driver.advance_to_stage") as advance_mock:
         await orch._handle_agent_stage(ws, "dev", stage_def)
 
-    orch._advance_to_stage.assert_called_once()
+    advance_mock.assert_called_once()
     blocked_calls = [c for c in ws.transition.call_args_list if c.args and c.args[0] == "BLOCKED"]
     assert blocked_calls == []
 
@@ -195,13 +191,10 @@ async def test_verification_fail_notifies_telegram_and_sets_escalation_fields(tm
     )
     orch._get_repo_config = MagicMock(return_value=None)
     orch._emit = MagicMock()
-    orch._parse_agent_outcome = MagicMock(return_value="default")
-    orch._should_approval_gate = MagicMock(return_value=False)
-    orch._advance_to_stage = MagicMock()
     orch._get_chat_id = MagicMock(return_value="chat-1")
-    orch._log_pipeline = MagicMock()
 
-    await orch._handle_agent_stage(ws, "dev", stage_def)
+    with patch("orchestrator.pipeline.driver.advance_to_stage"):
+        await orch._handle_agent_stage(ws, "dev", stage_def)
 
     # Workspace transitioned to BLOCKED.
     blocked_calls = [c for c in ws.transition.call_args_list if c.args and c.args[0] == "BLOCKED"]
@@ -274,8 +267,6 @@ class TestScopeCheckIterationClear:
         )
         orch._get_repo_config = MagicMock(return_value=None)
         orch._emit = MagicMock()
-        orch._should_approval_gate = MagicMock(return_value=False)
-        orch._advance_to_stage = MagicMock()
 
         return orch, ws, stage_def
 

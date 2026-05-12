@@ -14,15 +14,7 @@ from unittest.mock import AsyncMock, MagicMock, PropertyMock
 import pytest
 
 from integrations.telegram.command_handler import CommandHandler, _classify_reply
-from orchestrator.orchestrator import Orchestrator
-
-
-def _make_orch_for_send(notifier):
-    orch = Orchestrator.__new__(Orchestrator)
-    orch._notifier = notifier
-    orch._events = None
-    orch._get_chat_id = MagicMock(return_value="chat-1")
-    return orch
+from orchestrator.pipeline.actions.fetch_pr_comments import send_escalated_comment_tg
 
 
 def _fake_workspace_for_send():
@@ -31,18 +23,25 @@ def _fake_workspace_for_send():
     return ws
 
 
+def _send(notifier, ws, cc, pr_number):
+    return send_escalated_comment_tg(
+        ws, cc, pr_number,
+        notifier=notifier,
+        get_chat_id=lambda: "chat-1",
+    )
+
+
 @pytest.mark.asyncio
 async def test_escalation_message_renders_verdict():
     """The escalated TG message must include the one-word verdict."""
     notifier = MagicMock()
     notifier.send_message = AsyncMock(return_value=42)
-    orch = _make_orch_for_send(notifier)
 
     cc = SimpleNamespace(
         comment_id=99, author="Copilot", file="x.kt", line=10,
         body="Suggestion", reason="Real issue.", verdict="Valid",
     )
-    await orch._send_escalated_comment_tg(_fake_workspace_for_send(), cc, pr_number=1234)
+    await _send(notifier, _fake_workspace_for_send(), cc, 1234)
 
     body = notifier.send_message.call_args.args[1]
     assert "Valid — Real issue." in body
@@ -55,13 +54,12 @@ async def test_escalation_message_has_no_skip_button():
     them in a nag loop. Drop button = kill the trap."""
     notifier = MagicMock()
     notifier.send_message = AsyncMock(return_value=42)
-    orch = _make_orch_for_send(notifier)
 
     cc = SimpleNamespace(
         comment_id=99, author="Copilot", file="x.kt", line=10,
         body="Suggestion text", reason="Real issue.",
     )
-    await orch._send_escalated_comment_tg(_fake_workspace_for_send(), cc, pr_number=1234)
+    await _send(notifier, _fake_workspace_for_send(), cc, 1234)
 
     notifier.send_message.assert_awaited_once()
     buttons = notifier.send_message.call_args.kwargs.get("buttons") or []
@@ -76,13 +74,12 @@ async def test_escalation_message_includes_reply_instructions_footer():
     context. The buttons alone don't communicate this."""
     notifier = MagicMock()
     notifier.send_message = AsyncMock(return_value=42)
-    orch = _make_orch_for_send(notifier)
 
     cc = SimpleNamespace(
         comment_id=99, author="Copilot", file="x.kt", line=10,
         body="Suggestion", reason="Real issue.",
     )
-    await orch._send_escalated_comment_tg(_fake_workspace_for_send(), cc, pr_number=1234)
+    await _send(notifier, _fake_workspace_for_send(), cc, 1234)
 
     body = notifier.send_message.call_args.args[1]
     # Must explain both the button path and the reply path

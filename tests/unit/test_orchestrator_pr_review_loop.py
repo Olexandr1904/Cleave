@@ -16,7 +16,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from orchestrator.orchestrator import Orchestrator
+from orchestrator.pipeline.actions.fetch_pr_comments import action_fetch_pr_comments
 from workspace.workspace import Stage
 
 
@@ -52,53 +52,41 @@ def workspace(tmp_path: Path):
     return ws
 
 
-def _orc(vcs=None, notifier=None, tracker=None):
-    orc = Orchestrator.__new__(Orchestrator)
-    orc._vcs = vcs if vcs is not None else AsyncMock()
-    orc._tracker = tracker if tracker is not None else AsyncMock()
-    if notifier is None:
-        notifier = MagicMock()
-        notifier.send_message = AsyncMock(return_value=1234)
-    orc._notifier = notifier
-    orc._repo_vcs = {}
-    orc._projects = {}
-    orc._global_config = SimpleNamespace(
-        telegram=SimpleNamespace(default_chat_id="chat-1"),
+def _invoke(workspace, *, vcs=None, notifier=None, tracker=None, agent_runtime=None):
+    """Bridge helper — call the module function with sensible defaults."""
+    return action_fetch_pr_comments(
+        workspace, SimpleNamespace(),
+        get_vcs=lambda: (vcs or AsyncMock(), None),
+        get_chat_id=lambda: "chat-1",
+        tracker=tracker or AsyncMock(),
+        notifier=notifier or _default_notifier(),
+        agent_runtime=agent_runtime or AsyncMock(),
+        event_bus=None,
     )
-    orc._events = None
-    orc._agent_runtime = AsyncMock()
-    return orc
+
+
+def _default_notifier():
+    n = MagicMock()
+    n.send_message = AsyncMock(return_value=1234)
+    return n
 
 
 @pytest.mark.asyncio
 async def test_no_pr_number_marks_done(workspace) -> None:
-    """If state.pr_number is missing, action returns DONE immediately
-    (orchestrator/orchestrator.py:1838-1839)."""
+    """If state.pr_number is missing, action returns DONE immediately."""
     workspace.state.pr_number = None
-    orc = _orc()
-    result = await orc._action_fetch_pr_comments(workspace, SimpleNamespace())
-    # Current code returns next_state=Stage.DONE. The plan allowed
-    # `skipped=True` as an alternative; current behavior is the former.
+    result = await _invoke(workspace)
     assert getattr(result, "skipped", False) or result.next_state == Stage.DONE
 
 
 @pytest.mark.asyncio
 async def test_no_comments_marks_done(workspace, monkeypatch) -> None:
     """Empty review-comment list (after operator replied 'reviewed')
-    short-circuits to DONE (orchestrator/orchestrator.py:1942-1943).
-
-    Adjustment from plan draft: 'reviewed' reply is required to advance
-    past Phase 3 (line 1904-1906). Without it, the action returns
-    skipped=True regardless of comment count. The plan's assertion
-    `result.next_state in (Stage.DONE, Stage.PR_REVIEW)` would have hit
-    the skip branch (next_state="") — we set 'reviewed' to drive the
-    actual fetch-comments path.
-    """
+    short-circuits to DONE."""
     workspace.state.human_input_reply = "reviewed"
     vcs = AsyncMock()
     vcs.get_pr_comments.return_value = []
-    orc = _orc(vcs=vcs)
-    result = await orc._action_fetch_pr_comments(workspace, SimpleNamespace())
+    result = await _invoke(workspace, vcs=vcs)
     assert result.next_state == Stage.DONE
     assert result.success is True
 
@@ -106,16 +94,7 @@ async def test_no_comments_marks_done(workspace, monkeypatch) -> None:
 @pytest.mark.asyncio
 async def test_human_reply_fix_routes_to_dev(workspace, monkeypatch) -> None:
     """Operator decided 'fix' on a pending escalated comment → workspace
-    routes back to Stage.DEV (orchestrator/orchestrator.py:2201-2202 via
-    _execute_review_decisions, dispatched at 1897-1898).
-
-    Adjustment from plan draft: the plan put 'fix' in
-    `state.human_input_reply`, but that field is only consumed for
-    'reviewed'/'proceed' (line 1904-1906). The actual fix→DEV path is
-    driven by per-comment decisions in `pending_review_comments`. We
-    pre-populate one such comment with decision='fix' to exercise the
-    real routing logic.
-    """
+    routes back to Stage.DEV."""
     workspace.state.pending_review_comments = [
         {
             "comment_id": 999,
@@ -129,8 +108,7 @@ async def test_human_reply_fix_routes_to_dev(workspace, monkeypatch) -> None:
         }
     ]
     vcs = AsyncMock()
-    orc = _orc(vcs=vcs)
-    result = await orc._action_fetch_pr_comments(workspace, SimpleNamespace())
+    result = await _invoke(workspace, vcs=vcs)
     assert (
         result.next_state == Stage.DEV
         or any(c.args[0] == Stage.DEV for c in workspace.transition.call_args_list)
@@ -140,13 +118,7 @@ async def test_human_reply_fix_routes_to_dev(workspace, monkeypatch) -> None:
 @pytest.mark.asyncio
 async def test_human_reply_wont_fix_posts_resolution(workspace) -> None:
     """Operator decided 'won't fix: <reason>' on a pending escalated comment
-    → both reply_to_comment and resolve_comment are awaited
-    (orchestrator/orchestrator.py:2154-2164).
-
-    Adjustment from plan draft: same as test 3 — 'won't fix' routing
-    runs on per-comment decisions in `pending_review_comments`, not on
-    `state.human_input_reply` (which gates only 'reviewed'/'proceed').
-    """
+    → both reply_to_comment and resolve_comment are awaited."""
     workspace.state.pending_review_comments = [
         {
             "comment_id": 999,
@@ -160,22 +132,14 @@ async def test_human_reply_wont_fix_posts_resolution(workspace) -> None:
         }
     ]
     vcs = AsyncMock()
-    orc = _orc(vcs=vcs)
-    await orc._action_fetch_pr_comments(workspace, SimpleNamespace())
+    await _invoke(workspace, vcs=vcs)
     assert vcs.reply_to_comment.await_count + vcs.resolve_comment.await_count >= 1
 
 
 @pytest.mark.asyncio
 async def test_open_comments_trigger_escalation(workspace, monkeypatch) -> None:
     """A reviewer comment that classifies ESCALATE causes a Telegram
-    escalation message to be sent (orchestrator/orchestrator.py:2059-2071
-    via _send_escalated_comment_tg).
-
-    We stub `classify_comments` to return one ESCALATE classification —
-    avoiding the agent_runtime LLM call. The patch target is the
-    `comment_classifier` module since `_action_fetch_pr_comments` imports
-    `classify_comments` from there at function-scope (line 1831).
-    """
+    escalation message to be sent."""
     from integrations.base.vcs import PRComment
     from orchestrator.comment_classifier import ClassifiedComment
 
@@ -188,7 +152,7 @@ async def test_open_comments_trigger_escalation(workspace, monkeypatch) -> None:
             path="x.py", line=10, author="reviewer",
         )
     ]
-    orc = _orc(vcs=vcs)
+    notifier = _default_notifier()
 
     async def _fake_classify(comments, ws, runtime, *, operator_hint=""):
         return [
@@ -204,6 +168,6 @@ async def test_open_comments_trigger_escalation(workspace, monkeypatch) -> None:
         "orchestrator.comment_classifier.classify_comments", _fake_classify,
     )
 
-    await orc._action_fetch_pr_comments(workspace, SimpleNamespace())
+    await _invoke(workspace, vcs=vcs, notifier=notifier)
 
-    assert orc._notifier.send_message.await_count >= 1
+    assert notifier.send_message.await_count >= 1

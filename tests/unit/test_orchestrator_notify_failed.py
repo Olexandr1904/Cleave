@@ -1,4 +1,4 @@
-"""Tests for Orchestrator._notify_failed — Gradle cache button surfacing."""
+"""Tests for orchestrator.notify.notify_failed — Gradle cache button surfacing."""
 
 from __future__ import annotations
 
@@ -7,7 +7,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from orchestrator.orchestrator import Orchestrator
+from orchestrator.notify import notify_failed
 
 
 def _make_workspace() -> MagicMock:
@@ -23,22 +23,13 @@ def _make_workspace() -> MagicMock:
     return ws
 
 
-def _make_orch(notifier) -> Orchestrator:
-    orch = Orchestrator.__new__(Orchestrator)
-    orch._notifier = notifier
-    orch._events = None
-    orch._get_chat_id = MagicMock(return_value="chat-1")
-    return orch
-
-
 @pytest.mark.asyncio
 async def test_notify_failed_default_only_retry_button():
     """Generic failure: only the existing Retry button is sent."""
     notifier = MagicMock()
     notifier.send_message = AsyncMock()
-    orch = _make_orch(notifier)
 
-    await orch._notify_failed(_make_workspace(), "Some unrelated build error")
+    await notify_failed(notifier, "chat-1", _make_workspace(), "Some unrelated build error")
 
     notifier.send_message.assert_awaited_once()
     buttons = notifier.send_message.call_args.kwargs.get("buttons")
@@ -52,14 +43,13 @@ async def test_notify_failed_aapt2_corruption_adds_clear_cache_button():
     """AAPT2 cache corruption: Clear-cache button is added before Retry."""
     notifier = MagicMock()
     notifier.send_message = AsyncMock()
-    orch = _make_orch(notifier)
 
     error_msg = (
         "Git command failed: git push -u origin feature/X\n"
         "AAPT2 aapt2-8.6.1-linux Daemon #2: Daemon startup failed\n"
         "FAILURE: Build failed with an exception."
     )
-    await orch._notify_failed(_make_workspace(), error_msg)
+    await notify_failed(notifier, "chat-1", _make_workspace(), error_msg)
 
     notifier.send_message.assert_awaited_once()
     args, kwargs = notifier.send_message.call_args
@@ -82,7 +72,6 @@ async def test_notify_failed_arch_mismatch_uses_help_message_no_clear_button():
     suggested host-level fixes."""
     notifier = MagicMock()
     notifier.send_message = AsyncMock()
-    orch = _make_orch(notifier)
 
     error_msg = (
         "Git command failed: git push -u origin feature/X\n"
@@ -90,7 +79,7 @@ async def test_notify_failed_arch_mismatch_uses_help_message_no_clear_button():
         "/home/admin0/.gradle/caches/8.14.1/transforms/abc/transformed/"
         "aapt2-8.6.1-11315950-linux/aapt2: 2: Syntax error: \"(\" unexpected"
     )
-    await orch._notify_failed(_make_workspace(), error_msg)
+    await notify_failed(notifier, "chat-1", _make_workspace(), error_msg)
 
     notifier.send_message.assert_awaited_once()
     args, kwargs = notifier.send_message.call_args
@@ -115,7 +104,6 @@ async def test_notify_failed_arch_mismatch_takes_precedence_over_cache_corruptio
     🧹 button on a host-level problem)."""
     notifier = MagicMock()
     notifier.send_message = AsyncMock()
-    orch = _make_orch(notifier)
 
     error_msg = (
         "AAPT2 aapt2-8.6.1-11315950-linux Daemon #0: Daemon startup failed\n"
@@ -123,7 +111,7 @@ async def test_notify_failed_arch_mismatch_takes_precedence_over_cache_corruptio
         "/home/admin0/.gradle/caches/8.14.1/transforms/abc/transformed/"
         "aapt2-8.6.1-11315950-linux/aapt2: 2: Syntax error: \"(\" unexpected"
     )
-    await orch._notify_failed(_make_workspace(), error_msg)
+    await notify_failed(notifier, "chat-1", _make_workspace(), error_msg)
 
     buttons = notifier.send_message.call_args.kwargs.get("buttons") or []
     labels = [b.label for b in buttons]
@@ -133,7 +121,5 @@ async def test_notify_failed_arch_mismatch_takes_precedence_over_cache_corruptio
 
 @pytest.mark.asyncio
 async def test_notify_failed_no_notifier_returns_silently():
-    orch = Orchestrator.__new__(Orchestrator)
-    orch._notifier = None
     # Should not raise
-    await orch._notify_failed(_make_workspace(), "anything")
+    await notify_failed(None, "", _make_workspace(), "anything")

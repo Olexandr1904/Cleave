@@ -79,7 +79,8 @@ class TestIterationCapEscalates:
         orch._dry_run = False
         orch._mode_handler = None
         orch._emit = MagicMock()
-        orch._handle_escalate = AsyncMock()
+        orch._notifier = None
+        orch._events = None
         orch._handle_agent_stage = AsyncMock()
         orch._workflow = WorkflowDefinition(
             stages={"qa": StageDefinition(
@@ -96,9 +97,12 @@ class TestIterationCapEscalates:
             error=None, branch="feature/t-1",
         )
 
-        await Orchestrator.advance_workspace(orch, ws)
+        with patch("orchestrator.escalation.handle_escalate", new=AsyncMock()) as escalate_mock:
+            await Orchestrator.advance_workspace(orch, ws)
 
-        orch._handle_escalate.assert_awaited_once_with(ws, is_max_iterations=True)
+        escalate_mock.assert_awaited_once()
+        # is_max_iterations=True must be passed through
+        assert escalate_mock.call_args.kwargs.get("is_max_iterations") is True
         orch._handle_agent_stage.assert_not_awaited()
 
 

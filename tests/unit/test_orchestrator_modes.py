@@ -83,56 +83,58 @@ class TestModeAwarePollCycle:
 
 class TestApprovalGates:
     def _manual(self):
-        orch = _make_orchestrator()
-        orch._mode_handler = MagicMock()
-        orch._mode_handler.get_mode.return_value = "manual"
-        return orch
+        mh = MagicMock()
+        mh.get_mode.return_value = "manual"
+        return mh
 
     def _auto(self):
-        orch = _make_orchestrator()
-        orch._mode_handler = MagicMock()
-        orch._mode_handler.get_mode.return_value = "auto"
-        return orch
+        mh = MagicMock()
+        mh.get_mode.return_value = "auto"
+        return mh
+
+    def _gate(self, mh, completed, nxt=None):
+        from orchestrator.approval_gate import should_approval_gate
+        return should_approval_gate(mh, completed, nxt)
 
     # Legacy single-arg form: gate fires for every gate state in manual mode.
     def test_should_gate_returns_true_for_analysis_in_manual(self):
-        assert self._manual()._should_approval_gate("ANALYSIS") is True
+        assert self._gate(self._manual(), "ANALYSIS") is True
 
     def test_should_gate_returns_true_for_qa_in_manual(self):
-        assert self._manual()._should_approval_gate("QA") is True
+        assert self._gate(self._manual(), "QA") is True
 
     def test_pr_review_not_gated(self):
         """PR_REVIEW goes straight to DONE — no approval gate."""
-        assert self._manual()._should_approval_gate("PR_REVIEW") is False
+        assert self._gate(self._manual(), "PR_REVIEW") is False
 
     def test_should_gate_returns_false_in_auto(self):
-        assert self._auto()._should_approval_gate("ANALYSIS") is False
+        assert self._gate(self._auto(), "ANALYSIS") is False
 
     def test_should_gate_returns_false_for_dev(self):
-        assert self._manual()._should_approval_gate("DEV") is False
+        assert self._gate(self._manual(), "DEV") is False
 
     # Two-arg form: gate only fires on happy-path transitions.
     def test_gate_analysis_to_dev_happy_path_fires(self):
-        assert self._manual()._should_approval_gate("ANALYSIS", "dev") is True
+        assert self._gate(self._manual(), "ANALYSIS", "dev") is True
 
     def test_gate_analysis_to_escalate_bypasses(self):
         """Unclear analysis escalates — gate must NOT fire."""
-        assert self._manual()._should_approval_gate("ANALYSIS", "escalate") is False
+        assert self._gate(self._manual(), "ANALYSIS", "escalate") is False
 
     def test_gate_qa_to_push_happy_path_fires(self):
-        assert self._manual()._should_approval_gate("QA", "push") is True
+        assert self._gate(self._manual(), "QA", "push") is True
 
     def test_gate_qa_to_dev_failure_loop_bypasses(self):
         """QA fail loops back to dev — gate must NOT fire."""
-        assert self._manual()._should_approval_gate("QA", "dev") is False
+        assert self._gate(self._manual(), "QA", "dev") is False
 
     def test_gate_pr_review_to_done_does_not_fire(self):
         """PR_REVIEW → DONE is not gated — comments handled = done."""
-        assert self._manual()._should_approval_gate("PR_REVIEW", "done") is False
+        assert self._gate(self._manual(), "PR_REVIEW", "done") is False
 
     def test_gate_pr_review_to_dev_bypasses(self):
         """PR review fix-required goes back to dev — gate must NOT fire."""
-        assert self._manual()._should_approval_gate("PR_REVIEW", "dev") is False
+        assert self._gate(self._manual(), "PR_REVIEW", "dev") is False
 
 
 class TestAutoResumeAwaitingApproval:

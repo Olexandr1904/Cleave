@@ -12,7 +12,7 @@ from orchestrator.constants import (
     RUNTIME_OUTPUT_QA,
     RUNTIME_OUTPUT_SCOPE_GUARD,
 )
-from orchestrator.orchestrator import Orchestrator
+from orchestrator.escalation import build_blocked_reason
 
 
 def _make_ws(tmp_path: Path) -> SimpleNamespace:
@@ -22,10 +22,6 @@ def _make_ws(tmp_path: Path) -> SimpleNamespace:
         reports_dir=reports,
         state=SimpleNamespace(ticket_id="T-1"),
     )
-
-
-def _orch() -> Orchestrator:
-    return Orchestrator.__new__(Orchestrator)
 
 
 def test_analysis_prefers_ba_questions(tmp_path):
@@ -40,7 +36,7 @@ def test_analysis_prefers_ba_questions(tmp_path):
         "---\n**Attempt: 2026-04-24 13:57 UTC**\n## Decision: Escalate — waiting_for_human\n"
     )
 
-    reason = _orch()._build_blocked_reason(ws, "analysis")
+    reason = build_blocked_reason(ws, "analysis")
 
     assert "Questions for Human Review" in reason
     assert "[AC2]" in reason
@@ -58,7 +54,7 @@ def test_non_analysis_strips_boilerplate(tmp_path):
         "See tests/data/fixture.json — expected but not found.\n"
     )
 
-    reason = _orch()._build_blocked_reason(ws, "qa")
+    reason = build_blocked_reason(ws, "qa")
 
     assert "Tests fail" in reason
     assert "Attempt:" not in reason
@@ -72,7 +68,7 @@ def test_non_analysis_uses_stage_specific_runtime_output(tmp_path):
     (ws.reports_dir / RUNTIME_OUTPUT_SCOPE_GUARD).write_text("Scope guard content.\n")
     (ws.reports_dir / RUNTIME_OUTPUT_QA).write_text("QA failure details here.\n")
 
-    reason = _orch()._build_blocked_reason(ws, "qa")
+    reason = build_blocked_reason(ws, "qa")
 
     assert "QA failure" in reason
     assert "Scope guard" not in reason
@@ -83,7 +79,7 @@ def test_truncates_long_reason(tmp_path):
     body = "x" * 2000
     (ws.reports_dir / RUNTIME_OUTPUT_QA).write_text(body)
 
-    reason = _orch()._build_blocked_reason(ws, "qa")
+    reason = build_blocked_reason(ws, "qa")
 
     assert len(reason) <= 801  # 800 + the ellipsis char
     assert reason.endswith("…")
@@ -91,7 +87,7 @@ def test_truncates_long_reason(tmp_path):
 
 def test_empty_reports_returns_fallback(tmp_path):
     ws = _make_ws(tmp_path)
-    reason = _orch()._build_blocked_reason(ws, "qa")
+    reason = build_blocked_reason(ws, "qa")
     assert "qa" in reason.lower()
 
 
@@ -100,7 +96,7 @@ def test_missing_reports_dir_returns_fallback(tmp_path):
         reports_dir=tmp_path / "does-not-exist",
         state=SimpleNamespace(ticket_id="T-1"),
     )
-    reason = _orch()._build_blocked_reason(ws, "analysis")
+    reason = build_blocked_reason(ws, "analysis")
     assert "analysis" in reason.lower()
 
 
@@ -109,7 +105,7 @@ def test_analysis_falls_back_to_runtime_output_when_no_questions_file(tmp_path):
     (ws.reports_dir / RUNTIME_OUTPUT_BA).write_text(
         "---\n**Attempt: 2026-04-24 13:57 UTC**\n## Decision: Escalate\n\nRepo label missing from ticket.\n"
     )
-    reason = _orch()._build_blocked_reason(ws, "analysis")
+    reason = build_blocked_reason(ws, "analysis")
     assert "Repo label missing" in reason
 
 
@@ -118,5 +114,5 @@ def test_boilerplate_only_returns_fallback(tmp_path):
     (ws.reports_dir / RUNTIME_OUTPUT_QA).write_text(
         "---\n**Attempt: 2026-04-24 14:00 UTC**\n## Decision: Escalate\n---\n\n\n"
     )
-    reason = _orch()._build_blocked_reason(ws, "qa")
+    reason = build_blocked_reason(ws, "qa")
     assert "qa" in reason.lower()

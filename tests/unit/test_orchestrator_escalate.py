@@ -7,7 +7,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from orchestrator.constants import REPORT_BA_QUESTIONS
-from orchestrator.orchestrator import Orchestrator
+from orchestrator.escalation import handle_escalate
 from workspace.workspace import Stage
 
 
@@ -33,15 +33,6 @@ def _make_workspace(tmp_path: Path) -> MagicMock:
     return ws
 
 
-def _make_orch(notifier) -> Orchestrator:
-    orch = Orchestrator.__new__(Orchestrator)
-    orch._notifier = notifier
-    orch._events = None
-    orch._get_chat_id = MagicMock(return_value="chat-1")
-    orch._emit = MagicMock()
-    return orch
-
-
 @pytest.mark.asyncio
 async def test_escalate_sends_message_without_buttons(tmp_path):
     ws = _make_workspace(tmp_path)
@@ -51,8 +42,7 @@ async def test_escalate_sends_message_without_buttons(tmp_path):
     notifier = MagicMock()
     notifier.send_message = AsyncMock(return_value=42)
 
-    orch = _make_orch(notifier)
-    await orch._handle_escalate(ws)
+    await handle_escalate(ws, notifier, "chat-1")
 
     notifier.send_message.assert_awaited_once()
     args, kwargs = notifier.send_message.call_args
@@ -71,8 +61,7 @@ async def test_escalate_stores_reason_only_in_human_input_question(tmp_path):
     notifier = MagicMock()
     notifier.send_message = AsyncMock(return_value=99)
 
-    orch = _make_orch(notifier)
-    await orch._handle_escalate(ws)
+    await handle_escalate(ws, notifier, "chat-1")
 
     # update_state called with human_input_question=<reason only, no header, no hint>
     found = [c for c in ws.update_state.call_args_list if "human_input_question" in c.kwargs]
@@ -90,8 +79,7 @@ async def test_escalate_transitions_to_blocked_and_records_msg_id(tmp_path):
     notifier = MagicMock()
     notifier.send_message = AsyncMock(return_value=123)
 
-    orch = _make_orch(notifier)
-    await orch._handle_escalate(ws)
+    await handle_escalate(ws, notifier, "chat-1")
 
     ws.transition.assert_called_once_with(Stage.BLOCKED)
     assert ws.state.escalation_msg_id == 123
@@ -101,11 +89,8 @@ async def test_escalate_transitions_to_blocked_and_records_msg_id(tmp_path):
 @pytest.mark.asyncio
 async def test_escalate_no_notifier_transitions_to_failed(tmp_path):
     ws = _make_workspace(tmp_path)
-    orch = Orchestrator.__new__(Orchestrator)
-    orch._notifier = None
-    orch._events = None
 
-    await orch._handle_escalate(ws)
+    await handle_escalate(ws, None, "")
 
     ws.transition.assert_called_once_with(Stage.FAILED)
 
@@ -115,10 +100,8 @@ async def test_escalate_no_chat_id_transitions_to_failed(tmp_path):
     ws = _make_workspace(tmp_path)
     notifier = MagicMock()
     notifier.send_message = AsyncMock()
-    orch = _make_orch(notifier)
-    orch._get_chat_id = MagicMock(return_value="")
 
-    await orch._handle_escalate(ws)
+    await handle_escalate(ws, notifier, "")
 
     ws.transition.assert_called_once_with(Stage.FAILED)
     notifier.send_message.assert_not_called()

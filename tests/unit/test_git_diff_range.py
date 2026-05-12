@@ -45,40 +45,40 @@ def repo(tmp_path):
 class TestGitDiffFiles:
     def test_default_fallback_returns_only_last_commit(self, repo):
         """No since_sha → falls back to HEAD~1 (single-commit diff)."""
-        from orchestrator.orchestrator import Orchestrator
+        from orchestrator.git_ops import git_diff_files
 
         ws = MagicMock()
         ws.source_dir = repo.dir
 
-        files = Orchestrator._git_diff_files(ws)
+        files = git_diff_files(ws)
         assert files == {"test.kt"}  # only the QA commit
 
     def test_since_sha_returns_cumulative_diff(self, repo):
         """With since_sha set to A → captures both fix.kt and test.kt."""
-        from orchestrator.orchestrator import Orchestrator
+        from orchestrator.git_ops import git_diff_files
 
         ws = MagicMock()
         ws.source_dir = repo.dir
 
-        files = Orchestrator._git_diff_files(ws, since_sha=repo.sha_a)
+        files = git_diff_files(ws, since_sha=repo.sha_a)
         assert files == {"fix.kt", "test.kt"}
 
     def test_since_sha_empty_falls_back(self, repo):
         """Empty since_sha → same behavior as default."""
-        from orchestrator.orchestrator import Orchestrator
+        from orchestrator.git_ops import git_diff_files
 
         ws = MagicMock()
         ws.source_dir = repo.dir
 
-        files = Orchestrator._git_diff_files(ws, since_sha="")
+        files = git_diff_files(ws, since_sha="")
         assert files == {"test.kt"}
 
     def test_invalid_sha_returns_empty_set(self, repo):
         """Bad sha → exception path → returns empty set (no crash)."""
-        from orchestrator.orchestrator import Orchestrator
+        from orchestrator.git_ops import git_diff_files
 
         ws = MagicMock()
         ws.source_dir = repo.dir
 
-        files = Orchestrator._git_diff_files(ws, since_sha="not-a-sha")
+        files = git_diff_files(ws, since_sha="not-a-sha")
         assert files == set()

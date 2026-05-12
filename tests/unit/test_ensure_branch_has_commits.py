@@ -26,7 +26,7 @@ from config.schemas import (
     RepoInfo,
     VCSConfig,
 )
-from orchestrator.orchestrator import Orchestrator
+from orchestrator.pipeline.actions.push_and_open_pr import ensure_branch_has_commits
 
 
 def _init_repo_with_orphaned_staged_work(tmp_path: Path) -> Path:
@@ -76,8 +76,6 @@ def test_recovers_branch_with_zero_commits_and_staged_work(tmp_path):
     staged, no commits ahead. Helper must commit the staged work so the
     upcoming push has something real to send."""
     repo = _init_repo_with_orphaned_staged_work(tmp_path)
-    orch = Orchestrator.__new__(Orchestrator)
-    orch._events = None
 
     # Pre-condition: 0 commits ahead but real_work.txt is staged
     pre_count = subprocess.run(
@@ -86,7 +84,7 @@ def test_recovers_branch_with_zero_commits_and_staged_work(tmp_path):
     ).stdout.strip()
     assert pre_count == "0"
 
-    orch._ensure_branch_has_commits(_workspace(repo), _repo_config())
+    ensure_branch_has_commits(_workspace(repo), _repo_config())
 
     # Post-condition: 1 commit ahead, real_work.txt is in it
     post_count = subprocess.run(
@@ -110,9 +108,7 @@ def test_uses_repo_config_author_for_recovery_commit(tmp_path):
     subprocess.run(["git", "-C", str(repo), "config", "--unset", "user.email"], check=False)
     subprocess.run(["git", "-C", str(repo), "config", "--unset", "user.name"], check=False)
 
-    orch = Orchestrator.__new__(Orchestrator)
-    orch._events = None
-    orch._ensure_branch_has_commits(_workspace(repo), _repo_config())
+    ensure_branch_has_commits(_workspace(repo), _repo_config())
 
     author = subprocess.run(
         ["git", "-C", str(repo), "log", "-1", "--format=%an <%ae>"],
@@ -142,9 +138,7 @@ def test_no_op_when_branch_already_has_commits(tmp_path):
         capture_output=True, text=True, check=True,
     ).stdout.strip()
 
-    orch = Orchestrator.__new__(Orchestrator)
-    orch._events = None
-    orch._ensure_branch_has_commits(_workspace(repo), _repo_config())
+    ensure_branch_has_commits(_workspace(repo), _repo_config())
 
     post_head = subprocess.run(
         ["git", "-C", str(repo), "rev-parse", "HEAD"],
@@ -171,9 +165,7 @@ def test_no_op_when_zero_commits_and_no_staged_work(tmp_path):
         capture_output=True, text=True, check=True,
     ).stdout.strip()
 
-    orch = Orchestrator.__new__(Orchestrator)
-    orch._events = None
-    orch._ensure_branch_has_commits(_workspace(repo), _repo_config())
+    ensure_branch_has_commits(_workspace(repo), _repo_config())
 
     post_count = subprocess.run(
         ["git", "-C", str(repo), "rev-list", "--count", "HEAD"],
@@ -190,9 +182,7 @@ def test_does_not_commit_untracked_files(tmp_path):
     # Drop an untracked file alongside the staged work
     (repo / "scratch.txt").write_text("not for commit")
 
-    orch = Orchestrator.__new__(Orchestrator)
-    orch._events = None
-    orch._ensure_branch_has_commits(_workspace(repo), _repo_config())
+    ensure_branch_has_commits(_workspace(repo), _repo_config())
 
     files_in_commit = subprocess.run(
         ["git", "-C", str(repo), "show", "--name-only", "--format=", "HEAD"],
@@ -212,9 +202,8 @@ def test_emits_recovery_event(tmp_path):
         def emit(self, event_type: str, message: str, **kwargs):
             events.append((event_type, kwargs.get("data", {})))
 
-    orch = Orchestrator.__new__(Orchestrator)
-    orch._events = _Bus()
-    orch._ensure_branch_has_commits(_workspace(repo), _repo_config())
+    bus = _Bus()
+    ensure_branch_has_commits(_workspace(repo), _repo_config(), event_bus=bus)
 
     recovery = [e for e in events if e[0] == "branch_recovered_from_orphan_state"]
     assert len(recovery) == 1

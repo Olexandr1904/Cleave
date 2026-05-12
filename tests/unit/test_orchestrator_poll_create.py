@@ -12,8 +12,22 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from integrations.base.tracker import TicketData
-from orchestrator.orchestrator import Orchestrator
 from workspace.workspace import Stage
+
+
+class _OrcStub:
+    """Minimal stand-in carrying the deps poll_and_create_workspaces needs."""
+    _tracker = None
+    _projects: dict = {}
+    _active_workspaces: list = []
+    _dry_run = False
+    _global_config = None
+    _workspace_manager = None
+    _default_model_provider = None
+    _repo_vcs: dict = {}
+    _notifier = None
+    _events = None
+    _create_workspace_for_ticket = None
 
 
 def _make_orchestrator(
@@ -24,8 +38,8 @@ def _make_orchestrator(
     workspaces_base: Path,
     dry_run: bool = False,
 ):
-    """Build a minimally-wired Orchestrator with __new__ to skip __init__ deps."""
-    orc = Orchestrator.__new__(Orchestrator)
+    """Build a minimal stub carrying the dependencies the ingest module reads."""
+    orc = _OrcStub()
     orc._tracker = tracker
     orc._projects = projects or {}
     orc._active_workspaces = active or []
@@ -36,10 +50,30 @@ def _make_orchestrator(
         telegram=SimpleNamespace(default_chat_id=""),
     )
     orc._workspace_manager = MagicMock()
-    orc._on_project_added = None
     orc._events = None
-    orc._registry = MagicMock()
+    orc._repo_vcs = {}
+    orc._notifier = None
+    orc._default_model_provider = None
     return orc
+
+
+async def _poll(orc):
+    """Bridge — call the module function with deps from orc."""
+    from orchestrator.ingest import poll_and_create_workspaces
+    new_workspaces = await poll_and_create_workspaces(
+        tracker=orc._tracker,
+        projects=orc._projects,
+        active_workspaces=orc._active_workspaces,
+        global_config=orc._global_config,
+        workspace_manager=orc._workspace_manager,
+        default_model_provider=orc._default_model_provider,
+        repo_vcs=orc._repo_vcs,
+        notifier=orc._notifier,
+        dry_run=orc._dry_run,
+        event_bus=orc._events,
+        create_workspace_fn=orc._create_workspace_for_ticket,
+    )
+    orc._active_workspaces.extend(new_workspaces)
 
 
 def _ticket(ticket_id: str, labels: list[str]) -> TicketData:
@@ -92,7 +126,7 @@ async def test_poll_routes_by_repo_label(tmp_path: Path) -> None:
         )),
     )
 
-    await orc._poll_and_create_workspaces()
+    await _poll(orc)
 
     tracker.poll_tickets.assert_awaited_once()
     orc._create_workspace_for_ticket.assert_called_once()
@@ -121,7 +155,7 @@ async def test_poll_dedupes_in_memory(tmp_path: Path) -> None:
     )
     orc._create_workspace_for_ticket = AsyncMock()
 
-    await orc._poll_and_create_workspaces()
+    await _poll(orc)
 
     tracker.poll_tickets.assert_awaited_once()
     orc._create_workspace_for_ticket.assert_not_called()
@@ -141,7 +175,7 @@ async def test_poll_dedupes_on_disk(tmp_path: Path) -> None:
     (tmp_path / "acme" / "android" / "tickets" / "PROJ-1").mkdir(parents=True)
     orc._create_workspace_for_ticket = AsyncMock()
 
-    await orc._poll_and_create_workspaces()
+    await _poll(orc)
 
     tracker.poll_tickets.assert_awaited_once()
     orc._create_workspace_for_ticket.assert_not_called()
@@ -166,7 +200,7 @@ async def test_poll_respects_parallel_cap(tmp_path: Path) -> None:
     )
     orc._create_workspace_for_ticket = AsyncMock()
 
-    await orc._poll_and_create_workspaces()
+    await _poll(orc)
 
     tracker.poll_tickets.assert_awaited_once()
     # Already at cap (2/2) — no new workspaces
@@ -185,7 +219,7 @@ async def test_poll_dry_run_no_create(tmp_path: Path) -> None:
     )
     orc._create_workspace_for_ticket = AsyncMock()
 
-    await orc._poll_and_create_workspaces()
+    await _poll(orc)
 
     tracker.poll_tickets.assert_awaited_once()
     orc._create_workspace_for_ticket.assert_not_called()

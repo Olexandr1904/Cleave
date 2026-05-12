@@ -15,7 +15,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from orchestrator.orchestrator import Orchestrator
+from orchestrator.pipeline.actions.fetch_pr_comments import execute_review_decisions
 from workspace.workspace import Stage
 
 
@@ -36,14 +36,13 @@ def _make_workspace(tmp_path, pending_comments):
     return ws
 
 
-def _make_orch(notifier=None):
-    orch = Orchestrator.__new__(Orchestrator)
-    orch._notifier = notifier
-    orch._events = None
-    orch._get_chat_id = MagicMock(return_value="chat-1")
-    orch._get_vcs_for_workspace = MagicMock(return_value=(None, None))
-    orch._now = MagicMock(return_value="2026-04-29T10:00:00Z")
-    return orch
+def _invoke(ws, notifier=None):
+    return execute_review_decisions(
+        ws,
+        get_vcs=lambda: (None, None),
+        get_chat_id=lambda: "chat-1",
+        notifier=notifier,
+    )
 
 
 @pytest.mark.asyncio
@@ -53,14 +52,13 @@ async def test_skip_routes_to_awaiting_approval_not_done(tmp_path):
     merge as-is or send back for a fix."""
     notifier = MagicMock()
     notifier.send_message = AsyncMock()
-    orch = _make_orch(notifier)
 
     ws = _make_workspace(tmp_path, [
         {"comment_id": 1, "decision": "skip", "author": "Copilot",
          "file": "x.kt", "line": 10, "body": "...", "reason": "..."},
     ])
 
-    result = await orch._execute_review_decisions(ws)
+    result = await _invoke(ws, notifier)
 
     assert result.success is True
     assert result.next_state == Stage.AWAITING_APPROVAL
@@ -78,14 +76,13 @@ async def test_skip_sends_one_shot_summary_not_nag_loop(tmp_path):
     triggered the original nag loop they complained about)."""
     notifier = MagicMock()
     notifier.send_message = AsyncMock()
-    orch = _make_orch(notifier)
 
     ws = _make_workspace(tmp_path, [
         {"comment_id": 1, "decision": "skip", "author": "Copilot",
          "file": "Frag.kt", "line": 96, "body": "...", "reason": "..."},
     ])
 
-    await orch._execute_review_decisions(ws)
+    await _invoke(ws, notifier)
 
     notifier.send_message.assert_awaited_once()
     msg = notifier.send_message.call_args.args[1]
@@ -100,13 +97,12 @@ async def test_skip_sends_one_shot_summary_not_nag_loop(tmp_path):
 async def test_fix_decision_still_returns_to_dev(tmp_path):
     """Sanity: the Fix path is not affected by the Skip change — still routes
     back to DEV so dev-agent can address the comment."""
-    orch = _make_orch()
     ws = _make_workspace(tmp_path, [
         {"comment_id": 1, "decision": "fix", "author": "Copilot",
          "file": "x.kt", "line": 10, "body": "...", "reason": "..."},
     ])
 
-    result = await orch._execute_review_decisions(ws)
+    result = await _invoke(ws)
 
     assert result.success is True
     assert result.next_state == Stage.DEV
@@ -116,7 +112,6 @@ async def test_fix_decision_still_returns_to_dev(tmp_path):
 async def test_mixed_skip_and_fix_routes_to_dev(tmp_path):
     """A Fix decision wins over Skip: route to DEV. The Skip comments are
     still recorded as such in the resolution report but don't block DEV."""
-    orch = _make_orch()
     ws = _make_workspace(tmp_path, [
         {"comment_id": 1, "decision": "skip", "author": "Copilot",
          "file": "a.kt", "line": 1, "body": "...", "reason": "..."},
@@ -124,7 +119,7 @@ async def test_mixed_skip_and_fix_routes_to_dev(tmp_path):
          "file": "b.kt", "line": 2, "body": "...", "reason": "..."},
     ])
 
-    result = await orch._execute_review_decisions(ws)
+    result = await _invoke(ws)
 
     assert result.success is True
     assert result.next_state == Stage.DEV

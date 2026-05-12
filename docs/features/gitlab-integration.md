@@ -29,9 +29,11 @@ end-to-end: clone → branch → push → MR → review-comment loop → CI gate
   `discussion_id` so `reply_to_comment` and `resolve_comment` can post
   to the right thread without changing the `VCSInterface` contract.
 - CI gate: `check_pr_status` calls `GET /merge_requests/:iid/pipelines`
-  and returns `all_passing = (latest.status == "success")`. No separate
-  `ci.provider: gitlab_ci` is added — the VCS adapter owns pipeline
-  status.
+  and returns `all_passing = (latest.status == "success")`. Latest is
+  selected by pipeline `id` (monotonic per project) rather than
+  `created_at`, so rapid retries that share a wall-clock second still
+  pick the last-created run. No separate `ci.provider: gitlab_ci` is
+  added — the VCS adapter owns pipeline status.
 
 ## Configuration
 

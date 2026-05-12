@@ -1,26 +1,56 @@
-# GitLab Integration
+# Feature: GitLab Integration
 
-VCS adapter for GitLab. Implements the same `VCSInterface` as the GitHub adapter so a project configured with `vcs.provider: gitlab` runs the full pipeline end-to-end. Single-file adapter using direct httpx REST calls against GitLab API v4 plus async git CLI subprocesses (mirrors the GitHub adapter shape).
+**Status:** Implemented
+**Created:** 2026-04-07
+**Updated:** 2026-05-12
+**Author:** Oleksandr Brazhenko
 
-## Status
+## Description
 
-- **Task 1 (in progress):** package scaffolded — `GitLabAdapter` constructor with URL normalization, project-id URL-encoding, and shared `httpx.AsyncClient`; all `VCSInterface` methods are `NotImplementedError` stubs filled in by later tasks.
-- **Task 2 (in progress):** `_request` wired — retries with backoff, 401/403 no-retry, response body surfaced on final failure.
-- **Task 3 (in progress):** git CLI wrappers wired — `_run_git` staticmethod plus `clone_repo` and `create_branch` via `asyncio.create_subprocess_exec` with `SUBPROCESS_TIMEOUT`.
-- **Task 4 (in progress):** `push` wired — rewrites `origin` to GitLab `oauth2:<token>` form before pushing; supports `force` and `skip_hooks`.
-- **Task 5 (in progress):** `open_pr` and `find_pr_by_branch` wired — MR create via POST `/merge_requests` (returns `iid`/`web_url`); branch lookup via `?source_branch=&state=opened`, errors swallowed to `None`.
-- **Task 6 (in progress):** `get_pr_comments` wired — paginates MR discussions, surfaces only diff-anchored notes (with `position`), populates `_discussion_cache[pr_number] = {note_id: discussion_id}` for Task 7's reply/resolve.
-- **Task 7 (in progress):** `reply_to_comment` and `resolve_comment` wired — `_lookup_discussion` resolves a note's discussion via cache → refetch once → raise; reply POSTs to `/discussions/:id/notes`, resolve PUTs `/discussions/:id?resolved=true`.
-- **Task 8 (in progress):** `check_pr_status` and `close_pr` wired — status reads `/merge_requests/:iid/pipelines` and gates on latest pipeline's `status == "success"` (empty list → not passing); close PUTs `state_event: close` to `/merge_requests/:iid`.
-- **Task 9 (in progress):** `main.py` wired via module-scope `_build_vcs_adapter(repo_cfg)` helper — initial-load loop and `_build_repo_adapters` hot-reload both dispatch on `vcs.provider` (github | gitlab); `github_adapters` renamed to `vcs_adapters`.
+VCS adapter for GitLab. Implements the same `VCSInterface` as the GitHub
+adapter, so a project with `vcs.provider: gitlab` runs the full pipeline
+end-to-end: clone → branch → push → MR → review-comment loop → CI gate
+→ DONE.
 
-## Key Decisions
-- Configured via `vcs.provider: gitlab` in repo config
-- Direct httpx REST (no shelling out to `glab` / helper scripts) — same shape as GitHub adapter
-- `project_id` accepts either numeric id or `group/sub/project` path; URL-encoded once at init for use in `/api/v4/projects/{id}/...` routes
+## Architecture
+
+- `GitLabAdapter` lives in `integrations/gitlab/gitlab_adapter.py` and
+  follows the same shape as `GitHubAdapter`: direct GitLab REST API v4
+  via `httpx`, with retries, body-on-failure error surfacing, and an
+  async git CLI helper for clone/branch/push.
+- Authentication: `Private-Token` header for REST; clone/push uses the
+  `https://oauth2:<token>@<host>/<namespace>/<project>.git` URL form so
+  workspaces remain authenticated after a token rotation (origin URL is
+  rewritten on each push).
+- MR ↔ PR mapping: GitLab's MR `iid` is the public identifier and is
+  returned by `open_pr`. Discussions with diff-position notes are
+  surfaced as `PRComment` objects; general MR notes are skipped. A
+  private `_discussion_cache[pr_number]` map records each note's owning
+  `discussion_id` so `reply_to_comment` and `resolve_comment` can post
+  to the right thread without changing the `VCSInterface` contract.
+- CI gate: `check_pr_status` calls `GET /merge_requests/:iid/pipelines`
+  and returns `all_passing = (latest.status == "success")`. No separate
+  `ci.provider: gitlab_ci` is added — the VCS adapter owns pipeline
+  status.
+
+## Configuration
+
+`vcs.provider: gitlab` plus a `vcs.gitlab` block — see `GitLabConfig`
+in `config/schemas.py`. The dashboard's `+ New Project` wizard renders
+the GitLab fields, validates them against the live API via
+`validate_gitlab`, and writes the YAML for you.
 
 ## References
+
 - Spec: `docs/superpowers/specs/2026-05-12-gitlab-vcs-adapter-design.md`
-- Plan: `docs/superpowers/plans/2026-05-12-gitlab-vcs-adapter.md`
-- Architecture: `docs/architecture-v2.md` §8.2 (VCS Abstraction)
-- Implementation: `integrations/gitlab/gitlab_adapter.py`
+- Adapter: `integrations/gitlab/gitlab_adapter.py`
+- Schema: `config/schemas.py` (`GitLabConfig`, `VCSConfig`)
+- Live validator: `integrations/config/config_tools.py` (`validate_gitlab`)
+
+## Out of scope
+
+- GitLab CI as a distinct `ci.provider` (pipeline status is read by the
+  VCS adapter).
+- MR approval rules, auto-merge, merge-when-pipeline-succeeds.
+- Live-network integration tests in CI; manual smoke against a real
+  instance is the verification path.

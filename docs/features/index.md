@@ -18,6 +18,7 @@
 | 11 | [PR Comment Responder](pr-comment-responder.md) | In Progress | Classify and respond to PR review comments with extreme skepticism; resolution report module implemented |
 | 12 | [GitLab Integration](gitlab-integration.md) | In Progress | MR creation, comment fetching/resolving via GitLab API; adapter package scaffolded (Task 1) |
 | 13 | [Jenkins Integration](jenkins-integration.md) | Planned | Build status and failure log retrieval from Jenkins |
+| 21 | [Trello Integration](trello-integration.md) | In Progress | Poll Trello cards by trigger label, transition between lists, post comments; fuzzy list autodetect helper |
 | 14 | [CLI Entry Point](cli-entry-point.md) | Implemented | CLI argument parsing, startup diagnostics, and version logging |
 | 15 | [Project Setup Agent (Atlas)](project-setup-agent.md) | Implemented | BMAD-style agent that onboards new projects with guided Q&A, credential validation, and YAML config generation; production atlas wired into dashboard |
 | 16 | [Dashboard & Event Log](dashboard.md) | Implemented | Local web dashboard with structured event log, per-project ticket history, and real-time auto-refresh |

@@ -95,6 +95,7 @@ class CommandHandler:
         jira_base_url: str = "",
         started_at: str = "",
         tracker: Any | None = None,
+        get_trackers: Callable[[], dict[str, Any]] | None = None,
         analyze_callback: Callable | None = None,
         recent_completions_fn: Callable[[], list[tuple[str, str, float]]] | None = None,
         allowed_chat_ids: set[str] | None = None,
@@ -107,7 +108,14 @@ class CommandHandler:
         self._status_handler = StatusHandler(jira_base_url=jira_base_url)
         self._approval_handler = ApprovalHandler()
         self._started_at = started_at
-        self._tracker = tracker
+        # Resolver: callers inject a callable that returns the current tracker dict.
+        # The legacy `tracker` kwarg is wrapped for back-compat.
+        if get_trackers is not None:
+            self._get_trackers = get_trackers
+        elif tracker is not None:
+            self._get_trackers = lambda: {"_legacy": tracker}
+        else:
+            self._get_trackers = lambda: {}
         self._analyze_callback = analyze_callback
         self._recent_completions_fn = recent_completions_fn
         # None or empty set disables the allowlist — use an empty set to block
@@ -124,9 +132,17 @@ class CommandHandler:
         """Called by orchestrator after each Jira poll."""
         self._last_poll_time = time.time()
 
+    def set_trackers_resolver(self, get_trackers: Callable[[], dict[str, Any]]) -> None:
+        """Set a callable resolver that returns the current tracker dict."""
+        self._get_trackers = get_trackers
+
     def set_tracker(self, tracker) -> None:
-        """Attach a tracker after init (used by wizard hot-reload)."""
-        self._tracker = tracker
+        """Deprecated: use set_trackers_resolver instead. Wraps a single tracker
+        in a resolver for back-compat."""
+        if tracker is None:
+            self._get_trackers = lambda: {}
+        else:
+            self._get_trackers = lambda: {"_legacy": tracker}
 
     def add_allowed_chat_id(self, chat_id: str) -> None:
         """Extend the chat allowlist with a new id.

@@ -8,8 +8,9 @@ exception class in `reason`.
 from __future__ import annotations
 
 import subprocess
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Any
 
 from integrations.config import config_tools
 
@@ -31,6 +32,7 @@ class ValidatorResult:
     target: str
     reason: str
     fix_hint: str
+    extra: dict[str, Any] = field(default_factory=dict)
 
 
 async def check_jira(url: str, email: str, token: str, project_key: str) -> ValidatorResult:
@@ -202,4 +204,29 @@ def check_git_remote(workspace_root: Path, remote: str = "origin") -> ValidatorR
     return ValidatorResult(
         ok=False, name="git_remote", target=target,
         reason=first_line, fix_hint=fix_hint,
+    )
+
+
+async def check_trello(api_key: str, token: str, board_id: str) -> ValidatorResult:
+    """Check Trello API access for a board."""
+    try:
+        result = await config_tools.validate_trello(
+            api_key=api_key, token=token, board_id=board_id,
+        )
+    except Exception as e:
+        return ValidatorResult(
+            ok=False, name="trello", target=board_id,
+            reason=f"{type(e).__name__}: {e}",
+            fix_hint="Check Trello API key, token, and board URL/ID",
+        )
+    if result.get("success"):
+        return ValidatorResult(
+            ok=True, name="trello", target=board_id,
+            reason="", fix_hint="",
+            extra={"lists": result.get("lists", [])},
+        )
+    return ValidatorResult(
+        ok=False, name="trello", target=board_id,
+        reason=result.get("error", "Trello check failed"),
+        fix_hint="Verify token has access to the board",
     )

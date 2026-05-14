@@ -126,31 +126,66 @@ class TestAssemblePrompt:
         assert "Operator Profile" in prompt
         assert "Tech Lead" in prompt
 
-    def test_includes_text_attachments(self, registry, mock_llm, workspace):
-        """Text attachments under meta/attachments/ are inlined as context."""
+    def test_attachments_manifest_lists_text_files_by_path(
+        self, registry, mock_llm, workspace
+    ):
+        """Attachments are listed in a manifest by absolute path, not inlined
+        as truncated bytes — a large crash log truncated to 5 KB is useless."""
         attachments_dir = workspace.meta_dir / "attachments"
         attachments_dir.mkdir()
-        (attachments_dir / "crash.txt").write_text("FATAL: NullPointerException at Foo.kt:42")
+        crash = attachments_dir / "crash.logcat"
+        crash.write_text("FATAL: NullPointerException at Foo.kt:42\n" * 500)
 
         runtime = AgentRuntime(registry, mock_llm)
         agent = registry.get_agent("dev-agent")
         prompt = runtime.assemble_prompt(agent, workspace)
 
-        assert '<context file="attachments/crash.txt">' in prompt
-        assert "NullPointerException" in prompt
+        assert "## Ticket Attachments" in prompt
+        assert str(crash) in prompt
+        assert "text" in prompt
 
-    def test_skips_binary_attachments(self, registry, mock_llm, workspace):
-        """Binary attachments (e.g. images) are silently skipped, not crashed on."""
+    def test_attachments_manifest_lists_images(
+        self, registry, mock_llm, workspace
+    ):
+        """Image attachments appear in the manifest (the CLI Read tool can
+        view them) instead of being silently dropped."""
         attachments_dir = workspace.meta_dir / "attachments"
         attachments_dir.mkdir()
-        # PNG signature + non-utf8 garbage — read_text raises UnicodeDecodeError
-        (attachments_dir / "screenshot.png").write_bytes(b"\x89PNG\r\n\x1a\n\xff\xfe\xfd")
+        png = attachments_dir / "screenshot.png"
+        png.write_bytes(b"\x89PNG\r\n\x1a\n\xff\xfe\xfd")
 
         runtime = AgentRuntime(registry, mock_llm)
         agent = registry.get_agent("dev-agent")
         prompt = runtime.assemble_prompt(agent, workspace)
 
-        assert "screenshot.png" not in prompt
+        assert str(png) in prompt
+        assert "image" in prompt
+
+    def test_no_manifest_when_no_attachments(
+        self, registry, mock_llm, workspace
+    ):
+        """No attachments dir -> no manifest section."""
+        runtime = AgentRuntime(registry, mock_llm)
+        agent = registry.get_agent("dev-agent")
+        prompt = runtime.assemble_prompt(agent, workspace)
+
+        assert "## Ticket Attachments" not in prompt
+
+    def test_truncated_meta_file_gets_full_path_pointer(
+        self, registry, mock_llm, workspace
+    ):
+        """When an inlined meta file is truncated, the agent is told where the
+        full file lives so it can read the rest with its tools."""
+        from orchestrator.agent_runtime import _PER_FILE_CONTEXT_BYTES
+
+        big = workspace.meta_dir / "comments.md"
+        big.write_text("x" * (_PER_FILE_CONTEXT_BYTES + 1000))
+
+        runtime = AgentRuntime(registry, mock_llm)
+        agent = registry.get_agent("dev-agent")
+        prompt = runtime.assemble_prompt(agent, workspace)
+
+        assert f"full file at {big}" in prompt
 
     def test_total_context_budget_caps_many_files(self, registry, mock_llm, workspace):
         """Many context files are truncated at the total budget, not unbounded.
@@ -606,6 +641,33 @@ class TestQuotaFailureClassification:
         assert result.success is False
         assert result.failure_kind == "quota"  # reused for auto-retry
         assert result.retry_at is not None
+
+
+class TestCliAddDirs:
+    async def test_execute_cli_passes_meta_dir_as_add_dir(self, registry, workspace):
+        """The CLI agent runs with cwd=source/, so meta/ must be passed as an
+        add-dir or the agent cannot read attachments and comments."""
+        from integrations.llm.claude_code_adapter import ClaudeCodeAdapter
+        from integrations.llm.llm_interface import LLMResponse
+        from orchestrator.agent_runtime import AgentRuntime
+
+        captured: dict = {}
+
+        class StubAdapter(ClaudeCodeAdapter):
+            def __init__(self):
+                pass
+
+            async def execute_in_workspace(self, *args, **kwargs):
+                captured.update(kwargs)
+                return LLMResponse(
+                    content="ok", input_tokens=10, output_tokens=5,
+                    model="claude-sonnet-4-5",
+                )
+
+        runtime = AgentRuntime(registry, StubAdapter())
+        await runtime.execute("dev-agent", workspace)
+
+        assert captured.get("add_dirs") == [str(workspace.meta_dir)]
 
 
 class TestModelSelection:

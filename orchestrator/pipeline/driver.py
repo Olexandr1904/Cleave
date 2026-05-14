@@ -7,6 +7,7 @@ manual-mode approval gates and AWAITING_APPROVAL auto-resume.
 from __future__ import annotations
 
 import logging
+import re
 from typing import Any, Callable
 
 from integrations.base.notifier import Button
@@ -70,6 +71,41 @@ def advance_to_stage(
         logger.warning("Cannot map stage '%s' to state", stage_id)
 
 
+def _extract_ba_verdict(ba_file: Any) -> str:
+    """One-line BA decision for the approval-gate message.
+
+    Prefers the `## Verdict` section of ba.md — a single sentence the BA
+    writes stating what must be fixed (bug) or implemented (story). Falls
+    back to the first sentence of the file's first prose line for plans
+    written before the Verdict section existed.
+    """
+    if not ba_file.exists():
+        return ""
+    lines = ba_file.read_text(encoding="utf-8").splitlines()
+
+    # Preferred: text under the `## Verdict` heading.
+    collecting = False
+    for line in lines:
+        stripped = line.strip()
+        if not collecting:
+            if stripped.lower() == "## verdict":
+                collecting = True
+            continue
+        if stripped.startswith("#"):
+            break
+        if stripped:
+            return tg_format.strip_markdown(stripped)[:240]
+
+    # Fallback: first prose line, trimmed to its first sentence.
+    for line in lines:
+        stripped = line.strip()
+        if stripped and not stripped.startswith("#"):
+            text = tg_format.strip_markdown(stripped)
+            match = re.match(r".*?[.!?](?:\s|$)", text)
+            return (match.group(0).strip() if match else text)[:240]
+    return ""
+
+
 def build_gate_summary(
     workspace: Workspace, gate_state: str,
 ) -> tuple[str, list[Button]]:
@@ -110,20 +146,13 @@ def build_gate_summary(
         return text, buttons
 
     if gate_state == Stage.ANALYSIS:
-        # Include BA summary from ba.md
-        ba_file = workspace.reports_dir / REPORT_BA
-        summary = ""
-        if ba_file.exists():
-            content = ba_file.read_text(encoding="utf-8")
-            # Extract first heading + summary paragraph
-            lines = content.strip().splitlines()
-            for line in lines:
-                if line.startswith("## Summary") or line.startswith("## Fix") or line.startswith("## Root"):
-                    continue
-                if line.strip() and not line.startswith("#"):
-                    summary = tg_format.strip_markdown(line.strip()[:200])
-                    break
-        gate_title = f"Analysis complete.\n{summary}" if summary else "Analysis complete."
+        # Surface the BA's one-line decision so the operator can sanity-check
+        # whether the ticket was analysed correctly before approving.
+        verdict = _extract_ba_verdict(workspace.reports_dir / REPORT_BA)
+        if verdict:
+            gate_title = f"Analysis complete — BA decision:\n{verdict}"
+        else:
+            gate_title = "Analysis complete."
         gate_title += "\n\nApprove = start coding. Reject = back to analysis."
     elif gate_state == Stage.QA:
         gate_title = "QA passed.\n\nApprove = push code & open PR. Reject = back to dev."

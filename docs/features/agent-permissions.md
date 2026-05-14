@@ -118,3 +118,4 @@ built-in path restrictions.
 | Date | Change |
 |---|---|
 | 2026-04-21 | Initial documentation. Project settings + per-agent tools + CLI flags. |
+| 2026-05-14 | Added `add_dirs` parameter to `execute_in_workspace` / `_run_cli`; maps to `--add-dir` so agents can read directories outside `cwd` (e.g. `meta/`). Documented `add_dirs` in the `execute_in_workspace` docstring `Args:` block. |

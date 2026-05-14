@@ -332,6 +332,41 @@ async def validate_gitlab(
         return {"success": False, "error": f"Request to {url} failed: {type(e).__name__}"}
 
 
+async def validate_trello(*, api_key: str, token: str, board_id: str) -> dict:
+    """Live check: token works AND board is reachable. Returns board lists on success."""
+    if not (api_key and token and board_id):
+        return {"success": False, "error": "API key, token, and board ID required"}
+
+    async with httpx.AsyncClient(timeout=15) as client:
+        try:
+            me = await client.get(
+                "https://api.trello.com/1/members/me",
+                params={"key": api_key, "token": token},
+            )
+            if me.status_code in (401, 403):
+                return {"success": False, "error": "Invalid Trello API key or token"}
+            me.raise_for_status()
+
+            lists = await client.get(
+                f"https://api.trello.com/1/boards/{board_id}/lists",
+                params={"key": api_key, "token": token},
+            )
+            if lists.status_code == 404:
+                return {"success": False, "error": f"Board {board_id!r} not found or not accessible"}
+            lists.raise_for_status()
+            lists_data = lists.json()
+        except httpx.HTTPError as e:
+            return {"success": False, "error": f"{type(e).__name__}: {e}"}
+
+    return {
+        "success": True,
+        "lists": [
+            {"id": l.get("id", ""), "name": l.get("name", ""), "pos": l.get("pos", 0)}
+            for l in lists_data
+        ],
+    }
+
+
 async def validate_jenkins(
     url: str, username: str, token: str, job_key: str
 ) -> dict[str, Any]:

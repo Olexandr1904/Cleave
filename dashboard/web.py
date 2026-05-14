@@ -193,6 +193,102 @@ def _scan_all_workspaces(
     return results
 
 
+async def validate_step(request: Request) -> JSONResponse:
+    """Validate wizard step data against live APIs."""
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse({"ok": False, "error": "invalid JSON"}, status_code=400)
+    step = body.get("step")
+    data = body.get("data", {})
+
+    if step == "jira":
+        from health.validators import check_jira
+        url = data.get("url", "")
+        r = await check_jira(
+            url=url, email=data.get("email", ""),
+            token=data.get("token", ""), project_key=data.get("project_key", ""),
+        )
+        return JSONResponse({
+            "ok": r.ok,
+            "checks": [{"name": r.name, "ok": r.ok, "reason": r.reason, "fix_hint": r.fix_hint}],
+        })
+
+    if step == "trello":
+        from health.validators import check_trello
+        r = await check_trello(
+            api_key=data.get("api_key", ""),
+            token=data.get("token", ""),
+            board_id=data.get("board_id", ""),
+        )
+        return JSONResponse({
+            "ok": r.ok,
+            "checks": [{"name": r.name, "ok": r.ok, "reason": r.reason, "fix_hint": r.fix_hint}],
+            "lists": r.extra.get("lists", []) if r.ok else [],
+        })
+
+    if step == "vcs":
+        provider = data.get("provider")
+        if provider == "github":
+            from health.validators import check_github
+            r = await check_github(
+                token=data.get("token", ""),
+                owner=data.get("owner", ""), repo=data.get("repo", ""),
+            )
+        elif provider == "gitlab":
+            from health.validators import check_gitlab
+            r = await check_gitlab(
+                token=data.get("token", ""),
+                project_id=data.get("project_id", ""),
+                url=data.get("url", "https://gitlab.com"),
+            )
+        else:
+            return JSONResponse({"ok": False, "error": "unknown provider"}, status_code=400)
+        return JSONResponse({
+            "ok": r.ok,
+            "checks": [{"name": r.name, "ok": r.ok, "reason": r.reason, "fix_hint": r.fix_hint}],
+        })
+
+    if step == "telegram":
+        import os
+        token = data.get("token") or os.environ.get("TELEGRAM_BOT_TOKEN", "")
+        chat_id = data.get("chat_id") or os.environ.get("TELEGRAM_CHAT_ID", "")
+        if not token or not chat_id:
+            return JSONResponse({
+                "ok": False,
+                "checks": [{"name": "telegram", "ok": False,
+                            "reason": "Bot token or chat ID missing",
+                            "fix_hint": "Provide values or set TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID in .env"}],
+            })
+        import httpx
+        try:
+            async with httpx.AsyncClient(timeout=10) as client:
+                resp = await client.post(
+                    f"https://api.telegram.org/bot{token}/sendMessage",
+                    json={"chat_id": chat_id, "text": "Hello World"},
+                )
+                rj = resp.json()
+                if rj.get("ok"):
+                    return JSONResponse({
+                        "ok": True,
+                        "checks": [{"name": "telegram", "ok": True, "reason": "", "fix_hint": ""}],
+                    })
+                return JSONResponse({
+                    "ok": False,
+                    "checks": [{"name": "telegram", "ok": False,
+                                "reason": rj.get("description", f"HTTP {resp.status_code}"),
+                                "fix_hint": "Check bot token and chat ID"}],
+                })
+        except Exception as e:
+            return JSONResponse({
+                "ok": False,
+                "checks": [{"name": "telegram", "ok": False,
+                            "reason": str(e), "fix_hint": "Check network and bot token"}],
+            })
+
+    return JSONResponse({"ok": True, "checks": []})
+
+
 def create_app(
     bus: EventBus,
     store: EventStore,
@@ -383,88 +479,6 @@ def create_app(
         orchestrator=orchestrator,
     )
     routes.append(Route("/api/projects/create", create_route_handler, methods=["POST"]))
-
-    async def validate_step(request: Request) -> JSONResponse:
-        """Validate wizard step data against live APIs."""
-        try:
-            body = await request.json()
-        except Exception:
-            return JSONResponse({"ok": False, "error": "invalid JSON"}, status_code=400)
-        step = body.get("step")
-        data = body.get("data", {})
-
-        if step == "jira":
-            from health.validators import check_jira
-            url = data.get("url", "")
-            r = await check_jira(
-                url=url, email=data.get("email", ""),
-                token=data.get("token", ""), project_key=data.get("project_key", ""),
-            )
-            return JSONResponse({
-                "ok": r.ok,
-                "checks": [{"name": r.name, "ok": r.ok, "reason": r.reason, "fix_hint": r.fix_hint}],
-            })
-
-        if step == "vcs":
-            provider = data.get("provider")
-            if provider == "github":
-                from health.validators import check_github
-                r = await check_github(
-                    token=data.get("token", ""),
-                    owner=data.get("owner", ""), repo=data.get("repo", ""),
-                )
-            elif provider == "gitlab":
-                from health.validators import check_gitlab
-                r = await check_gitlab(
-                    token=data.get("token", ""),
-                    project_id=data.get("project_id", ""),
-                    url=data.get("url", "https://gitlab.com"),
-                )
-            else:
-                return JSONResponse({"ok": False, "error": "unknown provider"}, status_code=400)
-            return JSONResponse({
-                "ok": r.ok,
-                "checks": [{"name": r.name, "ok": r.ok, "reason": r.reason, "fix_hint": r.fix_hint}],
-            })
-
-        if step == "telegram":
-            import os
-            token = data.get("token") or os.environ.get("TELEGRAM_BOT_TOKEN", "")
-            chat_id = data.get("chat_id") or os.environ.get("TELEGRAM_CHAT_ID", "")
-            if not token or not chat_id:
-                return JSONResponse({
-                    "ok": False,
-                    "checks": [{"name": "telegram", "ok": False,
-                                "reason": "Bot token or chat ID missing",
-                                "fix_hint": "Provide values or set TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID in .env"}],
-                })
-            import httpx
-            try:
-                async with httpx.AsyncClient(timeout=10) as client:
-                    resp = await client.post(
-                        f"https://api.telegram.org/bot{token}/sendMessage",
-                        json={"chat_id": chat_id, "text": "Hello World"},
-                    )
-                    rj = resp.json()
-                    if rj.get("ok"):
-                        return JSONResponse({
-                            "ok": True,
-                            "checks": [{"name": "telegram", "ok": True, "reason": "", "fix_hint": ""}],
-                        })
-                    return JSONResponse({
-                        "ok": False,
-                        "checks": [{"name": "telegram", "ok": False,
-                                    "reason": rj.get("description", f"HTTP {resp.status_code}"),
-                                    "fix_hint": "Check bot token and chat ID"}],
-                    })
-            except Exception as e:
-                return JSONResponse({
-                    "ok": False,
-                    "checks": [{"name": "telegram", "ok": False,
-                                "reason": str(e), "fix_hint": "Check network and bot token"}],
-                })
-
-        return JSONResponse({"ok": True, "checks": []})
 
     routes.append(Route("/api/projects/validate-step", validate_step, methods=["POST"]))
 

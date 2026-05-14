@@ -17,6 +17,7 @@ from health.validators import (
     check_jira,
     check_github,
     check_gitlab,
+    check_trello,
 )
 
 
@@ -29,7 +30,7 @@ class ProjectHealth:
     @property
     def status(self) -> str:
         """Aggregate status: 'red' | 'yellow' | 'green'."""
-        red_names = {"jira", "github", "gitlab"}
+        red_names = {"jira", "github", "gitlab", "trello"}
         yellow_names = {"git_identity", "git_remote"}
         has_red = any(not c.ok and c.name in red_names for c in self.checks)
         has_yellow = any(not c.ok and c.name in yellow_names for c in self.checks)
@@ -44,13 +45,21 @@ async def check_project(project_id: str, project: Any) -> ProjectHealth:
     """Run all applicable validators for a single project."""
     checks: list[ValidatorResult] = []
 
-    jira = project.config.tracker.jira
-    if getattr(jira, "url", ""):
+    tracker = project.config.tracker
+    jira = tracker.jira
+    provider = getattr(tracker, "provider", "jira")
+    if provider == "jira" and getattr(jira, "url", ""):
         checks.append(await check_jira(
             url=jira.url,
             email=getattr(jira, "email", ""),
             token=getattr(jira, "token", ""),
             project_key=getattr(jira, "project_key", ""),
+        ))
+    elif provider == "trello" and getattr(tracker.trello, "api_key", ""):
+        checks.append(await check_trello(
+            api_key=tracker.trello.api_key,
+            token=tracker.trello.token,
+            board_id=tracker.trello.board_id,
         ))
 
     for _, repo_cfg in project.repos.items():

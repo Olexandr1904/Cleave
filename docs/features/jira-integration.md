@@ -2,7 +2,7 @@
 
 **Status:** Implemented
 **Created:** 2026-04-07
-**Updated:** 2026-04-15
+**Updated:** 2026-05-12
 **Author:** Oleksandr Brazhenko
 
 ## Description
@@ -70,3 +70,15 @@ Jira adapter behind the TrackerInterface. Polls Jira for tickets matching config
 - `download_attachment` implemented on `JiraAdapter`: adapter-owned basic auth, no leakage of `_email`/`_token`.
 - `list_transitions` implemented on `JiraAdapter`: prefers `to.name`, falls back to `name`.
 - `RepoConfig.jira_repo_label` renamed to `tracker_label` (loader accepts old key as alias).
+
+## Fix: jira_base_url scans all projects; drop _tracker shim; log skipped projects (2026-05-12)
+
+`main.py` iterates all projects to find the first Jira URL instead of checking only the first project, fixing silent empty `jira_base_url` in mixed Jira+Trello deployments. `_build_tracker_for_project` now emits `logger.warning` on the `return None` path so operators see which projects were skipped. `CommandHandler._tracker` shim removed; tests updated to assert via `_get_trackers()`.
+
+## ADF image placeholder (2026-05-14)
+
+`_extract_adf_text` now emits `[image: <name>]` for `media` and `mediaInline` leaf nodes instead of silently dropping them. The `alt` attribute is used as the name; falls back to `id`, then `"attached"`. `mediaSingle` and `mediaGroup` wrapper nodes are treated as block-level so the placeholder is flushed to its own line.
+
+## Per-project tracker build with provider dispatch (2026-05-12)
+
+`main.py` now builds one tracker per configured project at startup using the module-level `_build_tracker_for_project(cfg, project_id)` helper, which dispatches on `cfg.provider`. The old single-first-project Jira block is replaced with a loop over all projects; `Orchestrator(trackers=...)` receives the completed dict directly. `on_project_added` calls the same helper so hot-reload behavior is consistent with startup. A stub Trello branch is present but lazy-imports `TrelloAdapter` — it will only fire once Task 6 lands. `CommandHandler` gains a `get_trackers` resolver kwarg and `set_trackers_resolver()` method; the legacy `set_tracker(tracker)` becomes a deprecated shim wrapping the tracker in a lambda. Phase 1 (Checkpoint A) complete.

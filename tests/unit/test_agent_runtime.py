@@ -608,6 +608,33 @@ class TestQuotaFailureClassification:
         assert result.retry_at is not None
 
 
+class TestCliAddDirs:
+    async def test_execute_cli_passes_meta_dir_as_add_dir(self, registry, workspace):
+        """The CLI agent runs with cwd=source/, so meta/ must be passed as an
+        add-dir or the agent cannot read attachments and comments."""
+        from integrations.llm.claude_code_adapter import ClaudeCodeAdapter
+        from integrations.llm.llm_interface import LLMResponse
+        from orchestrator.agent_runtime import AgentRuntime
+
+        captured: dict = {}
+
+        class StubAdapter(ClaudeCodeAdapter):
+            def __init__(self):
+                pass
+
+            async def execute_in_workspace(self, *args, **kwargs):
+                captured.update(kwargs)
+                return LLMResponse(
+                    content="ok", input_tokens=10, output_tokens=5,
+                    model="claude-sonnet-4-5",
+                )
+
+        runtime = AgentRuntime(registry, StubAdapter())
+        await runtime.execute("dev-agent", workspace)
+
+        assert captured.get("add_dirs") == [str(workspace.meta_dir)]
+
+
 class TestModelSelection:
     """agent_runtime dispatches with workspace.state.model — the single source of truth."""
 

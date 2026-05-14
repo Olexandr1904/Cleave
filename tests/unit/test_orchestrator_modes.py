@@ -44,6 +44,7 @@ def _make_orchestrator(mode="auto"):
     workspace_manager.discover_workspaces.return_value = []
     workspace_manager.cleanup_old_workspaces.return_value = []
 
+    tracker_mock = AsyncMock()
     orch = Orchestrator(
         global_config=global_config,
         projects={},
@@ -52,9 +53,10 @@ def _make_orchestrator(mode="auto"):
         workspace_manager=workspace_manager,
         agent_runtime=MagicMock(),
         default_model_provider=lambda: "claude-sonnet-4-6",
-        tracker=AsyncMock(),
+        trackers={"test": tracker_mock},
         notifier=AsyncMock(),
     )
+    orch._tracker_mock = tracker_mock  # keep a handle for test assertions
     return orch
 
 
@@ -63,22 +65,24 @@ class TestModeAwarePollCycle:
         orch = _make_orchestrator(mode="manual")
         orch._mode_handler = MagicMock()
         orch._mode_handler.get_mode.return_value = "manual"
-        orch._tracker = AsyncMock()
+        # Replace tracker with a fresh mock
+        new_tracker = AsyncMock()
+        orch._trackers = {"test": new_tracker}
 
         await orch.poll_cycle()
-        orch._tracker.poll_tickets.assert_not_called()
+        new_tracker.poll_tickets.assert_not_called()
 
     async def test_auto_mode_polls_jira(self):
         orch = _make_orchestrator(mode="auto")
         orch._mode_handler = MagicMock()
         orch._mode_handler.get_mode.return_value = "auto"
         orch._projects = {"test": MagicMock()}
-        orch._projects["test"].config.jira.url = "https://jira.example.com"
-        orch._tracker.poll_tickets.return_value = []
+        orch._projects["test"].config.tracker.jira.url = "https://jira.example.com"
+        orch._tracker_mock.poll_tickets.return_value = []
 
         await orch.poll_cycle()
         # Tracker is called because mode is auto
-        assert orch._tracker.poll_tickets.called
+        assert orch._tracker_mock.poll_tickets.called
 
 
 class TestApprovalGates:

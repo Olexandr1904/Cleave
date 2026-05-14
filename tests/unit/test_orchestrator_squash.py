@@ -15,6 +15,7 @@ from config.schemas import (
     JiraStatusesConfig,
     RepoConfig,
     RepoInfo,
+    TrackerConfig,
     VCSConfig,
 )
 from orchestrator.pipeline.actions.push_and_open_pr import squash_feature_commits
@@ -48,7 +49,7 @@ def _repo_config_with_author() -> RepoConfig:
     return RepoConfig(
         repo=RepoInfo(id="r"),
         vcs=VCSConfig(github=GitHubConfig()),
-        jira=JiraConfig(statuses=JiraStatusesConfig()),
+        tracker=TrackerConfig(jira=JiraConfig(statuses=JiraStatusesConfig())),
         git=GitConfig(
             commit_author_name="Cleave Bot",
             commit_author_email="cleave@pipeline.local",

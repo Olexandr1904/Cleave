@@ -53,6 +53,14 @@ Jira adapter behind the TrackerInterface. Polls Jira for tickets matching config
 | 2026-04-15 | trigger_label renamed to trigger_labels (list, AND semantics) |
 | 2026-04-16 | Fix integration tests: poll_tickets uses POST /search/jql (Jira Cloud API); update mocks from GET /search |
 
+## Provider-aware in_review_status (2026-05-12)
+
+`_on_ticket_done` in the orchestrator now reads `jira.statuses.in_review` only when `tracker.provider == "jira"`. For other providers (e.g. Trello) the value defaults to `""`, which `on_ticket_done` treats as a no-op transition. Previously the jira field was read unconditionally (harmless but incorrect abstraction). The inline rationale comment points at the adapter (not the config object) as the source of Trello transitions.
+
+## TrackerConfig wrapper (2026-05-12)
+
+`ProjectConfig.jira` and `RepoConfig.jira` replaced by `ProjectConfig.tracker` and `RepoConfig.tracker` (type `TrackerConfig`). `TrackerConfig` holds `provider` ("jira" | "trello"), `jira: JiraConfig`, and `trello: TrelloConfig`, mirroring the `VCSConfig` pattern. A back-compat loader shim transparently lifts legacy top-level `jira:` blocks into `tracker.jira` so existing config files continue to load without modification. All call-sites updated to `project.config.tracker.jira.*` and `repo_config.tracker.jira.*`.
+
 ## Tracker abstraction expansion (2026-05-11)
 
 `TrackerInterface` extended with `get_comments`, `get_status_history`, `download_attachment`, and `list_transitions` to remove Jira-specific HTTP plumbing from the orchestrator (formerly accessed via `_tracker._request`, `_email`, `_token`). New `TicketComment` and `StatusChange` dataclasses standardize the return shapes. Future Trello/GitLab adapters implement the same surface.

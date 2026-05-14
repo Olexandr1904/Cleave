@@ -44,7 +44,7 @@ async def check_project(project_id: str, project: Any) -> ProjectHealth:
     """Run all applicable validators for a single project."""
     checks: list[ValidatorResult] = []
 
-    jira = project.config.jira
+    jira = project.config.tracker.jira
     if getattr(jira, "url", ""):
         checks.append(await check_jira(
             url=jira.url,

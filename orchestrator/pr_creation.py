@@ -121,7 +121,7 @@ async def create_pr(
         try:
             await tracker.transition_ticket(
                 state.ticket_id,
-                repo_config.jira.statuses.in_review,
+                repo_config.tracker.jira.statuses.in_review,
             )
         except Exception as e:
             logger.warning("Failed to transition %s to In Review: %s", state.ticket_id, e)

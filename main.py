@@ -11,6 +11,30 @@ import argparse
 import logging
 import sys
 
+from config.schemas import RepoConfig
+from integrations.base.vcs import VCSInterface
+
+
+def _build_vcs_adapter(repo_cfg: RepoConfig) -> VCSInterface | None:
+    """Return the VCS adapter for this repo, or None if the provider is
+    unsupported or required credentials are missing."""
+    provider = repo_cfg.vcs.provider
+    if provider == "github" and repo_cfg.vcs.github.token:
+        from integrations.github.github_adapter import GitHubAdapter
+        return GitHubAdapter(
+            token=repo_cfg.vcs.github.token,
+            owner=repo_cfg.vcs.github.owner,
+            repo=repo_cfg.vcs.github.repo,
+        )
+    if provider == "gitlab" and repo_cfg.vcs.gitlab.token:
+        from integrations.gitlab.gitlab_adapter import GitLabAdapter
+        return GitLabAdapter(
+            token=repo_cfg.vcs.gitlab.token,
+            project_id=repo_cfg.vcs.gitlab.project_id,
+            url=repo_cfg.vcs.gitlab.url or "https://gitlab.com",
+        )
+    return None
+
 
 def get_version() -> str:
     """Read version from package metadata, falling back to pyproject.toml."""
@@ -234,10 +258,10 @@ def main(argv: list[str] | None = None) -> int:
 
     # Jira adapter — use first project's Jira config
     first_project = next(iter(projects.values()), None)
-    if first_project and first_project.config.jira.url:
+    if first_project and first_project.config.tracker.jira.url:
         from integrations.jira.jira_adapter import JiraAdapter
 
-        jira_cfg = first_project.config.jira
+        jira_cfg = first_project.config.tracker.jira
         tracker = JiraAdapter(
             url=jira_cfg.url,
             email=jira_cfg.email,
@@ -254,22 +278,18 @@ def main(argv: list[str] | None = None) -> int:
         )
         print("  Jira adapter initialized")
 
-    # VCS adapter — per-repo, default to first GitHub repo
-    github_adapters = {}
+    # VCS adapter — per-repo; first non-None adapter becomes the daemon
+    # default (used as fallback when a workspace has no repo-scoped adapter).
+    vcs_adapters: dict[str, tuple[VCSInterface, RepoConfig]] = {}
     for proj_id, proj in projects.items():
         for repo_id, repo_cfg in proj.repos.items():
-            if repo_cfg.vcs.provider == "github" and repo_cfg.vcs.github.token:
-                from integrations.github.github_adapter import GitHubAdapter
-
-                gh = GitHubAdapter(
-                    token=repo_cfg.vcs.github.token,
-                    owner=repo_cfg.vcs.github.owner,
-                    repo=repo_cfg.vcs.github.repo,
-                )
-                github_adapters[repo_id] = (gh, repo_cfg)
-                if vcs is None:
-                    vcs = gh
-                print(f"  GitHub adapter for {repo_id}: {repo_cfg.vcs.github.owner}/{repo_cfg.vcs.github.repo}")
+            adapter = _build_vcs_adapter(repo_cfg)
+            if adapter is None:
+                continue
+            vcs_adapters[repo_id] = (adapter, repo_cfg)
+            if vcs is None:
+                vcs = adapter
+            print(f"  {repo_cfg.vcs.provider} adapter for {repo_id}")
 
     # Telegram notifier
     tg_config = global_config.telegram
@@ -282,26 +302,21 @@ def main(argv: list[str] | None = None) -> int:
     def _build_repo_adapters(project, logger_):
         """Build + register VCS adapters for each repo in a single project."""
         for repo_id, repo_cfg in project.repos.items():
-            provider = repo_cfg.vcs.provider
-            if provider == "github" and repo_cfg.vcs.github.token:
-                from integrations.github.github_adapter import GitHubAdapter
-                gh = GitHubAdapter(
-                    token=repo_cfg.vcs.github.token,
-                    owner=repo_cfg.vcs.github.owner,
-                    repo=repo_cfg.vcs.github.repo,
-                )
-                orchestrator.register_repo_vcs(repo_id, gh, repo_cfg)
-                logger_.info(
-                    "Hot-reload: registered GitHub adapter for %s: %s/%s",
-                    repo_id, repo_cfg.vcs.github.owner, repo_cfg.vcs.github.repo,
-                )
+            adapter = _build_vcs_adapter(repo_cfg)
+            if adapter is None:
+                continue
+            orchestrator.register_repo_vcs(repo_id, adapter, repo_cfg)
+            logger_.info(
+                "Hot-reload: registered %s adapter for %s",
+                repo_cfg.vcs.provider, repo_id,
+            )
 
     def on_project_added(project_id, new_project):
         log = logging.getLogger(__name__)
         _build_repo_adapters(new_project, log)
 
-        jira_cfg = new_project.config.jira
-        if orchestrator._tracker is None and jira_cfg.url:
+        jira_cfg = new_project.config.tracker.jira
+        if jira_cfg.url and orchestrator.get_tracker_for_project(project_id) is None:
             from integrations.jira.jira_adapter import JiraAdapter
             new_tracker = JiraAdapter(
                 url=jira_cfg.url,
@@ -317,15 +332,18 @@ def main(argv: list[str] | None = None) -> int:
                     "done": jira_cfg.statuses.done,
                 },
             )
-            orchestrator.set_tracker(new_tracker)
-            log.info("Jira tracker attached from project %s", project_id)
+            orchestrator.register_tracker(project_id, new_tracker)
+            log.info("Jira tracker registered for project %s", project_id)
 
         if command_handler is not None:
             pcid = new_project.config.telegram.default_chat_id
             if pcid:
                 command_handler.add_allowed_chat_id(pcid)
-            if orchestrator._tracker is not None:
-                command_handler.set_tracker(orchestrator._tracker)
+            # TODO Task 5: CommandHandler will be updated to use per-project trackers.
+            # For now pass the first available tracker to keep existing behavior.
+            first_tracker = next(iter(orchestrator._trackers.values()), None)
+            if first_tracker is not None:
+                command_handler.set_tracker(first_tracker)
 
         for rid, repo in new_project.repos.items():
             event_bus.emit(
@@ -346,7 +364,7 @@ def main(argv: list[str] | None = None) -> int:
         workspace_manager=workspace_manager,
         agent_runtime=agent_runtime,
         default_model_provider=_read_model,
-        tracker=tracker,
+        trackers={},          # populated by register_tracker calls below
         vcs=vcs,
         notifier=notifier,
         dry_run=args.dry_run,
@@ -355,9 +373,15 @@ def main(argv: list[str] | None = None) -> int:
         on_project_added=on_project_added,
     )
 
+    # Register the tracker for the first project (Task 5 will make this per-project).
+    if tracker is not None and first_project is not None:
+        first_project_id = next(iter(projects))
+        orchestrator.register_tracker(first_project_id, tracker)
+        print(f"  Tracker registered for {first_project_id}")
+
     # Register per-repo VCS adapters
-    for repo_id, (gh_adapter, repo_cfg) in github_adapters.items():
-        orchestrator.register_repo_vcs(repo_id, gh_adapter, repo_cfg)
+    for repo_id, (adapter, repo_cfg) in vcs_adapters.items():
+        orchestrator.register_repo_vcs(repo_id, adapter, repo_cfg)
 
     # Initialize mode handler (auto/manual pipeline mode)
     from integrations.telegram.handlers.mode import ModeHandler
@@ -386,8 +410,8 @@ def main(argv: list[str] | None = None) -> int:
             )
 
             jira_base_url = ""
-            if first_project and first_project.config.jira.url:
-                jira_base_url = first_project.config.jira.url
+            if first_project and first_project.config.tracker.jira.url:
+                jira_base_url = first_project.config.tracker.jira.url
 
             # Build the chat-id allowlist from global + per-project configs so
             # the bot ignores commands from other chats. An empty set disables

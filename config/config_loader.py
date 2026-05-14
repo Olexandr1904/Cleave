@@ -8,12 +8,15 @@ Environment variable references (${VAR_NAME}) are resolved at load time.
 
 from __future__ import annotations
 
+import logging
 import os
 import re
 from pathlib import Path
 from typing import Any
 
 import yaml
+
+logger = logging.getLogger(__name__)
 
 from config.schemas import (
     AgentBudget,
@@ -43,6 +46,9 @@ from config.schemas import (
     RepoInfo,
     TelegramConfig,
     TestConfig,
+    TrackerConfig,
+    TrelloConfig,
+    TrelloListMapping,
     VCSConfig,
     WorkspacesConfig,
 )
@@ -185,8 +191,9 @@ def _load_yaml_file(path: Path) -> dict:
 
 
 def _parse_jira_section(data: dict, file_path: str) -> JiraConfig:
-    """Parse jira section, handling nested statuses."""
-    jira_data = dict(data.get("jira", {}) or {})
+    """Parse a jira section dict into JiraConfig. Used by both legacy top-level
+    `jira:` blocks (back-compat) and the nested `tracker.jira:` form."""
+    jira_data = dict(data or {})
     if "trigger_label" in jira_data:
         raise ConfigError(
             "Legacy 'trigger_label' (singular) is no longer supported. "
@@ -201,6 +208,78 @@ def _parse_jira_section(data: dict, file_path: str) -> JiraConfig:
         return JiraConfig(**jira_data, statuses=statuses)
     except TypeError as e:
         raise ConfigError(f"Invalid fields in 'jira': {e}", file_path=file_path, field="jira") from e
+
+
+def _parse_trello_section(data: dict, file_path: str) -> TrelloConfig:
+    """Parse a trello section dict into TrelloConfig."""
+    trello_data = dict(data or {})
+    lists_data = trello_data.pop("lists", None) or {}
+    try:
+        lists = TrelloListMapping(**lists_data) if lists_data else TrelloListMapping()
+    except TypeError as e:
+        raise ConfigError(
+            f"Invalid fields in 'tracker.trello.lists': {e}",
+            file_path=file_path, field="tracker.trello.lists",
+        ) from e
+    try:
+        return TrelloConfig(**trello_data, lists=lists)
+    except TypeError as e:
+        raise ConfigError(f"Invalid fields in 'trello': {e}", file_path=file_path, field="trello") from e
+
+
+def _parse_tracker_section(data: dict, file_path: str) -> TrackerConfig:
+    """Parse tracker config with back-compat for legacy top-level `jira:` block.
+
+    Three shapes are accepted:
+      1. New: `tracker: { provider: jira|trello, jira: {...}, trello: {...} }`
+      2. Legacy: top-level `jira: {...}` (lifted to tracker.jira, provider=jira)
+      3. Both present: `tracker:` wins; WARN-log that the legacy `jira:` block
+         is ignored.
+    """
+    legacy_jira = data.get("jira")
+    tracker_data = data.get("tracker")
+
+    if tracker_data is None and legacy_jira is not None:
+        # Legacy shape — lift into tracker.jira
+        logger.info(
+            "Config %s: migrated legacy top-level 'jira:' block to 'tracker.jira:' "
+            "(provider=jira). Run the wizard or rewrite to silence this notice.",
+            file_path,
+        )
+        return TrackerConfig(
+            provider="jira",
+            jira=_parse_jira_section(legacy_jira, file_path),
+        )
+
+    if tracker_data is None:
+        return TrackerConfig()  # empty — no tracker configured
+
+    if legacy_jira is not None:
+        logger.warning(
+            "Config %s has both 'tracker:' and legacy 'jira:' blocks; "
+            "the legacy block is ignored.",
+            file_path,
+        )
+
+    tracker_data = dict(tracker_data)
+    provider = tracker_data.pop("provider", "jira")
+    if provider not in ("jira", "trello"):
+        raise ConfigError(
+            f"tracker.provider must be 'jira' or 'trello' (got: {provider!r})",
+            file_path=file_path, field="tracker.provider",
+        )
+    jira_block = tracker_data.pop("jira", None) or {}
+    trello_block = tracker_data.pop("trello", None) or {}
+    if tracker_data:
+        raise ConfigError(
+            f"Unexpected fields in 'tracker': {sorted(tracker_data)}",
+            file_path=file_path, field="tracker",
+        )
+    return TrackerConfig(
+        provider=provider,
+        jira=_parse_jira_section(jira_block, file_path) if jira_block else JiraConfig(),
+        trello=_parse_trello_section(trello_block, file_path) if trello_block else TrelloConfig(),
+    )
 
 
 def _parse_agent_budget(data: dict, file_path: str, where: str) -> AgentBudget:
@@ -309,7 +388,7 @@ def _load_project_config(project_dir: Path, global_defaults: dict) -> ProjectCon
 
     return ProjectConfig(
         project=_parse_section(data, "project", ProjectInfo, file_str),
-        jira=_parse_jira_section(data, file_str),
+        tracker=_parse_tracker_section(data, file_str),
         telegram=_parse_section(data, "telegram", TelegramConfig, file_str),
         parallelism=_parse_section(data, "parallelism", ParallelismConfig, file_str),
         defaults=_parse_defaults_section(data, file_str),
@@ -336,7 +415,7 @@ def _load_repo_config(repo_path: Path, project_config: ProjectConfig, global_def
         pr_description_template=data.get("pr_description_template", ""),
         parallelism=_parse_section(data, "parallelism", ParallelismConfig, file_str),
         # Inherited from project
-        jira=project_config.jira,
+        tracker=project_config.tracker,
         telegram=project_config.telegram if project_config.telegram.default_chat_id or project_config.telegram.bot_token else TelegramConfig(),
         defaults=_parse_defaults_section(data, file_str) if data.get("defaults") else project_config.defaults,
     )

@@ -6,7 +6,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from config.schemas import GitHubConfig, JiraConfig, JiraStatusesConfig, RepoConfig, RepoInfo, VCSConfig
+from config.schemas import GitHubConfig, JiraConfig, JiraStatusesConfig, RepoConfig, RepoInfo, TrackerConfig, VCSConfig
 from orchestrator.pr_creation import PRCreationResult, create_pr
 from workspace.workspace import Workspace, WorkspaceState
 
@@ -37,7 +37,7 @@ def repo_config():
     return RepoConfig(
         repo=RepoInfo(id="test-repo"),
         vcs=VCSConfig(github=GitHubConfig(default_branch="main")),
-        jira=JiraConfig(statuses=JiraStatusesConfig(in_review="In Review")),
+        tracker=TrackerConfig(jira=JiraConfig(statuses=JiraStatusesConfig(in_review="In Review"))),
     )
 
 

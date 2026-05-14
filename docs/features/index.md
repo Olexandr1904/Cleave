@@ -8,7 +8,7 @@
 | 1 | [Agent System (BMAD-style)](agent-system.md) | Implemented | Pluggable prompt-file agents with persona, tools, constraints via Claude tool_use |
 | 2 | [Orchestrator](orchestrator.md) | Implemented | Main loop, slot management, workspace spawning, workflow router with agent + action stages, quota-deferral recovery (DEFERRED state auto-resumes) |
 | 3 | [Workspace Isolation](workspace-isolation.md) | Implemented | Per-ticket workspaces with multi-company hierarchy: base/company/repo/tickets/id/ |
-| 4 | [Configuration Cascade](configuration-cascade.md) | Implemented | 3-level config hierarchy with VCS/CI provider abstraction and helper script paths |
+| 4 | [Configuration Cascade](configuration-cascade.md) | Implemented | 3-level config hierarchy with VCS/CI/tracker provider abstraction and helper script paths |
 | 5 | [Jira Integration](jira-integration.md) | Implemented | Poll tickets with AND semantics on trigger_labels, sync status, transition on completion |
 | 6 | [GitHub Integration](github-integration.md) | Implemented | Branch creation, PR management, review handling (no auto-merge) |
 | 7 | [Telegram Notifications](telegram-notifications.md) | In Progress | Alert human when stuck, receive threaded replies to unblock; IntentParser classifies free-text commands |
@@ -16,7 +16,7 @@
 | 9 | [Scope Guard](scope-guard.md) | Implemented | Validate diff against plan and architecture rules, prevent scope creep; agent and stage routing live |
 | 10 | [Tool Sandbox](tool-sandbox.md) | Implemented | Sandboxed tool execution for agents with path restrictions and per-agent allowlists |
 | 11 | [PR Comment Responder](pr-comment-responder.md) | In Progress | Classify and respond to PR review comments with extreme skepticism; resolution report module implemented |
-| 12 | [GitLab Integration](gitlab-integration.md) | Planned | MR creation, comment fetching/resolving via GitLab API |
+| 12 | [GitLab Integration](gitlab-integration.md) | In Progress | MR creation, comment fetching/resolving via GitLab API; adapter package scaffolded (Task 1) |
 | 13 | [Jenkins Integration](jenkins-integration.md) | Planned | Build status and failure log retrieval from Jenkins |
 | 14 | [CLI Entry Point](cli-entry-point.md) | Implemented | CLI argument parsing, startup diagnostics, and version logging |
 | 15 | [Project Setup Agent (Atlas)](project-setup-agent.md) | Implemented | BMAD-style agent that onboards new projects with guided Q&A, credential validation, and YAML config generation; production atlas wired into dashboard |

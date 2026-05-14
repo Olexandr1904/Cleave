@@ -152,6 +152,35 @@ class JiraConfig:
 
 
 @dataclass
+class TrelloListMapping:
+    """Maps Cleave status keys to Trello list IDs (24-char hex).
+    Stored as IDs (not names) so list renames don't break the pipeline."""
+    todo: str = ""
+    in_progress: str = ""
+    in_review: str = ""
+    done: str = ""
+
+
+@dataclass
+class TrelloConfig:
+    api_key: str = ""
+    token: str = ""
+    board_id: str = ""
+    trigger_labels: list[str] = field(default_factory=lambda: ["ai-pipeline"])
+    ignore_labels: list[str] = field(default_factory=list)
+    lists: TrelloListMapping = field(default_factory=TrelloListMapping)
+
+
+@dataclass
+class TrackerConfig:
+    """Provider-neutral tracker config. Only the sub-config matching `provider`
+    is consulted at runtime. Mirrors VCSConfig pattern."""
+    provider: str = "jira"   # "jira" | "trello"
+    jira: JiraConfig = field(default_factory=JiraConfig)
+    trello: TrelloConfig = field(default_factory=TrelloConfig)
+
+
+@dataclass
 class ParallelismConfig:
     max_concurrent_tickets: int = 7
 
@@ -280,7 +309,7 @@ class ProjectInfo:
 @dataclass
 class ProjectConfig:
     project: ProjectInfo = field(default_factory=ProjectInfo)
-    jira: JiraConfig = field(default_factory=JiraConfig)
+    tracker: TrackerConfig = field(default_factory=TrackerConfig)
     telegram: TelegramConfig = field(default_factory=TelegramConfig)
     parallelism: ParallelismConfig = field(default_factory=ParallelismConfig)
     defaults: DefaultsConfig = field(default_factory=DefaultsConfig)
@@ -315,7 +344,7 @@ class RepoConfig:
     pr_description_template: str = ""
     parallelism: ParallelismConfig = field(default_factory=ParallelismConfig)
     # Inherited from project/global — merged at load time
-    jira: JiraConfig = field(default_factory=JiraConfig)
+    tracker: TrackerConfig = field(default_factory=TrackerConfig)
     telegram: TelegramConfig = field(default_factory=TelegramConfig)
     defaults: DefaultsConfig = field(default_factory=DefaultsConfig)
 

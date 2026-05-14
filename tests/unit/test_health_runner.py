@@ -16,7 +16,7 @@ def _make_project(company_id="acme", vcs_provider="github"):
     gitlab = SimpleNamespace(token="", url="", project_id="")
     vcs = SimpleNamespace(provider=vcs_provider, github=github, gitlab=gitlab)
     repo_cfg = SimpleNamespace(vcs=vcs)
-    config = SimpleNamespace(jira=jira)
+    config = SimpleNamespace(tracker=SimpleNamespace(jira=jira))
     return SimpleNamespace(config=config, repos={"acme-app": repo_cfg})
 
 

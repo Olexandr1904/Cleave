@@ -107,7 +107,7 @@ async def create_workspace_for_ticket(
     if tracker:
         try:
             await tracker.transition_ticket(
-                pt.ticket.id, repo_config.jira.statuses.in_progress,
+                pt.ticket.id, repo_config.tracker.jira.statuses.in_progress,
             )
         except Exception as e:
             logger.warning("Failed to transition %s: %s", pt.ticket.id, e)
@@ -139,7 +139,7 @@ async def create_workspace_for_ticket(
 
 async def poll_and_create_workspaces(
     *,
-    tracker: TrackerInterface,
+    trackers: dict[str, TrackerInterface],
     projects: dict[str, LoadedProject],
     active_workspaces: list[Workspace],
     global_config: GlobalConfig,
@@ -151,7 +151,7 @@ async def poll_and_create_workspaces(
     event_bus: Any | None,
     create_workspace_fn: Any = None,
 ) -> list[Workspace]:
-    """Poll tracker for new tickets and create workspaces.
+    """Poll each project's tracker for new tickets and create workspaces.
 
     Returns the newly created workspaces (caller appends to active list).
 
@@ -160,28 +160,28 @@ async def poll_and_create_workspaces(
     Tests inject a mock here via the Orchestrator shim so existing
     `_create_workspace_for_ticket` patches keep working.
     """
-    if create_workspace_fn is None:
-        async def create_workspace_fn(pt, project_id, repo_config):  # type: ignore[no-redef]
-            return await create_workspace_for_ticket(
-                pt, project_id, repo_config,
-                workspace_manager=workspace_manager,
-                tracker=tracker,
-                default_model_provider=default_model_provider,
-                repo_vcs=repo_vcs,
-                notifier=notifier,
-            )
-
     new_workspaces: list[Workspace] = []
 
     for project_id, project in projects.items():
-        jira_config = project.config.jira
-        if not jira_config.url:
+        tracker = trackers.get(project_id)
+        if tracker is None:
             continue
+
+        tracker_cfg = project.config.tracker
+        if tracker_cfg.provider == "jira":
+            trigger_labels = tracker_cfg.jira.trigger_labels
+            ignore_labels = tracker_cfg.jira.ignore_labels
+        else:  # trello (and any future provider — fall through)
+            trigger_labels = tracker_cfg.trello.trigger_labels
+            ignore_labels = tracker_cfg.trello.ignore_labels
 
         try:
             tickets = await tracker.poll_tickets()
         except Exception as e:
-            logger.error("Failed to poll tickets for %s: %s", project_id, e)
+            logger.error(
+                "Failed to poll tickets for %s (%s): %s",
+                project_id, tracker_cfg.provider, e,
+            )
             continue
 
         if not tickets:
@@ -190,8 +190,8 @@ async def poll_and_create_workspaces(
         # Filter, route to repos, then prioritize
         filtered = filter_tickets(
             tickets,
-            trigger_labels=jira_config.trigger_labels,
-            ignore_labels=jira_config.ignore_labels,
+            trigger_labels=trigger_labels,
+            ignore_labels=ignore_labels,
         )
         routed = route_tickets(filtered, project)
         prioritized = prioritize_tickets(routed)
@@ -205,6 +205,21 @@ async def poll_and_create_workspaces(
             1 for ws in new_workspaces
             if ws.state.company_id == project_id
         )
+
+        # Per-project create-workspace function captures the project's tracker
+        if create_workspace_fn is None:
+            async def _create(pt, pid, repo_cfg, _t=tracker):
+                return await create_workspace_for_ticket(
+                    pt, pid, repo_cfg,
+                    workspace_manager=workspace_manager,
+                    tracker=_t,
+                    default_model_provider=default_model_provider,
+                    repo_vcs=repo_vcs,
+                    notifier=notifier,
+                )
+            _project_create = _create
+        else:
+            _project_create = create_workspace_fn
 
         for pt in prioritized:
             if active_count >= max_parallel:
@@ -242,7 +257,7 @@ async def poll_and_create_workspaces(
                 continue
 
             try:
-                ws = await create_workspace_fn(pt, project_id, repo_config)
+                ws = await _project_create(pt, project_id, repo_config)
                 new_workspaces.append(ws)
                 active_count += 1
                 logger.info(
@@ -267,7 +282,7 @@ async def poll_and_create_workspaces(
 async def analyze_ticket_ids(
     ticket_ids: list[str],
     *,
-    tracker: TrackerInterface | None,
+    trackers: dict[str, TrackerInterface],
     projects: dict[str, LoadedProject],
     active_workspaces: list[Workspace],
     workspace_manager: WorkspaceManager,
@@ -277,73 +292,87 @@ async def analyze_ticket_ids(
     notifier: NotifierInterface | None = None,
     create_workspace_fn: Any = None,
 ) -> dict[str, list[str]]:
-    """Manually queue tickets for analysis (Telegram /analyze callback).
+    """Look up each ticket across all configured trackers (first-match wins),
+    filter out duplicates of already-active workspaces, then create workspaces
+    for the remainder.
 
-    Validates each ticket via AnalyzeHandler, skips duplicates, then
-    creates a workspace for each valid one by matching its labels to a
-    configured repo. Returns {"valid": [...], "invalid": [...]} where
-    invalid entries are "TICKET: reason" strings.
+    Returns a dict with keys 'valid' (list of ticket ids) and 'invalid'
+    (list of 'ticket_id: reason' strings).
 
     Mutates `active_workspaces` by appending newly created workspaces.
     """
     result: dict[str, list[str]] = {"valid": [], "invalid": []}
 
-    if not tracker:
+    if not trackers:
         for tid in ticket_ids:
             result["invalid"].append(f"{tid}: no tracker configured")
         return result
 
-    if create_workspace_fn is None:
-        async def create_workspace_fn(pt, project_id, repo_config):  # type: ignore[no-redef]
-            return await create_workspace_for_ticket(
-                pt, project_id, repo_config,
-                workspace_manager=workspace_manager,
-                tracker=tracker,
-                default_model_provider=default_model_provider,
-                repo_vcs=repo_vcs,
-                notifier=notifier,
-            )
-
-    handler = AnalyzeHandler(tracker)
-    validation = await handler.validate_tickets(ticket_ids)
-    result["invalid"].extend(validation.invalid)
-
-    for ticket in validation.valid:
-        if handler.is_already_active(ticket.id, active_workspaces):
-            result["invalid"].append(f"{ticket.id}: already active")
+    for tid in ticket_ids:
+        # Try each tracker; the first one to return a ticket wins.
+        found_ticket = None
+        found_tracker = None
+        for project_id, tracker in trackers.items():
+            try:
+                found_ticket = await tracker.get_ticket(tid)
+                found_tracker = tracker
+                break
+            except Exception:
+                continue
+        if found_ticket is None:
+            result["invalid"].append(f"{tid}: not found in any tracker")
             continue
 
-        pt = route_manual_ticket(ticket, projects)
+        handler = AnalyzeHandler(found_tracker)
+        if handler.is_already_active(found_ticket.id, active_workspaces):
+            result["invalid"].append(f"{found_ticket.id}: already active")
+            continue
+
+        pt = route_manual_ticket(found_ticket, projects)
         if not pt:
             result["invalid"].append(
-                f"{ticket.id}: no matching repo label in any project",
+                f"{found_ticket.id}: no matching repo label in any project",
             )
             continue
 
         project = projects.get(pt.project_id)
         if not project:
-            result["invalid"].append(f"{ticket.id}: project {pt.project_id} not loaded")
+            result["invalid"].append(f"{found_ticket.id}: project {pt.project_id} not loaded")
             continue
         repo_config = project.repos.get(pt.repo_id)
         if not repo_config:
-            result["invalid"].append(f"{ticket.id}: repo {pt.repo_id} not loaded")
+            result["invalid"].append(f"{found_ticket.id}: repo {pt.repo_id} not loaded")
             continue
 
+        if create_workspace_fn is None:
+            async def _create_ws(pt, pid, repo_cfg, _t=found_tracker):  # type: ignore[no-redef]
+                return await create_workspace_for_ticket(
+                    pt, pid, repo_cfg,
+                    workspace_manager=workspace_manager,
+                    tracker=_t,
+                    default_model_provider=default_model_provider,
+                    repo_vcs=repo_vcs,
+                    notifier=notifier,
+                )
+            _ticket_create = _create_ws
+        else:
+            _ticket_create = create_workspace_fn
+
         if dry_run:
-            logger.info("[DRY RUN] Would create manual workspace for %s", ticket.id)
-            result["valid"].append(ticket.id)
+            logger.info("[DRY RUN] Would create manual workspace for %s", found_ticket.id)
+            result["valid"].append(found_ticket.id)
             continue
 
         try:
-            ws = await create_workspace_fn(pt, pt.project_id, repo_config)
+            ws = await _ticket_create(pt, pt.project_id, repo_config)
             active_workspaces.append(ws)
-            result["valid"].append(ticket.id)
+            result["valid"].append(found_ticket.id)
             logger.info(
                 "Manually queued %s (%s/%s)",
-                ticket.id, pt.project_id, pt.repo_id,
+                found_ticket.id, pt.project_id, pt.repo_id,
             )
         except Exception as e:
-            logger.error("Manual workspace creation failed for %s: %s", ticket.id, e)
-            result["invalid"].append(f"{ticket.id}: {e}")
+            logger.error("Manual workspace creation failed for %s: %s", found_ticket.id, e)
+            result["invalid"].append(f"{found_ticket.id}: {e}")
 
     return result

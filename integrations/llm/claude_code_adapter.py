@@ -189,6 +189,10 @@ class ClaudeCodeAdapter(LLMInterface):
                 dump). One line per event so it's grep-friendly.
             raw_stream_path: If set, every raw line of the CLI's stream-json
                 stdout is teed here for forensic replay.
+            add_dirs: Additional directories the agent's tools may access
+                beyond cwd. Passed as --add-dir flags to the CLI. Used to
+                expose meta/ (ticket attachments, comments), a sibling of
+                the source/ cwd.
 
         Returns:
             LLMResponse with the final text output and usage stats.

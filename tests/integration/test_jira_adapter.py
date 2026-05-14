@@ -262,3 +262,42 @@ async def test_list_transitions_returns_to_names() -> None:
     with patch.object(adapter, "_request", AsyncMock(return_value=raw)):
         names = await adapter.list_transitions("PROJ-1")
     assert names == ["In Review", "To Do", "Close"]
+
+
+def test_extract_adf_text_preserves_media_reference() -> None:
+    """A pasted image in an ADF body becomes an [image: name] placeholder
+    so the agent knows the comment has a visual to inspect."""
+    from integrations.jira.jira_adapter import _extract_adf_text
+
+    adf = {
+        "type": "doc", "version": 1,
+        "content": [
+            {"type": "paragraph", "content": [
+                {"type": "text", "text": "See the crash below"},
+            ]},
+            {"type": "mediaSingle", "content": [
+                {"type": "media", "attrs": {
+                    "type": "file", "id": "abc-123",
+                    "collection": "x", "alt": "crash-screenshot.png",
+                }},
+            ]},
+        ],
+    }
+    text = _extract_adf_text(adf)
+    assert "See the crash below" in text
+    assert "[image: crash-screenshot.png]" in text
+
+
+def test_extract_adf_text_media_falls_back_to_id() -> None:
+    """When a media node has no alt filename, fall back to its id."""
+    from integrations.jira.jira_adapter import _extract_adf_text
+
+    adf = {
+        "type": "doc", "version": 1,
+        "content": [
+            {"type": "mediaSingle", "content": [
+                {"type": "media", "attrs": {"type": "file", "id": "uuid-9"}},
+            ]},
+        ],
+    }
+    assert "[image: uuid-9]" in _extract_adf_text(adf)

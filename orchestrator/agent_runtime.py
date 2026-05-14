@@ -225,9 +225,9 @@ class AgentRuntime:
         # 3. Workspace context files (read from meta_dir)
         # Note: pipeline reports live at source/ai_pipeline/<ticket>/ — agents
         # read them directly via tools, not via this context block.
-        # Ticket attachments are included from meta_dir/attachments/ — text
-        # files (crash logs, JSON, source) are inlined; binaries (images)
-        # raise UnicodeDecodeError on read and are silently skipped.
+        # Small text meta files (ticket.md, comments.md, ...) are inlined here.
+        # Attachments are NOT inlined — see step 3b: a truncated crash log is
+        # noise and images are not text. They go in a manifest instead.
         context_sections: list[str] = []
         context_dir = workspace.meta_dir
         total_bytes = 0
@@ -241,11 +241,18 @@ class AgentRuntime:
                 file_content = path.read_text(encoding="utf-8")
             except (UnicodeDecodeError, OSError):
                 return True  # skip this file but keep going
+            truncated = False
             if len(file_content) > _PER_FILE_CONTEXT_BYTES:
-                file_content = file_content[:_PER_FILE_CONTEXT_BYTES] + "\n...(truncated)"
+                file_content = file_content[:_PER_FILE_CONTEXT_BYTES]
+                truncated = True
             remaining = _TOTAL_CONTEXT_BYTES - total_bytes
             if len(file_content) > remaining:
-                file_content = file_content[:remaining] + "\n...(budget exhausted)"
+                file_content = file_content[:remaining]
+                truncated = True
+            if truncated:
+                # Point the agent at the full file — it can read the rest with
+                # its tools (meta_dir is passed via --add-dir).
+                file_content += f"\n...(truncated — full file at {path})"
             context_sections.append(
                 f"<context file=\"{label}\">\n{file_content}\n</context>"
             )
@@ -262,24 +269,15 @@ class AgentRuntime:
                         _TOTAL_CONTEXT_BYTES, context_dir,
                     )
                     break
-            attachments_dir = context_dir / "attachments"
-            if (
-                total_bytes < _TOTAL_CONTEXT_BYTES
-                and attachments_dir.exists()
-                and attachments_dir.is_dir()
-            ):
-                for att_file in sorted(attachments_dir.iterdir()):
-                    if not att_file.is_file():
-                        continue
-                    if not _include(att_file, f"attachments/{att_file.name}"):
-                        logger.warning(
-                            "Context budget %d B exhausted; skipping remaining attachments in %s",
-                            _TOTAL_CONTEXT_BYTES, attachments_dir,
-                        )
-                        break
 
         if context_sections:
             prompt_body += "\n\n## Workspace Context\n\n" + "\n\n".join(context_sections)
+
+        # 3b. Attachments manifest — absolute paths, not inlined bytes. The
+        # agent reads these itself; meta_dir is reachable via --add-dir.
+        manifest = _build_attachments_manifest(context_dir / "attachments")
+        if manifest:
+            prompt_body += "\n\n" + manifest
 
         # 4. Operator profile
         if self._operator_profile:
@@ -700,6 +698,38 @@ class AgentRuntime:
                 f"tool_rounds={result.tool_rounds} "
                 f"duration={result.duration_seconds:.1f}s\n"
             )
+
+
+def _build_attachments_manifest(attachments_dir: Path) -> str:
+    """Build a manifest of ticket attachments for the agent prompt.
+
+    Lists each file's absolute path, size, and type (text/image). The agent
+    reads them with its own tools — large crash logs truncate to noise if
+    inlined, and images are not text. Returns "" when there are none.
+    """
+    if not attachments_dir.is_dir():
+        return ""
+    entries: list[str] = []
+    for att in sorted(attachments_dir.iterdir()):
+        if not att.is_file():
+            continue
+        try:
+            att.read_text(encoding="utf-8")
+            kind = "text"
+        except (UnicodeDecodeError, OSError):
+            kind = "image"
+        size_kb = max(1, att.stat().st_size // 1024)
+        entries.append(f"- {att} ({size_kb} KB, {kind})")
+    if not entries:
+        return ""
+    return (
+        "## Ticket Attachments\n\n"
+        "These files are attached to the ticket and available on disk at the "
+        "paths below. Read them with your tools — use Read for images and "
+        "short text, Grep to search large logs. Crash logs and screenshots "
+        "often contain the root cause; inspect them before analyzing code.\n\n"
+        + "\n".join(entries)
+    )
 
 
 HARD_SAFETY_RULES = """

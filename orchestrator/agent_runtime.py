@@ -474,6 +474,7 @@ class AgentRuntime:
                 adapter.execute_in_workspace(
                     prompt=prompt,
                     cwd=str(workspace.source_dir),
+                    add_dirs=[str(workspace.meta_dir)],
                     allowed_tools=allowed_tools if allowed_tools else None,
                     model=model,
                     max_turns=budget.max_cli_turns,

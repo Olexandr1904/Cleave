@@ -378,6 +378,7 @@ class ClaudeCodeAdapter(LLMInterface):
             _post_result_watchdog(
                 progress, progress_log_path, stop_event, kill_signal,
                 grace_seconds=POST_RESULT_IDLE_GRACE_SECONDS,
+                idle_stall_seconds=IDLE_STALL_SECONDS,
             )
         )
         stdout_task = asyncio.create_task(
@@ -393,6 +394,7 @@ class ClaudeCodeAdapter(LLMInterface):
         kill_waiter = asyncio.create_task(kill_signal.wait())
         timed_out = False
         graceful_idle = False
+        stalled = False
         try:
             # Race three terminations: proc exits naturally, watchdog
             # signals post-result idle, or the wall-clock cap fires.
@@ -402,7 +404,13 @@ class ClaudeCodeAdapter(LLMInterface):
                 return_when=asyncio.FIRST_COMPLETED,
             )
             if kill_waiter in done:
-                graceful_idle = True
+                # Watchdog fired. A cached result event means post-result
+                # idle (graceful — we have the output); none means the run
+                # stalled mid-flight and there is nothing to salvage.
+                if progress.last_result_at is not None:
+                    graceful_idle = True
+                else:
+                    stalled = True
             elif wait_proc in done:
                 pass  # natural exit
             else:
@@ -418,7 +426,9 @@ class ClaudeCodeAdapter(LLMInterface):
                 except (asyncio.TimeoutError, Exception):
                     bg_task.cancel()
 
-            need_kill = (graceful_idle or timed_out) and proc.returncode is None
+            need_kill = (
+                graceful_idle or stalled or timed_out
+            ) and proc.returncode is None
             if need_kill:
                 if graceful_idle:
                     _write_progress(
@@ -428,6 +438,17 @@ class ClaudeCodeAdapter(LLMInterface):
                         f"turns_seen={progress.turns} tool_calls_seen={progress.tool_calls} "
                         f"events={progress.events_seen} "
                         f"last_event={progress.last_event_kind!r} "
+                        f"since_last_event={progress.since_last_activity():.1f}s",
+                    )
+                elif stalled:
+                    _write_progress(
+                        progress_log_path,
+                        f"stall kill: no result event, idle exceeded "
+                        f"{IDLE_STALL_SECONDS}s. "
+                        f"turns_seen={progress.turns} tool_calls_seen={progress.tool_calls} "
+                        f"events={progress.events_seen} "
+                        f"last_event={progress.last_event_kind!r} "
+                        f"last_tool={progress.last_tool!r} "
                         f"since_last_event={progress.since_last_activity():.1f}s",
                     )
                 else:
@@ -475,6 +496,18 @@ class ClaudeCodeAdapter(LLMInterface):
                 f"stderr_tail_chars={len(stderr_str)}",
             )
             raise RuntimeError(f"Claude Code CLI timed out after {timeout}s")
+
+        if stalled:
+            _write_progress(
+                progress_log_path,
+                f"end status=stalled duration={progress.elapsed():.1f}s "
+                f"last_tool={progress.last_tool!r} "
+                f"stderr_tail_chars={len(stderr_str)}",
+            )
+            raise RuntimeError(
+                f"Claude Code CLI stalled: no activity for >{IDLE_STALL_SECONDS}s "
+                f"with no result event (last_tool={progress.last_tool!r})"
+            )
 
         # Subprocess exited; capture rc.
         rc = proc.returncode if proc.returncode is not None else -1
@@ -597,6 +630,14 @@ HEARTBEAT_INTERVAL_SECONDS = 30
 # then terminate. Turns a 4 h timeout into a ~10 min graceful exit.
 POST_RESULT_IDLE_GRACE_SECONDS = 600
 
+# Before any `result` event, if no event arrives within this many seconds the
+# run is stalled mid-flight and we force-kill it. Why: observed on RTL-13824 —
+# the CLI issued a tool call and hung with no terminal `result`, so the
+# post-result watchdog never engaged and the run coasted until the wall-clock
+# cap. Sits well above the longest legitimate intra-run gap (8m 23s gradle
+# poll) so a long tool call is not mistaken for a stall.
+IDLE_STALL_SECONDS = 1800
+
 # How often the watchdog checks the grace condition. Cheap poll.
 _WATCHDOG_POLL_SECONDS = 5
 
@@ -693,15 +734,20 @@ async def _post_result_watchdog(
     stop: asyncio.Event,
     kill_signal: asyncio.Event,
     grace_seconds: int = POST_RESULT_IDLE_GRACE_SECONDS,
+    idle_stall_seconds: int = IDLE_STALL_SECONDS,
 ) -> None:
-    """Set `kill_signal` when the CLI has gone idle after emitting a result.
+    """Set `kill_signal` when the CLI has gone idle, in two cases.
 
-    The trigger is `result_seen AND since_last_event > grace_seconds`. Any
-    new event (assistant turn, tool call, another result) resets the idle
-    timer via `progress.last_event_at`, so this only fires when the model
-    has truly stopped producing output. Catches the documented hang where
-    `claude -p --output-format stream-json` emits a terminal `result`
-    event but the subprocess never exits.
+    Post-result idle: `result_seen AND since_last_event > grace_seconds` —
+    the model finished but the subprocess never exited; we have the cached
+    result so this is a graceful kill.
+
+    Mid-run stall: `NOT result_seen AND since_last_event > idle_stall_seconds`
+    — the run hung before producing any result (RTL-13824); the caller treats
+    this as a failure, not a success, since there is nothing cached.
+
+    Any new event resets the idle timer via `progress.last_event_at`, so
+    neither branch fires while the model is still producing output.
     """
     while not stop.is_set():
         try:
@@ -709,15 +755,26 @@ async def _post_result_watchdog(
             return  # stop fired
         except asyncio.TimeoutError:
             pass
-        if progress.last_result_at is None:
-            continue
-        if progress.since_last_activity() >= grace_seconds:
+        idle = progress.since_last_activity()
+        if progress.last_result_at is not None:
+            if idle >= grace_seconds:
+                _write_progress(
+                    log_path,
+                    f"post_result_grace exceeded ({grace_seconds}s); "
+                    f"last_event={progress.last_event_kind!r} "
+                    f"events={progress.events_seen} turns={progress.turns}; "
+                    f"signalling graceful kill",
+                )
+                kill_signal.set()
+                return
+        elif idle >= idle_stall_seconds:
             _write_progress(
                 log_path,
-                f"post_result_grace exceeded ({grace_seconds}s); "
+                f"idle_stall exceeded ({idle_stall_seconds}s); no result event seen; "
                 f"last_event={progress.last_event_kind!r} "
+                f"last_tool={progress.last_tool!r} "
                 f"events={progress.events_seen} turns={progress.turns}; "
-                f"signalling graceful kill",
+                f"signalling stall kill",
             )
             kill_signal.set()
             return

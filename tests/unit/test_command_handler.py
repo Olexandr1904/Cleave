@@ -284,11 +284,43 @@ def test_set_tracker_attaches_after_init():
         allowed_chat_ids=None,
         event_bus=None,
     )
-    assert handler._tracker is None
+    assert handler._get_trackers() == {}
 
     new_tracker = MagicMock()
     handler.set_tracker(new_tracker)
-    assert handler._tracker is new_tracker
+    # Resolver should return the tracker wrapped under _legacy key
+    assert handler._get_trackers() == {"_legacy": new_tracker}
+
+
+def test_set_trackers_resolver():
+    from unittest.mock import MagicMock
+    from integrations.telegram.command_handler import CommandHandler
+
+    t1 = MagicMock()
+    t2 = MagicMock()
+    handler = CommandHandler(
+        intent_parser=MagicMock(),
+        notifier=MagicMock(),
+        mode_handler=MagicMock(),
+        active_workspaces_fn=lambda: [],
+    )
+    handler.set_trackers_resolver(lambda: {"p1": t1, "p2": t2})
+    assert handler._get_trackers() == {"p1": t1, "p2": t2}
+
+
+def test_get_trackers_kwarg():
+    from unittest.mock import MagicMock
+    from integrations.telegram.command_handler import CommandHandler
+
+    t1 = MagicMock()
+    handler = CommandHandler(
+        intent_parser=MagicMock(),
+        notifier=MagicMock(),
+        mode_handler=MagicMock(),
+        active_workspaces_fn=lambda: [],
+        get_trackers=lambda: {"proj": t1},
+    )
+    assert handler._get_trackers() == {"proj": t1}
 
 
 def test_add_allowed_chat_id_admits_new_chat():

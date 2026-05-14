@@ -33,6 +33,16 @@ def _require_slug(errors: dict[str, str], value: Any, path: str) -> None:
 
 
 def validate_payload(payload: dict[str, Any]) -> None:
+    """Validate a project-create payload.
+
+    Raises PayloadValidationError with a dict of field-path → reason if any
+    required fields are missing or values are invalid.
+
+    Mutates `payload` in place when a legacy top-level `jira:` key is present
+    and no `tracker:` key exists — lifting `payload["jira"]` into
+    `payload["tracker"]["jira"]` with `provider="jira"`. Callers expecting a
+    pure check should validate a copy.
+    """
     errors: dict[str, str] = {}
 
     identity = payload.get("identity") or {}
@@ -43,25 +53,48 @@ def validate_payload(payload: dict[str, Any]) -> None:
     _require_slug(errors, rid, "identity.repo_id")
     _require(errors, identity, "repo_display_name", "identity.repo_display_name")
 
-    jira = payload.get("jira") or {}
-    _require(errors, jira, "url", "jira.url")
-    _require(errors, jira, "project_key", "jira.project_key")
-    _require(errors, jira, "email", "jira.email")
-    _require(errors, jira, "token", "jira.token")
-    labels = jira.get("trigger_labels")
-    if not isinstance(labels, list) or len(labels) == 0:
-        errors["jira.trigger_labels"] = "must be a non-empty list"
+    # Back-compat shim: lift legacy top-level `jira:` to `tracker.jira`.
+    tracker = payload.get("tracker")
+    legacy_jira = payload.get("jira")
+    if tracker is None and legacy_jira is not None:
+        tracker = {"provider": "jira", "jira": legacy_jira}
+        payload["tracker"] = tracker
+    tracker = tracker or {}
+    provider = tracker.get("provider")
+    if provider == "jira":
+        j = tracker.get("jira") or {}
+        _require(errors, j, "url", "tracker.jira.url")
+        _require(errors, j, "project_key", "tracker.jira.project_key")
+        _require(errors, j, "email", "tracker.jira.email")
+        _require(errors, j, "token", "tracker.jira.token")
+        labels = j.get("trigger_labels")
+        if not isinstance(labels, list) or not labels:
+            errors["tracker.jira.trigger_labels"] = "must be a non-empty list"
+    elif provider == "trello":
+        t = tracker.get("trello") or {}
+        _require(errors, t, "api_key", "tracker.trello.api_key")
+        _require(errors, t, "token", "tracker.trello.token")
+        _require(errors, t, "board_id", "tracker.trello.board_id")
+        labels = t.get("trigger_labels")
+        if not isinstance(labels, list) or not labels:
+            errors["tracker.trello.trigger_labels"] = "must be a non-empty list"
+        lists = t.get("lists") or {}
+        for k in ("todo", "in_progress", "in_review", "done"):
+            if not lists.get(k):
+                errors[f"tracker.trello.lists.{k}"] = "required"
+    else:
+        errors["tracker.provider"] = "must be 'jira' or 'trello'"
 
     vcs = payload.get("vcs") or {}
-    provider = vcs.get("provider")
-    if provider not in VCS_PROVIDERS:
+    provider_vcs = vcs.get("provider")
+    if provider_vcs not in VCS_PROVIDERS:
         errors["vcs.provider"] = f"must be one of {sorted(VCS_PROVIDERS)}"
-    elif provider == "github":
+    elif provider_vcs == "github":
         gh = vcs.get("github") or {}
         _require(errors, gh, "owner", "vcs.github.owner")
         _require(errors, gh, "repo", "vcs.github.repo")
         _require(errors, gh, "token", "vcs.github.token")
-    elif provider == "gitlab":
+    elif provider_vcs == "gitlab":
         gl = vcs.get("gitlab") or {}
         _require(errors, gl, "url", "vcs.gitlab.url")
         _require(errors, gl, "project_id", "vcs.gitlab.project_id")
@@ -74,12 +107,18 @@ def validate_payload(payload: dict[str, Any]) -> None:
 def derive_env_vars(payload: dict[str, Any]) -> dict[str, str]:
     project_id = payload["identity"]["project_id"]
     prefix = project_id.upper().replace("-", "_")
-    vars: dict[str, str] = {
-        f"{prefix}_JIRA_TOKEN": payload["jira"]["token"],
-    }
+    vars: dict[str, str] = {}
+
+    tracker = payload.get("tracker") or {}
+    provider = tracker.get("provider")
+    if provider == "jira":
+        vars[f"{prefix}_JIRA_TOKEN"] = tracker["jira"]["token"]
+    elif provider == "trello":
+        vars[f"{prefix}_TRELLO_KEY"] = tracker["trello"]["api_key"]
+        vars[f"{prefix}_TRELLO_TOKEN"] = tracker["trello"]["token"]
+
     vcs = payload["vcs"]
-    provider = vcs["provider"]
-    if provider == "github":
+    if vcs["provider"] == "github":
         vars[f"{prefix}_GITHUB_TOKEN"] = vcs["github"]["token"]
     else:
         vars[f"{prefix}_GITLAB_TOKEN"] = vcs["gitlab"]["token"]
@@ -95,7 +134,6 @@ def redact_to_input_md(payload: dict[str, Any]) -> str:
     project_id = payload["identity"]["project_id"]
     prefix = project_id.upper().replace("-", "_")
     identity = payload["identity"]
-    jira = payload["jira"]
     vcs = payload["vcs"]
     quality = payload.get("quality") or {}
     extras = payload.get("extras") or {}
@@ -106,20 +144,35 @@ def redact_to_input_md(payload: dict[str, Any]) -> str:
     lines.append(f"- repo_id: {identity['repo_id']}")
     lines.append(f"- repo_display_name: {identity['repo_display_name']}")
 
-    lines += ["", "## Jira"]
-    lines.append(f"- url: {jira['url']}")
-    lines.append(f"- project_key: {jira['project_key']}")
-    lines.append(f"- email: {jira['email']}")
-    lines.append(f"- token_var: {prefix}_JIRA_TOKEN")
-    labels = jira["trigger_labels"]
-    lines.append("- trigger_labels: [" + ", ".join(labels) + "]")
-    repo_label = labels[-1] if len(labels) > 1 else labels[0] if labels else ""
-    lines.append(f"- tracker_label: {repo_label}  # use this as tracker_label in repo YAML")
-    lines.append(
-        "- ignore_labels: [" + ", ".join(jira.get("ignore_labels") or []) + "]"
-    )
-    statuses = jira.get("statuses") or {}
-    lines.append(f"- statuses: {statuses}")
+    lines += ["", "## Tracker"]
+    tracker = payload.get("tracker") or {}
+    provider = tracker.get("provider", "")
+    lines.append(f"- provider: {provider}")
+    if provider == "jira":
+        j = tracker["jira"]
+        lines.append(f"- url: {j['url']}")
+        lines.append(f"- project_key: {j['project_key']}")
+        lines.append(f"- email: {j['email']}")
+        lines.append(f"- token_var: {prefix}_JIRA_TOKEN")
+        labels = j["trigger_labels"]
+        lines.append("- trigger_labels: [" + ", ".join(labels) + "]")
+        repo_label = labels[-1] if len(labels) > 1 else (labels[0] if labels else "")
+        lines.append(f"- tracker_repo_label: {repo_label}")
+        lines.append("- ignore_labels: [" + ", ".join(j.get("ignore_labels") or []) + "]")
+        statuses = j.get("statuses") or {}
+        lines.append(f"- statuses: {statuses}")
+    elif provider == "trello":
+        t = tracker["trello"]
+        lines.append(f"- board_id: {t['board_id']}")
+        lines.append(f"- api_key_var: {prefix}_TRELLO_KEY")
+        lines.append(f"- token_var: {prefix}_TRELLO_TOKEN")
+        labels = t["trigger_labels"]
+        lines.append("- trigger_labels: [" + ", ".join(labels) + "]")
+        repo_label = labels[-1] if len(labels) > 1 else (labels[0] if labels else "")
+        lines.append(f"- tracker_repo_label: {repo_label}")
+        lines.append("- ignore_labels: [" + ", ".join(t.get("ignore_labels") or []) + "]")
+        lists = t.get("lists") or {}
+        lines.append(f"- lists: {lists}")
 
     lines += ["", "## VCS"]
     provider = vcs["provider"]

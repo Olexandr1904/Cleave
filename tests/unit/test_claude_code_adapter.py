@@ -4,12 +4,18 @@ from __future__ import annotations
 
 import asyncio
 import json
+import time
 from datetime import datetime, timezone
 from unittest.mock import AsyncMock, patch, MagicMock
 
 import pytest
 
-from integrations.llm.claude_code_adapter import ClaudeCodeAdapter, QuotaExhaustedError
+from integrations.llm.claude_code_adapter import (
+    ClaudeCodeAdapter,
+    QuotaExhaustedError,
+    _post_result_watchdog,
+    _ProgressState,
+)
 
 
 def _make_streaming_proc(stdout_lines, stderr_lines, rc):
@@ -42,6 +48,47 @@ def _make_streaming_proc(stdout_lines, stderr_lines, rc):
 
     proc.wait = AsyncMock(return_value=rc)
     proc.kill = MagicMock()
+    return proc
+
+
+def _make_hanging_proc():
+    """A fake subprocess that emits nothing and never exits until `.kill()`.
+
+    Models the RTL-13824 hang: the CLI produced no `result` event and the
+    process sat idle. stdout/stderr/wait all block on a shared event that
+    `.kill()` sets, so the run only ends once the watchdog force-kills it.
+    """
+    proc = MagicMock()
+    proc.pid = 12345
+    proc.returncode = None
+
+    proc.stdin = MagicMock()
+    proc.stdin.write = MagicMock()
+    proc.stdin.drain = AsyncMock()
+    proc.stdin.close = MagicMock()
+
+    killed = asyncio.Event()
+
+    async def _hang():
+        await killed.wait()
+        return b""
+
+    proc.stdout = MagicMock()
+    proc.stdout.readline = AsyncMock(side_effect=_hang)
+    proc.stderr = MagicMock()
+    proc.stderr.readline = AsyncMock(side_effect=_hang)
+
+    async def _wait():
+        await killed.wait()
+        return proc.returncode if proc.returncode is not None else -9
+
+    proc.wait = AsyncMock(side_effect=_wait)
+
+    def _kill():
+        proc.returncode = -9
+        killed.set()
+
+    proc.kill = MagicMock(side_effect=_kill)
     return proc
 
 
@@ -191,3 +238,137 @@ class TestRunCliQuotaRaises:
                     prompt="test", cwd="/tmp", allowed_tools=["read_file"],
                 )
         assert not isinstance(exc_info.value, QuotaExhaustedError)
+
+
+class TestWatchdogIdleStall:
+    """The watchdog must catch mid-run stalls, not only post-result idle."""
+
+    async def test_kills_on_midrun_stall_without_result(self):
+        # Agent issued a tool call and the CLI hung — no `result` event ever
+        # arrived, so `last_result_at` stays None. This is the RTL-13824 hang.
+        progress = _ProgressState()
+        progress.last_event_at = time.monotonic() - 10_000
+        assert progress.last_result_at is None
+        stop = asyncio.Event()
+        kill_signal = asyncio.Event()
+
+        with patch(
+            "integrations.llm.claude_code_adapter._WATCHDOG_POLL_SECONDS", 0.01
+        ):
+            await asyncio.wait_for(
+                _post_result_watchdog(
+                    progress, None, stop, kill_signal,
+                    grace_seconds=600, idle_stall_seconds=1,
+                ),
+                timeout=2,
+            )
+        assert kill_signal.is_set()
+
+    async def test_does_not_kill_active_run(self):
+        # Recent activity, no result event — a healthy mid-run state.
+        progress = _ProgressState()
+        progress.last_event_at = time.monotonic()
+        stop = asyncio.Event()
+        kill_signal = asyncio.Event()
+
+        async def _stopper():
+            await asyncio.sleep(0.1)
+            stop.set()
+
+        with patch(
+            "integrations.llm.claude_code_adapter._WATCHDOG_POLL_SECONDS", 0.01
+        ):
+            await asyncio.gather(
+                _post_result_watchdog(
+                    progress, None, stop, kill_signal,
+                    grace_seconds=600, idle_stall_seconds=1,
+                ),
+                _stopper(),
+            )
+        assert not kill_signal.is_set()
+
+    async def test_still_kills_on_post_result_idle(self):
+        # Regression guard: the original post-result idle path keeps working.
+        progress = _ProgressState()
+        progress.last_result_at = time.monotonic() - 10_000
+        progress.last_event_at = time.monotonic() - 10_000
+        stop = asyncio.Event()
+        kill_signal = asyncio.Event()
+
+        with patch(
+            "integrations.llm.claude_code_adapter._WATCHDOG_POLL_SECONDS", 0.01
+        ):
+            await asyncio.wait_for(
+                _post_result_watchdog(
+                    progress, None, stop, kill_signal,
+                    grace_seconds=1, idle_stall_seconds=999_999,
+                ),
+                timeout=2,
+            )
+        assert kill_signal.is_set()
+
+    async def test_midrun_stall_raises_instead_of_silent_success(self):
+        # A hung run with no `result` event must surface as a RuntimeError,
+        # not a silent empty success — otherwise the orchestrator records a
+        # stalled agent as completed and the ticket never gets retried.
+        adapter = ClaudeCodeAdapter(model_provider=lambda: "claude-sonnet-4-5")
+        proc = _make_hanging_proc()
+
+        with patch("asyncio.create_subprocess_exec", return_value=proc), \
+             patch("integrations.llm.claude_code_adapter.IDLE_STALL_SECONDS", 0.05), \
+             patch(
+                 "integrations.llm.claude_code_adapter._WATCHDOG_POLL_SECONDS", 0.01
+             ), \
+             patch("os.killpg", side_effect=ProcessLookupError):
+            with pytest.raises(RuntimeError) as exc_info:
+                await asyncio.wait_for(
+                    adapter.execute_in_workspace(
+                        prompt="test", cwd="/tmp", allowed_tools=["read_file"],
+                    ),
+                    timeout=5,
+                )
+        assert "stall" in str(exc_info.value).lower()
+        assert proc.kill.called
+
+
+class TestAddDir:
+    @pytest.fixture
+    def adapter(self):
+        return ClaudeCodeAdapter(model_provider=lambda: "claude-sonnet-4-5")
+
+    async def test_add_dirs_appended_to_cli_command(self, adapter):
+        """add_dirs are passed through as --add-dir flags so the agent's
+        tools can read directories outside its cwd (e.g. meta/)."""
+        result_event = json.dumps({
+            "type": "result", "subtype": "success", "is_error": False,
+            "result": "done",
+            "usage": {"input_tokens": 10, "output_tokens": 5},
+        }).encode()
+        mock_proc = _make_streaming_proc([result_event], [], rc=0)
+
+        with patch("asyncio.create_subprocess_exec", return_value=mock_proc) as mock_exec:
+            await adapter.execute_in_workspace(
+                prompt="test", cwd="/tmp/ws/source",
+                allowed_tools=["read_file"],
+                add_dirs=["/tmp/ws/meta"],
+            )
+        cmd_list = list(mock_exec.call_args[0])
+        assert "--add-dir" in cmd_list
+        idx = cmd_list.index("--add-dir")
+        assert cmd_list[idx + 1] == "/tmp/ws/meta"
+
+    async def test_no_add_dir_flag_when_add_dirs_omitted(self, adapter):
+        """Without add_dirs the flag must not appear — keeps default runs clean."""
+        result_event = json.dumps({
+            "type": "result", "subtype": "success", "is_error": False,
+            "result": "done",
+            "usage": {"input_tokens": 10, "output_tokens": 5},
+        }).encode()
+        mock_proc = _make_streaming_proc([result_event], [], rc=0)
+
+        with patch("asyncio.create_subprocess_exec", return_value=mock_proc) as mock_exec:
+            await adapter.execute_in_workspace(
+                prompt="test", cwd="/tmp/ws/source",
+                allowed_tools=["read_file"],
+            )
+        assert "--add-dir" not in list(mock_exec.call_args[0])

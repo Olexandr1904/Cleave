@@ -2,7 +2,7 @@ import { createProject, validateStep } from './api.js';
 
 const stepDefs = [
   { id: 'identity', title: 'Project' },
-  { id: 'jira',     title: 'Jira' },
+  { id: 'tracker',  title: 'Tracker' },
   { id: 'vcs',      title: 'Repository' },
   { id: 'extras',   title: 'Notifications' },
   { id: 'review',   title: 'Review' },
@@ -12,14 +12,25 @@ const state = {
   step: 0,
   data: {
     identity: {},
-    jira: { statuses: { todo: 'To Do', in_progress: 'In Progress', in_review: 'In Review', done: 'Done' }, trigger_labels: [], ignore_labels: [] },
+    tracker: {
+      provider: 'jira',
+      jira: {
+        statuses: { todo: 'To Do', in_progress: 'In Progress', in_review: 'In Review', done: 'Done' },
+        trigger_labels: [], ignore_labels: [],
+      },
+      trello: {
+        trigger_labels: [], ignore_labels: [],
+        lists: { todo: '', in_progress: '', in_review: '', done: '' },
+        _detected_lists: [],
+      },
+    },
     vcs: { provider: 'github', github: { default_branch: 'develop', branch_prefix: 'feature', merge_method: 'squash' }, gitlab: {} },
     quality: { lint: {hard_gate: true}, test: {hard_gate: true}, build: {hard_gate: true} },
     extras: { protected_files: [] },
   },
   errors: {},
   running: null,
-  validated: { jira: false, vcs: false, telegram: false },
+  validated: { tracker: false, vcs: false, telegram: false },
 };
 
 let els;
@@ -98,10 +109,18 @@ async function onNext() {
     return;
   }
   // Block steps that require live validation
-  if (def.id === 'jira' && !state.validated.jira) {
-    state.errors = { _check: 'Click "Check Jira connection" and fix any errors before proceeding' };
+  if (def.id === 'tracker' && !state.validated.tracker) {
+    state.errors = { _check: 'Click "Check connection" and fix any errors before proceeding' };
     render();
     return;
+  }
+  if (def.id === 'tracker' && state.data.tracker.provider === 'trello') {
+    const lists = state.data.tracker.trello.lists;
+    if (!lists.todo || !lists.in_progress || !lists.in_review || !lists.done) {
+      state.errors = { _check: 'Pick a Trello list for each status before proceeding' };
+      render();
+      return;
+    }
   }
   if (def.id === 'vcs' && !state.validated.vcs) {
     state.errors = { _check: 'Click "Check repository access" before proceeding' };
@@ -161,6 +180,175 @@ function mountChipInput(container, values, onChange) {
   container.appendChild(wrap);
 }
 
+function renderJiraFields(container, d, e) {
+  const urlClean = (v) => { const m = v.match(/^(https?:\/\/[^/]+)/); return m ? m[1] : v; };
+  container.innerHTML = `
+    <h4>Jira</h4>
+    <div class="form-field">
+      <label>Jira URL</label>
+      <input id="f-jira-url" value="${d.url || ''}" placeholder="https://yourteam.atlassian.net" />
+      <small class="hint">Just the base URL — board/project path is stripped automatically</small>
+      ${e.url ? `<span class="error">${e.url}</span>` : ''}
+    </div>
+    <div class="form-field"><label>Project key</label><input id="f-jira-key" value="${d.project_key || ''}" placeholder="e.g. PROJ, ACME" />${e.project_key ? `<span class="error">${e.project_key}</span>` : ''}</div>
+    <div class="form-field"><label>Email</label><input id="f-jira-email" value="${d.email || ''}" placeholder="your-bot@company.com" /></div>
+    <div class="form-field"><label>API token</label><input type="password" id="f-jira-token" value="${d.token || ''}" placeholder="From id.atlassian.com/manage/api-tokens" />${e.token ? `<span class="error">${e.token}</span>` : ''}</div>
+    <div class="form-field">
+      <label>Trigger labels <small class="hint">comma-separated — ticket must have ALL of these</small></label>
+      <input id="f-jira-labels" value="${(d.trigger_labels || []).join(', ')}" placeholder="ai-pipeline, your-repo-label" />
+      ${e.trigger_labels ? `<span class="error">${e.trigger_labels}</span>` : ''}
+    </div>
+    <div class="form-field">
+      <label>Ignore labels <small class="hint">comma-separated — tickets with any of these are skipped</small></label>
+      <input id="f-jira-ignore" value="${(d.ignore_labels || []).join(', ')}" placeholder="on-hold, manual-only" />
+    </div>
+    <div class="form-field">
+      <button id="f-jira-check" class="btn-check" type="button">Check Jira connection</button>
+      <div id="f-jira-check-result"></div>
+    </div>
+  `;
+  container.querySelector('#f-jira-url').oninput = (ev) => d.url = urlClean(ev.target.value);
+  container.querySelector('#f-jira-url').onblur = (ev) => { d.url = urlClean(ev.target.value); ev.target.value = d.url; };
+  container.querySelector('#f-jira-key').oninput = (ev) => d.project_key = ev.target.value.toUpperCase();
+  container.querySelector('#f-jira-email').oninput = (ev) => d.email = ev.target.value;
+  container.querySelector('#f-jira-token').oninput = (ev) => d.token = ev.target.value;
+  container.querySelector('#f-jira-labels').oninput = (ev) => d.trigger_labels = ev.target.value.split(',').map(s => s.trim()).filter(Boolean);
+  container.querySelector('#f-jira-ignore').oninput = (ev) => d.ignore_labels = ev.target.value.split(',').map(s => s.trim()).filter(Boolean);
+  const jiraInvalidate = () => { state.validated.tracker = false; };
+  for (const id of ['#f-jira-url', '#f-jira-key', '#f-jira-email', '#f-jira-token']) {
+    const el = container.querySelector(id);
+    if (el) el.addEventListener('input', jiraInvalidate);
+  }
+  container.querySelector('#f-jira-check').onclick = async () => {
+    const btn = container.querySelector('#f-jira-check');
+    const res_el = container.querySelector('#f-jira-check-result');
+    btn.disabled = true; btn.textContent = 'Checking…';
+    res_el.innerHTML = '';
+    const r = await validateStep('jira', {
+      url: d.url, email: d.email, token: d.token, project_key: d.project_key,
+    });
+    btn.disabled = false; btn.textContent = 'Check Jira connection';
+    if (r.ok) {
+      state.validated.tracker = true;
+      res_el.innerHTML = '<span class="check-pass">Connected — credentials valid</span>';
+    } else {
+      state.validated.tracker = false;
+      const c = (r.checks || [])[0] || {};
+      res_el.innerHTML = `<span class="check-fail">${escapeHtml(c.reason || r.error || 'Check failed')}</span>`
+        + (c.fix_hint ? `<br><small class="hint">${escapeHtml(c.fix_hint)}</small>` : '');
+    }
+  };
+}
+
+function renderTrelloFields(container, d, e) {
+  const renderColumnPicker = () => {
+    if (!d._detected_lists.length) return '';
+    const opt = (id, name, selected) => `<option value="${id}" ${selected === id ? 'selected' : ''}>${escapeHtml(name)}</option>`;
+    const blank = `<option value="">— pick —</option>`;
+    const render_one = (statusKey, label) => `
+      <div class="form-field">
+        <label>${label}</label>
+        <select id="f-trello-list-${statusKey}">
+          ${blank}
+          ${d._detected_lists.map(l => opt(l.id, l.name, d.lists[statusKey])).join('')}
+        </select>
+        ${d.lists[statusKey] ? '<small class="check-pass">auto-detected</small>' : '<small class="hint">please pick</small>'}
+      </div>
+    `;
+    return `
+      <h4>Columns → Cleave statuses</h4>
+      ${render_one('todo', 'Todo')}
+      ${render_one('in_progress', 'In Progress')}
+      ${render_one('in_review', 'In Review')}
+      ${render_one('done', 'Done')}
+    `;
+  };
+
+  container.innerHTML = `
+    <h4>Trello</h4>
+    <div class="form-field">
+      <label>API key</label>
+      <input id="f-trello-key" type="password" value="${d.api_key || ''}" placeholder="From trello.com/app-key" />
+      <small class="hint"><a href="https://trello.com/app-key" target="_blank" rel="noopener">Get your API key</a></small>
+      ${e.api_key ? `<span class="error">${e.api_key}</span>` : ''}
+    </div>
+    <div class="form-field">
+      <label>Token</label>
+      <input id="f-trello-token" type="password" value="${d.token || ''}" placeholder="Generated from the API key page" />
+    </div>
+    <div class="form-field">
+      <label>Board URL or short ID</label>
+      <input id="f-trello-board" value="${d.board_id || ''}" placeholder="https://trello.com/b/abc123/my-board" />
+      <small class="hint">URL or just the short ID (after /b/)</small>
+    </div>
+    <div class="form-field">
+      <label>Trigger labels <small class="hint">comma-separated</small></label>
+      <input id="f-trello-labels" value="${(d.trigger_labels || []).join(', ')}" placeholder="ai-pipeline" />
+    </div>
+    <div class="form-field">
+      <label>Ignore labels <small class="hint">comma-separated, optional</small></label>
+      <input id="f-trello-ignore" value="${(d.ignore_labels || []).join(', ')}" placeholder="wip, blocked" />
+    </div>
+    <div class="form-field">
+      <button id="f-trello-check" class="btn-check" type="button">Validate & fetch columns</button>
+      <div id="f-trello-check-result"></div>
+    </div>
+    <div id="f-trello-cols">${renderColumnPicker()}</div>
+  `;
+
+  const invalidate = () => {
+    state.validated.tracker = false;
+    d._detected_lists = [];
+    d.lists = { todo: '', in_progress: '', in_review: '', done: '' };
+    render();
+  };
+  container.querySelector('#f-trello-key').oninput = (ev) => { d.api_key = ev.target.value; invalidate(); };
+  container.querySelector('#f-trello-token').oninput = (ev) => { d.token = ev.target.value; invalidate(); };
+  container.querySelector('#f-trello-board').oninput = (ev) => {
+    let v = ev.target.value.trim();
+    const m = v.match(/trello\.com\/b\/([A-Za-z0-9]+)/);
+    if (m) v = m[1];
+    d.board_id = v;
+    invalidate();
+  };
+  container.querySelector('#f-trello-labels').oninput = (ev) => d.trigger_labels = ev.target.value.split(',').map(s => s.trim()).filter(Boolean);
+  container.querySelector('#f-trello-ignore').oninput = (ev) => d.ignore_labels = ev.target.value.split(',').map(s => s.trim()).filter(Boolean);
+  for (const k of ['todo', 'in_progress', 'in_review', 'done']) {
+    const sel = container.querySelector(`#f-trello-list-${k}`);
+    if (sel) sel.onchange = (ev) => { d.lists[k] = ev.target.value; render(); };
+  }
+
+  container.querySelector('#f-trello-check').onclick = async () => {
+    const btn = container.querySelector('#f-trello-check');
+    const res_el = container.querySelector('#f-trello-check-result');
+    btn.disabled = true; btn.textContent = 'Checking…';
+    res_el.innerHTML = '';
+    const r = await validateStep('trello', {
+      api_key: d.api_key, token: d.token, board_id: d.board_id,
+    });
+    btn.disabled = false; btn.textContent = 'Validate & fetch columns';
+    if (r.ok) {
+      state.validated.tracker = true;
+      d._detected_lists = r.lists || [];
+      const { autodetectStatusMapping } = await import('./trello-autodetect.js');
+      const mapping = autodetectStatusMapping(d._detected_lists);
+      d.lists = {
+        todo: mapping.todo || '',
+        in_progress: mapping.in_progress || '',
+        in_review: mapping.in_review || '',
+        done: mapping.done || '',
+      };
+      res_el.innerHTML = `<span class="check-pass">Connected — ${d._detected_lists.length} lists fetched, ${Object.values(d.lists).filter(Boolean).length} auto-detected</span>`;
+      render();
+    } else {
+      state.validated.tracker = false;
+      const c = (r.checks || [])[0] || {};
+      res_el.innerHTML = `<span class="check-fail">${escapeHtml(c.reason || r.error || 'Check failed')}</span>`
+        + (c.fix_hint ? `<br><small class="hint">${escapeHtml(c.fix_hint)}</small>` : '');
+    }
+  };
+}
+
 const renderers = {
   identity(body) {
     const d = state.data.identity;
@@ -179,66 +367,28 @@ const renderers = {
       d.project_id = slugify(ev.target.value);
     };
   },
-  jira(body) {
-    const d = state.data.jira;
+  tracker(body) {
+    const d = state.data.tracker;
     const e = state.errors;
-    const urlClean = (v) => { const m = v.match(/^(https?:\/\/[^/]+)/); return m ? m[1] : v; };
     body.innerHTML = `
-      <h3>Jira</h3>
+      <h3>Tracker</h3>
       <div class="form-field">
-        <label>Jira URL</label>
-        <input id="f-jira-url" value="${d.url || ''}" placeholder="https://yourteam.atlassian.net" />
-        <small class="hint">Just the base URL — board/project path is stripped automatically</small>
-        ${e.url ? `<span class="error">${e.url}</span>` : ''}
+        <label>Provider</label>
+        <label style="margin-right: 1em;"><input type="radio" name="tracker-provider" value="jira"   ${d.provider === 'jira' ? 'checked' : ''}/> Jira</label>
+        <label><input type="radio" name="tracker-provider" value="trello" ${d.provider === 'trello' ? 'checked' : ''}/> Trello</label>
       </div>
-      <div class="form-field"><label>Project key</label><input id="f-jira-key" value="${d.project_key || ''}" placeholder="e.g. PROJ, ACME" />${e.project_key ? `<span class="error">${e.project_key}</span>` : ''}</div>
-      <div class="form-field"><label>Email</label><input id="f-jira-email" value="${d.email || ''}" placeholder="your-bot@company.com" /></div>
-      <div class="form-field"><label>API token</label><input type="password" id="f-jira-token" value="${d.token || ''}" placeholder="From id.atlassian.com/manage/api-tokens" />${e.token ? `<span class="error">${e.token}</span>` : ''}</div>
-      <div class="form-field">
-        <label>Trigger labels <small class="hint">comma-separated — ticket must have ALL of these</small></label>
-        <input id="f-jira-labels" value="${(d.trigger_labels || []).join(', ')}" placeholder="ai-pipeline, your-repo-label" />
-        ${e.trigger_labels ? `<span class="error">${e.trigger_labels}</span>` : ''}
-      </div>
-      <div class="form-field">
-        <label>Ignore labels <small class="hint">comma-separated — tickets with any of these are skipped</small></label>
-        <input id="f-jira-ignore" value="${(d.ignore_labels || []).join(', ')}" placeholder="on-hold, manual-only" />
-      </div>
-      <div class="form-field">
-        <button id="f-jira-check" class="btn-check" type="button">Check Jira connection</button>
-        <div id="f-jira-check-result"></div>
-      </div>
+      <div id="tracker-fields"></div>
     `;
-    body.querySelector('#f-jira-url').oninput = (ev) => d.url = urlClean(ev.target.value);
-    body.querySelector('#f-jira-url').onblur = (ev) => { d.url = urlClean(ev.target.value); ev.target.value = d.url; };
-    body.querySelector('#f-jira-key').oninput = (ev) => d.project_key = ev.target.value.toUpperCase();
-    body.querySelector('#f-jira-email').oninput = (ev) => d.email = ev.target.value;
-    body.querySelector('#f-jira-token').oninput = (ev) => d.token = ev.target.value;
-    body.querySelector('#f-jira-labels').oninput = (ev) => d.trigger_labels = ev.target.value.split(',').map(s => s.trim()).filter(Boolean);
-    body.querySelector('#f-jira-ignore').oninput = (ev) => d.ignore_labels = ev.target.value.split(',').map(s => s.trim()).filter(Boolean);
-    const jiraInvalidate = () => { state.validated.jira = false; };
-    for (const id of ['#f-jira-url','#f-jira-key','#f-jira-email','#f-jira-token']) {
-      const el = body.querySelector(id);
-      if (el) el.addEventListener('input', jiraInvalidate);
-    }
-    body.querySelector('#f-jira-check').onclick = async () => {
-      const btn = body.querySelector('#f-jira-check');
-      const res_el = body.querySelector('#f-jira-check-result');
-      btn.disabled = true; btn.textContent = 'Checking…';
-      res_el.innerHTML = '';
-      const r = await validateStep('jira', {
-        url: d.url, email: d.email, token: d.token, project_key: d.project_key,
-      });
-      btn.disabled = false; btn.textContent = 'Check Jira connection';
-      if (r.ok) {
-        state.validated.jira = true;
-        res_el.innerHTML = '<span class="check-pass">Connected — credentials valid</span>';
-      } else {
-        state.validated.jira = false;
-        const c = (r.checks || [])[0] || {};
-        res_el.innerHTML = `<span class="check-fail">${escapeHtml(c.reason || r.error || 'Check failed')}</span>`
-          + (c.fix_hint ? `<br><small class="hint">${escapeHtml(c.fix_hint)}</small>` : '');
-      }
-    };
+    body.querySelectorAll('input[name=tracker-provider]').forEach((el) => {
+      el.onchange = (ev) => {
+        d.provider = ev.target.value;
+        state.validated.tracker = false;
+        render();
+      };
+    });
+    const fields = body.querySelector('#tracker-fields');
+    if (d.provider === 'jira') renderJiraFields(fields, d.jira, e);
+    else renderTrelloFields(fields, d.trello, e);
   },
   vcs(body) {
     const d = state.data.vcs;
@@ -441,12 +591,19 @@ const renderers = {
         <tr><th colspan="2">Project</th></tr>
         <tr><td>Name</td><td><strong>${escapeHtml(d.identity.display_name)}</strong> <small class="hint">(${d.identity.project_id})</small></td></tr>
         <tr><td>Repository</td><td>${escapeHtml(d.identity.repo_display_name || d.identity.repo_id || '—')} <small class="hint">(${d.identity.repo_id || '—'})</small></td></tr>
-        <tr><th colspan="2">Jira</th></tr>
-        <tr><td>URL</td><td>${escapeHtml(d.jira.url)}</td></tr>
-        <tr><td>Project</td><td>${escapeHtml(d.jira.project_key)}</td></tr>
-        <tr><td>Email</td><td>${escapeHtml(d.jira.email || '—')}</td></tr>
-        <tr><td>Labels</td><td>${d.jira.trigger_labels.map(l => `<span class="review-label">${escapeHtml(l)}</span>`).join(' ')}</td></tr>
+        <tr><th colspan="2">Tracker (${escapeHtml(d.tracker.provider)})</th></tr>
+        ${d.tracker.provider === 'jira' ? `
+        <tr><td>URL</td><td>${escapeHtml(d.tracker.jira.url || '—')}</td></tr>
+        <tr><td>Project</td><td>${escapeHtml(d.tracker.jira.project_key || '—')}</td></tr>
+        <tr><td>Email</td><td>${escapeHtml(d.tracker.jira.email || '—')}</td></tr>
+        <tr><td>Labels</td><td>${(d.tracker.jira.trigger_labels || []).map(l => `<span class="review-label">${escapeHtml(l)}</span>`).join(' ')}</td></tr>
         <tr><td>Token</td><td>•••• → ${env('JIRA_TOKEN')}</td></tr>
+        ` : `
+        <tr><td>Board ID</td><td>${escapeHtml(d.tracker.trello.board_id || '—')}</td></tr>
+        <tr><td>Labels</td><td>${(d.tracker.trello.trigger_labels || []).map(l => `<span class="review-label">${escapeHtml(l)}</span>`).join(' ')}</td></tr>
+        <tr><td>API key</td><td>•••• → ${env('TRELLO_KEY')}</td></tr>
+        <tr><td>Token</td><td>•••• → ${env('TRELLO_TOKEN')}</td></tr>
+        `}
         <tr><th colspan="2">Repository (${vp})</th></tr>
         <tr><td>Repo</td><td>${escapeHtml(repo)}</td></tr>
         <tr><td>Branch</td><td>${escapeHtml(vp === 'github' ? d.vcs.github.default_branch : d.vcs.gitlab.default_branch || 'develop')}</td></tr>
@@ -465,12 +622,20 @@ const validators = {
     if (!d.display_name) errors.display_name = 'required';
     return errors;
   },
-  jira(d) {
+  tracker(d) {
     const errors = {};
-    if (!d.url) errors.url = 'required';
-    if (!d.project_key) errors.project_key = 'required';
-    if (!d.token) errors.token = 'required';
-    if (!d.trigger_labels || d.trigger_labels.length === 0) errors.trigger_labels = 'at least one label required';
+    if (d.provider === 'jira') {
+      const j = d.jira;
+      if (!j.url) errors.url = 'required';
+      if (!j.project_key) errors.project_key = 'required';
+      if (!j.token) errors.token = 'required';
+      if (!j.trigger_labels || j.trigger_labels.length === 0) errors.trigger_labels = 'at least one label required';
+    } else if (d.provider === 'trello') {
+      const t = d.trello;
+      if (!t.api_key) errors.api_key = 'required';
+      if (!t.token) errors.token = 'required';
+      if (!t.board_id) errors.board_id = 'required';
+    }
     return errors;
   },
   vcs(d) {
@@ -520,9 +685,16 @@ function buildPayload() {
   const vcs = { provider: d.vcs.provider };
   if (d.vcs.provider === 'github') vcs.github = { ...d.vcs.github };
   else vcs.gitlab = { ...d.vcs.gitlab };
+  const tracker = { provider: d.tracker.provider };
+  if (d.tracker.provider === 'jira') {
+    tracker.jira = { ...d.tracker.jira, trigger_labels: [...d.tracker.jira.trigger_labels], ignore_labels: [...d.tracker.jira.ignore_labels] };
+  } else {
+    const { _detected_lists, ...trelloOut } = d.tracker.trello;
+    tracker.trello = { ...trelloOut, trigger_labels: [...d.tracker.trello.trigger_labels], ignore_labels: [...d.tracker.trello.ignore_labels] };
+  }
   return {
     identity: { ...d.identity },
-    jira: { ...d.jira, trigger_labels: [...d.jira.trigger_labels], ignore_labels: [...d.jira.ignore_labels] },
+    tracker,
     vcs,
     quality: { ...d.quality },
     extras: { ...d.extras, protected_files: [...d.extras.protected_files] },
@@ -553,7 +725,8 @@ async function renderFailure(entry) {
     </div>
   `;
   document.getElementById('retry-btn').onclick = () => {
-    state.data.jira.token = '';
+    state.data.tracker.jira.token = '';
+    state.data.tracker.trello.token = '';
     if (state.data.vcs.provider === 'github') state.data.vcs.github.token = '';
     else state.data.vcs.gitlab.token = '';
     state.data.extras.telegram_bot_token = null;
@@ -587,7 +760,7 @@ async function renderSuccess() {
       <h3>Project created</h3>
       <ul style="text-align:left;">
         <li><strong>${d.identity.display_name}</strong> (${pid})</li>
-        <li>Jira: ${d.jira.project_key} — ${d.jira.trigger_labels.join(', ')}</li>
+        <li>Tracker: ${d.tracker.provider === 'jira' ? `Jira: ${d.tracker.jira.project_key} — ${d.tracker.jira.trigger_labels.join(', ')}` : `Trello board: ${d.tracker.trello.board_id || '—'}`}</li>
         <li>VCS: ${d.vcs.provider} — ${vcs}</li>
       </ul>
       ${modeMsg}

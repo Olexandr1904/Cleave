@@ -125,6 +125,12 @@ each row — write N/A only if you can explain why the concern cannot arise.
 ```markdown
 # Implementation Plan — {ticket_id}
 
+## Verdict
+ONE short sentence stating the decision a human can sanity-check at a glance:
+- For a bug/crash: what is broken and must be fixed.
+- For a story/feature: what must be implemented.
+No file names, no root-cause detail, no approach trade-offs — just the essence.
+
 ## Summary
 One-paragraph description of what will be implemented, including the picked approach
 and its main trade-off vs. alternatives considered.

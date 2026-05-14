@@ -329,3 +329,46 @@ class TestWatchdogIdleStall:
                 )
         assert "stall" in str(exc_info.value).lower()
         assert proc.kill.called
+
+
+class TestAddDir:
+    @pytest.fixture
+    def adapter(self):
+        return ClaudeCodeAdapter(model_provider=lambda: "claude-sonnet-4-5")
+
+    async def test_add_dirs_appended_to_cli_command(self, adapter):
+        """add_dirs are passed through as --add-dir flags so the agent's
+        tools can read directories outside its cwd (e.g. meta/)."""
+        result_event = json.dumps({
+            "type": "result", "subtype": "success", "is_error": False,
+            "result": "done",
+            "usage": {"input_tokens": 10, "output_tokens": 5},
+        }).encode()
+        mock_proc = _make_streaming_proc([result_event], [], rc=0)
+
+        with patch("asyncio.create_subprocess_exec", return_value=mock_proc) as mock_exec:
+            await adapter.execute_in_workspace(
+                prompt="test", cwd="/tmp/ws/source",
+                allowed_tools=["read_file"],
+                add_dirs=["/tmp/ws/meta"],
+            )
+        cmd_list = list(mock_exec.call_args[0])
+        assert "--add-dir" in cmd_list
+        idx = cmd_list.index("--add-dir")
+        assert cmd_list[idx + 1] == "/tmp/ws/meta"
+
+    async def test_no_add_dir_flag_when_add_dirs_omitted(self, adapter):
+        """Without add_dirs the flag must not appear — keeps default runs clean."""
+        result_event = json.dumps({
+            "type": "result", "subtype": "success", "is_error": False,
+            "result": "done",
+            "usage": {"input_tokens": 10, "output_tokens": 5},
+        }).encode()
+        mock_proc = _make_streaming_proc([result_event], [], rc=0)
+
+        with patch("asyncio.create_subprocess_exec", return_value=mock_proc) as mock_exec:
+            await adapter.execute_in_workspace(
+                prompt="test", cwd="/tmp/ws/source",
+                allowed_tools=["read_file"],
+            )
+        assert "--add-dir" not in list(mock_exec.call_args[0])

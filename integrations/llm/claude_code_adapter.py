@@ -162,6 +162,7 @@ class ClaudeCodeAdapter(LLMInterface):
         pid_callback: Callable[[int], None] | None = None,
         progress_log_path: Path | None = None,
         raw_stream_path: Path | None = None,
+        add_dirs: list[str] | None = None,
     ) -> LLMResponse:
         """Execute a prompt with Claude Code in a specific workspace directory.
 
@@ -203,6 +204,7 @@ class ClaudeCodeAdapter(LLMInterface):
             pid_callback=pid_callback,
             progress_log_path=progress_log_path,
             raw_stream_path=raw_stream_path,
+            add_dirs=add_dirs,
         )
 
     async def quick_query(
@@ -281,6 +283,7 @@ class ClaudeCodeAdapter(LLMInterface):
         pid_callback: Callable[[int], None] | None = None,
         progress_log_path: Path | None = None,
         raw_stream_path: Path | None = None,
+        add_dirs: list[str] | None = None,
     ) -> LLMResponse:
         """Run claude CLI subprocess in stream-json mode.
 
@@ -316,6 +319,12 @@ class ClaudeCodeAdapter(LLMInterface):
         if allowed_tools is not None:
             cc_tools = self._map_tools(allowed_tools)
             cmd.extend(["--allowedTools", ",".join(cc_tools) if cc_tools else ""])
+
+        # Extra directories the agent's tools may read beyond cwd. Ticket
+        # metadata (attachments, comments) lives in meta/, a sibling of the
+        # source/ cwd — without this the agent cannot reach it.
+        for extra_dir in add_dirs or []:
+            cmd.extend(["--add-dir", extra_dir])
 
         logger.info(
             "Claude Code CLI: model=%s, cwd=%s, tools=%s, max_turns=%d, "

@@ -88,9 +88,12 @@ function updateActiveNav(id) {
 // ── Board ──
 async function doRenderBoard() {
   const { workspaces } = await renderBoard(state.projectId, state.showDone);
-  // Update sidebar project list from workspace data
-  updateProjectSidebar(workspaces || []);
-  // Update toolbar stats
+  // Sidebar must reflect every project, not just the active board filter —
+  // otherwise a newly-added project is invisible whenever another project
+  // is selected. Reuse the filtered list when no filter is active.
+  const sidebarWorkspaces = state.projectId ? await loadWorkspaces(null) : workspaces;
+  updateProjectSidebar(sidebarWorkspaces || []);
+  // Toolbar stats stay scoped to the current board view.
   updateToolbarStats(workspaces || []);
 }
 

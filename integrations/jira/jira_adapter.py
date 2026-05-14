@@ -324,10 +324,21 @@ def _extract_adf_text(adf: dict) -> str:
         if ntype == "hardBreak":
             buf.append("\n")
             return
-        # Block-level nodes flush the current line buffer before/after
+        if ntype in {"media", "mediaInline"}:
+            # Leaf node for a pasted/attached image. Keep a reference so the
+            # agent knows the comment has a visual — the file itself lands in
+            # meta/attachments/ via the issue's attachment list.
+            attrs = node.get("attrs", {}) or {}
+            name = attrs.get("alt") or attrs.get("id") or "attached"
+            buf.append(f"[image: {name}]")
+            return
+        # Block-level nodes flush the current line buffer before/after.
+        # mediaSingle/mediaGroup wrap media leaves — treat as block so the
+        # placeholder gets flushed to its own line.
         block = ntype in {"paragraph", "listItem", "heading", "blockquote",
                           "codeBlock", "tableRow", "tableHeader", "tableCell",
-                          "orderedList", "bulletList"}
+                          "orderedList", "bulletList",
+                          "mediaSingle", "mediaGroup"}
         if block:
             inner: list[str] = []
             for child in node.get("content", []) or []:

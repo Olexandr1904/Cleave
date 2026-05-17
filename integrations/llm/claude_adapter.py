@@ -15,6 +15,9 @@ logger = logging.getLogger(__name__)
 MAX_RETRIES = 3
 RETRY_BACKOFF = [1, 2, 4]
 
+# Anthropic ephemeral cache breakpoint marker.
+_CACHE_EPHEMERAL: dict[str, Any] = {"type": "ephemeral"}
+
 
 class ClaudeAdapter(LLMInterface):
     """Claude API adapter via Anthropic SDK."""
@@ -58,19 +61,27 @@ class ClaudeAdapter(LLMInterface):
         tools: list[dict[str, Any]] | None = None,
         system: str = "",
     ) -> LLMResponse:
-        """Make a single Claude API call with retries."""
+        """Make a single Claude API call with retries.
+
+        Applies prompt-cache breakpoints to the stable prefix so repeated
+        agent rounds hit the cache. Three breakpoints are placed (max is 4):
+        last tool, system block, and the first user message. Everything
+        before the marked block is cached together; later messages (tool
+        results) are volatile and re-evaluated each call.
+        """
         use_model = model or self._default_model_provider()
         last_error = None
 
+        cached_messages = _mark_first_user_for_cache(messages)
         kwargs: dict[str, Any] = {
             "model": use_model,
             "max_tokens": max_tokens,
-            "messages": messages,
+            "messages": cached_messages,
         }
         if tools:
-            kwargs["tools"] = tools
+            kwargs["tools"] = _mark_last_tool_for_cache(tools)
         if system:
-            kwargs["system"] = system
+            kwargs["system"] = _wrap_system_for_cache(system)
 
         for attempt in range(MAX_RETRIES):
             try:
@@ -107,18 +118,25 @@ class ClaudeAdapter(LLMInterface):
                     )
                 )
 
+        usage = response.usage
+        cache_read = getattr(usage, "cache_read_input_tokens", 0) or 0
+        cache_create = getattr(usage, "cache_creation_input_tokens", 0) or 0
+        # The SDK reports `input_tokens` excluding cached tokens. Mirror the
+        # CLI adapter and include them so downstream budgets/dashboards count
+        # the full prefix the model actually saw.
         result = LLMResponse(
             content=content,
-            input_tokens=response.usage.input_tokens,
-            output_tokens=response.usage.output_tokens,
+            input_tokens=usage.input_tokens + cache_read + cache_create,
+            output_tokens=usage.output_tokens,
             model=model,
             tool_use=tool_use_requests,
             stop_reason=response.stop_reason or "",
         )
 
         logger.info(
-            "Claude API call: model=%s, input=%d, output=%d, tool_calls=%d, stop=%s",
-            model, result.input_tokens, result.output_tokens,
+            "Claude API call: model=%s, input=%d (cache_r=%d cache_w=%d), output=%d, "
+            "tool_calls=%d, stop=%s",
+            model, result.input_tokens, cache_read, cache_create, result.output_tokens,
             len(tool_use_requests), result.stop_reason,
         )
         return result
@@ -170,3 +188,52 @@ class ClaudeAdapter(LLMInterface):
     def supports_extended_thinking(self) -> bool:
         """Claude supports extended thinking."""
         return True
+
+
+def _mark_last_tool_for_cache(tools: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Mark the last tool definition with cache_control.
+
+    Anthropic caches everything up to and including the marked block, so
+    flagging the trailing tool caches the entire tools array. Tool defs are
+    stable per agent — they don't mutate between rounds — so this hits cache
+    from round 2 onward.
+    """
+    if not tools:
+        return tools
+    out = [dict(t) for t in tools]  # shallow copy is enough; we only add a key
+    out[-1] = {**out[-1], "cache_control": _CACHE_EPHEMERAL}
+    return out
+
+
+def _wrap_system_for_cache(system: str) -> list[dict[str, Any]]:
+    """Wrap a system string as a single text block with cache_control."""
+    return [{"type": "text", "text": system, "cache_control": _CACHE_EPHEMERAL}]
+
+
+def _mark_first_user_for_cache(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Convert the first user message's string content to a cached text block.
+
+    The agent_runtime tool-use loop sends messages as
+    [user(prompt_str), assistant(...), user(tool_results), assistant(...), ...]
+    where messages[0].content is the stable assembled prompt. Wrapping that
+    content in a list with cache_control caches the full prefix; subsequent
+    tool-result messages are not marked and remain volatile.
+
+    Already-structured content (lists, non-user roles) is left as-is.
+    """
+    if not messages:
+        return messages
+    first = messages[0]
+    if first.get("role") != "user":
+        return messages
+    content = first.get("content")
+    if not isinstance(content, str):
+        return messages
+    out = list(messages)
+    out[0] = {
+        **first,
+        "content": [
+            {"type": "text", "text": content, "cache_control": _CACHE_EPHEMERAL},
+        ],
+    }
+    return out

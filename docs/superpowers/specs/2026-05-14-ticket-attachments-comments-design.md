@@ -66,9 +66,10 @@ unaffected.
   Instead emit an **attachments manifest**: one line per file with its
   absolute path, byte size, and type (`text` / `image`), followed by an
   instruction telling the agent these files are available and should be
-  read with its tools (crash logs, screenshots, etc.).
-- As a convenience, text attachments under 5 KB may still be inlined in
-  full alongside their manifest entry.
+  read with its tools (crash logs, screenshots, etc.). All attachments —
+  small text files included — go through the manifest path; double
+  representation (inlined + listed) was considered and rejected to keep
+  the prompt format uniform.
 
 This applies uniformly to every CLI agent.
 
@@ -77,8 +78,10 @@ This applies uniformly to every CLI agent.
 `_extract_adf_text` handles `media`, `mediaSingle`, `mediaGroup`, and
 `mediaInline` nodes. For each, emit a placeholder `[image: <name>]`,
 where `<name>` is the node's `alt` attribute (Jira usually stores the
-original filename there) or `[image attached]` if absent. The agent then
-knows the comment has a visual and can find it in `meta/attachments/`.
+original filename there), falling back to `id`, then the literal
+`attached` (producing `[image: attached]`) when neither is present. The
+agent then knows the comment has a visual and can find it in
+`meta/attachments/`.
 
 ### 4. Tests
 

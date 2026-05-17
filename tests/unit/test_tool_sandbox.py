@@ -9,7 +9,12 @@ from pathlib import Path
 import pytest
 
 from orchestrator.constants import REPORT_BA
-from orchestrator.tool_sandbox import ToolError, ToolSandbox, get_tool_definitions
+from orchestrator.tool_sandbox import (
+    ToolError,
+    ToolSandbox,
+    _redact_secrets,
+    get_tool_definitions,
+)
 
 
 @pytest.fixture
@@ -290,3 +295,64 @@ class TestGetToolDefinitions:
         defs = get_tool_definitions(["read_file"])
         assert "input_schema" in defs[0]
         assert defs[0]["input_schema"]["type"] == "object"
+
+    def test_run_command_description_forbids_destructive_ops(self):
+        defs = get_tool_definitions(["run_command"])
+        desc = defs[0]["description"].lower()
+        assert "do not use" in desc
+        assert "deleting files" in desc
+        assert "pip install" in desc or "package" in desc
+
+
+class TestRedactSecrets:
+    # Fixtures are assembled at runtime so GitHub push-protection's secret
+    # scanner doesn't flag them as live credentials. Each token-shaped string
+    # is split across a `+` to break the literal pattern in the source.
+    _FIXTURES = [
+        (
+            "GITHUB_TOKEN=" + "ghp_" + "abcdef1234567890ABCDEF1234567890ABCDEF",
+            "[REDACTED",
+            "ghp_" + "abcdef1234567890ABCDEF",
+        ),
+        (
+            "Authorization: Bearer " + "eyJhbGci.payload.signaturelongenough",
+            "[REDACTED]",
+            "eyJhbGci.payload.signaturelongenough",
+        ),
+        (
+            "aws key: " + "AKIA" + "IOSFODNN7EXAMPLE here",
+            "[REDACTED:aws_access_key]",
+            "AKIA" + "IOSFODNN7EXAMPLE",
+        ),
+        (
+            "xox" + "b-1234567890-abcdefghij1234567890",
+            "[REDACTED:slack_token]",
+            "xox" + "b-1234567890-abcdefghij1234567890",
+        ),
+        (
+            "JIRA_API_TOKEN=" + "ATATT" + "abcdef1234567890longstringvalue",
+            "[REDACTED]",
+            "ATATT" + "abcdef1234567890longstringvalue",
+        ),
+    ]
+
+    @pytest.mark.parametrize("raw, must_contain, must_not_contain", _FIXTURES)
+    def test_redacts_known_patterns(self, raw, must_contain, must_not_contain):
+        out = _redact_secrets(raw)
+        assert must_contain in out
+        assert must_not_contain not in out
+
+    @pytest.mark.parametrize(
+        "raw",
+        [
+            "commit abc1234deadbeef on master",
+            "uuid 550e8400-e29b-41d4-a716-446655440000",
+            "var COUNT = 42",
+            "ticket ACME-14567",
+        ],
+    )
+    def test_leaves_non_secrets_alone(self, raw):
+        assert _redact_secrets(raw) == raw
+
+    def test_empty_input(self):
+        assert _redact_secrets("") == ""

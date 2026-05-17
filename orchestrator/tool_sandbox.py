@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import subprocess
 from pathlib import Path
 from typing import Any
@@ -35,6 +36,49 @@ ALL_TOOLS = {
     "write_repo_config",
     "remove_project",
 }
+
+
+# Secret patterns redacted from tool output before the model sees it. This
+# protects against secrets leaking via `env`, `git log -p` on rotated tokens,
+# or accidentally-committed .env files surfaced by `read_file`. Patterns target
+# the formats Cleave actually integrates with plus a generic "looks like a
+# secret env assignment" catch-all. Source code with high-entropy strings that
+# aren't secrets (git SHAs, UUIDs) is left alone — those don't match.
+_SECRET_PATTERNS: list[tuple[str, re.Pattern[str]]] = [
+    ("github_token", re.compile(r"\bgh[pousr]_[A-Za-z0-9]{30,}\b")),
+    ("openai_key", re.compile(r"\bsk-(?:proj-)?[A-Za-z0-9_-]{20,}\b")),
+    ("anthropic_key", re.compile(r"\bsk-ant-(?:api|admin)\d{2}-[A-Za-z0-9_-]{20,}\b")),
+    ("aws_access_key", re.compile(r"\bAKIA[0-9A-Z]{16}\b")),
+    ("slack_token", re.compile(r"\bxox[baprs]-[A-Za-z0-9-]{10,}\b")),
+    ("bearer_header", re.compile(r"(?i)\b(bearer)\s+[A-Za-z0-9._~+/=-]{20,}")),
+    # Env-style assignment: VAR_NAME_WITH_SECRETY_WORD=value
+    (
+        "secret_env_assignment",
+        re.compile(
+            r"(?im)^([A-Z][A-Z0-9_]*(?:TOKEN|SECRET|KEY|PASSWORD|PASSWD|PAT)[A-Z0-9_]*)"
+            r"\s*[:=]\s*[\"']?([^\s\"']{8,})[\"']?"
+        ),
+    ),
+]
+
+
+def _redact_secrets(text: str) -> str:
+    """Mask common secret formats in tool output.
+
+    Best-effort: false negatives are possible (custom token formats won't
+    match), so this is a defense-in-depth layer, not a guarantee.
+    """
+    if not text:
+        return text
+    out = text
+    for label, pattern in _SECRET_PATTERNS:
+        if label == "secret_env_assignment":
+            out = pattern.sub(r"\1=[REDACTED]", out)
+        elif label == "bearer_header":
+            out = pattern.sub(r"\1 [REDACTED]", out)
+        else:
+            out = pattern.sub(f"[REDACTED:{label}]", out)
+    return out
 
 
 class ToolError(Exception):
@@ -198,7 +242,7 @@ class ToolSandbox:
         if len(content) > max_size:
             content = content[:max_size] + f"\n\n... (truncated, file is {len(content)} bytes)"
 
-        return content
+        return _redact_secrets(content)
 
     async def _tool_write_file(self, params: dict[str, Any]) -> str:
         """Write a file in workspace source/."""
@@ -312,7 +356,7 @@ class ToolSandbox:
         if len(output) > max_size:
             output = output[:max_size] + f"\n... (truncated, output was {len(output)} bytes)"
 
-        return output
+        return _redact_secrets(output)
 
     async def _tool_git_operation(self, params: dict[str, Any]) -> str:
         """Run a git command in the workspace source directory.
@@ -366,7 +410,7 @@ class ToolSandbox:
         if len(output) > max_size:
             output = output[:max_size] + "\n... (truncated)"
 
-        return output
+        return _redact_secrets(output)
 
     # --- Config management tools (project-setup-agent) ---
 
@@ -593,7 +637,16 @@ def get_tool_definitions(allowed_tools: list[str]) -> list[dict[str, Any]]:
         },
         "run_command": {
             "name": "run_command",
-            "description": "Run a shell command in the repository root directory. Use for running tests, linters, build tools.",
+            "description": (
+                "Run a shell command in the repository root directory. "
+                "Use for running tests, linters, build tools. "
+                "DO NOT use for: deleting files outside the build output directory "
+                "(e.g. no `rm -rf`, `find ... -delete` on source files); "
+                "installing third-party packages (no `pip install`, `npm i`, "
+                "`gradle dependencies --refresh`, etc. — dependencies belong in "
+                "the implementation plan and are added by editing manifest files, "
+                "not by this tool)."
+            ),
             "input_schema": {
                 "type": "object",
                 "properties": {

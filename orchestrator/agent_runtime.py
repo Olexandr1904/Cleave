@@ -36,6 +36,23 @@ DEFAULT_MAX_TOOL_ROUNDS = 25
 _PER_FILE_CONTEXT_BYTES = 5000
 _TOTAL_CONTEXT_BYTES = 100_000
 
+# Order in which meta_dir files are fed to the prompt assembler.
+# Earlier names get the budget first; lower-priority files are truncated or
+# dropped when the context budget runs out. Without this, alphabetical sort
+# loads `comments.md` before `ticket.md` and a chatty Jira thread can squeeze
+# out the ticket body itself.
+_CONTEXT_FILE_PRIORITY: dict[str, int] = {
+    "ticket.md": 0,
+    "parent.md": 1,
+    "history.md": 2,
+    "comments.md": 3,
+}
+
+
+def _context_priority(path: Path) -> tuple[int, str]:
+    """Sort key: known files in priority order, then everything else alphabetically."""
+    return (_CONTEXT_FILE_PRIORITY.get(path.name, 100), path.name)
+
 
 @dataclass
 class AgentResult:
@@ -260,9 +277,8 @@ class AgentRuntime:
             return True
 
         if context_dir.exists():
-            for ctx_file in sorted(context_dir.iterdir()):
-                if not ctx_file.is_file():
-                    continue
+            files = [p for p in context_dir.iterdir() if p.is_file()]
+            for ctx_file in sorted(files, key=_context_priority):
                 if not _include(ctx_file, ctx_file.name):
                     logger.warning(
                         "Context budget %d B exhausted; skipping remaining files in %s",

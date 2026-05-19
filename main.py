@@ -274,6 +274,24 @@ def main(argv: list[str] | None = None) -> int:
         llm = ClaudeCodeAdapter(model_provider=_read_model)
         print("  LLM: Claude Code CLI adapter (using existing auth)")
 
+    # Wire the agent failure summarizer. It uses a dedicated Sonnet 4.6
+    # client (configured separately from the pipeline's LLM adapter) so
+    # crash summaries are cheap and don't share the agents' model choice.
+    from orchestrator.agent_failure_summarizer import configure_summarizer
+    import anthropic
+    _fs_cfg = global_config.failure_summarizer
+    if _fs_cfg.enabled and global_config.claude.api_key:
+        configure_summarizer(
+            client=anthropic.AsyncAnthropic(api_key=global_config.claude.api_key),
+            model=_fs_cfg.model,
+            timeout_seconds=_fs_cfg.timeout_seconds,
+            enabled=True,
+        )
+        print(f"  Failure summarizer: enabled (model={_fs_cfg.model})")
+    else:
+        configure_summarizer(client=None, model="", timeout_seconds=30, enabled=False)
+        print("  Failure summarizer: disabled")
+
     # Initialize workspace manager
     workspace_manager = WorkspaceManager(base_dir=global_config.workspaces.base_dir)
 

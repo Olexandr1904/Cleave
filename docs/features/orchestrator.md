@@ -166,3 +166,7 @@ Review fixes (2026-05-19): text-accumulation loop wrapped in try/except so non-i
 ## agent_stage: summarizer wired into FAILED path (2026-05-19)
 
 `orchestrator/pipeline/agent_stage.py` FAILED branch now calls `summarize_agent_failure(workspace, stage_id, reason_kind="agent_failed", raw_error=result.error)` before transitioning. The returned summary (if any) is stored in `state.error`; the raw CLI error is always preserved in `state.raw_error` for forensics. Falls back to the raw CLI error when the summarizer returns `None`. `notify_failed_fn` receives the operator-facing string in both cases.
+
+## main: failure summarizer wired at daemon startup (2026-05-19)
+
+`main.py` now calls `configure_summarizer` immediately after the LLM adapter selection block. An `AsyncAnthropic` client is constructed from `global_config.claude.api_key` and passed to the summarizer module. When `failure_summarizer.enabled` is false or no API key is configured, the summarizer is explicitly disabled (so `summarize_agent_failure` returns `None` safely). Startup prints `Failure summarizer: enabled (model=…)` or `Failure summarizer: disabled` to match the existing `LLM: …` style.

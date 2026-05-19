@@ -2,7 +2,7 @@
 
 **Status:** Implemented
 **Created:** 2026-04-07
-**Updated:** 2026-04-21
+**Updated:** 2026-05-19
 **Author:** Oleksandr Brazhenko
 
 ## Description
@@ -150,3 +150,9 @@ After the layer extractions above, `orchestrator.py` was 736 LOC, mostly pass-th
 - Runtime-attr properties compressed: five `@property` + setter pairs (about 75 LOC of boilerplate) replaced with a single `_RuntimeAttr` descriptor class. Same external behavior — read/write `_active_workspaces` / `_recent_completions` / `_shutdown_event` / `_wake_event` / `_agent_semaphore` forwards to `Runtime` when present, falls back to `__dict__` otherwise.
 - Dashboard `actions.py` rerun handler no longer reaches into `orchestrator._refetch_ticket_data` / `orchestrator._notify_rerun`; it imports `refetch_ticket_data` and `notify_rerun` from their modules and passes `orchestrator._tracker` / `_notifier` / `_get_chat_id` explicitly.
 - Tests migrated to call module functions directly across ~15 test files. The pattern: build a minimal stub or `MagicMock` carrying the deps the function reads, call the module function, assert. No behavior changes; 1046 unit tests + 4 dry-run integration tests still pass.
+
+## Agent failure summarizer (2026-05-19)
+
+New module `orchestrator/agent_failure_summarizer.py`. `extract_log_slice(workspace, stage_id, raw_error)` builds a structured 5-section input slice (TICKET, STAGE HISTORY, OUTPUT FILES, CRASH SIGNALS, LOG TAIL) from the workspace events log for the failure-summarizer LLM call. Hard cap: 6 KB. CRASH SIGNALS section is never truncated; LOG TAIL is head-truncated to fit under the cap. Output files listed by presence/absence only — no content included.
+
+Corrections applied in same commit: `KNOWN_OUTPUT_FILES` is now derived from `STAGE_RUNTIME_OUTPUT` so the two stay in sync. The `_crash_signals_section` loop uses independent `if` statements so a line can populate multiple buckets. The LOG TAIL label is `"(truncated)"` when the log file existed but was fully head-truncated (vs. `"(no log file)"` when no log file was present). A `logger.warning` is emitted if the four base sections collectively exceed the 6 KB cap; the slice is returned anyway.

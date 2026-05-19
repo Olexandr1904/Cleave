@@ -18,6 +18,7 @@ from orchestrator.approval_gate import should_approval_gate
 from orchestrator.constants import REPORT_BA, STAGE_RUNTIME_OUTPUT
 from orchestrator.escalation import handle_escalate
 from orchestrator.git_ops import git_head_sha
+from orchestrator.agent_failure_summarizer import summarize_agent_failure
 from orchestrator.workflow_router import WorkflowDefinition, get_next_stage
 from workspace.workspace import Stage, Workspace
 
@@ -215,9 +216,15 @@ async def handle_agent_stage(
             workspace.transition(Stage.DEFERRED, retry_at=retry_at.isoformat())
             await notify_deferred_fn(workspace, retry_at, reason=result.error)
         else:
+            summary = await summarize_agent_failure(
+                workspace, stage_id,
+                reason_kind="agent_failed",
+                raw_error=result.error,
+            )
+            final_error = summary or result.error or ""
             workspace.transition(Stage.FAILED)
-            workspace.update_state(error=result.error)
-            await notify_failed_fn(workspace, result.error or "")
+            workspace.update_state(error=final_error, raw_error=result.error)
+            await notify_failed_fn(workspace, final_error)
         return
 
     _emit(event_bus, "agent_completed", f"{stage_def.agent} completed for {state.ticket_id}", project_id=state.company_id, ticket_id=state.ticket_id, agent_id=stage_def.agent, data={"stage": stage_id, "duration": result.duration_seconds, "input_tokens": result.input_tokens, "output_tokens": result.output_tokens})

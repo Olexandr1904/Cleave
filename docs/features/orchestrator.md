@@ -162,3 +162,7 @@ Corrections applied in same commit: `KNOWN_OUTPUT_FILES` is now derived from `ST
 `summarize_agent_failure(workspace, stage_id, *, reason_kind, raw_error=None)` — async function that feeds the log slice to Sonnet 4.6, validates the two-block `Reason: / Suggested action:` shape (≤ 500 chars), and returns `None` on any failure mode (disabled, timeout, API error, malformed, too long). `configure_summarizer(*, client, model, timeout_seconds, enabled)` wires the SDK client at startup.
 
 Review fixes (2026-05-19): text-accumulation loop wrapped in try/except so non-iterable `response.content` or explicit-`None` block text logs `api_error` and returns `None` instead of raising; misplaced `from orchestrator.constants import STAGE_RUNTIME_OUTPUT` moved to top-of-file imports; `_crash_signals_section` output stable-deduped via `dict.fromkeys` so lines matching multiple buckets appear only once.
+
+## agent_stage: summarizer wired into FAILED path (2026-05-19)
+
+`orchestrator/pipeline/agent_stage.py` FAILED branch now calls `summarize_agent_failure(workspace, stage_id, reason_kind="agent_failed", raw_error=result.error)` before transitioning. The returned summary (if any) is stored in `state.error`; the raw CLI error is always preserved in `state.raw_error` for forensics. Falls back to the raw CLI error when the summarizer returns `None`. `notify_failed_fn` receives the operator-facing string in both cases.

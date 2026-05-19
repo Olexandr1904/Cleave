@@ -74,6 +74,7 @@ class WorkspaceState:
     started_at: str = ""
     last_updated_at: str = ""
     error: str | None = None
+    raw_error: str | None = None
     manual_control_started_at: str | None = None
     manual_control_comment: str | None = None
     retry_at: str | None = None

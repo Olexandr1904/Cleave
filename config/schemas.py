@@ -116,6 +116,13 @@ class DashboardConfig:
 
 
 @dataclass
+class FailureSummarizerConfig:
+    enabled: bool = True
+    model: str = "claude-sonnet-4-6"
+    timeout_seconds: int = 30
+
+
+@dataclass
 class GlobalConfig:
     telegram: TelegramConfig = field(default_factory=TelegramConfig)
     claude: ClaudeConfig = field(default_factory=ClaudeConfig)
@@ -127,6 +134,7 @@ class GlobalConfig:
     pipeline: PipelineConfig = field(default_factory=PipelineConfig)
     intent_parser: IntentParserConfig = field(default_factory=IntentParserConfig)
     dashboard: DashboardConfig = field(default_factory=DashboardConfig)
+    failure_summarizer: FailureSummarizerConfig = field(default_factory=FailureSummarizerConfig)
 
 
 # --- Jira config (project-level) ---

@@ -185,3 +185,41 @@ class TestParseVcsSection:
         data = {"vcs": {"provider": "github", "skip_pre_pus_hook": True}}  # typo
         with pytest.raises(ConfigError):
             _parse_vcs_section(data, "test.yaml")
+
+
+def test_failure_summarizer_unknown_key_raises(tmp_path):
+    from config.config_loader import ConfigError, load_global_config
+    (tmp_path / "global.yaml").write_text(
+        "claude:\n  api_key: test\n"
+        "failure_summarizer:\n"
+        "  enabled: false\n"
+        "  unknown_field: oops\n"
+    )
+    with pytest.raises(ConfigError):
+        load_global_config(str(tmp_path))
+
+
+def test_failure_summarizer_defaults(tmp_path):
+    from config.config_loader import load_global_config
+    (tmp_path / "global.yaml").write_text(
+        "claude:\n  api_key: test\n"
+    )
+    cfg = load_global_config(str(tmp_path))
+    assert cfg.failure_summarizer.enabled is True
+    assert cfg.failure_summarizer.model == "claude-sonnet-4-6"
+    assert cfg.failure_summarizer.timeout_seconds == 30
+
+
+def test_failure_summarizer_overrides(tmp_path):
+    from config.config_loader import load_global_config
+    (tmp_path / "global.yaml").write_text(
+        "claude:\n  api_key: test\n"
+        "failure_summarizer:\n"
+        "  enabled: false\n"
+        "  model: claude-haiku-4-5-20251001\n"
+        "  timeout_seconds: 10\n"
+    )
+    cfg = load_global_config(str(tmp_path))
+    assert cfg.failure_summarizer.enabled is False
+    assert cfg.failure_summarizer.model == "claude-haiku-4-5-20251001"
+    assert cfg.failure_summarizer.timeout_seconds == 10

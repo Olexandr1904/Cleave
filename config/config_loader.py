@@ -25,6 +25,7 @@ from config.schemas import (
     CIConfig,
     ClaudeConfig,
     DefaultsConfig,
+    FailureSummarizerConfig,
     GitConfig,
     GitHubConfig,
     GitLabConfig,
@@ -163,6 +164,7 @@ def load_global_config(config_dir: str) -> GlobalConfig:
         logging=_parse_section(data, "logging", LoggingConfig, file_str),
         heartbeat=_parse_section(data, "heartbeat", HeartbeatConfig, file_str),
         operator=_parse_section(data, "operator", OperatorProfile, file_str),
+        failure_summarizer=_parse_section(data, "failure_summarizer", FailureSummarizerConfig, file_str),
     )
 
 

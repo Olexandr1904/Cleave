@@ -152,3 +152,172 @@ def test_truncated_label_when_tail_empties(tmp_path: Path) -> None:
     tail = slice_.split("=== LOG TAIL ===")[1].strip()
     # Should be the new truncated label, not the no-log-file one.
     assert tail == "(truncated)" or "(truncated)" in tail
+
+
+# ---------------------------------------------------------------------------
+# Tests for configure_summarizer and summarize_agent_failure (Task 4)
+# ---------------------------------------------------------------------------
+
+from orchestrator.agent_failure_summarizer import (  # noqa: E402
+    configure_summarizer,
+    summarize_agent_failure,
+)
+
+
+class _FakeMessageBlock:
+    def __init__(self, text: str) -> None:
+        self.type = "text"
+        self.text = text
+
+
+class _FakeResponse:
+    def __init__(self, text: str) -> None:
+        self.content = [_FakeMessageBlock(text)]
+
+
+class _FakeClient:
+    """Minimal stand-in for anthropic.AsyncAnthropic."""
+
+    def __init__(self, response_text: str | Exception = "") -> None:
+        self._response_text = response_text
+        self.calls: list[dict] = []
+
+        class _Messages:
+            def __init__(self, parent: "_FakeClient") -> None:
+                self._parent = parent
+
+            async def create(self, **kwargs):
+                self._parent.calls.append(kwargs)
+                if isinstance(self._parent._response_text, Exception):
+                    raise self._parent._response_text
+                return _FakeResponse(self._parent._response_text)
+
+        self.messages = _Messages(self)
+
+
+def _ws(tmp_path: Path) -> SimpleNamespace:
+    logs = tmp_path / "logs"
+    logs.mkdir()
+    (logs / "qa-agent.events.log").write_text(
+        "[10:00] event=tool_result is_error=True preview='OOM'\n"
+    )
+    reports = tmp_path / "source" / "ai_pipeline" / "T-1"
+    reports.mkdir(parents=True)
+    state = SimpleNamespace(
+        ticket_id="T-1", title="x", previous_state="QA",
+        stage_iterations={"qa": 2}, current_state="BLOCKED",
+    )
+    return SimpleNamespace(logs_dir=logs, reports_dir=reports, state=state)
+
+
+@pytest.fixture(autouse=True)
+def _reset_summarizer_state():
+    # Reset to disabled between tests so state doesn't leak.
+    configure_summarizer(client=None, model="", timeout_seconds=30, enabled=False)
+    yield
+    configure_summarizer(client=None, model="", timeout_seconds=30, enabled=False)
+
+
+async def test_summarize_returns_none_when_disabled(tmp_path: Path) -> None:
+    client = _FakeClient(response_text="Reason: x\nSuggested action: y")
+    configure_summarizer(client=client, model="m", timeout_seconds=30, enabled=False)
+    out = await summarize_agent_failure(_ws(tmp_path), "qa", reason_kind="missing_output")
+    assert out is None
+    assert client.calls == []
+
+
+async def test_summarize_returns_string_on_success(tmp_path: Path) -> None:
+    body = (
+        "Reason: Kotlin daemon OOM during ./gradlew testDebugUnitTest.\n"
+        "Suggested action: Raise -Xmx; retry the stage once resolved."
+    )
+    client = _FakeClient(response_text=body)
+    configure_summarizer(client=client, model="claude-sonnet-4-6",
+                         timeout_seconds=30, enabled=True)
+    out = await summarize_agent_failure(_ws(tmp_path), "qa", reason_kind="missing_output")
+    assert out == body
+    # Slice was passed to the LLM.
+    assert len(client.calls) == 1
+    sent = client.calls[0]
+    assert sent["model"] == "claude-sonnet-4-6"
+    assert sent["max_tokens"] == 200
+    assert sent["temperature"] == 0
+    user_content = sent["messages"][0]["content"]
+    assert "=== TICKET ===" in user_content
+    assert "=== CRASH SIGNALS ===" in user_content
+
+
+async def test_summarize_returns_none_on_timeout(tmp_path: Path, caplog) -> None:
+    import asyncio
+
+    class _SlowClient:
+        class _Messages:
+            async def create(self, **kw):
+                await asyncio.sleep(10)
+        messages = _Messages()
+
+    configure_summarizer(client=_SlowClient(), model="m",
+                         timeout_seconds=0.05, enabled=True)
+    out = await summarize_agent_failure(_ws(tmp_path), "qa", reason_kind="missing_output")
+    assert out is None
+    assert any("timeout" in r.message.lower() for r in caplog.records)
+
+
+async def test_summarize_returns_none_on_api_error(tmp_path: Path, caplog) -> None:
+    client = _FakeClient(response_text=RuntimeError("rate limit"))
+    configure_summarizer(client=client, model="m", timeout_seconds=30, enabled=True)
+    out = await summarize_agent_failure(_ws(tmp_path), "qa", reason_kind="missing_output")
+    assert out is None
+    assert any("api_error" in r.message.lower() for r in caplog.records)
+
+
+async def test_summarize_returns_none_on_malformed_output(tmp_path: Path, caplog) -> None:
+    client = _FakeClient(response_text="here's what I think happened: stuff broke")
+    configure_summarizer(client=client, model="m", timeout_seconds=30, enabled=True)
+    out = await summarize_agent_failure(_ws(tmp_path), "qa", reason_kind="missing_output")
+    assert out is None
+    assert any("malformed" in r.message.lower() for r in caplog.records)
+
+
+async def test_summarize_returns_none_when_too_long(tmp_path: Path, caplog) -> None:
+    long_body = (
+        "Reason: " + ("x" * 400) + "\nSuggested action: " + ("y" * 200)
+    )
+    client = _FakeClient(response_text=long_body)
+    configure_summarizer(client=client, model="m", timeout_seconds=30, enabled=True)
+    out = await summarize_agent_failure(_ws(tmp_path), "qa", reason_kind="missing_output")
+    assert out is None
+    assert any("too_long" in r.message.lower() for r in caplog.records)
+
+
+async def test_summarize_passes_raw_error_for_agent_failed(tmp_path: Path) -> None:
+    body = "Reason: a.\nSuggested action: b."
+    client = _FakeClient(response_text=body)
+    configure_summarizer(client=client, model="m", timeout_seconds=30, enabled=True)
+    out = await summarize_agent_failure(
+        _ws(tmp_path), "qa", reason_kind="agent_failed", raw_error="exit 137"
+    )
+    assert out == body
+    sent_content = client.calls[0]["messages"][0]["content"]
+    assert "raw_error: exit 137" in sent_content
+
+
+async def test_summarize_returns_none_when_response_content_malformed(
+    tmp_path: Path, caplog
+) -> None:
+    """If the LLM client returns a response with malformed content (e.g.
+    non-iterable), summarize_agent_failure logs api_error and returns None."""
+    class _BrokenResponse:
+        content = 42  # not iterable
+
+    class _BrokenClient:
+        class _Messages:
+            async def create(self, **kw):
+                return _BrokenResponse()
+        messages = _Messages()
+
+    configure_summarizer(client=_BrokenClient(), model="m",
+                         timeout_seconds=30, enabled=True)
+    out = await summarize_agent_failure(_ws(tmp_path), "qa", reason_kind="missing_output")
+    assert out is None
+    assert any("api_error" in r.message.lower() for r in caplog.records)

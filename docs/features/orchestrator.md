@@ -116,6 +116,8 @@ Central daemon process that continuously polls for work, manages isolated worksp
 - `_on_ticket_done` uses `tracker.list_transitions` + `tracker.transition_ticket` (pipeline-side fuzzy keyword matching kept; transport-side moved into adapter).
 - Result: ZERO references to `tracker._request`, `_email`, or `_token` remain in `orchestrator/`.
 
+| 2026-05-19 | `build_blocked_reason` converted to async. When the stage runtime output file is missing, calls `summarize_agent_failure(reason_kind="missing_output")` for a 'Reason / Suggested action' string from the LLM; falls back to the prior generic message on None. `notify_verification_blocked` updated to await the async callback. `build_blocked_reason_fn` parameter annotation tightened to `Callable[[Any, str], Awaitable[str]]`. |
+
 ## Layer extraction (2026-05-11)
 
 Beginning the layer-cut of the monolithic `Orchestrator` class. Each extraction creates a new module under `orchestrator/` and leaves a thin method shim on the `Orchestrator` class for backward compatibility with existing call sites and tests.

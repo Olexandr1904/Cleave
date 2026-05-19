@@ -7,8 +7,9 @@ class instance, no shared mutable holders.
 from __future__ import annotations
 
 import logging
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from datetime import datetime, timezone
+from typing import Any
 
 from integrations.base.notifier import Button, NotifierInterface
 from orchestrator import tg_format
@@ -191,7 +192,7 @@ async def notify_verification_blocked(
     workspace: Workspace,
     stage_id: str,
     verify_reason: str,
-    build_blocked_reason_fn: Callable[[Workspace, str], str],
+    build_blocked_reason_fn: Callable[[Any, str], Awaitable[str]],
 ) -> None:
     """Send a TG notification for a stage that just failed verification.
 
@@ -210,7 +211,7 @@ async def notify_verification_blocked(
     hdr = tg_format.tg_header("⚠️", workspace.state.company_id, workspace.state.ticket_id, title)
     header = f"{hdr}\nStage: {stage_id} — verification failed\n"
 
-    agent_reason = tg_format.strip_markdown(build_blocked_reason_fn(workspace, stage_id))
+    agent_reason = tg_format.strip_markdown(await build_blocked_reason_fn(workspace, stage_id))
     combined = f"Verification failed: {verify_reason}\n\n{agent_reason}"
     hint = (
         f"\n{sep}\n"

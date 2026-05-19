@@ -12,6 +12,7 @@ from typing import Any
 
 from integrations.base.notifier import NotifierInterface
 from orchestrator import tg_format
+from orchestrator.agent_failure_summarizer import summarize_agent_failure
 from orchestrator.constants import (
     REPORT_BA_QUESTIONS,
     STAGE_RUNTIME_OUTPUT,
@@ -37,7 +38,7 @@ def truncate_reason(text: str) -> str:
     return text[:BLOCKED_REASON_MAX_CHARS] + "…"
 
 
-def build_blocked_reason(workspace: Any, stage_id: str) -> str:
+async def build_blocked_reason(workspace: Any, stage_id: str) -> str:
     """Extract a human-readable reason for why a workspace is blocked.
 
     For analysis: prefer the BA agent's numbered questions
@@ -68,7 +69,15 @@ def build_blocked_reason(workspace: Any, stage_id: str) -> str:
         if candidate.exists():
             stage_output = candidate
         else:
-            return f"{stage_id} agent produced no output (may have timed out or crashed). Check pipeline logs."
+            summary = await summarize_agent_failure(
+                workspace, stage_id, reason_kind="missing_output"
+            )
+            if summary:
+                return summary
+            return (
+                f"{stage_id} agent produced no output "
+                f"(may have timed out or crashed). Check pipeline logs."
+            )
 
     if stage_output is None:
         # Stage has no known agent output — don't show an unrelated stage's file.
@@ -133,7 +142,9 @@ async def handle_escalate(
     else:
         header = f"{hdr}\nStage: {stage}\n"
 
-    reason = tg_format.strip_markdown(build_blocked_reason(workspace, stage_id_str))
+    reason = tg_format.strip_markdown(
+        await build_blocked_reason(workspace, stage_id_str)
+    )
     if is_max_iterations:
         hint = (
             f"\n{sep}\n"

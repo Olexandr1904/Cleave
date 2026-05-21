@@ -68,6 +68,18 @@ class DefaultsConfig:
     poll_interval_seconds: int = 60
     max_iterations: MaxIterationsConfig = field(default_factory=MaxIterationsConfig)
     max_parallel_tickets: int = 7
+    # Build-heavy stages (dev, qa) each spawn a gradle daemon + Kotlin compiler
+    # daemon holding gigabytes of heap. Running more than one at a time on a
+    # modest host exhausts RAM and the Kotlin daemon gets OOM-killed mid-compile.
+    # Cap concurrent build stages independently of the max_parallel_tickets
+    # fan-out (light stages like BA/scope-guard still run in parallel).
+    max_parallel_builds: int = 1
+    # Cap the JVM heap the build toolchain may request, written to
+    # GRADLE_USER_HOME/gradle.properties at startup so it overrides each repo's
+    # own (often oversized) org.gradle.jvmargs / kotlin.daemon.jvmargs.
+    cap_build_memory: bool = True
+    build_gradle_heap_mb: int = 2048
+    build_kotlin_heap_mb: int = 1536
     pr_comment_fetch_delay_minutes: int = 30
     agent_budget: AgentBudget = field(default_factory=AgentBudget)
     # Per-agent overrides keyed by agent id (e.g. "dev-agent"). Missing keys

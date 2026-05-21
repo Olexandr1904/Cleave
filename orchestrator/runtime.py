@@ -20,6 +20,15 @@ from workspace.workspace_manager import WorkspaceManager
 
 logger = logging.getLogger(__name__)
 
+# Stages whose agent runs the build toolchain (gradle + Kotlin compiler daemon).
+# These are throttled by the build semaphore on top of the general one.
+_BUILD_STAGES = {Stage.DEV, Stage.QA}
+
+
+def is_build_stage(state: Any) -> bool:
+    """True if `state` is a build-heavy stage gated by the build semaphore."""
+    return state in _BUILD_STAGES
+
 
 class Runtime:
     """Daemon shell. Owns the event loop, semaphore, signal handling, and
@@ -67,6 +76,15 @@ class Runtime:
         except (TypeError, ValueError, AttributeError):
             max_parallel = 3
         self._agent_semaphore = asyncio.Semaphore(max_parallel)
+
+        # Build-heavy stages (dev, qa) run gradle + the Kotlin compiler daemon and
+        # are gated by a stricter semaphore so concurrent builds don't OOM the
+        # host. Light stages (BA, scope-guard) only take the general semaphore.
+        try:
+            max_builds = int(global_config.defaults.max_parallel_builds)
+        except (TypeError, ValueError, AttributeError):
+            max_builds = 1
+        self._build_semaphore = asyncio.Semaphore(max(1, max_builds))
 
     @property
     def active_workspaces(self) -> list[Workspace]:
@@ -155,6 +173,31 @@ class Runtime:
                     data={"target_state": target},
                 )
 
+    async def _advance_one(self, ws: Workspace) -> None:
+        """Advance a single workspace under the concurrency semaphores.
+
+        All advances take the general semaphore; build-heavy stages (dev, qa)
+        additionally take the stricter build semaphore so concurrent gradle /
+        Kotlin-daemon builds don't exhaust host memory.
+        """
+        async with self._agent_semaphore:
+            try:
+                if is_build_stage(ws.state.current_state):
+                    async with self._build_semaphore:
+                        await self._advance_callback(ws)
+                else:
+                    await self._advance_callback(ws)
+            except Exception as e:
+                logger.error(
+                    "Workspace %s error: %s",
+                    ws.state.ticket_id, e, exc_info=True,
+                )
+                try:
+                    ws.transition(Stage.FAILED)
+                    ws.update_state(error=str(e))
+                except Exception:
+                    pass
+
     async def poll_cycle(self) -> None:
         """Single poll + advance cycle."""
         # Pick up any projects added to config-live/ since last cycle (wizard or hand-edit).
@@ -170,28 +213,13 @@ class Runtime:
         if trackers:
             await self._poll_callback()
 
-        # 2. Advance active workspaces in parallel (bounded by semaphore)
-        async def _safe_advance(ws: Workspace) -> None:
-            async with self._agent_semaphore:
-                try:
-                    await self._advance_callback(ws)
-                except Exception as e:
-                    logger.error(
-                        "Workspace %s error: %s",
-                        ws.state.ticket_id, e, exc_info=True,
-                    )
-                    try:
-                        ws.transition(Stage.FAILED)
-                        ws.update_state(error=str(e))
-                    except Exception:
-                        pass
-
+        # 2. Advance active workspaces in parallel (bounded by semaphores)
         # Skip workspaces in terminal or clearly waiting states
         _SKIP = {Stage.DONE, Stage.ARCHIVED, Stage.BLOCKED,
                  Stage.MANUAL_CONTROL, Stage.DEFERRED, Stage.FAILED, Stage.PAUSED}
         active = [ws for ws in self._active_workspaces if ws.state.current_state not in _SKIP]
         if active:
-            await asyncio.gather(*[_safe_advance(ws) for ws in active])
+            await asyncio.gather(*[self._advance_one(ws) for ws in active])
 
         # 3. Cleanup terminal workspaces from active list and record them for
         # /status to show recent completions even after they leave the list.

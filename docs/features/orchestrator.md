@@ -170,3 +170,11 @@ Review fixes (2026-05-19): text-accumulation loop wrapped in try/except so non-i
 ## main: failure summarizer wired at daemon startup (2026-05-19)
 
 `main.py` now calls `configure_summarizer` immediately after the LLM adapter selection block. An `AsyncAnthropic` client is constructed from `global_config.claude.api_key` and passed to the summarizer module. When `failure_summarizer.enabled` is false or no API key is configured, the summarizer is explicitly disabled (so `summarize_agent_failure` returns `None` safely). Startup prints `Failure summarizer: enabled (model=…)` or `Failure summarizer: disabled` to match the existing `LLM: …` style.
+
+## Build concurrency + JVM heap caps (2026-05-21)
+
+New module `orchestrator/build_env.py` and a build-gating layer in `runtime.py` address host OOMs from concurrent Android builds. Dev and QA stages each spawn a gradle daemon plus a Kotlin compiler daemon, each able to claim gigabytes of heap from a repo's own `gradle.properties`; running several at once oversubscribes RAM and the Kotlin daemon gets OOM-killed mid-compile (observed `EOFException` in `compileWithDaemon`).
+
+Two independent guards, both on `DefaultsConfig`:
+- **Build semaphore** (`max_parallel_builds`, default 1): `Runtime` now holds a second `asyncio.Semaphore` that gates only build-heavy stages (`is_build_stage` → `{DEV, QA}`) on top of the general agent semaphore. Light stages (BA, scope-guard) still fan out under `max_parallel_tickets`. The per-workspace advance + error handling that was inline in `poll_cycle` is now `Runtime._advance_one`, which acquires the general semaphore always and the build semaphore only for build stages.
+- **Heap caps** (`cap_build_memory`, `build_gradle_heap_mb`=2048, `build_kotlin_heap_mb`=1536): `apply_build_memory_limits(gradle_user_home, …)` writes capped `org.gradle.jvmargs` / `kotlin.daemon.jvmargs` into `GRADLE_USER_HOME/gradle.properties` (preserving other keys), which overrides each repo's oversized project values without editing checked-out source. `main.py` calls it at startup when `cap_build_memory` is set, defaulting `GRADLE_USER_HOME` to `~/.gradle`, and prints the applied caps.

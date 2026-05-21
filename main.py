@@ -292,6 +292,28 @@ def main(argv: list[str] | None = None) -> int:
         configure_summarizer(client=None, model="", timeout_seconds=30, enabled=False)
         print("  Failure summarizer: disabled")
 
+    # Cap the JVM heap the build toolchain may request, so concurrent/oversized
+    # Android builds don't OOM the host (Kotlin daemon getting killed mid-compile).
+    if global_config.defaults.cap_build_memory:
+        import os
+        from orchestrator.build_env import apply_build_memory_limits
+        gradle_user_home = Path(
+            os.environ.get("GRADLE_USER_HOME") or (Path.home() / ".gradle")
+        )
+        try:
+            props = apply_build_memory_limits(
+                gradle_user_home,
+                gradle_heap_mb=global_config.defaults.build_gradle_heap_mb,
+                kotlin_heap_mb=global_config.defaults.build_kotlin_heap_mb,
+            )
+            print(
+                f"  Build memory caps applied: {props} "
+                f"(gradle={global_config.defaults.build_gradle_heap_mb}MB, "
+                f"kotlin={global_config.defaults.build_kotlin_heap_mb}MB)"
+            )
+        except OSError as e:
+            print(f"  WARNING: could not write build memory caps: {e}")
+
     # Initialize workspace manager
     workspace_manager = WorkspaceManager(base_dir=global_config.workspaces.base_dir)
 

@@ -231,6 +231,16 @@ export async function renderBoard(projectId, showDone = true) {
   }
 }
 
+const HEALTH_MINIMIZED_KEY = 'dashboard.healthStrip.minimized';
+
+function isHealthMinimized() {
+  try { return localStorage.getItem(HEALTH_MINIMIZED_KEY) === '1'; } catch (e) { return false; }
+}
+
+function setHealthMinimized(v) {
+  try { localStorage.setItem(HEALTH_MINIMIZED_KEY, v ? '1' : '0'); } catch (e) {}
+}
+
 async function renderHealthStrip(container) {
   if (!container) return;
   let data;
@@ -271,16 +281,22 @@ async function renderHealthStrip(container) {
   }).join('');
 
   const topStatus = unhealthy.some(p => p.status === 'red') ? 'red' : 'yellow';
+  const minimized = isHealthMinimized();
+  const stripClass = `health-strip ${topStatus}${minimized ? ' minimized' : ''}`;
+  const toggleTitle = minimized ? 'Expand' : 'Minimize';
+  const toggleGlyph = minimized ? '+' : '–';
   container.innerHTML = `
-    <div class="health-strip ${topStatus}">
+    <div class="${stripClass}">
       <div class="health-strip-header">
         <span class="health-dot ${topStatus}"></span>
         <span>${unhealthy.length} project(s) need attention</span>
-        <button class="health-refresh" id="health-refresh">&#x21bb;</button>
+        <button class="health-refresh" id="health-toggle" title="${toggleTitle}">${toggleGlyph}</button>
+        <button class="health-refresh" id="health-refresh" title="Refresh">&#x21bb;</button>
       </div>
-      ${rowsHtml}
+      <div class="health-strip-body">${rowsHtml}</div>
     </div>`;
   bindHealthRefresh(container);
+  bindHealthToggle(container);
 }
 
 function bindHealthRefresh(container) {
@@ -294,6 +310,16 @@ function bindHealthRefresh(container) {
         btn.disabled = false;
         renderHealthStrip(container);
       }
+    });
+  }
+}
+
+function bindHealthToggle(container) {
+  const btn = container.querySelector('#health-toggle');
+  if (btn) {
+    btn.addEventListener('click', () => {
+      setHealthMinimized(!isHealthMinimized());
+      renderHealthStrip(container);
     });
   }
 }

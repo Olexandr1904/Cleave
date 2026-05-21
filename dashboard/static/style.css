@@ -873,6 +873,16 @@
   flex-direction: column;
   gap: 10px;
 }
+.health-strip.minimized {
+  gap: 0;
+  padding: 6px 14px;
+}
+.health-strip.minimized .health-strip-body { display: none; }
+.health-strip-body {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
 .health-strip.green {
   background: #0d1f17;
   border: 1px solid #238636;

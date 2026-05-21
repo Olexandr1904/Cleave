@@ -6,6 +6,7 @@ import json
 import logging
 import os
 import tempfile
+import time
 from pathlib import Path
 from typing import Any
 
@@ -129,6 +130,53 @@ def _maybe_backfill_title(ws_root: Path, data: dict) -> str:
     return data.get("ticket_id", "")
 
 
+def _dir_size_bytes(root: Path) -> int:
+    """Total size of all regular files under `root`, in bytes.
+
+    Iterative os.scandir walk (cheaper than rglob+stat on large trees). Symlinks
+    are not followed and their targets are not counted, so nothing is summed
+    twice. Unreadable entries are skipped rather than raising.
+    """
+    total = 0
+    stack = [str(root)]
+    while stack:
+        path = stack.pop()
+        try:
+            with os.scandir(path) as it:
+                for entry in it:
+                    try:
+                        if entry.is_symlink():
+                            continue
+                        if entry.is_dir(follow_symlinks=False):
+                            stack.append(entry.path)
+                        else:
+                            total += entry.stat(follow_symlinks=False).st_size
+                    except OSError:
+                        continue
+        except OSError:
+            continue
+    return total
+
+
+# Per-workspace disk-size memo. Walking a multi-GB Android checkout on every
+# board refresh would hammer the disk, so results are cached briefly. Sizes
+# only matter for operator cleanup decisions, so short staleness is fine.
+_DISK_SIZE_TTL_SECONDS = 300.0
+_disk_size_cache: dict[str, tuple[int, float]] = {}
+
+
+def _workspace_disk_bytes(ws_root: Path) -> int:
+    """Cached `_dir_size_bytes` for a workspace root (TTL-bounded, in-process)."""
+    key = str(ws_root)
+    now = time.monotonic()
+    cached = _disk_size_cache.get(key)
+    if cached is not None and now - cached[1] < _DISK_SIZE_TTL_SECONDS:
+        return cached[0]
+    size = _dir_size_bytes(ws_root)
+    _disk_size_cache[key] = (size, now)
+    return size
+
+
 def _scan_all_workspaces(
     base_dir: str,
     projects: dict[str, Any] | None = None,
@@ -183,6 +231,7 @@ def _scan_all_workspaces(
                 "reports": reports,
                 "meta": meta,
                 "workspace_root": str(ws_root),
+                "disk_bytes": _workspace_disk_bytes(ws_root),
                 "links": _build_external_links(data, projects),
                 "kind": kind,
                 "model": model_id,

@@ -8,7 +8,48 @@ from starlette.testclient import TestClient
 
 from dashboard.event_store import EventStore
 from dashboard.events import Event, EventBus
-from dashboard.web import create_app, _scan_all_workspaces
+from dashboard.web import create_app, _dir_size_bytes, _scan_all_workspaces
+
+
+class TestDirSizeBytes:
+    def test_sums_nested_file_sizes(self, tmp_path):
+        (tmp_path / "a.txt").write_bytes(b"x" * 100)
+        sub = tmp_path / "sub" / "deep"
+        sub.mkdir(parents=True)
+        (sub / "b.bin").write_bytes(b"y" * 250)
+        assert _dir_size_bytes(tmp_path) == 350
+
+    def test_missing_dir_returns_zero(self, tmp_path):
+        assert _dir_size_bytes(tmp_path / "nope") == 0
+
+    def test_does_not_follow_symlinks(self, tmp_path):
+        real = tmp_path / "real"
+        real.mkdir()
+        (real / "f").write_bytes(b"z" * 500)
+        link = tmp_path / "link"
+        link.symlink_to(real, target_is_directory=True)
+        # The 500-byte file is counted once (via real/), not again via the symlink.
+        assert _dir_size_bytes(tmp_path) == 500
+
+
+class TestScanIncludesDiskBytes:
+    def _write_state(self, root: Path):
+        root.mkdir(parents=True, exist_ok=True)
+        (root / "state.json").write_text(json.dumps({
+            "ticket_id": "T-1", "company_id": "acme", "repo_id": "acme-app",
+            "current_state": "QA", "title": "t",
+        }), encoding="utf-8")
+
+    def test_card_dict_has_disk_bytes(self, tmp_path):
+        ws = tmp_path / "acme" / "acme-app" / "tickets" / "T-1"
+        self._write_state(ws)
+        (ws / "source").mkdir()
+        (ws / "source" / "big.bin").write_bytes(b"q" * 1234)
+
+        results = _scan_all_workspaces(str(tmp_path))
+
+        assert results[0]["disk_bytes"] >= 1234
+        assert isinstance(results[0]["disk_bytes"], int)
 
 
 @pytest.fixture

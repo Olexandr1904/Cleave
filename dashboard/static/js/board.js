@@ -1,7 +1,7 @@
 // board.js — board view rendering
 
 import { loadWorkspaces, loadHealth } from './api.js';
-import { esc, timeAgo, stateBadgeHtml } from './helpers.js';
+import { esc, timeAgo, fmtBytes, stateBadgeHtml } from './helpers.js';
 import { approveWorkspace, pauseWorkspace, unpauseWorkspace, retryWorkspace, clearGradleAndRetry } from './actions.js';
 
 // Mirrors orchestrator/gradle_remediation.py. Keep these patterns in sync —
@@ -349,6 +349,11 @@ function renderCard(ws) {
   if (ws.repo_id) metaParts.push(esc(ws.repo_id));
   metaParts.push(esc(timeAgo(ws.started_at)));
   if (totalIters > 0) metaParts.push(`iter ${totalIters}`);
+  const sizeStr = fmtBytes(ws.disk_bytes);
+  if (sizeStr) {
+    const big = ws.disk_bytes >= 1024 * 1024 * 1024;  // ≥1 GB → flag as a disk hog
+    metaParts.push(`<span class="card-size${big ? ' card-size-big' : ''}" title="Workspace disk usage">${esc(sizeStr)}</span>`);
+  }
   const metaHtml = `<div class="card-meta">${metaParts.join(' <span class="card-meta-sep">·</span> ')}</div>`;
 
   // Footer: model + PR + Jira tags + contextual button (Approve/Clean)

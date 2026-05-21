@@ -217,6 +217,8 @@
     margin-bottom: 8px;
   }
   .card-meta-sep { color: #30363d; }
+  .card-size { font-variant-numeric: tabular-nums; }
+  .card-size-big { color: #f0883e; font-weight: 600; }
 
   /* Line 5 — footer (conditional) */
   .card-footer {

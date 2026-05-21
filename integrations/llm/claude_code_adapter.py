@@ -89,6 +89,43 @@ def _classify_cli_error(stdout: str, stderr: str) -> QuotaExhaustedError | None:
     return None
 
 
+def _rate_limit_retry_at(info: dict) -> datetime | None:
+    """Extract the quota reset time from a `rate_limit_event`'s info block.
+
+    `resetsAt` is epoch SECONDS (observed in the CLI stream). Returns a
+    tz-aware UTC datetime, or None when absent/unparseable so the caller
+    falls back to the default quota retry delay.
+    """
+    raw = info.get("resetsAt")
+    if not isinstance(raw, (int, float)) or isinstance(raw, bool) or raw <= 0:
+        return None
+    try:
+        return datetime.fromtimestamp(raw, tz=timezone.utc)
+    except (ValueError, OverflowError, OSError):
+        return None
+
+
+def _stall_as_quota(progress: "_ProgressState") -> QuotaExhaustedError | None:
+    """Reclassify a mid-run stall as a quota wait when it was caused by a
+    rate limit.
+
+    Signature (observed on ACME-14816/14819): the last stream event was a
+    `rate_limit_event` and then the CLI went silent — it is blocked waiting
+    for the 5-hour window to reset, not hung. Returning a QuotaExhaustedError
+    routes it into the existing defer/auto-resume path instead of a permanent
+    FAILED. A stall after any other event is a genuine hang -> None.
+    """
+    if progress.last_event_kind != "rate_limit_event":
+        return None
+    retry_at = _rate_limit_retry_at(progress.last_rate_limit_info or {})
+    when = retry_at.strftime("%H:%M UTC") if retry_at else "an unknown time"
+    return QuotaExhaustedError(
+        f"Claude Code CLI rate-limited (usage limit reached); idle after "
+        f"rate_limit_event, resets at {when}",
+        retry_at=retry_at,
+    )
+
+
 # Map our tool names to Claude Code's built-in tool names
 TOOL_MAP = {
     "read_file": "Read",
@@ -511,6 +548,17 @@ class ClaudeCodeAdapter(LLMInterface):
             raise RuntimeError(f"Claude Code CLI timed out after {timeout}s")
 
         if stalled:
+            # A stall whose last event was a rate_limit_event is a quota wait,
+            # not a hang: route it into the defer/auto-resume path with the
+            # real reset time instead of failing the ticket permanently.
+            quota = _stall_as_quota(progress)
+            if quota is not None:
+                _write_progress(
+                    progress_log_path,
+                    f"end status=rate_limited duration={progress.elapsed():.1f}s "
+                    f"retry_at={quota.retry_at.isoformat() if quota.retry_at else None}",
+                )
+                raise quota
             _write_progress(
                 progress_log_path,
                 f"end status=stalled duration={progress.elapsed():.1f}s "
@@ -673,6 +721,7 @@ class _ProgressState:
         "last_event_kind", "last_tool", "last_text",
         "stdout_tail", "stderr_tail", "final_event",
         "input_tokens_running", "output_tokens_running",
+        "last_rate_limit_info",
     )
 
     def __init__(self) -> None:
@@ -691,6 +740,7 @@ class _ProgressState:
         self.final_event: dict | None = None
         self.input_tokens_running = 0
         self.output_tokens_running = 0
+        self.last_rate_limit_info: dict | None = None
 
     def elapsed(self) -> float:
         return time.monotonic() - self.started_at
@@ -913,6 +963,7 @@ def _handle_stream_event(
 
     if kind == "rate_limit_event":
         info = evt.get("rate_limit_info", {}) or {}
+        progress.last_rate_limit_info = info
         _write_progress(
             log_path,
             f"event=rate_limit status={info.get('status', '')!r} "

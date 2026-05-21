@@ -9,7 +9,10 @@ import pytest
 
 from integrations.llm.claude_code_adapter import (
     QuotaExhaustedError,
+    _ProgressState,
     _classify_cli_error,
+    _rate_limit_retry_at,
+    _stall_as_quota,
 )
 
 
@@ -112,3 +115,55 @@ class TestClassifyCliError:
             "result": "Internal server error",
         })
         assert _classify_cli_error(stdout, "") is None
+
+
+class TestRateLimitRetryAt:
+    def test_resets_at_epoch_seconds_to_utc(self):
+        # resetsAt is epoch SECONDS (observed in the CLI rate_limit_event).
+        # 1776196800 == 2026-04-14T20:00:00 UTC.
+        assert _rate_limit_retry_at({"resetsAt": 1776196800}) == datetime(
+            2026, 4, 14, 20, 0, 0, tzinfo=timezone.utc
+        )
+
+    def test_missing_resets_at_returns_none(self):
+        assert _rate_limit_retry_at({}) is None
+
+    def test_zero_or_negative_resets_at_returns_none(self):
+        assert _rate_limit_retry_at({"resetsAt": 0}) is None
+        assert _rate_limit_retry_at({"resetsAt": -5}) is None
+
+    def test_non_numeric_resets_at_returns_none(self):
+        assert _rate_limit_retry_at({"resetsAt": "soon"}) is None
+
+
+class TestStallAsQuota:
+    def _progress(self, last_event_kind, rate_limit_info=None):
+        p = _ProgressState()
+        p.last_event_kind = last_event_kind
+        p.last_rate_limit_info = rate_limit_info
+        return p
+
+    def test_stall_right_after_rate_limit_event_is_quota(self):
+        # The exact 14816/14819 signature: a rate_limit_event was the last
+        # thing seen, then total silence until the watchdog fired.
+        info = {
+            "rateLimitType": "five_hour",
+            "overageStatus": "rejected",
+            "resetsAt": 1776196800,
+        }
+        err = _stall_as_quota(self._progress("rate_limit_event", info))
+        assert isinstance(err, QuotaExhaustedError)
+        assert err.retry_at == datetime(2026, 4, 14, 20, 0, 0, tzinfo=timezone.utc)
+        assert "limit" in str(err).lower()
+
+    def test_stall_after_rate_limit_event_without_reset_still_quota(self):
+        # No parseable resetsAt -> still a quota defer, retry_at None so the
+        # default retry delay applies.
+        err = _stall_as_quota(self._progress("rate_limit_event", {}))
+        assert isinstance(err, QuotaExhaustedError)
+        assert err.retry_at is None
+
+    def test_stall_after_normal_tool_is_not_quota(self):
+        # A genuine hang mid-work (last event was a tool/assistant turn) is not
+        # a quota wait — it must stay a generic stall, not auto-defer forever.
+        assert _stall_as_quota(self._progress("assistant", None)) is None

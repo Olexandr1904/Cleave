@@ -38,6 +38,46 @@ def truncate_reason(text: str) -> str:
     return text[:BLOCKED_REASON_MAX_CHARS] + "…"
 
 
+def build_max_iterations_hint(
+    ticket_id: str,
+    stage_id: str,
+    iterations: int,
+    *,
+    has_output: bool,
+    sep: str,
+) -> str:
+    """Operator options block for a stage that hit its attempt cap.
+
+    Distinguishes the two cases the operator keeps confusing:
+    `has_output=True`  — the agent ran and produced a result that didn't pass;
+    `has_output=False` — the agent never produced a result (timed out, crashed,
+    or was interrupted), so there is nothing to show and "skip"/"reset & retry"
+    are the real levers.
+    """
+    if has_output:
+        lead = (
+            f"The agent ran {iterations} times without completing this stage. "
+            f"Last output is shown above — it may say PASS but something is still "
+            f"blocking progress."
+        )
+    else:
+        lead = (
+            f"The agent ran {iterations} times but did not produce any result "
+            f"(each attempt timed out, crashed, or was interrupted before writing "
+            f"output) — there is no agent output to show."
+        )
+    return (
+        f"\n{sep}\n"
+        f"{lead}\n\n"
+        f"Options:\n"
+        f"  Reply with context — give the agent more information and resume\n"
+        f"  Reply \"skip\" — advance past this stage to the next one\n"
+        f"  Reply \"retry\" — re-run this stage (resets the attempt counter)\n"
+        f"  Send \"retry {ticket_id} from {stage_id}\" — reset counter and run again\n"
+        f"  Send \"retry {ticket_id} from dev\" — restart the dev agent from scratch"
+    )
+
+
 async def build_blocked_reason(workspace: Any, stage_id: str) -> str:
     """Extract a human-readable reason for why a workspace is blocked.
 
@@ -138,7 +178,7 @@ async def handle_escalate(
         stage_def = workflow.stages.get(stage_id_str) if workflow else None
         cap = stage_def.max_iterations if stage_def else "?"
         iterations = state.stage_iterations.get(stage_id_str, 0)
-        header = f"{hdr}\nStage: {stage} — stuck after {iterations} attempts\n"
+        header = f"{hdr}\nStage: {stage} — stuck after {iterations}/{cap} attempts\n"
     else:
         header = f"{hdr}\nStage: {stage}\n"
 
@@ -146,16 +186,11 @@ async def handle_escalate(
         await build_blocked_reason(workspace, stage_id_str)
     )
     if is_max_iterations:
-        hint = (
-            f"\n{sep}\n"
-            f"The agent ran {iterations} times without completing this stage. "
-            f"Last output is shown above — it may say PASS but something is still blocking progress.\n\n"
-            f"Options:\n"
-            f"  Reply with context — give the agent more information and resume\n"
-            f"  Reply \"skip\" — advance past this stage to the next one\n"
-            f"  Reply \"retry\" — re-run this stage\n"
-            f"  Send \"retry {state.ticket_id} from {stage_id_str}\" — reset counter and run again\n"
-            f"  Send \"retry {state.ticket_id} from dev\" — restart the dev agent from scratch"
+        runtime_name = STAGE_RUNTIME_OUTPUT.get(stage_id_str)
+        has_output = bool(runtime_name) and (workspace.reports_dir / runtime_name).exists()
+        hint = build_max_iterations_hint(
+            state.ticket_id, stage_id_str, iterations,
+            has_output=has_output, sep=sep,
         )
     elif is_agent_stage:
         hint = (

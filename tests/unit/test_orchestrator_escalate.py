@@ -7,8 +7,31 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from orchestrator.constants import REPORT_BA_QUESTIONS
-from orchestrator.escalation import handle_escalate
+from orchestrator.escalation import build_max_iterations_hint, handle_escalate
 from workspace.workspace import Stage
+
+
+class TestMaxIterationsHint:
+    def test_no_output_does_not_claim_last_output_shown(self):
+        # When the agent never produced a result, the message must NOT tell the
+        # operator "Last output is shown above" — that line is the misleading bit.
+        h = build_max_iterations_hint("ACME-1", "qa", 2, has_output=False, sep="---")
+        assert "Last output is shown above" not in h
+        assert "did not produce" in h.lower()
+        # The action that actually works (resets the cap) is offered.
+        assert "retry ACME-1 from qa" in h
+
+    def test_with_output_references_last_output(self):
+        # When there IS agent output, keep pointing the operator at it.
+        h = build_max_iterations_hint("ACME-1", "qa", 2, has_output=True, sep="---")
+        assert "Last output is shown above" in h
+        assert "retry ACME-1 from qa" in h
+
+    def test_always_offers_skip_and_counter_reset(self):
+        for has_output in (True, False):
+            h = build_max_iterations_hint("T-9", "dev", 3, has_output=has_output, sep="-")
+            assert "retry T-9 from dev" in h
+            assert "skip" in h.lower()
 
 
 def _make_workspace(tmp_path: Path) -> MagicMock:

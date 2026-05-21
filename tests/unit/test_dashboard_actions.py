@@ -124,6 +124,25 @@ class TestRetryEndpoint:
         resp = client.post("/api/workspaces/T-1/retry")
         assert resp.status_code == 400
 
+    def test_retry_resets_target_stage_counter(self, client, orchestrator, tmp_path):
+        # A QA ticket stuck after hitting its attempt cap: the dashboard Retry
+        # must clear stage_iterations["qa"] (like the TG "retry … from qa" command)
+        # so the driver actually re-dispatches instead of instantly re-escalating.
+        from orchestrator.constants import REPORT_SCOPE_GUARD
+        ws = _make_workspace("T-1", "BLOCKED", previous="QA", error="stuck")
+        ws.reports_dir = tmp_path
+        (tmp_path / REPORT_SCOPE_GUARD).write_text("scope ok")  # -> target QA
+        ws.state.stage_iterations = {"analysis": 1, "dev": 1, "qa": 2}
+        orchestrator.get_active_workspaces.return_value = [ws]
+
+        resp = client.post("/api/workspaces/T-1/retry")
+
+        assert resp.status_code == 200
+        assert resp.json()["new_state"] == "QA"
+        assert ws.state.stage_iterations["qa"] == 0
+        # Untouched stages keep their counts.
+        assert ws.state.stage_iterations["dev"] == 1
+
 
 class TestClearGradleAndRetryEndpoint:
     def test_clears_cache_and_retries_when_signature_matches(

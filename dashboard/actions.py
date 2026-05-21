@@ -20,6 +20,11 @@ logger = logging.getLogger(__name__)
 
 TERMINAL_STATES = {Stage.DONE, Stage.ARCHIVED}
 
+# Agent stages that track a per-stage attempt counter in stage_iterations.
+# Retrying into one of these must clear its counter, or the driver's
+# max-iterations cap re-escalates immediately without re-running the agent.
+_COUNTER_STAGE_KEYS = {"analysis", "dev", "scope_check", "qa"}
+
 
 def _find_workspace(
     orchestrator: Any,
@@ -147,6 +152,12 @@ def build_action_routes(
 
         ws.state.human_input_pending = False
         ws.state.error = None
+        # Clear the target stage's attempt counter so the driver's cap check
+        # doesn't immediately re-escalate without running the agent (mirrors the
+        # TG "retry … from <stage>" command).
+        reset_key = str(target).lower()
+        if reset_key in _COUNTER_STAGE_KEYS:
+            ws.state.stage_iterations[reset_key] = 0
         # Restore QA as the gating stage so the approval summary and auto-resume
         # logic both know which gate to present.
         extra = {"previous_state": Stage.QA} if target == Stage.AWAITING_APPROVAL else {}

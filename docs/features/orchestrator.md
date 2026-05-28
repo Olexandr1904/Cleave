@@ -183,6 +183,10 @@ Two independent guards, both on `DefaultsConfig`:
 
 `integrations/llm/claude_code_adapter.py`: a mid-run stall whose last stream event was a `rate_limit_event` is now reclassified as a quota wait instead of a permanent FAILED. Signature observed on ACME-14816/14819: the CLI emits `rate_limit_event` then goes silent waiting for the 5-hour window — the stall watchdog can't tell that from a genuine hang. `_ProgressState` now records `last_rate_limit_info`; on stall, `_stall_as_quota` raises a `QuotaExhaustedError` (routing into the existing defer/auto-resume path) when the last event was a rate limit, else returns `None` so real hangs still stall. `_rate_limit_retry_at` parses the event's `resetsAt` (epoch seconds) into a tz-aware UTC `retry_at`, falling back to the default quota delay when absent/unparseable.
 
+## PR body and BA-agent template exclude ai_pipeline/ from review scope (2026-05-28)
+
+`orchestrator/pr_creation.py` and `agents/ba-agent.md` now include an explicit scope note telling reviewers (human and automated) to exclude the `ai_pipeline/{ticket_id}/` directory from any "files changed" count or comparison. That directory holds planning and report artifacts written by the Cleave pipeline, not source-code changes.
+
 ## Max-iterations escalation distinguishes no-output runs (2026-05-21)
 
 `orchestrator/escalation.py`: the max-iterations escalation hint is extracted into `build_max_iterations_hint(...)` and now branches on whether the stage actually produced a runtime output file (`STAGE_RUNTIME_OUTPUT[stage]` exists in `reports/`). When the agent ran but never wrote output (timed out / crashed / interrupted), the message no longer claims "Last output is shown above" — it says no output was produced and points the operator at skip / reset-and-retry. The header also now shows `iterations/cap` (e.g. `stuck after 2/2 attempts`).

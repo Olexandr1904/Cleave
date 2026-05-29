@@ -37,6 +37,7 @@ Thumbs.db
 # Claude Code
 .claude/*
 !.claude/commands/
+!.claude/settings.json
 .superpowers/
 
 # Cleave — live deployment config (contains per-deployment data).

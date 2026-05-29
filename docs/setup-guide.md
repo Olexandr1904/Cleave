@@ -50,6 +50,25 @@ Before running the daemon, configure these on the host machine. The
 daemon verifies them at startup and the dashboard shows a health strip
 if anything is broken.
 
+**Claude Code permissions** — pipeline agents run as `claude -p` (non-interactive
+subprocess). Without a pre-approved permissions file, Claude Code prompts for
+every file write and the agent stalls. `.claude/settings.json` is committed to
+the repo and pre-approves Read, Write, Edit, git, and common build tools — verify
+it's present:
+
+```bash
+ls .claude/settings.json
+```
+
+If it's missing (e.g. an old clone), the **+ New Project** wizard hangs at the
+file-write stage.
+
+On a **dedicated host where agents run outside the repo directory** (the workspace
+base is elsewhere, e.g. `~/CleaveData`), the same allow-rules must also live in
+the user-level `~/.claude/settings.json`, and the workspace base must be listed
+under `permissions.additionalDirectories` there — otherwise writes into the
+workspace are still blocked.
+
 **Git identity** — the dev-agent commits code on behalf of the operator.
 Git needs a name and email or `git commit` will refuse to run.
 

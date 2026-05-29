@@ -57,7 +57,10 @@ pip install -e ".[dev]"
 cp environment.template .env
 $EDITOR .env
 
-# 3. Start the daemon (auto-detects Claude Code CLI auth or CLAUDE_API_KEY)
+# 3. Verify the Claude Code permissions file is present (required for pipeline agents)
+ls .claude/settings.json   # must exist — it's committed to the repo
+
+# 4. Start the daemon (auto-detects Claude Code CLI auth or CLAUDE_API_KEY)
 ./run.sh
 ```
 

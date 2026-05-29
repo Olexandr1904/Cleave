@@ -120,6 +120,9 @@ The Event Log view is a complete record of orchestrator activity. Filter by `age
 | AAPT2 / Gradle cache corruption | Use the **🧹 Clear cache & retry** button on the FAILED card or in Telegram |
 | All agents fail with quota errors | DEFERRED auto-resume should kick in; if it doesn't, check Anthropic console quota usage |
 | Wizard validation fails | Live API check failed before writing config — credentials, scope, or unreachable host. The wizard tells you which |
+| Wizard setup step fails (SETUP_FAILED) | `.claude/settings.json` present? Stale daemon? See [Project-creation problems](#project-creation--daemon-restart-problems) |
+| A code/prompt edit didn't take effect | Restart the daemon — `pkill -f "main.py --config" && ./run.sh`. Watch for stale daemons on macOS |
+| Removed project still on the board | Delete its workspace dir + restart — see [Project-creation problems](#project-creation--daemon-restart-problems) |
 | Daemon was running but ran out of disk | Workspaces under `<workspaces.base_dir>` may be growing; check `max_workspace_size_gb` and `max_age_days` in `global.yaml` |
 
 ---
@@ -134,6 +137,48 @@ The four most common host-config root causes:
 - **`git push` doesn't work from your shell** — fix the SSH key / HTTPS credential helper before running the daemon
 - **Missing JDK** — Android/Kotlin projects fail QA silently without `openjdk-17-jdk`
 - **Claude Code CLI never authenticated** — run `claude` once interactively, complete the browser flow
+
+---
+
+## Project-creation & daemon-restart problems
+
+### "+ New Project" wizard fails at the setup step
+
+**Symptom:** The wizard reaches setup and Atlas reports `SETUP_FAILED` — e.g.
+"Agent did not produce project.yaml" or "validator tools not available / blocked
+pending shell approval".
+
+- **Missing permissions file.** Pipeline agents run as `claude -p` and need
+  `.claude/settings.json` to pre-approve file writes. It ships in the repo — if
+  it's absent (old clone), Atlas stalls waiting for write approval that never
+  comes. Confirm `ls .claude/settings.json`. On a dedicated host the agent's
+  working directory is *outside* the repo, so the same allow-rules must also
+  exist in the user-level `~/.claude/settings.json`, and the workspace base
+  (`<workspaces.base_dir>`) must be listed in `permissions.additionalDirectories`.
+- **Validators unavailable on the CLI path.** `validate_jira`/`validate_github`
+  are in-process tools that exist only on the API adapter (`CLAUDE_API_KEY` set).
+  On the CLI path the wizard validates credentials itself before submit, and
+  `meta/input.md` carries `pre_validated: true` so the agent skips re-validation.
+  If the agent still demands validation, you're almost certainly running a
+  **stale daemon** — see below.
+
+### A code change didn't take effect
+
+Python modules and agent prompts are read at **startup**. Restart the daemon:
+`pkill -f "main.py --config" && ./run.sh`.
+
+**macOS pkill gotcha:** the Homebrew interpreter shows as `Python` (capital P),
+so `pkill -f "python main.py"` matches nothing and stale daemons accumulate —
+the oldest keeps port 8080 and serves outdated behavior. Always match on
+`main.py --config`. Verify exactly one daemon: `pgrep -fl "main.py --config"`.
+
+### Removed project still shows on the dashboard
+
+- Project removal cleans `config-live/projects/<id>/` but **not** the workspace
+  state at `<workspaces.base_dir>/<id>/`. The board reads workspace state from
+  disk — delete it too: `rm -rf <workspaces.base_dir>/<id>`.
+- Hot-reload is **add-only**; it does not drop already-loaded projects from
+  memory. Restart the daemon after a removal.
 
 ---
 

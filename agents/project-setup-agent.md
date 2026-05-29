@@ -283,10 +283,13 @@ questions. Instead:
 1. Read `meta/input.md` and parse the key-value pairs under each section.
 2. Read env vars referenced as `token_var:` — they are already set in the
    process environment by the dashboard handler.
-3. For each credential, call the matching validator (`validate_jira` or
-   `validate_trello`, then `validate_github` or `validate_gitlab`). On failure,
-   write `reports/project-setup-output.md` with the validation error and raise —
-   the supervising handler will transition state to `SETUP_FAILED`.
+3. Check for `pre_validated: true` under `## Meta` in `input.md`.
+   - **If present**: credentials were already validated step-by-step by the
+     dashboard wizard before this input was generated. Skip all validator tool
+     calls. Proceed directly to writing config files and emit `status: pass`.
+   - **If absent**: call the matching validator (`validate_jira` or
+     `validate_trello`, then `validate_github` or `validate_gitlab`). On failure,
+     write `reports/project-setup-output.md` with the validation error and raise.
 4. Write `project.yaml` and `repos/{repo_id}.yaml` in the current working
    directory using `${TOKEN_VAR}` references (never raw values). Use the
    provider-branched YAML template above. Set `tracker_label` in the repo YAML

@@ -732,6 +732,8 @@ async function renderFailure(entry) {
     state.data.extras.telegram_bot_token = null;
     state.running = null;
     state.step = 0;
+    els.next.style.display = '';
+    els.back.style.display = '';
     els.next.disabled = false;
     render();
   };

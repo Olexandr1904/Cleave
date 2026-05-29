@@ -74,6 +74,49 @@ journalctl -u cleave -f
 - Agent logs: per-workspace in `{workspace}/logs/`
 - Agent reports: per-workspace in `{workspace}/reports/`
 
+## Running on macOS (launchd)
+
+Use `deploy/com.cleave.daemon.plist` instead of the systemd unit.
+
+**Prerequisites:**
+```bash
+mkdir -p ~/Library/Logs/cleave
+```
+
+**Install** (edit the plist first — replace `YOUR_USER` and paths):
+```bash
+cp deploy/com.cleave.daemon.plist ~/Library/LaunchAgents/
+launchctl load ~/Library/LaunchAgents/com.cleave.daemon.plist
+```
+
+**Start / stop:**
+```bash
+launchctl start com.cleave.daemon
+launchctl stop  com.cleave.daemon
+```
+
+**Uninstall:**
+```bash
+launchctl unload ~/Library/LaunchAgents/com.cleave.daemon.plist
+```
+
+**Logs:**
+```
+~/Library/Logs/cleave/cleave.log
+~/Library/Logs/cleave/cleave-error.log
+```
+
+**Required** in `config-live/global.yaml`:
+```yaml
+os: mac
+workspaces:
+  base_dir: "~/CleaveData/workspaces"
+logging:
+  dir: "~/Library/Logs/cleave"
+```
+
+---
+
 ## Dry-Run Testing (Development)
 
 ```bash

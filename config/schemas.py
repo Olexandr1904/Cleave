@@ -124,7 +124,9 @@ class DashboardConfig:
     host: str = "0.0.0.0"
     port: int = 8080
     db_path: str = "data/events.db"
-    terminal_command: str = "gnome-terminal -- bash -c"
+    # Empty means "derive the terminal launcher from GlobalConfig.os" (see
+    # config/host_os.py). A non-empty value is an explicit override (e.g. iTerm).
+    terminal_command: str = ""
 
 
 @dataclass
@@ -136,6 +138,9 @@ class FailureSummarizerConfig:
 
 @dataclass
 class GlobalConfig:
+    # Host OS — selects OS-divergent host behavior (currently the Take Control
+    # terminal launcher). "unix" (Linux) or "mac" (macOS). See config/host_os.py.
+    os: str = "unix"
     telegram: TelegramConfig = field(default_factory=TelegramConfig)
     claude: ClaudeConfig = field(default_factory=ClaudeConfig)
     workspaces: WorkspacesConfig = field(default_factory=WorkspacesConfig)

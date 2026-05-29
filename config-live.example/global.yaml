@@ -1,6 +1,10 @@
 # Global configuration — inherited by every project and repo.
 # Copy this directory to `config-live/` and fill in values for your deployment.
 
+# Host operating system. "unix" for Linux, "mac" for macOS. Selects OS-divergent
+# host behavior (currently the dashboard "Take Control" terminal launcher).
+os: unix
+
 telegram:
   bot_token: "${TELEGRAM_BOT_TOKEN}"
   default_chat_id: "${TELEGRAM_CHAT_ID}"
@@ -10,6 +14,8 @@ claude:
 
 workspaces:
   base_dir: "/data/cleave"         # Where ticket workspaces are created
+  # On macOS, point at a writable user path instead, e.g.:
+  #   base_dir: "~/CleaveData/workspaces"
   max_age_days: 14                 # Workspace TTL before cleanup
   min_free_disk_gb: 5              # Skip new tickets if disk is low
   max_workspace_size_gb: 2
@@ -62,6 +68,8 @@ defaults:
 logging:
   level: "INFO"
   dir: "/var/log/cleave"
+  # On macOS (no sudo needed), e.g.:
+  #   dir: "~/Library/Logs/cleave"
 
 heartbeat:
   enabled: true

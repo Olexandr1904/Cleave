@@ -18,6 +18,7 @@ import yaml
 
 logger = logging.getLogger(__name__)
 
+from config.host_os import SUPPORTED_OS
 from config.schemas import (
     AgentBudget,
     ArchitectureConfig,
@@ -156,7 +157,16 @@ def load_global_config(config_dir: str) -> GlobalConfig:
 
     file_str = str(config_path)
 
+    os_name = data.get("os", "unix")
+    if os_name not in SUPPORTED_OS:
+        raise ConfigError(
+            f"'os' must be one of {SUPPORTED_OS} (got {os_name!r})",
+            file_path=file_str,
+            field="os",
+        )
+
     return GlobalConfig(
+        os=os_name,
         telegram=_parse_section(data, "telegram", TelegramConfig, file_str),
         claude=_parse_section(data, "claude", ClaudeConfig, file_str),
         workspaces=_parse_section(data, "workspaces", WorkspacesConfig, file_str),

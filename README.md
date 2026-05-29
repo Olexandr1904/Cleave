@@ -78,6 +78,8 @@ source .env && python main.py --config config-live --dry-run
 | Git | 2.x+ | Used for workspace cloning + commits |
 | JDK | 17+ | Only for Android/Kotlin projects (QA agent runs `./gradlew`) |
 
+Cleave runs on **Linux and macOS**. On macOS, set `os: mac` in `config-live/global.yaml` and use the launchd plist in `deploy/` instead of the systemd unit — see [deploy/README.md](deploy/README.md) and [docs/setup-guide.md](docs/setup-guide.md).
+
 ### Required env vars
 
 | Var | Where to get it |

@@ -16,6 +16,8 @@ from starlette.responses import JSONResponse
 from orchestrator.constants import REPORT_BA, REPORT_DEV, REPORT_QA, REPORT_SCOPE_GUARD
 from workspace.workspace import Stage
 
+from config.host_os import terminal_launch_command
+
 logger = logging.getLogger(__name__)
 
 TERMINAL_STATES = {Stage.DONE, Stage.ARCHIVED}
@@ -226,9 +228,10 @@ def build_action_routes(
             )
             script_path.chmod(0o755)
 
-            terminal_cmd = "gnome-terminal -- bash -c"
-            if global_config and hasattr(global_config, "dashboard"):
-                terminal_cmd = getattr(global_config.dashboard, "terminal_command", terminal_cmd)
+            # Explicit override (e.g. iTerm, or the e2e test's "true" no-op) wins;
+            # otherwise derive the launcher from the host OS.
+            override = getattr(getattr(global_config, "dashboard", None), "terminal_command", "") or ""
+            terminal_cmd = override or terminal_launch_command(getattr(global_config, "os", "unix"))
             full_cmd = f"{terminal_cmd} {shlex.quote(str(script_path))}"
             logger.info("take_control launching: %s", full_cmd)
             subprocess.Popen(full_cmd, shell=True)

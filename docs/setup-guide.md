@@ -166,6 +166,27 @@ cp -r config-live.example config-live
 
 Secrets are referenced as `${ENV_VAR}` in YAML and resolved at load time from `.env`.
 
+### Running on macOS
+
+Set `os: mac` at the top of `config-live/global.yaml`. This switches the
+dashboard's **Take Control** button to open `Terminal.app` instead of
+`gnome-terminal` (which does not exist on macOS). Also update the default paths
+which point at Linux locations:
+
+```yaml
+os: mac
+
+workspaces:
+  base_dir: "~/CleaveData/workspaces"   # any writable directory
+
+logging:
+  dir: "~/Library/Logs/cleave"          # created automatically by the daemon
+```
+
+For running as a persistent background service, use the launchd plist at
+`deploy/com.cleave.daemon.plist` — see [deploy/README.md](../deploy/README.md)
+for the full install/unload steps.
+
 ### Adding your own project
 
 1. Rename (or create) `config-live/projects/{your-project-id}/`

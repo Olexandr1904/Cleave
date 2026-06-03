@@ -642,6 +642,31 @@ class TestQuotaFailureClassification:
         assert result.failure_kind == "quota"  # reused for auto-retry
         assert result.retry_at is not None
 
+    async def test_cli_stalled_sets_failure_kind_quota_for_retry(
+        self, registry, workspace
+    ):
+        """A watchdog stall kill ('Claude Code CLI stalled: no activity ...')
+        is a transient hang and must auto-retry via DEFERRED, not FAILED."""
+        from integrations.llm.claude_code_adapter import ClaudeCodeAdapter
+        from orchestrator.agent_runtime import AgentRuntime
+
+        class StubAdapter(ClaudeCodeAdapter):
+            def __init__(self):
+                pass
+
+            async def execute_in_workspace(self, *args, **kwargs):
+                raise RuntimeError(
+                    "Claude Code CLI stalled: no activity for >1800s "
+                    "with no result event (last_tool='Read')"
+                )
+
+        runtime = AgentRuntime(registry, StubAdapter())
+        result = await runtime.execute("dev-agent", workspace)
+
+        assert result.success is False
+        assert result.failure_kind == "quota"  # reused for auto-retry
+        assert result.retry_at is not None
+
 
 class TestCliAddDirs:
     async def test_execute_cli_passes_meta_dir_as_add_dir(self, registry, workspace):

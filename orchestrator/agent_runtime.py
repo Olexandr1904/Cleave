@@ -382,9 +382,13 @@ class AgentRuntime:
                     retry_at=e.retry_at,
                 )
             # CLI errors with no meaningful output are likely transient
-            # (quota, network, timeout) — treat as deferrable, not permanent
+            # (quota, network, timeout, a mid-flight hang) — treat as
+            # deferrable, not permanent. "stalled" covers the watchdog kill
+            # ("Claude Code CLI stalled: no activity for >Ns"), which says
+            # neither "timeout" nor "timed out" and would otherwise dead-end
+            # at FAILED instead of auto-retrying.
             error_str = str(e).lower()
-            if "cli exited" in error_str or "cli returned" in error_str or "returned error" in error_str or "timeout" in error_str or "timed out" in error_str:
+            if "cli exited" in error_str or "cli returned" in error_str or "returned error" in error_str or "timeout" in error_str or "timed out" in error_str or "stalled" in error_str:
                 retry_at = datetime.now(timezone.utc) + timedelta(minutes=10)
                 logger.warning(
                     "Agent '%s' CLI error classified transient -> deferred until %s "

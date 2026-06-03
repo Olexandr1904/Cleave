@@ -86,10 +86,43 @@ def looks_like_aapt2_arch_mismatch(error_message: str | None) -> bool:
     return bool(_AAPT2_ARCH_MISMATCH_RE.search(error_message))
 
 
+# The detekt pre-push hook writes its output to `/tmp/detekt-$(date +%s)` and
+# `rm`s it at the end. The filename is only seconds-granular, so two pushes in
+# the same second collide on one temp file: whichever `rm`s first wins, the
+# other's `rm` fails and — being the hook's last command — makes the hook exit
+# non-zero even though detekt itself passed. This is the resulting signature.
+_DETEKT_HOOK_CLEANUP_RE = re.compile(
+    r"rm:\s+\S*detekt-\d+:\s+No such file or directory", re.IGNORECASE
+)
+# Markers the hook prints when detekt ITSELF fails (real findings). If any are
+# present the failure is the user's code, not the temp-file race — never bypass.
+_DETEKT_REAL_FAILURE_RE = re.compile(
+    r"detekt failed|Please fix the above issues|issues?\s+found|weighted issues",
+    re.IGNORECASE,
+)
+
+
+def looks_like_detekt_hook_cleanup_failure(error_message: str | None) -> bool:
+    """True when the detekt pre-push hook failed ONLY because its shared
+    `/tmp/detekt-<epoch>` temp file was already removed by a concurrent push
+    (same-second filename collision under parallel tickets). detekt itself
+    passed — the non-zero exit comes from the hook's trailing `rm`, not a code
+    finding — so a `--no-verify` retry is safe. Real detekt findings carry their
+    own markers (see `_DETEKT_REAL_FAILURE_RE`) and are explicitly excluded.
+    """
+    if not error_message:
+        return False
+    return bool(
+        _DETEKT_HOOK_CLEANUP_RE.search(error_message)
+        and not _DETEKT_REAL_FAILURE_RE.search(error_message)
+    )
+
+
 def looks_like_pre_push_hook_environmental_failure(error_message: str | None) -> bool:
     """True if a `git push` failure looks like the project's local pre-push
-    hook tripping on environmental issues (Gradle/AAPT2 toolchain) rather
-    than real code-quality findings.
+    hook tripping on environmental issues (Gradle/AAPT2 toolchain, or the
+    detekt hook's concurrent temp-file cleanup race) rather than real
+    code-quality findings.
 
     Used by `pr_creation.create_pr` to decide whether to retry the push with
     `--no-verify`. Real detekt/lint findings won't match these patterns —
@@ -101,6 +134,7 @@ def looks_like_pre_push_hook_environmental_failure(error_message: str | None) ->
     return (
         looks_like_aapt2_arch_mismatch(error_message)
         or looks_like_gradle_cache_corruption(error_message)
+        or looks_like_detekt_hook_cleanup_failure(error_message)
     )
 
 

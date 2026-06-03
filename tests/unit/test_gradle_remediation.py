@@ -13,8 +13,51 @@ from orchestrator.gradle_remediation import (
     _GRADLE_DAEMON_MAIN_CLASS,
     clear_gradle_transforms,
     looks_like_aapt2_arch_mismatch,
+    looks_like_detekt_hook_cleanup_failure,
     looks_like_gradle_cache_corruption,
+    looks_like_pre_push_hook_environmental_failure,
 )
+
+
+class TestLooksLikeDetektHookCleanupFailure:
+    """The detekt pre-push hook's /tmp/detekt-<epoch> temp file collides when
+    two tickets push in the same second; the loser's `rm` fails and trips the
+    hook even though detekt passed. Reproduces ACME-14806 / ACME-11252."""
+
+    _RACE = (
+        "Git command failed: git -C /ws/source push -u origin feature/ACME-14806\n"
+        "rm: /tmp/detekt-1780305799: No such file or directory\n"
+        "error: failed to push some refs to 'https://github.com/acme-org/x.git'"
+    )
+
+    def test_matches_concurrent_cleanup_race(self):
+        assert looks_like_detekt_hook_cleanup_failure(self._RACE)
+
+    def test_classified_environmental_for_no_verify_retry(self):
+        assert looks_like_pre_push_hook_environmental_failure(self._RACE)
+
+    def test_does_not_bypass_real_detekt_findings(self):
+        # detekt actually failed AND the cleanup rm also raced — the real
+        # finding markers must keep this BLOCKING (no --no-verify bypass).
+        msg = (
+            "Running detekt check...\n"
+            "StartViewModel.kt:42:1: MagicNumber: ... (1 issues found)\n"
+            "rm: /tmp/detekt-1780305799: No such file or directory\n"
+            "detekt failed\n"
+            "Please fix the above issues before pushing\n"
+            "error: failed to push some refs"
+        )
+        assert not looks_like_detekt_hook_cleanup_failure(msg)
+        assert not looks_like_pre_push_hook_environmental_failure(msg)
+
+    def test_does_not_match_unrelated_rm_error(self):
+        assert not looks_like_detekt_hook_cleanup_failure(
+            "rm: /tmp/build-cache: No such file or directory"
+        )
+
+    def test_handles_none_and_empty(self):
+        assert not looks_like_detekt_hook_cleanup_failure(None)
+        assert not looks_like_detekt_hook_cleanup_failure("")
 
 
 class TestLooksLikeGradleCacheCorruption:

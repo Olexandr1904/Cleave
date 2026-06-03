@@ -68,12 +68,20 @@ These agents need tool access to read/write code, run git, and execute build com
 **Permission setup:** `.claude/settings.json` pre-approves tools for the pipeline:
 
 - **File access:** Read, Write, Edit, Glob, Grep, LS
-- **Git:** all git subcommands (add, commit, checkout, push, etc.)
-- **Build tools:** gradlew, npm, yarn, python, pytest
-- **Shell basics:** ls, find, cat, grep, mkdir, cp, mv
+- **Shell:** all Bash commands are allowed (git, gradlew, npm, yarn, python,
+  pytest, curl, wget, and standard CLI tools) — the deny list below is the only
+  restriction.
 
-**Denied:** `rm -rf /`, `sudo`, `curl`, `wget` (agents must not reach external
-services or escalate privileges — API calls go through Cleave's own adapters).
+**Denied** (deny rules take precedence over the blanket Bash allow):
+- **Destructive:** `rm -rf` of `/`, `~`, `/Users/*`; `dd`, `mkfs*`,
+  `chmod -R 777 /`, `chown -R *`
+- **Privilege escalation:** `sudo`, `su`, `doas`
+- **Host control:** `shutdown`, `reboot`, `halt` — Cleave runs on a dedicated
+  always-on host; agents must never take it down.
+
+Note: deny rules match by command prefix, so they block `sudo foo` but not a
+compound like `echo x && sudo foo`. This is acceptable for the trusted pipeline,
+not an airtight sandbox.
 
 **How agents get their tools:**
 1. Each agent's `.md` frontmatter lists allowed tools (e.g., `tools: [read_file, write_file, git_operation]`)

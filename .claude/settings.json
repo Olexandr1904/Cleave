@@ -7,26 +7,24 @@
       "Glob(*)",
       "Grep(*)",
       "LS(*)",
-      "Bash(git *)",
-      "Bash(ls *)",
-      "Bash(find *)",
-      "Bash(cat *)",
-      "Bash(grep *)",
-      "Bash(mkdir *)",
-      "Bash(cp *)",
-      "Bash(mv *)",
-      "Bash(./gradlew *)",
-      "Bash(npm *)",
-      "Bash(yarn *)",
-      "Bash(python *)",
-      "Bash(python3 *)",
-      "Bash(pytest *)"
+      "Bash"
     ],
     "deny": [
       "Bash(rm -rf /)",
+      "Bash(rm -rf /*)",
+      "Bash(rm -rf ~)",
+      "Bash(rm -rf ~/*)",
+      "Bash(rm -rf /Users/*)",
       "Bash(sudo *)",
-      "Bash(curl *)",
-      "Bash(wget *)"
+      "Bash(su *)",
+      "Bash(doas *)",
+      "Bash(dd *)",
+      "Bash(mkfs*)",
+      "Bash(shutdown *)",
+      "Bash(reboot *)",
+      "Bash(halt *)",
+      "Bash(chmod -R 777 /)",
+      "Bash(chown -R *)"
     ]
   }
 }

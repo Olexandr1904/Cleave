@@ -237,6 +237,7 @@ async def handle_agent_stage(
     verify_result = stage_verifier.verify(
         stage_id, workspace, stage_start_commit,
         duration_seconds=result.duration_seconds,
+        default_branch=getattr(getattr(repo_config, "vcs", None), "default_branch", None),
     )
     if not verify_result.ok:
         agent_snippet = (result.output or "")[:200].replace("\n", " ")

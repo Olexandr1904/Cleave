@@ -64,15 +64,45 @@ def capture_stage_start(workspace: Any, stage_id: str) -> str | None:
     return _git_rev_parse(Path(workspace.source_dir))
 
 
+def _commits_ahead_of_base(source: Path, default_branch: str | None) -> int | None:
+    """Count commits HEAD is ahead of the base branch.
+
+    Tries the configured base branch first (``origin/<default_branch>``), then
+    falls back to the ``origin/HEAD`` symref. Returns None when neither base ref
+    can be resolved (e.g. no remote, or the symref isn't set in the clone) —
+    callers must treat None as "unknown", not "zero".
+    """
+    candidates: list[str] = []
+    if default_branch:
+        candidates.append(f"origin/{default_branch}")
+    candidates.append("origin/HEAD")
+    for base_ref in candidates:
+        try:
+            result = subprocess.run(
+                ["git", "-C", str(source), "rev-list", "--count", f"{base_ref}..HEAD"],
+                capture_output=True, text=True, timeout=5,
+            )
+        except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
+            continue
+        if result.returncode != 0:
+            continue
+        try:
+            return int(result.stdout.strip())
+        except ValueError:
+            continue
+    return None
+
+
 def verify(
     stage_id: str,
     workspace: Any,
     stage_start_commit: str | None,
     duration_seconds: float | None = None,
+    default_branch: str | None = None,
 ) -> VerifyResult:
     """Run the mechanical verifier for the given stage."""
     if stage_id == "dev":
-        return _verify_dev(workspace, stage_start_commit, duration_seconds)
+        return _verify_dev(workspace, stage_start_commit, duration_seconds, default_branch)
     if stage_id == "scope_check":
         return _verify_report_exists("scope_check", workspace, RUNTIME_OUTPUT_SCOPE_GUARD)
     if stage_id == "qa":
@@ -155,6 +185,7 @@ def _verify_dev(
     workspace: Any,
     stage_start_commit: str | None,
     duration_seconds: float | None = None,
+    default_branch: str | None = None,
 ) -> VerifyResult:
     source = Path(workspace.source_dir)
     current = _git_rev_parse(source)
@@ -163,32 +194,28 @@ def _verify_dev(
             ok=False, stage_id="dev",
             reason="could not read git HEAD from workspace source_dir",
         )
+
+    # Strongest signal: HEAD advanced during this run. Only meaningful when the
+    # pre-stage commit was actually captured.
+    if stage_start_commit is not None and current != stage_start_commit:
+        return VerifyResult(ok=True, stage_id="dev", reason="")
+
+    # HEAD didn't advance this run — or the start commit was never captured
+    # (transient git failure at stage entry). Either way, fall back to the
+    # durable question: does the feature branch carry commits the base branch
+    # doesn't? This catches commits made in a prior run AND real work that the
+    # start-capture missed. None means "couldn't resolve a base ref" (no remote
+    # / unset origin/HEAD), which we must not treat as zero.
+    ahead = _commits_ahead_of_base(source, default_branch)
+    if ahead is not None and ahead > 0:
+        return VerifyResult(ok=True, stage_id="dev", reason="")
+
     if stage_start_commit is None:
         return VerifyResult(
             ok=False, stage_id="dev",
-            reason="stage start commit was not captured",
+            reason="stage start commit was not captured and the branch has no "
+                   "commits ahead of the base branch",
         )
-    if current != stage_start_commit:
-        return VerifyResult(ok=True, stage_id="dev", reason="")
-
-    # HEAD didn't change this run — but maybe the commit was made in a prior run.
-    # Check if the feature branch has commits ahead of the default branch.
-    branch = getattr(workspace.state, "branch", None)
-    if branch:
-        try:
-            # Find the fork point: how many commits on this branch that aren't
-            # on any remote branch (i.e., local work)
-            result = subprocess.run(
-                ["git", "-C", str(source), "log", "--oneline", f"origin/HEAD..HEAD"],
-                capture_output=True, text=True, timeout=5,
-            )
-            if result.returncode == 0:
-                local_commits = [l for l in result.stdout.strip().splitlines() if l]
-                if len(local_commits) > 0:
-                    return VerifyResult(ok=True, stage_id="dev", reason="")
-        except (subprocess.TimeoutExpired, OSError):
-            pass
-
     if duration_seconds is not None and duration_seconds < 60:
         return VerifyResult(
             ok=False, stage_id="dev",

@@ -90,6 +90,84 @@ class TestDevVerifier:
         assert "map plan to code" not in r.reason
 
 
+def _clone_with_feature_commit(tmp_path: Path) -> Path:
+    """Clone a bare 'develop' remote and add one local commit on a branch."""
+    bare = tmp_path / "bare.git"
+    subprocess.run(["git", "init", "--bare", "-q", "-b", "develop", str(bare)], check=True)
+    seed = tmp_path / "seed"
+    subprocess.run(["git", "clone", "-q", str(bare), str(seed)], check=True)
+    subprocess.run(["git", "config", "user.email", "t@t"], cwd=seed, check=True)
+    subprocess.run(["git", "config", "user.name", "T"], cwd=seed, check=True)
+    (seed / "a.txt").write_text("a")
+    subprocess.run(["git", "add", "a.txt"], cwd=seed, check=True)
+    subprocess.run(["git", "commit", "-qm", "init"], cwd=seed, check=True)
+    subprocess.run(["git", "push", "-q", "origin", "develop"], cwd=seed, check=True)
+
+    repo = tmp_path / "source"
+    subprocess.run(["git", "clone", "-q", str(bare), str(repo)], check=True)
+    subprocess.run(["git", "config", "user.email", "t@t"], cwd=repo, check=True)
+    subprocess.run(["git", "config", "user.name", "T"], cwd=repo, check=True)
+    subprocess.run(["git", "checkout", "-qb", "feature/x"], cwd=repo, check=True)
+    (repo / "b.txt").write_text("b")
+    subprocess.run(["git", "add", "b.txt"], cwd=repo, check=True)
+    subprocess.run(["git", "commit", "-qm", "feat"], cwd=repo, check=True)
+    return repo
+
+
+class TestDevVerifierFalseFailRegressions:
+    """Real commits must not be blocked when start-capture or origin/HEAD fail.
+
+    Reproduces ACME-14812: dev committed real work but the stage was BLOCKED
+    because the pre-stage commit wasn't captured and origin/HEAD was unset.
+    """
+
+    def test_none_start_but_branch_ahead_passes(self, tmp_path):
+        repo = _clone_with_feature_commit(tmp_path)
+        ws = _fake_workspace(repo)
+        ws.state = SimpleNamespace(branch="feature/x")
+        # start capture failed (None) but the branch carries a real commit
+        r = verify("dev", ws, None, default_branch="develop")
+        assert r.ok is True
+
+    def test_unset_origin_head_still_detects_commit(self, tmp_path):
+        repo = _clone_with_feature_commit(tmp_path)
+        # Reproduce the ACME-14812 clone: origin/develop exists but the
+        # origin/HEAD symref is absent, so the old origin/HEAD fallback no-ops.
+        subprocess.run(
+            ["git", "-C", str(repo), "remote", "set-head", "origin", "-d"],
+            capture_output=True, text=True,
+        )
+        bad = subprocess.run(
+            ["git", "-C", str(repo), "rev-parse", "--verify", "-q", "origin/HEAD"],
+            capture_output=True, text=True,
+        )
+        assert bad.returncode != 0  # precondition: origin/HEAD unresolvable
+        ws = _fake_workspace(repo)
+        ws.state = SimpleNamespace(branch="feature/x")
+        start = capture_stage_start(ws, "dev")  # HEAD unchanged this run
+        r = verify("dev", ws, start, default_branch="develop")
+        assert r.ok is True
+
+    def test_none_start_and_no_commits_still_fails(self, tmp_path):
+        """Genuine no-op (start lost AND no work) must still escalate."""
+        bare = tmp_path / "bare.git"
+        subprocess.run(["git", "init", "--bare", "-q", "-b", "develop", str(bare)], check=True)
+        repo = tmp_path / "source"
+        subprocess.run(["git", "clone", "-q", str(bare), str(repo)], check=True)
+        subprocess.run(["git", "config", "user.email", "t@t"], cwd=repo, check=True)
+        subprocess.run(["git", "config", "user.name", "T"], cwd=repo, check=True)
+        (repo / "a.txt").write_text("a")
+        subprocess.run(["git", "add", "a.txt"], cwd=repo, check=True)
+        subprocess.run(["git", "commit", "-qm", "init"], cwd=repo, check=True)
+        subprocess.run(["git", "push", "-q", "origin", "develop"], cwd=repo, check=True)
+
+        ws = _fake_workspace(repo)
+        ws.state = SimpleNamespace(branch="develop")
+        r = verify("dev", ws, None, default_branch="develop")
+        assert r.ok is False
+        assert "no commits ahead" in r.reason
+
+
 class TestScopeCheckVerifier:
     def test_report_file_exists_passes(self, tmp_path):
         reports = tmp_path / "reports"

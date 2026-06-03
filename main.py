@@ -366,12 +366,21 @@ def main(argv: list[str] | None = None) -> int:
                 vcs = adapter
             print(f"  {repo_cfg.vcs.provider} adapter for {repo_id}")
 
-    # Telegram notifier
-    tg_config = global_config.telegram
-    if tg_config.bot_token:
+    # Telegram notifier — prefer the global token, else fall back to the first
+    # project that configured one. The dashboard wizard writes Telegram creds
+    # per-project, so global is usually empty; without this fallback the
+    # notifier stays None and every escalation dead-ends at FAILED with
+    # "No notifier configured for escalation".
+    tg_token = global_config.telegram.bot_token
+    if not tg_token:
+        for proj in projects.values():
+            if proj.config.telegram.bot_token:
+                tg_token = proj.config.telegram.bot_token
+                break
+    if tg_token:
         from integrations.telegram.telegram_adapter import TelegramAdapter
 
-        notifier = TelegramAdapter(bot_token=tg_config.bot_token, event_bus=event_bus)
+        notifier = TelegramAdapter(bot_token=tg_token, event_bus=event_bus)
         print("  Telegram adapter initialized")
 
     def _build_repo_adapters(project, logger_):
@@ -477,8 +486,8 @@ def main(argv: list[str] | None = None) -> int:
             # the bot ignores commands from other chats. An empty set disables
             # the bot (fail-safe); None would disable the check entirely.
             allowed_chat_ids: set[str] = set()
-            if tg_config.default_chat_id:
-                allowed_chat_ids.add(tg_config.default_chat_id)
+            if global_config.telegram.default_chat_id:
+                allowed_chat_ids.add(global_config.telegram.default_chat_id)
             for proj in projects.values():
                 pcid = proj.config.telegram.default_chat_id
                 if pcid:

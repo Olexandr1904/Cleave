@@ -51,6 +51,54 @@ def _emit(event_bus: Any | None, event_type: str, message: str, **kwargs: Any) -
         event_bus.emit(event_type, message, **kwargs)
 
 
+def build_fix_instruction(
+    *,
+    file: str,
+    line: Any = None,
+    author: str = "",
+    body: str = "",
+    suggested_fix: str = "",
+    reason: str = "",
+) -> str:
+    """Turn a comment the pipeline will act on into an instruction for dev-agent.
+
+    `reason` is accepted and deliberately ignored. It is written to justify
+    *escalating* — "needs human judgment", "expands scope" — and feeding it to
+    dev-agent as the instruction is why every fix on PR #1509 came back
+    `Verified: FAILED` with the commented files untouched. The reviewer's own
+    words are the instruction; the full body, not a 200-char prefix, because
+    the truncation cut off the technical content.
+    """
+    location = f"{file}:{line}" if file else "(no file)"
+    who = f"@{author}" if author else "the reviewer"
+    parts = [
+        f"## Fix: {location}",
+        "",
+        f"{who} wrote:",
+        "",
+        body.strip(),
+    ]
+    if suggested_fix.strip():
+        parts += ["", f"Suggested approach: {suggested_fix.strip()}"]
+    parts += [
+        "",
+        "This fix is approved. Implement it. If you believe it is wrong, write "
+        "why in developer.md and change nothing — do not silently skip it.",
+        "",
+    ]
+    return "\n".join(parts)
+
+
+def build_public_reply(*, reason: str = "") -> str:
+    """Public PR reply for an approved fix.
+
+    `reason` is accepted and ignored: posting the escalation rationale put
+    "Will fix: ... needs human judgment" and "Will fix: Agent failed" on real
+    review threads.
+    """
+    return "Will fix — addressing this in the next commit on this branch."
+
+
 async def send_escalated_comment_tg(
     workspace: Workspace, cc: Any, pr_number: int,
     *,
@@ -240,7 +288,7 @@ async def execute_review_decisions(
             if vcs and pr_number:
                 try:
                     await vcs.reply_to_comment(
-                        pr_number, cid, f"Will fix: {c.get('reason', 'operator decision')}",
+                        pr_number, cid, build_public_reply(),
                     )
                 except Exception as e:
                     logger.warning("Failed to post 'Will fix' on comment %d: %s", cid, e)
@@ -295,9 +343,10 @@ async def execute_review_decisions(
     if fixes_needed:
         fix_md = "# PR Comment Fixes Required\n\n"
         for f in fixes_needed:
-            fix_md += f"## Fix: {f['file']}:{f.get('line', '?')}\n"
-            fix_md += f"Comment by @{f['author']}: {f['body'][:200]}\n"
-            fix_md += f"Reason: {f['reason']}\n\n"
+            fix_md += build_fix_instruction(
+                file=f["file"], line=f.get("line", "?"), author=f["author"],
+                body=f["body"], suggested_fix=f.get("suggested_fix", ""),
+            )
         (workspace.reports_dir / "pr-comment-fixes.md").write_text(fix_md, encoding="utf-8")
 
     state.pending_review_comments = None
@@ -516,7 +565,7 @@ async def action_fetch_pr_comments(
             if vcs:
                 try:
                     await vcs.reply_to_comment(
-                        pr_number, cc.comment_id, f"Will fix: {cc.reason}",
+                        pr_number, cc.comment_id, build_public_reply(),
                     )
                 except Exception as e:
                     logger.warning("Failed to post 'Will fix' on comment %d: %s", cc.comment_id, e)
@@ -597,9 +646,10 @@ async def action_fetch_pr_comments(
             # Write fix instructions for the dev agent
             fix_md = "# PR Comment Fixes Required\n\n"
             for af in auto_fixed:
-                fix_md += f"## Fix: {af.file}:{af.line or '?'}\n"
-                fix_md += f"Comment by @{af.author}: {af.body[:200]}\n"
-                fix_md += f"What to do: {af.suggested_fix or af.reason}\n\n"
+                fix_md += build_fix_instruction(
+                    file=af.file, line=af.line or "?", author=af.author,
+                    body=af.body, suggested_fix=af.suggested_fix,
+                )
             (workspace.reports_dir / "pr-comment-fixes.md").write_text(fix_md, encoding="utf-8")
             for stage in ("dev", "scope_check", "qa"):
                 state.stage_iterations.pop(stage, None)

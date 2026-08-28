@@ -16,7 +16,7 @@ from integrations.base.notifier import NotifierInterface
 from orchestrator import stage_verifier, tg_format
 from orchestrator.agent_runtime import AgentRuntime
 from orchestrator.approval_gate import should_approval_gate
-from orchestrator.constants import REPORT_BA, STAGE_RUNTIME_OUTPUT
+from orchestrator.constants import REPORT_BA, REPORT_BA_QUESTIONS, STAGE_RUNTIME_OUTPUT
 from orchestrator.escalation import handle_escalate
 from orchestrator.git_ops import git_diff_files_vs_base, git_head_sha
 from orchestrator.agent_failure_summarizer import summarize_agent_failure
@@ -129,6 +129,11 @@ def parse_agent_outcome(
         return "fail" if failing_hard_gates(gate_results) else "pass"
 
     if stage_id == "analysis":
+        # BA flagged decisions the ticket asked to align on before work starts.
+        # Checked before ba.md: a plan can be complete and still rest on a
+        # choice that was the author's to make (ACME-14795 shipped three).
+        if (workspace.reports_dir / REPORT_BA_QUESTIONS).exists():
+            return "unclear"
         ba_plan = workspace.reports_dir / REPORT_BA
         # If ba.md exists, analysis is done — proceed regardless of keywords
         if ba_plan.exists():

@@ -206,3 +206,18 @@ def test_code_review_pass_verdict_advances(tmp_path):
     ws = _make_workspace(tmp_path, "ACME-7")
     (ws.reports_dir / "code-review-agent-output.md").write_text("## Status: PASS")
     assert parse_agent_outcome("code_review", "", ws) == "pass"
+
+
+def test_analysis_escalates_when_ba_writes_questions(tmp_path):
+    """ACME-14795 listed three "align before implementation" questions and BA
+    resolved all three itself under Assumptions."""
+    ws = _make_workspace(tmp_path, "ACME-8")
+    (ws.reports_dir / "ba.md").write_text("# Plan")
+    (ws.reports_dir / "ba-questions.md").write_text("1. Which annotation name?")
+    assert parse_agent_outcome("analysis", "", ws) == "unclear"
+
+
+def test_analysis_proceeds_when_no_questions(tmp_path):
+    ws = _make_workspace(tmp_path, "ACME-9")
+    (ws.reports_dir / "ba.md").write_text("# Plan")
+    assert parse_agent_outcome("analysis", "", ws) == "default"

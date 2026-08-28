@@ -734,69 +734,45 @@ Next real ticket: confirm `scope-guard.md` no longer lists a test file as a viol
 
 ---
 
-### Task 6: Move pipeline reports out of the source clone
+### Task 6: Keep pipeline reports out of the PR diff
+
+**Revised during execution.** The plan first proposed moving `reports_dir` to
+`meta/reports/`, which meant rewriting ~90 `ai_pipeline/` references across 25
+files including every agent prompt, and switching those prompts to absolute
+paths (agents run with `cwd=source/`, so a relative write outside it would not
+resolve). A missed reference would silently break stage verification and block
+tickets.
+
+The goal — "PR diff contains only code" — is reached by two small changes
+instead. `commit_pipeline_artifacts()` in `push_and_open_pr.py` was the only
+thing putting reports into the PR, and `.git/info/exclude` is local to the
+clone, so nothing in the product repo is touched. Reports stay where every
+consumer already looks for them.
 
 **Files:**
-- Modify: `workspace/workspace.py` (`reports_dir`)
-- Test: `tests/unit/test_workspace.py`
-- Modify: every place that hardcodes `ai_pipeline/<ticket>` in a prompt or message
+- Modify: `workspace/workspace_manager.py` (new `_exclude_pipeline_artifacts`)
+- Modify: `orchestrator/pipeline/actions/push_and_open_pr.py` (delete `commit_pipeline_artifacts` + 2 call sites)
+- Modify: `orchestrator/pr_creation.py` (drop the "ignore ai_pipeline/" plea from the PR body)
+- Test: `tests/unit/test_workspace_manager.py`, `tests/unit/test_action_stage.py`
 
-**Interfaces:**
-- Produces: `Workspace.reports_dir` now resolves to `<root>/meta/reports`, still auto-creating the directory. `meta/` is already passed to the CLI via `--add-dir`, so agents can still write there.
+- [x] **Step 1: Write the failing test** — `TestPipelineArtifactsExcluded`: after
+      `manager.create(...)`, `source/.git/info/exclude` contains `ai_pipeline/`;
+      and calling the helper twice does not duplicate the entry.
+- [x] **Step 2: Run to verify it fails** — 2 failed.
+- [x] **Step 3: Write `_exclude_pipeline_artifacts(source_dir)`** and call it
+      right after the clone succeeds. Appends a comment plus `ai_pipeline/`,
+      idempotently; an `OSError` is logged, not raised — worst case the
+      artifacts appear in the diff again.
+- [x] **Step 4: Delete `commit_pipeline_artifacts`** (64 lines) and its two call
+      sites, and drop the PR-body scope note that existed only to ask reviewers
+      to ignore the artifacts.
+- [x] **Step 5: Fix the two tests** that patched the deleted function.
+- [x] **Step 6: Full suite** — 1240 passed, 4 pre-existing failures unchanged.
+- [x] **Step 7: Commit**
 
-- [ ] **Step 1: Write the failing test**
-
-```python
-def test_reports_dir_is_outside_source_clone(tmp_workspace):
-    reports = tmp_workspace.reports_dir
-    assert "source" not in reports.parts
-    assert reports.parent == tmp_workspace.meta_dir
-    assert reports.exists()
-```
-
-- [ ] **Step 2: Run test to verify it fails**
-
-Run: `.venv/bin/python -m pytest tests/unit -k reports_dir -v`
-Expected: FAIL — path still contains `source`
-
-- [ ] **Step 3: Write minimal implementation**
-
-In `workspace/workspace.py`, replace the `reports_dir` body:
-
-```python
-    @property
-    def reports_dir(self) -> Path:
-        # Reports live in meta/, not inside the source clone: committing them
-        # put agent paperwork into every PR diff and drew reviewer attention
-        # away from the code (Evidence §6). meta/ reaches the agent via --add-dir.
-        path = self._root / "meta" / "reports"
-        path.mkdir(parents=True, exist_ok=True)
-        return path
-```
-
-- [ ] **Step 4: Find and update every hardcoded path**
-
-Run: `grep -rn "ai_pipeline" --include="*.py" --include="*.md" --include="*.yaml" . | grep -v "^./docs/" | grep -v "^./.git"`
-
-Update each hit to `meta/reports/`. Expect hits in `agents/*.md` (`inputs:`/`outputs:` blocks), `orchestrator/pipeline/agent_stage.py` (`_log_pipeline` message), `orchestrator/constants.py` docstrings, and `orchestrator/stage_verifier.py` (`_verify_report_exists` reason string). Do not change the `docs/` history.
-
-- [ ] **Step 5: Run the full unit suite**
-
-Run: `.venv/bin/python -m pytest tests/unit -q`
-Expected: PASS
-
-- [ ] **Step 6: Commit**
-
-```bash
-git add workspace/workspace.py orchestrator agents tests
-git commit -m "fix(pipeline): keep agent reports out of the product repo"
-```
-
-- [ ] **Step 7: Live check**
-
-Next ticket: the PR diff contains only code; `meta/reports/` in the workspace contains the reports.
-
----
+**Live check:** next ticket's PR diff contains no `ai_pipeline/` paths, and the
+reports are still present on disk under `source/ai_pipeline/<ticket>/` for the
+dashboard and escalation views.
 
 ### Task 7: Correctness review stage
 

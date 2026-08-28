@@ -28,70 +28,6 @@ def _now() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M")
 
 
-def commit_pipeline_artifacts(
-    workspace: Workspace, repo_config: RepoConfig,
-) -> None:
-    """Stage and commit any uncommitted files under `ai_pipeline/<ticket>/`.
-
-    Run before each push so agent reports written after the dev commit
-    (scope-guard, qa, pr-review-*) ride along with the code on the PR.
-    No-op when nothing is staged. On the first push the orchestrator
-    squashes feature commits, so this commit gets folded into the PR's
-    single squash commit. On subsequent pushes (PR-review cycle) it lands
-    as its own `chore({ticket}): pipeline artifacts` commit.
-    """
-    source = str(workspace.source_dir)
-    state = workspace.state
-    rel_dir = f"ai_pipeline/{state.ticket_id}"
-
-    if not (workspace.source_dir / "ai_pipeline" / state.ticket_id).exists():
-        return
-
-    try:
-        add_result = subprocess.run(
-            ["git", "-C", source, "add", "--", rel_dir],
-            capture_output=True, text=True, timeout=10,
-        )
-        if add_result.returncode != 0:
-            logger.warning(
-                "Failed to git-add pipeline artifacts for %s: %s",
-                state.ticket_id, add_result.stderr.strip()[:200],
-            )
-            return
-
-        staged = subprocess.run(
-            ["git", "-C", source, "diff", "--cached", "--name-only", "--", rel_dir],
-            capture_output=True, text=True, timeout=10,
-        )
-        files = [line for line in staged.stdout.splitlines() if line.strip()]
-        if not files:
-            return  # nothing to commit
-
-        commit_msg = f"chore({state.ticket_id}): pipeline artifacts"
-        commit_result = subprocess.run(
-            [
-                "git", "-C", source,
-                "-c", f"user.email={repo_config.git.commit_author_email}",
-                "-c", f"user.name={repo_config.git.commit_author_name}",
-                "commit", "-m", commit_msg, "--", rel_dir,
-            ],
-            capture_output=True, text=True, timeout=10,
-        )
-        if commit_result.returncode != 0:
-            logger.warning(
-                "Failed to commit pipeline artifacts for %s: %s",
-                state.ticket_id, commit_result.stderr.strip()[:200],
-            )
-            return
-
-        logger.info(
-            "Committed %d pipeline artifact(s) for %s",
-            len(files), state.ticket_id,
-        )
-    except Exception as e:
-        logger.warning("Pipeline-artifacts commit failed for %s: %s", state.ticket_id, e)
-
-
 def ensure_branch_has_commits(
     workspace: Workspace,
     repo_config: RepoConfig,
@@ -271,7 +207,6 @@ async def action_push_and_open_pr(
     # If PR already exists (from a previous cycle), just push new commits (no squash)
     if state.pr_number and state.pr_url:
         if vcs and repo_config:
-            commit_pipeline_artifacts(workspace, repo_config)
             try:
                 branch = state.branch
                 if branch:
@@ -350,11 +285,6 @@ async def action_push_and_open_pr(
     # the next push opens an empty PR (GitHub 422 "No commits between
     # develop and feature/...") and operators have to commit by hand.
     ensure_branch_has_commits(workspace, repo_config, event_bus=event_bus)
-
-    # Commit any pipeline artifacts the agents wrote after dev's commit
-    # (scope-guard, qa) so they ride along on this push. The squash below
-    # folds them into the single PR commit.
-    commit_pipeline_artifacts(workspace, repo_config)
 
     # Squash commits into one clean commit before the first PR
     squash_feature_commits(workspace, repo_config)

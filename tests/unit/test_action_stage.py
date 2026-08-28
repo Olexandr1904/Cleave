@@ -52,7 +52,6 @@ class TestActionPushAndOpenPr:
         mod = "orchestrator.pipeline.actions.push_and_open_pr"
         with patch(f"{mod}.create_pr", new=AsyncMock(return_value=pr_result)), \
              patch(f"{mod}.ensure_branch_has_commits"), \
-             patch(f"{mod}.commit_pipeline_artifacts"), \
              patch(f"{mod}.squash_feature_commits"):
             result = await action_push_and_open_pr(
                 _fake_workspace(), MagicMock(), MagicMock(), None, "", MagicMock(), None,
@@ -86,7 +85,6 @@ class TestActionPushAndOpenPr:
         mod = "orchestrator.pipeline.actions.push_and_open_pr"
         with patch(f"{mod}.create_pr", new=AsyncMock(return_value=pr_result)), \
              patch(f"{mod}.ensure_branch_has_commits"), \
-             patch(f"{mod}.commit_pipeline_artifacts"), \
              patch(f"{mod}.squash_feature_commits"):
             await action_push_and_open_pr(
                 ws, MagicMock(), MagicMock(), None, "", MagicMock(), None,

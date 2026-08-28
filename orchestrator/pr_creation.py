@@ -174,10 +174,6 @@ def _build_pr_body(workspace: Workspace, repo_config: RepoConfig) -> str:
     return (
         f"## {state.ticket_id}\n\n"
         f"Automated PR created by Cleave pipeline.\n\n"
-        f"> **Scope note for reviewers (incl. automated):** Any file counts or lists "
-        f"in this PR refer to **source-code changes only**. The `ai_pipeline/` directory "
-        f"holds automated planning and report artifacts written by the pipeline, not part "
-        f"of the change under review — exclude it from any \"files changed\" count or comparison.\n\n"
         f"### Checklist\n"
         f"- [x] Implementation plan followed\n"
         f"- [x] Scope guard passed\n"

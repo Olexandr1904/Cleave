@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any
 
 from config.resource_registry import AgentEntry, ResourceRegistry
+from orchestrator.git_ops import git_diff_files_vs_base
 from config.schemas import AgentBudget
 from integrations.llm.llm_interface import LLMInterface, LLMResponse
 from orchestrator.tool_sandbox import ToolSandbox, get_tool_definitions
@@ -298,6 +299,22 @@ class AgentRuntime:
         # 4. Operator profile
         if self._operator_profile:
             prompt_body += f"\n\n## Operator Profile\n\n{self._operator_profile}"
+
+        # 4b. Ground truth — the changed-file list computed by us. Agents have
+        # derived this themselves with a bad pathspec and reasoned from the
+        # wrong answer (PR #1530). Base ref resolves via origin/HEAD; an empty
+        # list means "could not resolve", so we say nothing rather than imply
+        # nothing changed.
+        changed = git_diff_files_vs_base(workspace)
+        if changed:
+            listing = "\n".join(f"- {p}" for p in changed)
+            prompt_body += (
+                "\n\n## Ground Truth\n\n"
+                "Files changed on this branch, computed by the orchestrator. "
+                "This list is authoritative — do not re-derive it with git "
+                "commands and do not contradict it.\n\n"
+                f"{listing}\n"
+            )
 
         # 5. Hard safety rules (appended last, after all context)
         prompt_body += HARD_SAFETY_RULES

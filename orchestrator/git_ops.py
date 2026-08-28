@@ -26,6 +26,34 @@ def git_diff_files(workspace: Workspace, since_sha: str = "") -> set[str]:
     return set()
 
 
+def git_diff_files_vs_base(workspace: Workspace, default_branch: str = "") -> list[str]:
+    """Files changed on this branch vs its base, computed by us, not by the agent.
+
+    Agents have derived this themselves with a mistaken pathspec and then
+    reasoned from the wrong answer: QA on PR #1530 concluded the branch never
+    touched a file the PR modifies. Base-ref resolution mirrors
+    `stage_verifier._commits_ahead_of_base` — the configured branch first, then
+    the `origin/HEAD` symref. Returns [] when neither resolves, which callers
+    must read as "unknown", not "nothing changed".
+    """
+    candidates: list[str] = []
+    if default_branch:
+        candidates.append(f"origin/{default_branch}")
+    candidates.append("origin/HEAD")
+    for base_ref in candidates:
+        try:
+            result = subprocess.run(
+                ["git", "-C", str(workspace.source_dir),
+                 "diff", f"{base_ref}...HEAD", "--name-only"],
+                capture_output=True, text=True, timeout=10,
+            )
+        except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
+            continue
+        if result.returncode == 0:
+            return sorted(p for p in result.stdout.strip().splitlines() if p)
+    return []
+
+
 def git_head_sha(workspace: Workspace) -> str:
     """Return the current HEAD sha, or 'unknown' on error."""
     try:

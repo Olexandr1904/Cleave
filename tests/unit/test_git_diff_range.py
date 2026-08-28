@@ -82,3 +82,41 @@ class TestGitDiffFiles:
 
         files = git_diff_files(ws, since_sha="not-a-sha")
         assert files == set()
+
+
+class TestGitDiffFilesVsBase:
+    """Ground truth for 'what changed on this branch' — the question agents
+    have answered wrongly for themselves (PR #1530 missed a modified file)."""
+
+    @pytest.fixture
+    def branch_repo(self, tmp_path):
+        repo_dir = tmp_path / "branchrepo"
+        repo_dir.mkdir()
+        _run(["git", "init", "-q", "-b", "develop"], cwd=repo_dir)
+        _run(["git", "config", "user.email", "t@t"], cwd=repo_dir)
+        _run(["git", "config", "user.name", "t"], cwd=repo_dir)
+        (repo_dir / "Base.kt").write_text("base")
+        _run(["git", "add", "."], cwd=repo_dir)
+        _run(["git", "commit", "-q", "-m", "base"], cwd=repo_dir)
+        base_sha = _run(["git", "rev-parse", "HEAD"], cwd=repo_dir).stdout.strip()
+        # Stand in for the remote-tracking ref without needing a real remote.
+        _run(["git", "update-ref", "refs/remotes/origin/develop", base_sha], cwd=repo_dir)
+        _run(["git", "checkout", "-q", "-b", "feature/x"], cwd=repo_dir)
+        (repo_dir / "Foo.kt").write_text("foo")
+        _run(["git", "add", "."], cwd=repo_dir)
+        _run(["git", "commit", "-q", "-m", "feature"], cwd=repo_dir)
+        return repo_dir
+
+    def test_lists_branch_changes(self, branch_repo):
+        from orchestrator.git_ops import git_diff_files_vs_base
+
+        ws = MagicMock()
+        ws.source_dir = branch_repo
+        assert git_diff_files_vs_base(ws, "develop") == ["Foo.kt"]
+
+    def test_returns_empty_when_base_unresolvable(self, repo):
+        from orchestrator.git_ops import git_diff_files_vs_base
+
+        ws = MagicMock()
+        ws.source_dir = repo.dir  # no origin refs at all
+        assert git_diff_files_vs_base(ws, "develop") == []

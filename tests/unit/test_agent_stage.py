@@ -133,3 +133,64 @@ async def test_agent_failed_falls_back_when_summarizer_returns_none(
     assert ws.state.current_state == Stage.FAILED
     assert ws.state.error == "raw cli err"
     assert ws.state.raw_error == "raw cli err"
+
+
+# --- QA verdict from gate exit codes, not prose ---------------------------
+# Regression cover for PR #1530, where the agent narrated "PASS for ticket
+# scope" over a non-zero detektDebug exit and the pipeline advanced.
+
+from orchestrator.pipeline.agent_stage import parse_agent_outcome  # noqa: E402
+from orchestrator.quality_gates import GateResult  # noqa: E402
+
+
+def _gate(name: str, exit_code: int, hard: bool = True) -> GateResult:
+    return GateResult(name=name, command="x", exit_code=exit_code,
+                      hard_gate=hard, output_tail="")
+
+
+def test_qa_fails_when_hard_gate_fails_even_if_agent_says_pass(tmp_path):
+    ws = _make_workspace(tmp_path, "ACME-1")
+    (ws.reports_dir / "qa-agent-output.md").write_text("## Status: PASS")
+    outcome = parse_agent_outcome(
+        "qa", "Status: PASS", ws, gate_results=[_gate("tests", 1)],
+    )
+    assert outcome == "fail"
+
+
+def test_qa_passes_when_all_hard_gates_pass_even_if_prose_is_ambiguous(tmp_path):
+    ws = _make_workspace(tmp_path, "ACME-2")
+    (ws.reports_dir / "qa-agent-output.md").write_text("verdict: hold")
+    outcome = parse_agent_outcome(
+        "qa", "verdict: hold", ws,
+        gate_results=[_gate("tests", 0), _gate("lint", 1, hard=False)],
+    )
+    assert outcome == "pass"
+
+
+def test_qa_falls_back_to_prose_when_no_gates_configured(tmp_path):
+    ws = _make_workspace(tmp_path, "ACME-3")
+    (ws.reports_dir / "qa-agent-output.md").write_text("## Status: FAIL")
+    assert parse_agent_outcome("qa", "", ws, gate_results=[]) == "fail"
+
+
+def test_gate_report_records_failing_command_output(tmp_path):
+    from orchestrator.pipeline.agent_stage import _write_gate_report
+
+    ws = _make_workspace(tmp_path, "ACME-4")
+    _write_gate_report(ws, [
+        _gate("tests", 0),
+        GateResult(name="build", command="./gradlew assembleDebug",
+                   exit_code=1, hard_gate=True, output_tail="compile error here"),
+    ])
+    report = (ws.reports_dir / "qa-gates.md").read_text()
+    assert "## tests — PASS [hard]" in report
+    assert "## build — FAIL (exit 1) [hard]" in report
+    assert "compile error here" in report
+
+
+def test_gate_report_not_written_when_no_gates_configured(tmp_path):
+    from orchestrator.pipeline.agent_stage import _write_gate_report
+
+    ws = _make_workspace(tmp_path, "ACME-5")
+    _write_gate_report(ws, [])
+    assert not (ws.reports_dir / "qa-gates.md").exists()

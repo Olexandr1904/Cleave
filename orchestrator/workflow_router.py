@@ -29,6 +29,10 @@ class StageDefinition:
     on_max_iterations: str = ""
     max_iterations: int = 0
     delay_minutes: int = 0
+    # Continue this agent's previous CLI session when the stage is re-entered.
+    # Only for stages that benefit from remembering their own reasoning; a
+    # judging stage must start fresh.
+    resume_from_previous: bool = False
 
 
 @dataclass
@@ -70,6 +74,7 @@ def load_workflow(workflow_path: str) -> WorkflowDefinition:
             on_max_iterations=stage_data.get("on_max_iterations", ""),
             max_iterations=stage_data.get("max_iterations", 0),
             delay_minutes=stage_data.get("delay_minutes", 0),
+            resume_from_previous=bool(stage_data.get("resume_from_previous", False)),
         )
 
     return WorkflowDefinition(

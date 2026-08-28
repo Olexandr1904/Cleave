@@ -149,3 +149,14 @@ class TestCodeReviewStage:
 
     def test_code_review_uses_its_own_agent(self, workflow):
         assert workflow.stages["code_review"].agent == "code-review-agent"
+
+
+class TestResumeFlag:
+    def test_dev_opts_into_resume(self, workflow):
+        assert workflow.stages["dev"].resume_from_previous is True
+
+    def test_judging_stages_start_fresh(self, workflow):
+        """scope_check and code_review must judge with a clean head."""
+        assert workflow.stages["scope_check"].resume_from_previous is False
+        assert workflow.stages["code_review"].resume_from_previous is False
+        assert workflow.stages["analysis"].resume_from_previous is False

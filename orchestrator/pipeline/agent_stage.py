@@ -216,8 +216,12 @@ async def handle_agent_stage(
 
     _emit(event_bus, "agent_dispatched", f"Dispatching {stage_def.agent} for {state.ticket_id}", project_id=state.company_id, ticket_id=state.ticket_id, agent_id=stage_def.agent, data={"stage": stage_id})
     state_before = workspace.state.current_state
+    # Resume only on re-entry: the first run of a stage has nothing to resume,
+    # and passing --resume for a session that was never created just costs a
+    # failed attempt plus a cold-start retry.
+    resume = bool(getattr(stage_def, "resume_from_previous", False)) and iteration_now > 1
     result = await agent_runtime.execute(
-        stage_def.agent, workspace, protected_files=protected,
+        stage_def.agent, workspace, protected_files=protected, resume=resume,
     )
     logger.info(
         "Stage exit: stage=%s ticket=%s agent=%s success=%s "

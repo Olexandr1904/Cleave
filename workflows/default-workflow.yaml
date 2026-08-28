@@ -14,6 +14,11 @@ stages:
     agent: "dev-agent"
     description: "Implement code on feature branch"
     next: "scope_check"
+    # Re-entered after a scope/review/qa bounce, dev resumes its own earlier
+    # session instead of starting cold — otherwise it cannot remember why the
+    # code looks the way it does and rewrites rather than patches. Judging
+    # stages (scope_check, code_review) deliberately do NOT resume.
+    resume_from_previous: true
     # Counts every dev entry, including bounces from scope_check and qa.
     # Was previously uncapped — runs that kept getting bounced (e.g.
     # scope-guard fix → qa-bounce fix) burned unbounded $$.

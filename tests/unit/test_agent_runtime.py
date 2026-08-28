@@ -773,3 +773,20 @@ class TestGroundTruthBlock:
         prompt = runtime.assemble_prompt(registry.get_agent("ba-agent"), workspace)
 
         assert "## Ground Truth" not in prompt
+
+
+class TestSessionId:
+    def test_session_id_is_stable_per_ticket_and_agent(self):
+        from orchestrator.agent_runtime import session_id_for
+
+        a = session_id_for("ACME-14795", "dev-agent")
+        assert a == session_id_for("ACME-14795", "dev-agent")
+        assert a != session_id_for("ACME-14795", "qa-agent")
+        assert a != session_id_for("ACME-14796", "dev-agent")
+
+    def test_session_id_is_a_uuid(self):
+        import uuid
+
+        from orchestrator.agent_runtime import session_id_for
+
+        assert str(uuid.UUID(session_id_for("T-1", "dev-agent"))) == session_id_for("T-1", "dev-agent")

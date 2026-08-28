@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
+import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -48,6 +49,16 @@ _CONTEXT_FILE_PRIORITY: dict[str, int] = {
     "history.md": 2,
     "comments.md": 3,
 }
+
+
+def session_id_for(ticket_id: str, agent_id: str) -> str:
+    """Stable CLI session id for a (ticket, agent) pair.
+
+    Derived, not stored: nothing to persist, migrate, or lose when a workspace
+    is re-created. The CLI accepts any UUID for --session-id, so the first run
+    names the session and later runs can resume it by recomputing the same id.
+    """
+    return str(uuid.uuid5(uuid.NAMESPACE_URL, f"cleave://{ticket_id}/{agent_id}"))
 
 
 def _context_priority(path: Path) -> tuple[int, str]:
@@ -341,6 +352,7 @@ class AgentRuntime:
         workspace: Workspace,
         extra_context: dict[str, str] | None = None,
         protected_files: list[str] | None = None,
+        resume: bool = False,
     ) -> AgentResult:
         """Execute an agent against a workspace.
 
@@ -381,7 +393,7 @@ class AgentRuntime:
             if ClaudeCodeAdapter is not None and isinstance(self._llm, ClaudeCodeAdapter):
                 result = await self._execute_cli(
                     agent_id, user_prompt, model, workspace, allowed_tools, budget,
-                    system=system_prompt,
+                    system=system_prompt, resume=resume,
                 )
             elif allowed_tools:
                 result = await self._execute_with_tools(
@@ -495,6 +507,7 @@ class AgentRuntime:
         allowed_tools: list[str],
         budget: AgentBudget,
         system: str = "",
+        resume: bool = False,
     ) -> AgentResult:
         """Execute agent via Claude Code CLI (subprocess).
 
@@ -529,6 +542,8 @@ class AgentRuntime:
                     prompt=prompt,
                     system=system,
                     effort=budget.effort,
+                    session_id=session_id_for(ticket_id, agent_id),
+                    resume=resume,
                     cwd=str(workspace.source_dir),
                     add_dirs=[str(workspace.meta_dir)],
                     allowed_tools=allowed_tools if allowed_tools else None,

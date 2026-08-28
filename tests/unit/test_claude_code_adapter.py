@@ -426,3 +426,70 @@ class TestEffortAndSystemPrompt:
         _, stdin = await self._capture(adapter, system="HARD SAFETY RULES")
         assert "HARD SAFETY RULES" not in stdin
         assert "ticket body" in stdin
+
+
+class TestSessionResume:
+    """Stage boundaries are cold starts. dev re-entered after a bounce has no
+    memory of why it wrote the code that way, so it rewrites instead of
+    patching. A deterministic per-(ticket, agent) id makes resume possible
+    without persisting anything."""
+
+    @pytest.fixture
+    def adapter(self):
+        return ClaudeCodeAdapter(model_provider=lambda: "claude-sonnet-4-5")
+
+    SESSION = "11111111-1111-5111-8111-111111111111"
+
+    @staticmethod
+    def _ok_proc():
+        result_event = json.dumps({
+            "type": "result", "subtype": "success", "is_error": False,
+            "result": "done", "usage": {"input_tokens": 1, "output_tokens": 1},
+        }).encode()
+        return _make_streaming_proc([result_event], [], rc=0)
+
+    async def test_session_id_flag(self, adapter):
+        with patch("asyncio.create_subprocess_exec", return_value=self._ok_proc()) as m:
+            await adapter.execute_in_workspace(
+                prompt="p", cwd="/tmp", allowed_tools=["read_file"],
+                session_id=self.SESSION,
+            )
+        cmd = list(m.call_args[0])
+        assert cmd[cmd.index("--session-id") + 1] == self.SESSION
+
+    async def test_resume_uses_resume_flag_not_session_id(self, adapter):
+        with patch("asyncio.create_subprocess_exec", return_value=self._ok_proc()) as m:
+            await adapter.execute_in_workspace(
+                prompt="p", cwd="/tmp", allowed_tools=["read_file"],
+                session_id=self.SESSION, resume=True,
+            )
+        cmd = list(m.call_args[0])
+        assert cmd[cmd.index("--resume") + 1] == self.SESSION
+        assert "--session-id" not in cmd
+
+    async def test_resume_failure_falls_back_to_cold_start(self, adapter):
+        """An expired or missing session must never fail the ticket."""
+        dead = _make_streaming_proc([], [b"No conversation found with session ID"], rc=1)
+        procs = [dead, self._ok_proc()]
+        with patch("asyncio.create_subprocess_exec", side_effect=procs) as m:
+            result = await adapter.execute_in_workspace(
+                prompt="p", cwd="/tmp", allowed_tools=["read_file"],
+                session_id=self.SESSION, resume=True,
+            )
+        assert result.content == "done"
+        first, second = list(m.call_args_list[0][0]), list(m.call_args_list[1][0])
+        assert "--resume" in first
+        assert "--resume" not in second
+        assert "--session-id" in second
+
+    async def test_quota_error_during_resume_is_not_retried(self, adapter):
+        """A rate limit must stay a QuotaExhaustedError, not become a cold start."""
+        quota = _make_streaming_proc(
+            [], [b"Claude AI usage limit reached|1776196800000"], rc=1,
+        )
+        with patch("asyncio.create_subprocess_exec", return_value=quota):
+            with pytest.raises(QuotaExhaustedError):
+                await adapter.execute_in_workspace(
+                    prompt="p", cwd="/tmp", allowed_tools=["read_file"],
+                    session_id=self.SESSION, resume=True,
+                )

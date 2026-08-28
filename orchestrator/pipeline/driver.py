@@ -30,6 +30,7 @@ _STAGE_TO_STATE = {
     "analysis": Stage.ANALYSIS,
     "dev": Stage.DEV,
     "scope_check": Stage.SCOPE_CHECK,
+    "code_review": Stage.CODE_REVIEW,
     "qa": Stage.QA,
     "push": Stage.PUSHED,
     "pr_review": Stage.PR_REVIEW,

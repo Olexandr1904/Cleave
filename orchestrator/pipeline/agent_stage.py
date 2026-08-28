@@ -142,7 +142,7 @@ def parse_agent_outcome(
         )
         return "unclear"
 
-    if stage_id in ("scope_check", "qa"):
+    if stage_id in ("scope_check", "code_review", "qa"):
         runtime_name = STAGE_RUNTIME_OUTPUT.get(stage_id)
         if runtime_name:
             report = workspace.reports_dir / runtime_name

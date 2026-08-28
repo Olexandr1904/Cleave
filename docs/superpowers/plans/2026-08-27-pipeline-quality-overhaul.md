@@ -849,6 +849,29 @@ In `workflows/default-workflow.yaml`, change `scope_check`'s `on_pass` from `"qa
     on_max_iterations: "escalate"
 ```
 
+- [ ] **Step 4b: Register the new pipeline state** (the plan underestimated this)
+
+A workflow stage id is not enough — a new state must exist everywhere a state
+is enumerated, or tickets deadlock or render blank:
+
+- `workspace/workspace.py`: `Stage.CODE_REVIEW`, plus `VALID_TRANSITIONS`.
+  Add `SCOPE_CHECK -> CODE_REVIEW` and `CODE_REVIEW -> {QA, DEV, ...}`, and add
+  `CODE_REVIEW` to the recovery sets (`BLOCKED`, `FAILED`, `AWAITING_APPROVAL`,
+  `DEFERRED`, `PAUSED`) so a blocked ticket can resume into it. Keep the direct
+  `SCOPE_CHECK -> QA` edge legal: the workflow yaml defines routing, this table
+  is only a safety net, and removing the stage from the yaml must not deadlock.
+- `orchestrator/pipeline/driver.py`: `_STAGE_TO_STATE["code_review"]`
+- `integrations/telegram/handlers/status.py`: display label
+- `integrations/telegram/command_handler.py`: `/stage` target map and the
+  next-stage map used by skip/advance
+- `dashboard/actions.py`: `_COUNTER_STAGE_KEYS`, `PAUSEABLE`
+- `dashboard/web.py`: sort order
+- `dashboard/static/js/{helpers,board,detail}.js`: `PIPELINE_STAGES`, label map,
+  sort order, `PAUSEABLE_STATES`
+
+Existing tests that assert the old topology (`test_all_stages_present`,
+`test_scope_check_pass`) must be updated — the routing genuinely changed.
+
 - [ ] **Step 5: Register the stage in outcome parsing and verification**
 
 In `orchestrator/pipeline/agent_stage.py`, change the membership test from `if stage_id in ("scope_check", "qa"):` to `if stage_id in ("scope_check", "code_review", "qa"):`.

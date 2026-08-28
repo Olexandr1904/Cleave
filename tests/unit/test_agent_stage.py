@@ -194,3 +194,15 @@ def test_gate_report_not_written_when_no_gates_configured(tmp_path):
     ws = _make_workspace(tmp_path, "ACME-5")
     _write_gate_report(ws, [])
     assert not (ws.reports_dir / "qa-gates.md").exists()
+
+
+def test_code_review_fail_verdict_routes_back_to_dev(tmp_path):
+    ws = _make_workspace(tmp_path, "ACME-6")
+    (ws.reports_dir / "code-review-agent-output.md").write_text("## Status: FAIL")
+    assert parse_agent_outcome("code_review", "", ws) == "fail"
+
+
+def test_code_review_pass_verdict_advances(tmp_path):
+    ws = _make_workspace(tmp_path, "ACME-7")
+    (ws.reports_dir / "code-review-agent-output.md").write_text("## Status: PASS")
+    assert parse_agent_outcome("code_review", "", ws) == "pass"

@@ -28,8 +28,8 @@ class TestLoadWorkflow:
         assert len(workflow.stages) > 0
 
     def test_all_stages_present(self, workflow):
-        expected = {"analysis", "dev", "scope_check", "qa", "push",
-                    "pr_review", "escalate", "done"}
+        expected = {"analysis", "dev", "scope_check", "code_review", "qa",
+                    "push", "pr_review", "escalate", "done"}
         assert set(workflow.stages.keys()) == expected
 
     def test_stage_agent_mapping(self, workflow):
@@ -65,7 +65,8 @@ class TestGetNextStage:
         assert get_next_stage("dev", workflow) == "scope_check"
 
     def test_scope_check_pass(self, workflow):
-        assert get_next_stage("scope_check", workflow, "pass") == "qa"
+        """Scope check pass now hands off to code_review, which owns correctness."""
+        assert get_next_stage("scope_check", workflow, "pass") == "code_review"
 
     def test_scope_check_fail(self, workflow):
         """Scope check fail loops back to dev."""
@@ -127,3 +128,24 @@ class TestAwaitingApprovalState:
 
     def test_get_next_stage_returns_none_for_awaiting_approval(self, workflow):
         assert get_next_stage("awaiting_approval", workflow) is None
+
+
+class TestCodeReviewStage:
+    """A stage that owns correctness, between scope_check (boundaries) and qa.
+
+    On PR #1509 Copilot found seven behavioural defects after the PR opened —
+    races, swallowed cancellation, an uncaught exception in a goAsync window —
+    while every internal gate was green. No stage was looking for them.
+    """
+
+    def test_scope_check_pass_goes_to_code_review(self, workflow):
+        assert get_next_stage("scope_check", workflow, "pass") == "code_review"
+
+    def test_code_review_pass_goes_to_qa(self, workflow):
+        assert get_next_stage("code_review", workflow, "pass") == "qa"
+
+    def test_code_review_fail_goes_back_to_dev(self, workflow):
+        assert get_next_stage("code_review", workflow, "fail") == "dev"
+
+    def test_code_review_uses_its_own_agent(self, workflow):
+        assert workflow.stages["code_review"].agent == "code-review-agent"

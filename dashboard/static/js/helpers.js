@@ -55,7 +55,7 @@ export function fmtIso(isoStr) {
   }).replace(',', '');
 }
 
-export const PIPELINE_STAGES = ['NEW', 'ANALYSIS', 'DEV', 'SCOPE_CHECK', 'QA', 'PUSHED', 'PR_REVIEW', 'DONE'];
+export const PIPELINE_STAGES = ['NEW', 'ANALYSIS', 'DEV', 'SCOPE_CHECK', 'CODE_REVIEW', 'QA', 'PUSHED', 'PR_REVIEW', 'DONE'];
 export const STAGE_ORDER = {};
 PIPELINE_STAGES.forEach((s, i) => { STAGE_ORDER[s] = i; });
 
@@ -78,6 +78,7 @@ export function badgeClass(type) {
 
 const STATE_LABELS = {
   SCOPE_CHECK: 'CODE CHECK',
+  CODE_REVIEW: 'CODE REVIEW',
   AWAITING_APPROVAL: 'APPROVAL',
   MANUAL_CONTROL: 'MANUAL',
   PR_REVIEW: 'PR REVIEW',

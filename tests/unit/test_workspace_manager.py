@@ -415,3 +415,35 @@ class TestResetSource:
 
         with pytest.raises(WorkspaceError, match="timed out"):
             manager.reset_source(ws, "https://git.example.com/repo.git", "develop")
+
+
+class TestPipelineArtifactsExcluded:
+    """Agent reports must never reach the PR diff.
+
+    Committed under ai_pipeline/, they drew reviewer attention away from the
+    code — 4 of 7 Copilot comments on PR #1517 targeted report files — and PR
+    bodies had to carry a paragraph asking reviewers to ignore them.
+    """
+
+    @patch("workspace.workspace_manager.subprocess.run")
+    def test_clone_excludes_pipeline_artifacts_from_git(self, mock_run, manager):
+        mock_run.return_value = MagicMock(returncode=0, stderr="")
+
+        ws = manager.create("acme", "acme-mobile", "ACME-200", "git@github.com:org/repo.git")
+
+        exclude = ws.source_dir / ".git" / "info" / "exclude"
+        assert exclude.exists()
+        assert "ai_pipeline/" in exclude.read_text()
+
+    @patch("workspace.workspace_manager.subprocess.run")
+    def test_exclude_entry_is_not_duplicated(self, mock_run, manager):
+        mock_run.return_value = MagicMock(returncode=0, stderr="")
+
+        ws = manager.create("acme", "acme-mobile", "ACME-201", "git@github.com:org/repo.git")
+        from workspace.workspace_manager import _exclude_pipeline_artifacts
+
+        _exclude_pipeline_artifacts(ws.source_dir)
+        _exclude_pipeline_artifacts(ws.source_dir)
+
+        exclude = (ws.source_dir / ".git" / "info" / "exclude").read_text()
+        assert exclude.count("ai_pipeline/") == 1

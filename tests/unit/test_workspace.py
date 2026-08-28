@@ -627,3 +627,14 @@ class TestPaused:
         workspace.transition(Stage.PAUSED)
         with pytest.raises(InvalidTransitionError):
             workspace.transition(Stage.DONE)
+
+
+class TestCodeReviewTransitions:
+    def test_scope_check_can_advance_to_code_review(self, tmp_path):
+        from workspace.workspace import VALID_TRANSITIONS, Stage
+        assert Stage.CODE_REVIEW in VALID_TRANSITIONS[Stage.SCOPE_CHECK]
+
+    def test_code_review_can_advance_to_qa_or_bounce_to_dev(self, tmp_path):
+        from workspace.workspace import VALID_TRANSITIONS, Stage
+        assert Stage.QA in VALID_TRANSITIONS[Stage.CODE_REVIEW]
+        assert Stage.DEV in VALID_TRANSITIONS[Stage.CODE_REVIEW]

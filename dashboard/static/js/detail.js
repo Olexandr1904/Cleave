@@ -111,7 +111,7 @@ function buildActionBar(ws, stateVal) {
   if (isDeferred) {
     buttons += `<button class="action-btn btn-retry" id="act-resume">Resume now</button>`;
   }
-  const PAUSEABLE_STATES = ['ANALYSIS', 'DEV', 'SCOPE_CHECK', 'QA', 'PUSHED', 'PR_REVIEW'];
+  const PAUSEABLE_STATES = ['ANALYSIS', 'DEV', 'SCOPE_CHECK', 'CODE_REVIEW', 'QA', 'PUSHED', 'PR_REVIEW'];
   const canPause = PAUSEABLE_STATES.includes(stateVal);
   const isPaused = stateVal === 'PAUSED';
   if (canPause) {

@@ -15,7 +15,11 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from orchestrator.constants import RUNTIME_OUTPUT_QA, RUNTIME_OUTPUT_SCOPE_GUARD
+from orchestrator.constants import (
+    RUNTIME_OUTPUT_CODE_REVIEW,
+    RUNTIME_OUTPUT_QA,
+    RUNTIME_OUTPUT_SCOPE_GUARD,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -105,6 +109,8 @@ def verify(
         return _verify_dev(workspace, stage_start_commit, duration_seconds, default_branch)
     if stage_id == "scope_check":
         return _verify_report_exists("scope_check", workspace, RUNTIME_OUTPUT_SCOPE_GUARD)
+    if stage_id == "code_review":
+        return _verify_report_exists("code_review", workspace, RUNTIME_OUTPUT_CODE_REVIEW)
     if stage_id == "qa":
         return _verify_report_exists("qa", workspace, RUNTIME_OUTPUT_QA)
     if stage_id == "push":

@@ -6,6 +6,7 @@ REPORT_BA = "ba.md"
 REPORT_BA_QUESTIONS = "ba-questions.md"
 REPORT_DEV = "developer.md"
 REPORT_SCOPE_GUARD = "scope-guard.md"
+REPORT_CODE_REVIEW = "code-review.md"
 REPORT_QA = "qa.md"
 
 # Runtime output files — written by agent_runtime after executing each agent.
@@ -14,6 +15,7 @@ REPORT_QA = "qa.md"
 RUNTIME_OUTPUT_BA = "ba-agent-output.md"
 RUNTIME_OUTPUT_DEV = "dev-agent-output.md"
 RUNTIME_OUTPUT_SCOPE_GUARD = "scope-guard-agent-output.md"
+RUNTIME_OUTPUT_CODE_REVIEW = "code-review-agent-output.md"
 RUNTIME_OUTPUT_QA = "qa-agent-output.md"
 
 # Maps workflow stage_id → agent structured report.
@@ -22,6 +24,7 @@ STAGE_REPORT_FILE: dict[str, str] = {
     "analysis": REPORT_BA,
     "dev": REPORT_DEV,
     "scope_check": REPORT_SCOPE_GUARD,
+    "code_review": REPORT_CODE_REVIEW,
     "qa": REPORT_QA,
 }
 
@@ -31,5 +34,6 @@ STAGE_RUNTIME_OUTPUT: dict[str, str] = {
     "analysis": RUNTIME_OUTPUT_BA,
     "dev": RUNTIME_OUTPUT_DEV,
     "scope_check": RUNTIME_OUTPUT_SCOPE_GUARD,
+    "code_review": RUNTIME_OUTPUT_CODE_REVIEW,
     "qa": RUNTIME_OUTPUT_QA,
 }

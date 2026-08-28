@@ -200,6 +200,9 @@ class ClaudeCodeAdapter(LLMInterface):
         progress_log_path: Path | None = None,
         raw_stream_path: Path | None = None,
         add_dirs: list[str] | None = None,
+        effort: str = "",
+        session_id: str = "",
+        resume: bool = False,
     ) -> LLMResponse:
         """Execute a prompt with Claude Code in a specific workspace directory.
 
@@ -234,7 +237,7 @@ class ClaudeCodeAdapter(LLMInterface):
         Returns:
             LLMResponse with the final text output and usage stats.
         """
-        return await self._run_cli(
+        kwargs = dict(
             prompt=prompt,
             model=model,
             system=system,
@@ -246,7 +249,27 @@ class ClaudeCodeAdapter(LLMInterface):
             progress_log_path=progress_log_path,
             raw_stream_path=raw_stream_path,
             add_dirs=add_dirs,
+            effort=effort,
+            session_id=session_id,
         )
+        if not (resume and session_id):
+            return await self._run_cli(**kwargs)
+
+        try:
+            return await self._run_cli(**kwargs, resume=True)
+        except QuotaExhaustedError:
+            # A rate limit says nothing about the session. Let the existing
+            # defer/auto-resume path handle it.
+            raise
+        except RuntimeError as e:
+            # The CLI keeps sessions in its own store: a re-created workspace
+            # or an expired session makes --resume fail. Falling back to a
+            # cold start costs context, not the ticket.
+            logger.warning(
+                "Resume of session %s failed (%s) — retrying as a cold start",
+                session_id, str(e)[:200],
+            )
+            return await self._run_cli(**kwargs)
 
     async def quick_query(
         self,
@@ -325,6 +348,9 @@ class ClaudeCodeAdapter(LLMInterface):
         progress_log_path: Path | None = None,
         raw_stream_path: Path | None = None,
         add_dirs: list[str] | None = None,
+        effort: str = "",
+        session_id: str = "",
+        resume: bool = False,
     ) -> LLMResponse:
         """Run claude CLI subprocess in stream-json mode.
 
@@ -337,10 +363,22 @@ class ClaudeCodeAdapter(LLMInterface):
         """
         cmd = [self._claude_bin, "-p"]
 
-        # System prompt prepended
+        # System text goes to --append-system-prompt, never into the user turn.
+        # Concatenated, HARD_SAFETY_RULES sat at the same level as the ticket
+        # content it declares itself immune to.
         full_prompt = prompt
         if system:
-            full_prompt = f"{system}\n\n---\n\n{full_prompt}"
+            cmd.extend(["--append-system-prompt", system])
+
+        # Reasoning effort. Unset means the CLI default — the pipeline ran
+        # that way for its whole history without ever choosing.
+        if effort:
+            cmd.extend(["--effort", effort])
+
+        # Session continuity. --resume replaces --session-id: the id already
+        # names the conversation being continued.
+        if session_id:
+            cmd.extend(["--resume", session_id] if resume else ["--session-id", session_id])
 
         # Model
         use_model = model or self._model_provider()

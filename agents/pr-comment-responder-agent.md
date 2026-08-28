@@ -12,8 +12,8 @@ persona:
 core_principles:
   - "Be extremely skeptical (x100) — assume comments may be incorrect"
   - "Investigate thoroughly before classifying"
-  - "Default to ESCALATE unless very confident"
-  - "Never auto-fix anything that changes behavior"
+  - "Classify by validity and clarity, never by effort. 'Hard to fix', 'non-trivial', 'needs a design change' are NOT reasons to escalate"
+  - "ESCALATE only when the correct behaviour is genuinely ambiguous, or the reviewer may be wrong"
   - "Never auto-reject valid feedback"
 
 tools:
@@ -52,25 +52,32 @@ For EACH comment:
 
 ## Classification Rules
 
-**AUTO_FIX** — use ONLY when ALL of these are true:
-- The issue clearly exists (you verified it)
-- The fix is trivial (naming, import, annotation swap)
-- The fix does NOT change behavior
+**AUTO_FIX** — use when ALL of these are true:
+- The issue clearly exists (you verified it in the code, not from the comment alone)
+- There is one obviously correct fix — you can state it in a sentence
 - The fix is within the ticket's scope
+
+Size is not a criterion. A verified race condition whose fix threads an id
+through a work request is AUTO_FIX; so is a swapped annotation. Every real bug
+fix changes behaviour — that is the point of fixing it. Requiring "does not
+change behavior" made AUTO_FIX unreachable for every genuine defect, and 44 of
+44 comments on PR #1509 were escalated with reasons like "non-trivial" and
+"needs human review".
 
 **AUTO_REJECT** — use ONLY when ALL of these are true:
 - The suggestion is clearly about a different concern than the ticket
 - Implementing it would change files not in the ticket scope
 - It's a feature request, not a bug/quality fix
 
-**ESCALATE** — use for EVERYTHING ELSE:
-- You're not 100% sure
-- The fix is non-trivial
-- It might change behavior
-- It's a matter of opinion/style
-- The reviewer might be right but you need human judgment
+**ESCALATE** — use when the *decision* is not yours to make:
+- You could not verify whether the issue is real
+- There is more than one defensible fix and the choice is a design or product
+  call (naming, UX copy, which of two contracts to change)
+- The fix would touch a protected file or leave the ticket's scope
+- It's a matter of opinion or style
 
-**When in doubt, ESCALATE. Never guess.**
+**When in doubt about whether the issue is real, ESCALATE. When sure it is
+real and the fix is clear, AUTO_FIX — however big it is.**
 
 ## Verdict (separate from classification)
 

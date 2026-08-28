@@ -66,13 +66,15 @@ class TestAutoFixReply:
             event_bus=None,
         )
 
-        # AUTO_FIX must post 'Will fix: ...' on GitHub at classification time
+        # AUTO_FIX must acknowledge on GitHub at classification time. The
+        # reply must NOT carry the classifier's reason: posting it published
+        # "Will fix: ... needs human judgment" on real review threads.
         vcs.reply_to_comment.assert_awaited()
         called_with = vcs.reply_to_comment.call_args.args
         assert called_with[0] == 42  # pr_number
         assert called_with[1] == 42  # comment_id
-        assert called_with[2].startswith("Will fix: ")
-        assert "Annotation missing" in called_with[2]
+        assert called_with[2].startswith("Will fix")
+        assert "Annotation missing" not in called_with[2]
 
         # AUTO_FIX must NOT resolve at classification time
         vcs.resolve_comment.assert_not_awaited()
@@ -164,8 +166,9 @@ class TestEscalateFixDecisionReply:
         called_with = vcs.reply_to_comment.call_args.args
         assert called_with[0] == 42
         assert called_with[1] == 7
-        assert called_with[2].startswith("Will fix: ")
-        assert "annotation needed" in called_with[2].lower()
+        assert called_with[2].startswith("Will fix")
+        # The operator's rationale stays in the resolution report, not on the PR.
+        assert "annotation needed" not in called_with[2].lower()
 
         # Don't resolve until the fix is verified post-push
         vcs.resolve_comment.assert_not_awaited()

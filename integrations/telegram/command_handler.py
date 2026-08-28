@@ -350,6 +350,7 @@ class CommandHandler:
         "analysis": Stage.ANALYSIS,
         "dev": Stage.DEV,
         "scope_check": Stage.SCOPE_CHECK,
+        "code_review": Stage.CODE_REVIEW,
         "qa": Stage.QA,
         "push": Stage.PUSHED,
     }
@@ -626,7 +627,8 @@ class CommandHandler:
                     # Advance past the blocked stage to the next one
                     _NEXT = {
                         Stage.ANALYSIS: Stage.DEV, Stage.DEV: Stage.SCOPE_CHECK,
-                        Stage.SCOPE_CHECK: Stage.QA, Stage.QA: Stage.PUSHED,
+                        Stage.SCOPE_CHECK: Stage.CODE_REVIEW,
+                        Stage.CODE_REVIEW: Stage.QA, Stage.QA: Stage.PUSHED,
                         Stage.PUSHED: Stage.PR_REVIEW, Stage.PR_REVIEW: Stage.DONE,
                     }
                     prev = ws.state.previous_state or Stage.ANALYSIS

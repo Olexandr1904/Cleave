@@ -14,6 +14,33 @@ logger = logging.getLogger(__name__)
 
 SUBPROCESS_TIMEOUT = 300  # 5 minutes
 
+# Agent reports live under source/ai_pipeline/<ticket>/ so agents can write
+# them with a path relative to their cwd. They must never reach the PR diff:
+# committed, they pulled reviewer attention onto pipeline paperwork (4 of 7
+# Copilot comments on PR #1517) and PR bodies had to ask reviewers to ignore
+# them. .git/info/exclude is local to the clone, so this never edits a file
+# in the product repo.
+_PIPELINE_ARTIFACT_EXCLUDE = "ai_pipeline/"
+
+
+def _exclude_pipeline_artifacts(source_dir: Path) -> None:
+    """Make the clone's git ignore the pipeline's own report directory."""
+    exclude_path = source_dir / ".git" / "info" / "exclude"
+    try:
+        exclude_path.parent.mkdir(parents=True, exist_ok=True)
+        existing = exclude_path.read_text(encoding="utf-8") if exclude_path.exists() else ""
+        if _PIPELINE_ARTIFACT_EXCLUDE in existing:
+            return
+        prefix = "" if existing.endswith("\n") or not existing else "\n"
+        exclude_path.write_text(
+            f"{existing}{prefix}# Cleave pipeline reports — never part of the change under review\n"
+            f"{_PIPELINE_ARTIFACT_EXCLUDE}\n",
+            encoding="utf-8",
+        )
+    except OSError as e:
+        # Not fatal: worst case the artifacts show up in the diff again.
+        logger.warning("Could not write git exclude in %s: %s", source_dir, e)
+
 
 class WorkspaceError(Exception):
     """Raised when workspace operations fail."""
@@ -113,6 +140,8 @@ class WorkspaceManager:
 
             # Create reports dir inside the cloned source/
             (source_dir / "reports").mkdir(parents=True, exist_ok=True)
+
+            _exclude_pipeline_artifacts(source_dir)
 
             # Checkout default branch and create feature branch
             slug = ticket_id.lower().replace(" ", "-")[:50]

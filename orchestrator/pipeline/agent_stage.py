@@ -6,6 +6,7 @@ parses agent outcome, and advances or escalates.
 """
 from __future__ import annotations
 
+import asyncio
 import logging
 from datetime import datetime, timedelta, timezone
 from typing import Any, Awaitable, Callable
@@ -15,10 +16,12 @@ from integrations.base.notifier import NotifierInterface
 from orchestrator import stage_verifier, tg_format
 from orchestrator.agent_runtime import AgentRuntime
 from orchestrator.approval_gate import should_approval_gate
-from orchestrator.constants import REPORT_BA, STAGE_RUNTIME_OUTPUT
+from orchestrator.constants import REPORT_BA, REPORT_BA_QUESTIONS, STAGE_RUNTIME_OUTPUT
 from orchestrator.escalation import handle_escalate
-from orchestrator.git_ops import git_head_sha
+from orchestrator.git_ops import git_diff_files_vs_base, git_head_sha
 from orchestrator.agent_failure_summarizer import summarize_agent_failure
+from orchestrator.fake_test_detector import detect_source_reading_tests
+from orchestrator.quality_gates import GateResult, failing_hard_gates, run_gates
 from orchestrator.workflow_router import WorkflowDefinition, get_next_stage
 from workspace.workspace import Stage, Workspace
 
@@ -49,6 +52,30 @@ def _log_pipeline(workspace: Workspace, entry: str) -> None:
             f"# Pipeline Log — {workspace.state.ticket_id}\n\n{line}",
             encoding="utf-8",
         )
+
+
+def _write_gate_report(workspace: Workspace, results: list[GateResult]) -> None:
+    """Write the orchestrator's own gate results next to the agent reports.
+
+    The next dev iteration reads this instead of re-deriving the gate state
+    from a narrative that may have redefined what PASS means.
+    """
+    if not results:
+        return
+    lines = ["# Quality Gates (measured by orchestrator)", ""]
+    for r in results:
+        status = "PASS" if r.passed else f"FAIL (exit {r.exit_code})"
+        kind = "hard" if r.hard_gate else "soft"
+        lines.append(f"## {r.name} — {status} [{kind}]")
+        lines.append(f"`{r.command}`")
+        if not r.passed:
+            lines.append("```")
+            lines.append(r.output_tail)
+            lines.append("```")
+        lines.append("")
+    (workspace.reports_dir / "qa-gates.md").write_text(
+        "\n".join(lines), encoding="utf-8",
+    )
 
 
 def _looks_like_pass(text: str) -> bool:
@@ -84,11 +111,29 @@ def rollback_iteration(workspace: Workspace, stage_id: str) -> None:
         workspace.save_state()
 
 
-def parse_agent_outcome(stage_id: str, output: str, workspace: Workspace) -> str:
-    """Parse agent output to determine outcome for routing."""
+def parse_agent_outcome(
+    stage_id: str,
+    output: str,
+    workspace: Workspace,
+    gate_results: list[GateResult] | None = None,
+) -> str:
+    """Parse agent output to determine outcome for routing.
+
+    For `qa`, configured gate exit codes win over the agent's narrative: the
+    agent has written "PASS for ticket scope" over a non-zero exit (PR #1530),
+    and `_looks_like_pass` is a substring match that accepts "verdict: hold".
+    """
     output_lower = output.lower()
 
+    if stage_id == "qa" and gate_results:
+        return "fail" if failing_hard_gates(gate_results) else "pass"
+
     if stage_id == "analysis":
+        # BA flagged decisions the ticket asked to align on before work starts.
+        # Checked before ba.md: a plan can be complete and still rest on a
+        # choice that was the author's to make (ACME-14795 shipped three).
+        if (workspace.reports_dir / REPORT_BA_QUESTIONS).exists():
+            return "unclear"
         ba_plan = workspace.reports_dir / REPORT_BA
         # If ba.md exists, analysis is done — proceed regardless of keywords
         if ba_plan.exists():
@@ -102,7 +147,7 @@ def parse_agent_outcome(stage_id: str, output: str, workspace: Workspace) -> str
         )
         return "unclear"
 
-    if stage_id in ("scope_check", "qa"):
+    if stage_id in ("scope_check", "code_review", "qa"):
         runtime_name = STAGE_RUNTIME_OUTPUT.get(stage_id)
         if runtime_name:
             report = workspace.reports_dir / runtime_name
@@ -171,8 +216,12 @@ async def handle_agent_stage(
 
     _emit(event_bus, "agent_dispatched", f"Dispatching {stage_def.agent} for {state.ticket_id}", project_id=state.company_id, ticket_id=state.ticket_id, agent_id=stage_def.agent, data={"stage": stage_id})
     state_before = workspace.state.current_state
+    # Resume only on re-entry: the first run of a stage has nothing to resume,
+    # and passing --resume for a session that was never created just costs a
+    # failed attempt plus a cold-start retry.
+    resume = bool(getattr(stage_def, "resume_from_previous", False)) and iteration_now > 1
     result = await agent_runtime.execute(
-        stage_def.agent, workspace, protected_files=protected,
+        stage_def.agent, workspace, protected_files=protected, resume=resume,
     )
     logger.info(
         "Stage exit: stage=%s ticket=%s agent=%s success=%s "
@@ -254,8 +303,48 @@ async def handle_agent_stage(
         )
         await notify_verification_blocked_fn(workspace, stage_id, verify_result.reason)
         return
+    # Ground truth for QA: run the repo's configured gates ourselves. Runs in a
+    # thread — a gradle build blocks for minutes and would stall the event loop
+    # (heartbeats, Telegram, other tickets). The qa stage already holds the
+    # build semaphore, so no concurrent gradle run can start here.
+    gate_results: list[GateResult] = []
+    if stage_id == "qa" and repo_config is not None:
+        gate_results = await asyncio.to_thread(
+            run_gates, workspace.source_dir, repo_config,
+        )
+        _write_gate_report(workspace, gate_results)
+        if gate_results:
+            _log_pipeline(workspace, "qa: gates measured — " + ", ".join(
+                f"{r.name}={'PASS' if r.passed else f'FAIL({r.exit_code})'}"
+                for r in gate_results
+            ))
+
     # Determine outcome from agent output
-    outcome = parse_agent_outcome(stage_id, result.output, workspace)
+    outcome = parse_agent_outcome(stage_id, result.output, workspace, gate_results)
+
+    # A test that greps production source cannot fail. Reject them before the
+    # PR exists — 10 of the 21 test files the pipeline has written were of
+    # this shape. Overrides a PASS: green gates over a fake test is not green.
+    if stage_id == "qa":
+        fake_tests = detect_source_reading_tests(
+            workspace.source_dir, git_diff_files_vs_base(workspace),
+        )
+        if fake_tests:
+            listing = "\n".join(f"- {p}" for p in fake_tests)
+            (workspace.reports_dir / "qa-rejected-tests.md").write_text(
+                "# Rejected tests\n\n"
+                "These tests assert on the text of a source file instead of "
+                "executing production code, so they cannot fail. Rewrite them "
+                "to call the code under test, or delete them and cover the "
+                "acceptance criterion another way.\n\n" + listing + "\n",
+                encoding="utf-8",
+            )
+            _log_pipeline(
+                workspace,
+                f"qa: rejected {len(fake_tests)} source-reading test(s) — "
+                "see qa-rejected-tests.md",
+            )
+            outcome = "fail"
 
     # Warn if QA passed but couldn't compile/test
     if stage_id == "qa" and outcome == "pass" and notifier:

@@ -741,3 +741,52 @@ class TestModelSelection:
         call_kwargs = mock_llm.send_message.call_args.kwargs
         assert call_kwargs.get("model") == ""
 
+
+
+class TestGroundTruthBlock:
+    """The changed-file list is computed by the orchestrator, not the agent."""
+
+    def test_prompt_contains_ground_truth_changed_files(
+        self, registry, mock_llm, workspace, monkeypatch,
+    ):
+        monkeypatch.setattr(
+            "orchestrator.agent_runtime.git_diff_files_vs_base",
+            lambda workspace, default_branch="": [
+                "app/src/main/java/Foo.kt", "app/src/test/java/FooTest.kt",
+            ],
+        )
+        runtime = AgentRuntime(registry, mock_llm)
+        prompt = runtime.assemble_prompt(registry.get_agent("dev-agent"), workspace)
+
+        assert "## Ground Truth" in prompt
+        assert "app/src/main/java/Foo.kt" in prompt
+        assert "app/src/test/java/FooTest.kt" in prompt
+
+    def test_ground_truth_absent_when_no_changes(
+        self, registry, mock_llm, workspace, monkeypatch,
+    ):
+        monkeypatch.setattr(
+            "orchestrator.agent_runtime.git_diff_files_vs_base",
+            lambda workspace, default_branch="": [],
+        )
+        runtime = AgentRuntime(registry, mock_llm)
+        prompt = runtime.assemble_prompt(registry.get_agent("ba-agent"), workspace)
+
+        assert "## Ground Truth" not in prompt
+
+
+class TestSessionId:
+    def test_session_id_is_stable_per_ticket_and_agent(self):
+        from orchestrator.agent_runtime import session_id_for
+
+        a = session_id_for("ACME-14795", "dev-agent")
+        assert a == session_id_for("ACME-14795", "dev-agent")
+        assert a != session_id_for("ACME-14795", "qa-agent")
+        assert a != session_id_for("ACME-14796", "dev-agent")
+
+    def test_session_id_is_a_uuid(self):
+        import uuid
+
+        from orchestrator.agent_runtime import session_id_for
+
+        assert str(uuid.UUID(session_id_for("T-1", "dev-agent"))) == session_id_for("T-1", "dev-agent")

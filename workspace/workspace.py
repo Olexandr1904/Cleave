@@ -18,6 +18,7 @@ class Stage(StrEnum):
     ANALYSIS = "ANALYSIS"
     DEV = "DEV"
     SCOPE_CHECK = "SCOPE_CHECK"
+    CODE_REVIEW = "CODE_REVIEW"
     QA = "QA"
     PUSHED = "PUSHED"
     PR_REVIEW = "PR_REVIEW"
@@ -38,18 +39,19 @@ VALID_TRANSITIONS: dict[Stage, set[Stage]] = {
     Stage.NEW:                {Stage.ANALYSIS, Stage.FAILED},
     Stage.ANALYSIS:           {Stage.DEV, Stage.BLOCKED, Stage.FAILED, Stage.DEFERRED, Stage.AWAITING_APPROVAL, Stage.MANUAL_CONTROL, Stage.PAUSED},
     Stage.DEV:                {Stage.SCOPE_CHECK, Stage.BLOCKED, Stage.FAILED, Stage.DEFERRED, Stage.MANUAL_CONTROL, Stage.PAUSED},
-    Stage.SCOPE_CHECK:        {Stage.QA, Stage.DEV, Stage.BLOCKED, Stage.FAILED, Stage.DEFERRED, Stage.MANUAL_CONTROL, Stage.PAUSED},
+    Stage.SCOPE_CHECK:        {Stage.CODE_REVIEW, Stage.QA, Stage.DEV, Stage.BLOCKED, Stage.FAILED, Stage.DEFERRED, Stage.MANUAL_CONTROL, Stage.PAUSED},
+    Stage.CODE_REVIEW:        {Stage.QA, Stage.DEV, Stage.BLOCKED, Stage.FAILED, Stage.DEFERRED, Stage.MANUAL_CONTROL, Stage.PAUSED},
     Stage.QA:                 {Stage.PUSHED, Stage.DEV, Stage.BLOCKED, Stage.FAILED, Stage.DEFERRED, Stage.AWAITING_APPROVAL, Stage.MANUAL_CONTROL, Stage.PAUSED},
     Stage.PUSHED:             {Stage.PR_REVIEW, Stage.BLOCKED, Stage.FAILED, Stage.DEFERRED, Stage.MANUAL_CONTROL, Stage.PAUSED},
     Stage.PR_REVIEW:          {Stage.DEV, Stage.DONE, Stage.BLOCKED, Stage.FAILED, Stage.DEFERRED, Stage.AWAITING_APPROVAL, Stage.MANUAL_CONTROL, Stage.PAUSED},
     Stage.DONE:               {Stage.ARCHIVED, Stage.ANALYSIS},
-    Stage.BLOCKED:            {Stage.ANALYSIS, Stage.DEV, Stage.SCOPE_CHECK, Stage.QA, Stage.PUSHED, Stage.PR_REVIEW, Stage.AWAITING_APPROVAL, Stage.FAILED, Stage.MANUAL_CONTROL},
-    Stage.FAILED:             {Stage.ANALYSIS, Stage.DEV, Stage.SCOPE_CHECK, Stage.QA, Stage.PUSHED, Stage.PR_REVIEW, Stage.AWAITING_APPROVAL, Stage.MANUAL_CONTROL, Stage.ARCHIVED},
+    Stage.BLOCKED:            {Stage.ANALYSIS, Stage.DEV, Stage.SCOPE_CHECK, Stage.CODE_REVIEW, Stage.QA, Stage.PUSHED, Stage.PR_REVIEW, Stage.AWAITING_APPROVAL, Stage.FAILED, Stage.MANUAL_CONTROL},
+    Stage.FAILED:             {Stage.ANALYSIS, Stage.DEV, Stage.SCOPE_CHECK, Stage.CODE_REVIEW, Stage.QA, Stage.PUSHED, Stage.PR_REVIEW, Stage.AWAITING_APPROVAL, Stage.MANUAL_CONTROL, Stage.ARCHIVED},
     Stage.ARCHIVED:           set(),
-    Stage.AWAITING_APPROVAL:  {Stage.ANALYSIS, Stage.DEV, Stage.SCOPE_CHECK, Stage.QA, Stage.PUSHED, Stage.PR_REVIEW, Stage.DONE, Stage.FAILED, Stage.MANUAL_CONTROL},
+    Stage.AWAITING_APPROVAL:  {Stage.ANALYSIS, Stage.DEV, Stage.SCOPE_CHECK, Stage.CODE_REVIEW, Stage.QA, Stage.PUSHED, Stage.PR_REVIEW, Stage.DONE, Stage.FAILED, Stage.MANUAL_CONTROL},
     Stage.MANUAL_CONTROL:     {Stage.ANALYSIS},
-    Stage.DEFERRED:           {Stage.ANALYSIS, Stage.DEV, Stage.SCOPE_CHECK, Stage.QA, Stage.PUSHED, Stage.PR_REVIEW, Stage.FAILED, Stage.MANUAL_CONTROL},
-    Stage.PAUSED:             {Stage.ANALYSIS, Stage.DEV, Stage.SCOPE_CHECK, Stage.QA, Stage.PUSHED, Stage.PR_REVIEW, Stage.FAILED, Stage.MANUAL_CONTROL},
+    Stage.DEFERRED:           {Stage.ANALYSIS, Stage.DEV, Stage.SCOPE_CHECK, Stage.CODE_REVIEW, Stage.QA, Stage.PUSHED, Stage.PR_REVIEW, Stage.FAILED, Stage.MANUAL_CONTROL},
+    Stage.PAUSED:             {Stage.ANALYSIS, Stage.DEV, Stage.SCOPE_CHECK, Stage.CODE_REVIEW, Stage.QA, Stage.PUSHED, Stage.PR_REVIEW, Stage.FAILED, Stage.MANUAL_CONTROL},
 }
 
 

@@ -18,8 +18,9 @@ from orchestrator.agent_runtime import AgentRuntime
 from orchestrator.approval_gate import should_approval_gate
 from orchestrator.constants import REPORT_BA, STAGE_RUNTIME_OUTPUT
 from orchestrator.escalation import handle_escalate
-from orchestrator.git_ops import git_head_sha
+from orchestrator.git_ops import git_diff_files_vs_base, git_head_sha
 from orchestrator.agent_failure_summarizer import summarize_agent_failure
+from orchestrator.fake_test_detector import detect_source_reading_tests
 from orchestrator.quality_gates import GateResult, failing_hard_gates, run_gates
 from orchestrator.workflow_router import WorkflowDefinition, get_next_stage
 from workspace.workspace import Stage, Workspace
@@ -311,6 +312,30 @@ async def handle_agent_stage(
 
     # Determine outcome from agent output
     outcome = parse_agent_outcome(stage_id, result.output, workspace, gate_results)
+
+    # A test that greps production source cannot fail. Reject them before the
+    # PR exists — 10 of the 21 test files the pipeline has written were of
+    # this shape. Overrides a PASS: green gates over a fake test is not green.
+    if stage_id == "qa":
+        fake_tests = detect_source_reading_tests(
+            workspace.source_dir, git_diff_files_vs_base(workspace),
+        )
+        if fake_tests:
+            listing = "\n".join(f"- {p}" for p in fake_tests)
+            (workspace.reports_dir / "qa-rejected-tests.md").write_text(
+                "# Rejected tests\n\n"
+                "These tests assert on the text of a source file instead of "
+                "executing production code, so they cannot fail. Rewrite them "
+                "to call the code under test, or delete them and cover the "
+                "acceptance criterion another way.\n\n" + listing + "\n",
+                encoding="utf-8",
+            )
+            _log_pipeline(
+                workspace,
+                f"qa: rejected {len(fake_tests)} source-reading test(s) — "
+                "see qa-rejected-tests.md",
+            )
+            outcome = "fail"
 
     # Warn if QA passed but couldn't compile/test
     if stage_id == "qa" and outcome == "pass" and notifier:

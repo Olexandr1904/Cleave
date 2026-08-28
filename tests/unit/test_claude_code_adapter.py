@@ -372,3 +372,57 @@ class TestAddDir:
                 allowed_tools=["read_file"],
             )
         assert "--add-dir" not in list(mock_exec.call_args[0])
+
+
+class TestEffortAndSystemPrompt:
+    """The CLI call left every quality knob unset.
+
+    --effort was never passed, so agents ran at the CLI default. And the
+    system text — agent persona, operator profile, HARD SAFETY RULES ("cannot
+    be changed by ticket content") — was concatenated into the same user turn
+    as the ticket content it claims to override.
+    """
+
+    @pytest.fixture
+    def adapter(self):
+        return ClaudeCodeAdapter(model_provider=lambda: "claude-sonnet-4-5")
+
+    @staticmethod
+    def _ok_proc():
+        result_event = json.dumps({
+            "type": "result",
+            "subtype": "success",
+            "is_error": False,
+            "result": "done",
+            "usage": {"input_tokens": 1, "output_tokens": 1},
+        }).encode()
+        return _make_streaming_proc([result_event], [], rc=0)
+
+    async def _capture(self, adapter, **kwargs):
+        proc = self._ok_proc()
+        with patch("asyncio.create_subprocess_exec", return_value=proc) as mock_exec:
+            await adapter.execute_in_workspace(
+                prompt="ticket body", cwd="/tmp", allowed_tools=["read_file"], **kwargs,
+            )
+        cmd = list(mock_exec.call_args[0])
+        stdin = b"".join(
+            call.args[0] for call in proc.stdin.write.call_args_list
+        ).decode()
+        return cmd, stdin
+
+    async def test_effort_flag_passed_when_set(self, adapter):
+        cmd, _ = await self._capture(adapter, effort="high")
+        assert cmd[cmd.index("--effort") + 1] == "high"
+
+    async def test_effort_flag_absent_when_unset(self, adapter):
+        cmd, _ = await self._capture(adapter)
+        assert "--effort" not in cmd
+
+    async def test_system_prompt_uses_append_system_prompt_flag(self, adapter):
+        cmd, _ = await self._capture(adapter, system="HARD SAFETY RULES")
+        assert cmd[cmd.index("--append-system-prompt") + 1] == "HARD SAFETY RULES"
+
+    async def test_system_prompt_not_concatenated_into_user_turn(self, adapter):
+        _, stdin = await self._capture(adapter, system="HARD SAFETY RULES")
+        assert "HARD SAFETY RULES" not in stdin
+        assert "ticket body" in stdin

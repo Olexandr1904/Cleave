@@ -200,6 +200,7 @@ class ClaudeCodeAdapter(LLMInterface):
         progress_log_path: Path | None = None,
         raw_stream_path: Path | None = None,
         add_dirs: list[str] | None = None,
+        effort: str = "",
     ) -> LLMResponse:
         """Execute a prompt with Claude Code in a specific workspace directory.
 
@@ -246,6 +247,7 @@ class ClaudeCodeAdapter(LLMInterface):
             progress_log_path=progress_log_path,
             raw_stream_path=raw_stream_path,
             add_dirs=add_dirs,
+            effort=effort,
         )
 
     async def quick_query(
@@ -325,6 +327,7 @@ class ClaudeCodeAdapter(LLMInterface):
         progress_log_path: Path | None = None,
         raw_stream_path: Path | None = None,
         add_dirs: list[str] | None = None,
+        effort: str = "",
     ) -> LLMResponse:
         """Run claude CLI subprocess in stream-json mode.
 
@@ -337,10 +340,17 @@ class ClaudeCodeAdapter(LLMInterface):
         """
         cmd = [self._claude_bin, "-p"]
 
-        # System prompt prepended
+        # System text goes to --append-system-prompt, never into the user turn.
+        # Concatenated, HARD_SAFETY_RULES sat at the same level as the ticket
+        # content it declares itself immune to.
         full_prompt = prompt
         if system:
-            full_prompt = f"{system}\n\n---\n\n{full_prompt}"
+            cmd.extend(["--append-system-prompt", system])
+
+        # Reasoning effort. Unset means the CLI default — the pipeline ran
+        # that way for its whole history without ever choosing.
+        if effort:
+            cmd.extend(["--effort", effort])
 
         # Model
         use_model = model or self._model_provider()

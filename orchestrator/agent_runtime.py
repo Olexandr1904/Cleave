@@ -209,10 +209,23 @@ class AgentRuntime:
         workspace: Workspace,
         extra_context: dict[str, str] | None = None,
     ) -> str:
-        """Assemble the full prompt for an agent execution.
+        """Assemble the full prompt as a single string (API adapter path)."""
+        system, user = self.assemble_prompt_parts(agent, workspace, extra_context)
+        return f"{system}\n\n---\n\n{user}"
 
-        Combines: agent prompt body + workspace context files +
-        operator profile + hard safety rules.
+    def assemble_prompt_parts(
+        self,
+        agent: AgentEntry,
+        workspace: Workspace,
+        extra_context: dict[str, str] | None = None,
+    ) -> tuple[str, str]:
+        """Split the prompt into (system, user).
+
+        System carries what must outrank ticket content: the agent's own
+        instructions, the operator profile, and HARD_SAFETY_RULES. On the CLI
+        path it goes to --append-system-prompt. Concatenated into the user
+        turn, rules declaring themselves immune to ticket content sat at the
+        same level as that content.
         """
         parts: list[str] = []
 
@@ -287,14 +300,15 @@ class AgentRuntime:
                     )
                     break
 
+        user_parts: list[str] = []
         if context_sections:
-            prompt_body += "\n\n## Workspace Context\n\n" + "\n\n".join(context_sections)
+            user_parts.append("## Workspace Context\n\n" + "\n\n".join(context_sections))
 
         # 3b. Attachments manifest — absolute paths, not inlined bytes. The
         # agent reads these itself; meta_dir is reachable via --add-dir.
         manifest = _build_attachments_manifest(context_dir / "attachments")
         if manifest:
-            prompt_body += "\n\n" + manifest
+            user_parts.append(manifest)
 
         # 4. Operator profile
         if self._operator_profile:
@@ -308,18 +322,18 @@ class AgentRuntime:
         changed = git_diff_files_vs_base(workspace)
         if changed:
             listing = "\n".join(f"- {p}" for p in changed)
-            prompt_body += (
-                "\n\n## Ground Truth\n\n"
+            user_parts.append(
+                "## Ground Truth\n\n"
                 "Files changed on this branch, computed by the orchestrator. "
                 "This list is authoritative — do not re-derive it with git "
                 "commands and do not contradict it.\n\n"
-                f"{listing}\n"
+                f"{listing}"
             )
 
-        # 5. Hard safety rules (appended last, after all context)
+        # 5. Hard safety rules (appended last, after all instructions)
         prompt_body += HARD_SAFETY_RULES
 
-        return prompt_body
+        return prompt_body, "\n\n".join(user_parts)
 
     async def execute(
         self,
@@ -357,13 +371,17 @@ class AgentRuntime:
         budget = self._budget_for(agent_id)
 
         try:
-            prompt = self.assemble_prompt(agent, workspace, extra_context)
+            system_prompt, user_prompt = self.assemble_prompt_parts(
+                agent, workspace, extra_context,
+            )
+            prompt = f"{system_prompt}\n\n---\n\n{user_prompt}"
             start_time = time.time()
 
             # Choose execution path based on adapter type
             if ClaudeCodeAdapter is not None and isinstance(self._llm, ClaudeCodeAdapter):
                 result = await self._execute_cli(
-                    agent_id, prompt, model, workspace, allowed_tools, budget,
+                    agent_id, user_prompt, model, workspace, allowed_tools, budget,
+                    system=system_prompt,
                 )
             elif allowed_tools:
                 result = await self._execute_with_tools(
@@ -476,6 +494,7 @@ class AgentRuntime:
         workspace: Workspace,
         allowed_tools: list[str],
         budget: AgentBudget,
+        system: str = "",
     ) -> AgentResult:
         """Execute agent via Claude Code CLI (subprocess).
 
@@ -508,6 +527,8 @@ class AgentRuntime:
             response = await asyncio.wait_for(
                 adapter.execute_in_workspace(
                     prompt=prompt,
+                    system=system,
+                    effort=budget.effort,
                     cwd=str(workspace.source_dir),
                     add_dirs=[str(workspace.meta_dir)],
                     allowed_tools=allowed_tools if allowed_tools else None,

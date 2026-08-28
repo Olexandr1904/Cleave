@@ -61,6 +61,11 @@ class AgentBudget:
     max_cli_turns: int = 100
     wall_clock_seconds: int = 14_400  # 4 h — stuck runs in prod logged 9–13 h
     max_total_tokens: int = 15_000_000  # input + output combined
+    # Claude Code reasoning effort passed as `--effort`: "" (CLI default) |
+    # low | medium | high | xhigh | max. Never set until now, so every agent
+    # ran at the CLI default. Raise it per-agent via agent_budget_overrides
+    # for the reasoning-heavy stages (dev, code_review).
+    effort: str = ""
 
 
 @dataclass

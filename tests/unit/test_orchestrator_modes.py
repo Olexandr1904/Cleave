@@ -198,6 +198,19 @@ class TestAutoResumeAwaitingApproval:
         await orch.advance_workspace(ws)
         ws.transition.assert_any_call("DONE")
 
+    async def test_auto_mode_resumes_a_stranded_analysis_gate(self):
+        """A workspace parked at the pre-branch ANALYSIS gate must not spin
+        forever logging "unknown previous gate ANALYSIS" once plan_review
+        merges into the running daemon."""
+        orch = self._auto_orch()
+        ws = _make_workspace("T-6", "AWAITING_APPROVAL", previous_state="ANALYSIS")
+        def _transition(new_state):
+            ws.state.current_state = "DONE"
+        ws.transition.side_effect = _transition
+
+        await orch.advance_workspace(ws)
+        ws.transition.assert_any_call("PLAN_REVIEW")
+
     async def test_manual_mode_does_not_auto_resume(self):
         orch = self._manual_orch()
         ws = _make_workspace("T-4", "AWAITING_APPROVAL", previous_state="ANALYSIS")

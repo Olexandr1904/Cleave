@@ -119,16 +119,18 @@ def build_action_routes(
         if ws.state.current_state != Stage.AWAITING_APPROVAL:
             return _error(f"Cannot reject: state is {ws.state.current_state}")
 
+        from integrations.telegram.handlers.approval import APPROVAL_REJECT_STATE
         previous = ws.state.previous_state or Stage.ANALYSIS
-        ws.transition(previous)
+        target = APPROVAL_REJECT_STATE.get(previous, previous)
+        ws.transition(target)
         if event_bus:
             event_bus.emit(
                 "dashboard_reject",
-                f"Rejected {ticket_id} via dashboard → back to {previous}",
+                f"Rejected {ticket_id} via dashboard → back to {target}",
                 ticket_id=ticket_id,
-                data={"new_state": previous},
+                data={"new_state": target},
             )
-        return JSONResponse({"status": "ok", "new_state": previous})
+        return JSONResponse({"status": "ok", "new_state": target})
 
     async def retry(request: Request) -> JSONResponse:
         ticket_id = request.path_params["ticket_id"]
@@ -150,7 +152,10 @@ def build_action_routes(
         elif (reports / REPORT_DEV).exists():
             target = Stage.SCOPE_CHECK
         elif (reports / REPORT_BA).exists():
-            target = Stage.DEV
+            # Not DEV: a ticket that died in or after plan_review would retry
+            # into dev with a plan nothing has signed off on — the one thing
+            # this stage exists to prevent. Costs one extra reviewer run.
+            target = Stage.PLAN_REVIEW
 
         ws.state.human_input_pending = False
         ws.state.error = None

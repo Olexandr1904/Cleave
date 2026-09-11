@@ -243,6 +243,29 @@ class TestRetryDeferred:
         await handler.handle_message("resume T-D", "12345")
         ws.transition.assert_called_once_with("QA")
 
+    async def test_smart_retry_with_only_a_plan_goes_through_plan_review(
+        self, mock_notifier, mock_mode_handler, tmp_path,
+    ):
+        """ba.md but no dev output means the plan was never (or not
+        successfully) reviewed — retry into the gate, not past it."""
+        from orchestrator.constants import REPORT_BA
+        ws = _make_workspace("T-R", "FAILED", previous_state="DEV")
+        ws.reports_dir = tmp_path
+        (tmp_path / REPORT_BA).write_text("# plan")
+        mock_intent_parser = AsyncMock()
+        mock_intent_parser.parse = AsyncMock(return_value=ParsedIntent(
+            intent="retry", params={"ticket_id": "T-R"}, reply="",
+        ))
+        handler = CommandHandler(
+            intent_parser=mock_intent_parser,
+            notifier=mock_notifier,
+            mode_handler=mock_mode_handler,
+            active_workspaces_fn=lambda: [ws],
+        )
+        await handler.handle_message("retry T-R", "12345")
+        ws.transition.assert_called_once_with(Stage.PLAN_REVIEW)
+        assert ws.state.stage_iterations["plan_review"] == 0
+
     async def test_retry_deferred_ticket_discriminates_branch(
         self, mock_notifier, mock_mode_handler,
     ):
@@ -404,6 +427,23 @@ class TestHandleCallback:
         ws.transition.assert_called_once_with("FAILED")
         call_kwargs = mock_notifier.send_message.call_args
         assert call_kwargs.kwargs.get("reply_to_message_id") == 42
+
+    async def test_callback_reject_at_plan_review_gate_goes_to_analysis(
+        self, mock_notifier, mock_mode_handler,
+    ):
+        """The same gate message that says "Reject = back to analysis" is the
+        one this button is attached to — marking the ticket FAILED makes it a
+        lie."""
+        ws = _make_workspace("T-1", "AWAITING_APPROVAL", previous_state="PLAN_REVIEW")
+        handler = CommandHandler(
+            intent_parser=AsyncMock(),
+            notifier=mock_notifier,
+            mode_handler=mock_mode_handler,
+            active_workspaces_fn=lambda: [ws],
+        )
+        await handler.handle_callback("reject", "T-1", "12345", 42)
+        ws.transition.assert_called_once_with("ANALYSIS")
+        assert "FAILED" not in mock_notifier.send_message.call_args.args[1]
 
     async def test_callback_reviewed(self, mock_notifier, mock_mode_handler):
         ws = _make_workspace("T-1", "PR_REVIEW")

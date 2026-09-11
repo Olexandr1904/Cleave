@@ -104,6 +104,27 @@ class TestRejectEndpoint:
         assert resp.status_code == 200
         ws.transition.assert_called()
 
+    def test_reject_at_the_plan_review_gate_goes_back_to_the_analyst(
+        self, client, orchestrator,
+    ):
+        """The gate message says "Reject = back to analysis". Returning to
+        PLAN_REVIEW would re-run the reviewer that just passed the plan,
+        re-park at the same gate, and burn the stage's iteration cap."""
+        ws = _make_workspace("T-1", "AWAITING_APPROVAL", previous="PLAN_REVIEW")
+        orchestrator.get_active_workspaces.return_value = [ws]
+        resp = client.post("/api/workspaces/T-1/reject")
+        assert resp.status_code == 200
+        assert resp.json()["new_state"] == "ANALYSIS"
+        ws.transition.assert_called_once_with("ANALYSIS")
+
+    def test_reject_at_other_gates_still_returns_to_the_previous_state(
+        self, client, orchestrator,
+    ):
+        ws = _make_workspace("T-1", "AWAITING_APPROVAL", previous="QA")
+        orchestrator.get_active_workspaces.return_value = [ws]
+        resp = client.post("/api/workspaces/T-1/reject")
+        assert resp.json()["new_state"] == "QA"
+
     def test_reject_wrong_state(self, client, orchestrator):
         ws = _make_workspace("T-1", "DEV")
         orchestrator.get_active_workspaces.return_value = [ws]
@@ -142,6 +163,26 @@ class TestRetryEndpoint:
         assert ws.state.stage_iterations["qa"] == 0
         # Untouched stages keep their counts.
         assert ws.state.stage_iterations["dev"] == 1
+
+
+    def test_retry_with_only_a_plan_goes_through_plan_review(
+        self, client, orchestrator, tmp_path,
+    ):
+        """A ticket that failed in or after plan_review must not retry
+        straight into dev with an unreviewed plan — that is the exact thing
+        this stage exists to prevent."""
+        from orchestrator.constants import REPORT_BA
+        ws = _make_workspace("T-1", "FAILED", previous="DEV", error="stuck")
+        ws.reports_dir = tmp_path
+        (tmp_path / REPORT_BA).write_text("# plan")
+        ws.state.stage_iterations = {"plan_review": 2}
+        orchestrator.get_active_workspaces.return_value = [ws]
+
+        resp = client.post("/api/workspaces/T-1/retry")
+
+        assert resp.status_code == 200
+        assert resp.json()["new_state"] == "PLAN_REVIEW"
+        assert ws.state.stage_iterations["plan_review"] == 0
 
 
 class TestClearGradleAndRetryEndpoint:

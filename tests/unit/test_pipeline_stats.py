@@ -78,3 +78,20 @@ def test_ignores_events_with_no_ticket(tmp_path: Path) -> None:
     db = tmp_path / "events.db"
     _seed(db, [(1.0, "poll_cycle", "", None, None, None, "{}")])
     assert collect_ticket_stats(str(db)) == []
+
+
+def test_terminal_state_breaks_timestamp_ties_by_insertion_order(tmp_path: Path) -> None:
+    """Two stage_transition rows with an identical timestamp must resolve by
+    insertion order (id), not by whatever order SQLite happens to return for
+    a tied sort key."""
+    db = tmp_path / "events.db"
+    def transition(ts, frm, to):
+        return (ts, "stage_transition", "", "proj", "T-1", None,
+                json.dumps({"from_state": frm, "to_state": to}))
+    _seed(db, [
+        transition(5.0, "DEV", "SCOPE_CHECK"),
+        transition(5.0, "SCOPE_CHECK", "QA"),
+    ])
+
+    s = collect_ticket_stats(str(db))[0]
+    assert s.terminal_state == "QA"

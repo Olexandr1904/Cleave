@@ -44,7 +44,7 @@ def collect_ticket_stats(db_path: str) -> list[TicketStats]:
     try:
         rows = conn.execute(
             "SELECT timestamp, event_type, project_id, ticket_id, data_json"
-            " FROM events WHERE ticket_id IS NOT NULL ORDER BY timestamp ASC"
+            " FROM events WHERE ticket_id IS NOT NULL ORDER BY timestamp ASC, id ASC"
         ).fetchall()
     finally:
         conn.close()

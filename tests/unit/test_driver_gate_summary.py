@@ -12,6 +12,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
+from orchestrator.agent_runtime import _write_agent_output
 from orchestrator.constants import REPORT_BA, RUNTIME_OUTPUT_PLAN_REVIEW
 from orchestrator.pipeline.driver import build_gate_summary
 
@@ -32,8 +33,12 @@ def test_plan_review_gate_shows_both_verdicts(tmp_path: Path) -> None:
     (reports_dir / REPORT_BA).write_text(
         "# Plan\n\n## Verdict\nShip the widget.\n", encoding="utf-8",
     )
-    (reports_dir / RUNTIME_OUTPUT_PLAN_REVIEW).write_text(
-        "Status: PASS\n", encoding="utf-8",
+    # Written the way the pipeline writes it: `_write_agent_output` appends
+    # every attempt under a `---` / `**Attempt:**` separator, so the file's
+    # first line is `---`, never the verdict. Writing the report by hand here
+    # is what let "Plan reviewer:\n---" ship green.
+    _write_agent_output(
+        reports_dir / RUNTIME_OUTPUT_PLAN_REVIEW, "Status: PASS\n",
     )
     ws = _ws(reports_dir, meta_dir)
 
@@ -45,3 +50,41 @@ def test_plan_review_gate_shows_both_verdicts(tmp_path: Path) -> None:
     assert "start coding" in text
     assert "back to analysis" in text
     assert {b.action for b in buttons} == {"approve:T-1", "reject:T-1"}
+
+
+def test_plan_review_gate_never_shows_the_attempt_separator(tmp_path: Path) -> None:
+    """The verdict, not the `---` the appender opens each block with."""
+    reports_dir = tmp_path / "reports"
+    reports_dir.mkdir()
+    meta_dir = tmp_path / "meta"
+    meta_dir.mkdir()
+    (reports_dir / REPORT_BA).write_text(
+        "# Plan\n\n## Verdict\nShip the widget.\n", encoding="utf-8",
+    )
+    _write_agent_output(
+        reports_dir / RUNTIME_OUTPUT_PLAN_REVIEW, "Status: PASS\n\nSound plan.",
+    )
+
+    text, _ = build_gate_summary(_ws(reports_dir, meta_dir), "PLAN_REVIEW")
+
+    assert "Plan reviewer:\nStatus: PASS" in text
+    assert "---" not in text
+
+
+def test_plan_review_gate_shows_the_latest_attempts_verdict(tmp_path: Path) -> None:
+    """After a bounce the operator must see the re-review, not the first one."""
+    reports_dir = tmp_path / "reports"
+    reports_dir.mkdir()
+    meta_dir = tmp_path / "meta"
+    meta_dir.mkdir()
+    (reports_dir / REPORT_BA).write_text(
+        "# Plan\n\n## Verdict\nShip the widget.\n", encoding="utf-8",
+    )
+    report = reports_dir / RUNTIME_OUTPUT_PLAN_REVIEW
+    _write_agent_output(report, "Status: FAIL\n\n### Files to Modify\nNo list.")
+    _write_agent_output(report, "Status: PASS\n\nThe file list is now concrete.")
+
+    text, _ = build_gate_summary(_ws(reports_dir, meta_dir), "PLAN_REVIEW")
+
+    assert "Plan reviewer:\nStatus: PASS" in text
+    assert "FAIL" not in text

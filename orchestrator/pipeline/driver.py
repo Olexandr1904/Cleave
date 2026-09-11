@@ -14,6 +14,7 @@ from integrations.base.notifier import Button
 from integrations.telegram.handlers.approval import APPROVAL_NEXT_STATE
 from integrations.telegram.handlers.mode import ModeHandler
 from orchestrator import tg_format
+from orchestrator.agent_runtime import last_attempt_block
 from orchestrator.constants import REPORT_BA, RUNTIME_OUTPUT_PLAN_REVIEW
 from orchestrator.pipeline.agent_stage import _emit, _log_pipeline
 from orchestrator.workflow_router import (
@@ -111,13 +112,15 @@ def _extract_ba_verdict(ba_file: Any) -> str:
 def _extract_plan_review_verdict(report_file: Any) -> str:
     """One-line plan-review decision for the approval-gate message.
 
-    The plan-review report's first line is always `Status: PASS` or
-    `Status: FAIL` (enforced by the agent's own contract), so the first
-    non-blank line is the verdict — no heading to look for, unlike ba.md.
+    The file's own first line is never the verdict: `_write_agent_output`
+    opens every appended attempt with a `---` separator and an `**Attempt:**`
+    header. Isolate the newest attempt first, then take its first non-blank
+    line — the agent's contract puts `Status: PASS`/`Status: FAIL` there.
     """
     if not report_file.exists():
         return ""
-    for line in report_file.read_text(encoding="utf-8").splitlines():
+    block = last_attempt_block(report_file.read_text(encoding="utf-8"))
+    for line in block.splitlines():
         stripped = line.strip()
         if stripped:
             return tg_format.strip_markdown(stripped)[:240]

@@ -294,6 +294,7 @@
 
   .state-NEW        { background: #21262d; color: #8b949e; border: 1px solid #30363d; }
   .state-ANALYSIS   { background: #1a2d3d; color: #79c0ff; border: 1px solid #1f6feb; }
+  .state-PLAN_REVIEW{ background: #1a2d3d; color: #79c0ff; border: 1px solid #388bfd; }
   .state-DEV        { background: #2d1a3d; color: #d2a8ff; border: 1px solid #8957e5; }
   .state-SCOPE_CHECK{ background: #3d3318; color: #e3b341; border: 1px solid #9e6a03; }
   .state-QA         { background: #3d2518; color: #f0883e; border: 1px solid #bd561d; }

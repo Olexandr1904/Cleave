@@ -25,7 +25,7 @@ TERMINAL_STATES = {Stage.DONE, Stage.ARCHIVED}
 # Agent stages that track a per-stage attempt counter in stage_iterations.
 # Retrying into one of these must clear its counter, or the driver's
 # max-iterations cap re-escalates immediately without re-running the agent.
-_COUNTER_STAGE_KEYS = {"analysis", "dev", "scope_check", "code_review", "qa"}
+_COUNTER_STAGE_KEYS = {"analysis", "plan_review", "dev", "scope_check", "code_review", "qa"}
 
 
 def _find_workspace(
@@ -303,8 +303,8 @@ def build_action_routes(
             return _error(f"Workspace not found: {ticket_id}", 404)
 
         logger.info("pause: %s current_state=%s", ticket_id, ws.state.current_state)
-        PAUSEABLE = {Stage.ANALYSIS, Stage.DEV, Stage.SCOPE_CHECK, Stage.CODE_REVIEW,
-                     Stage.QA, Stage.PUSHED, Stage.PR_REVIEW}
+        PAUSEABLE = {Stage.ANALYSIS, Stage.PLAN_REVIEW, Stage.DEV, Stage.SCOPE_CHECK,
+                     Stage.CODE_REVIEW, Stage.QA, Stage.PUSHED, Stage.PR_REVIEW}
         if ws.state.current_state not in PAUSEABLE:
             logger.warning("pause: %s rejected, state %s not pauseable", ticket_id, ws.state.current_state)
             return _error(f"Cannot pause: state is {ws.state.current_state}")

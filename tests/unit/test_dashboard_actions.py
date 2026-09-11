@@ -710,3 +710,9 @@ class TestPauseFallsBackToDiskScan:
         resp = disk_client.post("/api/workspaces/GHOST-1/pause",
                                 content=json.dumps({"confirm": True}))
         assert resp.status_code == 404
+
+
+def test_plan_review_is_a_counter_stage() -> None:
+    """Retrying into plan_review must clear its iteration counter."""
+    from dashboard.actions import _COUNTER_STAGE_KEYS
+    assert "plan_review" in _COUNTER_STAGE_KEYS

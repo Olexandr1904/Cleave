@@ -71,8 +71,9 @@ export async function renderBoard(projectId, showDone = true) {
     // Sort: BLOCKED first, AWAITING second, DEFERRED third, active by stage, DONE/ARCHIVED last
     const stateOrder = {
       BLOCKED: 0, AWAITING_APPROVAL: 1, DEFERRED: 2, MANUAL_CONTROL: 3, PAUSED: 4,
-      DEV: 5, ANALYSIS: 6, SCOPE_CHECK: 7, CODE_REVIEW: 8, QA: 9, PR_REVIEW: 10, PUSHED: 11,
-      NEW: 11, FAILED: 12, DONE: 13, SETUP_DONE: 13, ARCHIVED: 14,
+      DEV: 5, ANALYSIS: 6, PLAN_REVIEW: 7, SCOPE_CHECK: 8, CODE_REVIEW: 9, QA: 10,
+      PR_REVIEW: 11, PUSHED: 12,
+      NEW: 12, FAILED: 13, DONE: 14, SETUP_DONE: 14, ARCHIVED: 15,
     };
     filtered.sort((a, b) => (stateOrder[a.current_state] ?? 99) - (stateOrder[b.current_state] ?? 99));
 
@@ -335,7 +336,7 @@ function renderCard(ws) {
   if (dimmed) cardClass += ' card-dimmed';
 
   // Line 1: ID + state badge + pause/resume + retry + delete
-  const PAUSEABLE_STATES = ['ANALYSIS', 'DEV', 'SCOPE_CHECK', 'CODE_REVIEW', 'QA', 'PUSHED', 'PR_REVIEW'];
+  const PAUSEABLE_STATES = ['ANALYSIS', 'PLAN_REVIEW', 'DEV', 'SCOPE_CHECK', 'CODE_REVIEW', 'QA', 'PUSHED', 'PR_REVIEW'];
   let pauseIcon = '';
   if (PAUSEABLE_STATES.includes(stateVal)) {
     pauseIcon = `<button class="card-icon-btn" data-action="pause" data-ticket="${esc(ws.ticket_id)}" title="Pause" onclick="event.stopPropagation()">⏸</button>`;

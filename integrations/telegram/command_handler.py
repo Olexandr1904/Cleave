@@ -348,6 +348,7 @@ class CommandHandler:
 
     _VALID_RETRY_STATES = {
         "analysis": Stage.ANALYSIS,
+        "plan_review": Stage.PLAN_REVIEW,
         "dev": Stage.DEV,
         "scope_check": Stage.SCOPE_CHECK,
         "code_review": Stage.CODE_REVIEW,
@@ -626,7 +627,9 @@ class CommandHandler:
                 if reply_lower == "skip":
                     # Advance past the blocked stage to the next one
                     _NEXT = {
-                        Stage.ANALYSIS: Stage.DEV, Stage.DEV: Stage.SCOPE_CHECK,
+                        Stage.ANALYSIS: Stage.PLAN_REVIEW,
+                        Stage.PLAN_REVIEW: Stage.DEV,
+                        Stage.DEV: Stage.SCOPE_CHECK,
                         Stage.SCOPE_CHECK: Stage.CODE_REVIEW,
                         Stage.CODE_REVIEW: Stage.QA, Stage.QA: Stage.PUSHED,
                         Stage.PUSHED: Stage.PR_REVIEW, Stage.PR_REVIEW: Stage.DONE,

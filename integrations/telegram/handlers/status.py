@@ -9,6 +9,7 @@ logger = logging.getLogger(__name__)
 
 _FRIENDLY = {
     "SCOPE_CHECK": "Code Check",
+    "PLAN_REVIEW": "Plan Review",
     "CODE_REVIEW": "Code Review",
     "AWAITING_APPROVAL": "Awaiting Approval",
     "MANUAL_CONTROL": "Manual Control",

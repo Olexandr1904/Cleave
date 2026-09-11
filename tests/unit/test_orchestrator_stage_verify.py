@@ -294,3 +294,18 @@ class TestScopeCheckIterationClear:
             await orch._handle_agent_stage(ws, "scope_check", stage_def)
 
         assert ws.state.stage_iterations["scope_check"] == 1
+
+
+def test_plan_review_verify_requires_report(tmp_path: Path) -> None:
+    """A plan_review run that produced no output must not be treated as verified."""
+    from orchestrator import stage_verifier
+    from orchestrator.constants import RUNTIME_OUTPUT_PLAN_REVIEW
+
+    ws = MagicMock()
+    ws.reports_dir = tmp_path
+    ws.state = SimpleNamespace(ticket_id="T-1")
+
+    assert stage_verifier.verify("plan_review", ws, None).ok is False
+
+    (tmp_path / RUNTIME_OUTPUT_PLAN_REVIEW).write_text("Status: PASS", encoding="utf-8")
+    assert stage_verifier.verify("plan_review", ws, None).ok is True

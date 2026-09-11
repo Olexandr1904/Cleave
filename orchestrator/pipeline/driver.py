@@ -28,6 +28,7 @@ logger = logging.getLogger(__name__)
 
 _STAGE_TO_STATE = {
     "analysis": Stage.ANALYSIS,
+    "plan_review": Stage.PLAN_REVIEW,
     "dev": Stage.DEV,
     "scope_check": Stage.SCOPE_CHECK,
     "code_review": Stage.CODE_REVIEW,

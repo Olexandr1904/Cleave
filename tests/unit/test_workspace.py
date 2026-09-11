@@ -638,3 +638,34 @@ class TestCodeReviewTransitions:
         from workspace.workspace import VALID_TRANSITIONS, Stage
         assert Stage.QA in VALID_TRANSITIONS[Stage.CODE_REVIEW]
         assert Stage.DEV in VALID_TRANSITIONS[Stage.CODE_REVIEW]
+
+
+class TestPlanReviewTransitions:
+    """PLAN_REVIEW sits between ANALYSIS and DEV; it bounces back to ANALYSIS."""
+
+    def test_analysis_can_reach_plan_review(self):
+        from workspace.workspace import VALID_TRANSITIONS, Stage
+        assert Stage.PLAN_REVIEW in VALID_TRANSITIONS[Stage.ANALYSIS]
+
+    def test_plan_review_can_pass_to_dev_and_bounce_to_analysis(self):
+        from workspace.workspace import VALID_TRANSITIONS, Stage
+        assert Stage.DEV in VALID_TRANSITIONS[Stage.PLAN_REVIEW]
+        assert Stage.ANALYSIS in VALID_TRANSITIONS[Stage.PLAN_REVIEW]
+
+    def test_plan_review_can_await_approval(self):
+        """Manual mode gates here, so the state must be reachable."""
+        from workspace.workspace import VALID_TRANSITIONS, Stage
+        assert Stage.AWAITING_APPROVAL in VALID_TRANSITIONS[Stage.PLAN_REVIEW]
+
+    def test_paused_states_can_resume_into_plan_review(self):
+        from workspace.workspace import VALID_TRANSITIONS, Stage
+        for paused in (Stage.BLOCKED, Stage.FAILED, Stage.AWAITING_APPROVAL,
+                       Stage.DEFERRED, Stage.PAUSED):
+            assert Stage.PLAN_REVIEW in VALID_TRANSITIONS[paused], (
+                f"{paused} cannot resume into PLAN_REVIEW"
+            )
+
+    def test_analysis_to_dev_still_allowed(self):
+        """Additive change: the old edge stays for forced Telegram transitions."""
+        from workspace.workspace import VALID_TRANSITIONS, Stage
+        assert Stage.DEV in VALID_TRANSITIONS[Stage.ANALYSIS]

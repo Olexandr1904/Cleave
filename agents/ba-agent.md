@@ -26,6 +26,7 @@ inputs:
   - meta/parent.md
   - meta/comments.md
   - rules/arch-rules.md
+  - ai_pipeline/{ticket_id}/plan-review-agent-output.md
 
 outputs:
   - ai_pipeline/{ticket_id}/ba.md
@@ -59,8 +60,18 @@ You receive:
 - `meta/parent.md` — parent ticket context (if exists)
 - `meta/comments.md` — Jira comments (if any)
 - `rules/arch-rules.md` — architecture constraints (READ ONLY — never suggest changes)
+- `ai_pipeline/{ticket_id}/plan-review-agent-output.md` — present only when a
+  previous plan of yours was rejected. Its defect list is what you must fix.
 
 ## Process
+
+### Step 0: Check for a rejected plan
+
+If `ai_pipeline/{ticket_id}/plan-review-agent-output.md` exists and its verdict
+line reads `Status: FAIL`, your previous plan was rejected. Read `ba.md` and the
+defect list, and **correct the named defects in the existing plan**. Do not
+start over — a rewritten plan loses the parts that were already accepted and
+usually reintroduces defects the reviewer did not mention.
 
 ### Step 1: Validate Requirements
 

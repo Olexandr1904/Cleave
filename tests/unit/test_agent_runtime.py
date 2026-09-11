@@ -792,14 +792,39 @@ class TestSessionId:
         assert str(uuid.UUID(session_id_for("T-1", "dev-agent"))) == session_id_for("T-1", "dev-agent")
 
 
-def test_agent_execution_detail_carries_ticket_id() -> None:
-    """Without ticket_id the cost of a run cannot be attributed to a ticket."""
-    import inspect
-    from orchestrator import agent_runtime
+class TestAgentExecutionDetailAttribution:
+    """Verify agent_execution_detail events carry correct ticket and project attribution."""
 
-    src = inspect.getsource(agent_runtime)
-    emit_line = next(
-        line for line in src.splitlines() if '"agent_execution_detail"' in line
-    )
-    assert "ticket_id=" in emit_line, emit_line
-    assert "project_id=" in emit_line, emit_line
+    async def test_agent_execution_detail_carries_correct_ticket_id(
+        self, registry, mock_llm, workspace
+    ) -> None:
+        """The emitted event must carry ticket_id matching the workspace's ticket_id.
+
+        This test catches value-level regressions: if ticket_id and project_id are
+        swapped, or assigned the wrong workspace fields, the test fails.
+        """
+        from unittest.mock import Mock
+
+        # Create a mock event bus to capture emitted events
+        mock_bus = Mock()
+
+        runtime = AgentRuntime(registry, mock_llm, event_bus=mock_bus)
+        await runtime.execute("dev-agent", workspace)
+
+        # Find the agent_execution_detail emit call
+        emit_calls = [
+            call for call in mock_bus.emit.call_args_list
+            if call[0][0] == "agent_execution_detail"  # event type is first positional arg
+        ]
+        assert len(emit_calls) == 1, f"Expected exactly 1 agent_execution_detail emit, got {len(emit_calls)}"
+
+        # Verify the keyword arguments
+        call_kwargs = emit_calls[0][1]  # Get the kwargs dict from the call
+        assert call_kwargs.get("ticket_id") == workspace.state.ticket_id, (
+            f"ticket_id must be {workspace.state.ticket_id}, "
+            f"got {call_kwargs.get('ticket_id')}"
+        )
+        assert call_kwargs.get("project_id") == workspace.state.company_id, (
+            f"project_id must be {workspace.state.company_id}, "
+            f"got {call_kwargs.get('project_id')}"
+        )

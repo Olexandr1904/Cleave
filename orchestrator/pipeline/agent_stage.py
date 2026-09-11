@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 from datetime import datetime, timedelta, timezone
 from typing import Any, Awaitable, Callable
 
@@ -16,7 +17,12 @@ from integrations.base.notifier import NotifierInterface
 from orchestrator import stage_verifier, tg_format
 from orchestrator.agent_runtime import AgentRuntime
 from orchestrator.approval_gate import should_approval_gate
-from orchestrator.constants import REPORT_BA, REPORT_BA_QUESTIONS, STAGE_RUNTIME_OUTPUT
+from orchestrator.constants import (
+    REPORT_BA,
+    REPORT_BA_QUESTIONS,
+    RUNTIME_OUTPUT_PLAN_REVIEW,
+    STAGE_RUNTIME_OUTPUT,
+)
 from orchestrator.escalation import handle_escalate
 from orchestrator.git_ops import git_diff_files_vs_base, git_head_sha
 from orchestrator.agent_failure_summarizer import summarize_agent_failure
@@ -98,6 +104,25 @@ def _looks_like_fail(text: str) -> bool:
     ))
 
 
+# plan_review deliberately does NOT reuse _looks_like_pass: that matcher accepts
+# "advances to" and treats "verdict: hold" as a pass, and parse_agent_outcome
+# checks pass before fail. A plan-review report reading "the plan advances to dev
+# only if..." would be read as PASS — the exact inversion this gate exists to
+# prevent. Strict line match, and anything unparseable fails closed.
+_PLAN_REVIEW_VERDICT = re.compile(r"^status:[ \t]*(pass|fail)[ \t]*$", re.IGNORECASE | re.MULTILINE)
+
+
+def _parse_plan_review_outcome(workspace: Workspace) -> str:
+    """Return 'pass' only for an explicit `Status: PASS` line; else 'fail'."""
+    report = workspace.reports_dir / RUNTIME_OUTPUT_PLAN_REVIEW
+    if not report.exists():
+        return "fail"
+    match = _PLAN_REVIEW_VERDICT.search(report.read_text(encoding="utf-8"))
+    if match is None:
+        return "fail"
+    return "pass" if match.group(1).lower() == "pass" else "fail"
+
+
 def rollback_iteration(workspace: Workspace, stage_id: str) -> None:
     """Undo the iteration counter increment for an aborted stage run.
 
@@ -146,6 +171,9 @@ def parse_agent_outcome(
             workspace.state.ticket_id,
         )
         return "unclear"
+
+    if stage_id == "plan_review":
+        return _parse_plan_review_outcome(workspace)
 
     if stage_id in ("scope_check", "code_review", "qa"):
         runtime_name = STAGE_RUNTIME_OUTPUT.get(stage_id)

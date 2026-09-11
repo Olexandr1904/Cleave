@@ -49,3 +49,41 @@ def test_parse_outcome_qa_fail_from_output(tmp_path: Path) -> None:
 def test_parse_outcome_unknown_stage_returns_default(tmp_path: Path) -> None:
     assert parse_agent_outcome("dev", "anything", _ws(tmp_path)) == "default"
     assert parse_agent_outcome("push", "", _ws(tmp_path)) == "default"
+
+
+def test_plan_review_pass_requires_exact_verdict_line(tmp_path: Path) -> None:
+    from orchestrator.constants import RUNTIME_OUTPUT_PLAN_REVIEW
+    (tmp_path / RUNTIME_OUTPUT_PLAN_REVIEW).write_text(
+        "Status: PASS\n\nThe plan is sound.", encoding="utf-8",
+    )
+    assert parse_agent_outcome("plan_review", "", _ws(tmp_path)) == "pass"
+
+
+def test_plan_review_fail_verdict(tmp_path: Path) -> None:
+    from orchestrator.constants import RUNTIME_OUTPUT_PLAN_REVIEW
+    (tmp_path / RUNTIME_OUTPUT_PLAN_REVIEW).write_text(
+        "Status: FAIL\n\n### Files to Modify\nNo file list.", encoding="utf-8",
+    )
+    assert parse_agent_outcome("plan_review", "", _ws(tmp_path)) == "fail"
+
+
+def test_plan_review_does_not_inherit_loose_pass_matcher(tmp_path: Path) -> None:
+    """'advances to' is a pass keyword for the other stages. Not for this one."""
+    from orchestrator.constants import RUNTIME_OUTPUT_PLAN_REVIEW
+    (tmp_path / RUNTIME_OUTPUT_PLAN_REVIEW).write_text(
+        "Status: FAIL\n\nThe plan advances to dev only if the file list is fixed.",
+        encoding="utf-8",
+    )
+    assert parse_agent_outcome("plan_review", "", _ws(tmp_path)) == "fail"
+
+
+def test_plan_review_fails_closed_on_missing_report(tmp_path: Path) -> None:
+    assert parse_agent_outcome("plan_review", "looks good to me", _ws(tmp_path)) == "fail"
+
+
+def test_plan_review_fails_closed_on_malformed_verdict(tmp_path: Path) -> None:
+    from orchestrator.constants import RUNTIME_OUTPUT_PLAN_REVIEW
+    (tmp_path / RUNTIME_OUTPUT_PLAN_REVIEW).write_text(
+        "Status: mostly pass\n\nGood enough.", encoding="utf-8",
+    )
+    assert parse_agent_outcome("plan_review", "", _ws(tmp_path)) == "fail"

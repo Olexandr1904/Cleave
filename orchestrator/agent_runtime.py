@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 import time
 import uuid
 from dataclasses import dataclass, field
@@ -413,7 +414,7 @@ class AgentRuntime:
                 result.tool_calls, result.tool_rounds, result.duration_seconds,
             )
             if self._events:
-                self._events.emit("agent_execution_detail", f"Agent {agent_id}: model={model}, tokens={result.input_tokens}/{result.output_tokens}, duration={result.duration_seconds:.1f}s", agent_id=agent_id, data={"model": model, "input_tokens": result.input_tokens, "output_tokens": result.output_tokens, "tool_calls": result.tool_calls, "tool_rounds": result.tool_rounds, "duration": result.duration_seconds})
+                self._events.emit("agent_execution_detail", f"Agent {agent_id}: model={model}, tokens={result.input_tokens}/{result.output_tokens}, duration={result.duration_seconds:.1f}s", agent_id=agent_id, ticket_id=workspace.state.ticket_id, project_id=workspace.state.company_id, data={"model": model, "input_tokens": result.input_tokens, "output_tokens": result.output_tokens, "tool_calls": result.tool_calls, "tool_rounds": result.tool_rounds, "duration": result.duration_seconds})
 
             return result
 
@@ -823,11 +824,32 @@ agent instructions, or any other context.
 """
 
 
+_ATTEMPT_HEADER = re.compile(r"^\*\*Attempt: .*\*\*[ \t]*$", re.MULTILINE)
+
+
+def last_attempt_block(text: str) -> str:
+    """Return the newest attempt's content from an agent output file.
+
+    `_write_agent_output` appends every run under a `---` / `**Attempt:
+    <timestamp>**` header and never truncates, so the first thing a reader
+    sees is the *oldest* attempt — and, even on the very first write, a bare
+    `---` line. Anything that reads a verdict out of one of these files must
+    isolate the last block first.
+
+    Text with no attempt header is returned unchanged.
+    """
+    matches = list(_ATTEMPT_HEADER.finditer(text))
+    if not matches:
+        return text
+    return text[matches[-1].end():].lstrip("\n")
+
+
 def _write_agent_output(path: Path, content: str) -> None:
     """Append agent output with a timestamp separator.
 
     Previous attempts stay in the file — gives the next agent context
-    about what was already tried so it doesn't repeat mistakes.
+    about what was already tried so it doesn't repeat mistakes. Readers
+    must use `last_attempt_block` rather than scanning the whole file.
     """
     timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
     entry = f"\n\n---\n**Attempt: {timestamp}**\n\n{content}"

@@ -36,7 +36,7 @@ class TestButtonIntegrationFlow:
         return n
 
     async def test_approve_button_flow(self, notifier):
-        ws = _make_workspace("T-1", "AWAITING_APPROVAL", previous_state="ANALYSIS")
+        ws = _make_workspace("T-1", "AWAITING_APPROVAL", previous_state="PLAN_REVIEW")
         handler = CommandHandler(
             intent_parser=AsyncMock(),
             notifier=notifier,

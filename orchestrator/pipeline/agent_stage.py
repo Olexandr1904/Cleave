@@ -8,15 +8,21 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 from datetime import datetime, timedelta, timezone
 from typing import Any, Awaitable, Callable
 
 from config.schemas import RepoConfig
 from integrations.base.notifier import NotifierInterface
 from orchestrator import stage_verifier, tg_format
-from orchestrator.agent_runtime import AgentRuntime
+from orchestrator.agent_runtime import AgentRuntime, last_attempt_block
 from orchestrator.approval_gate import should_approval_gate
-from orchestrator.constants import REPORT_BA, REPORT_BA_QUESTIONS, STAGE_RUNTIME_OUTPUT
+from orchestrator.constants import (
+    REPORT_BA,
+    REPORT_BA_QUESTIONS,
+    RUNTIME_OUTPUT_PLAN_REVIEW,
+    STAGE_RUNTIME_OUTPUT,
+)
 from orchestrator.escalation import handle_escalate
 from orchestrator.git_ops import git_diff_files_vs_base, git_head_sha
 from orchestrator.agent_failure_summarizer import summarize_agent_failure
@@ -98,6 +104,38 @@ def _looks_like_fail(text: str) -> bool:
     ))
 
 
+# plan_review deliberately does NOT reuse _looks_like_pass: that matcher accepts
+# "advances to" and treats "verdict: hold" as a pass, and parse_agent_outcome
+# checks pass before fail. A plan-review report reading "the plan advances to dev
+# only if..." would be read as PASS — the exact inversion this gate exists to
+# prevent. Strict line match, and anything unparseable fails closed.
+# Markdown decoration around the line is tolerated — agents emit `**Status:
+# PASS**` and `## Status: PASS`, and `_looks_like_fail` above already carries
+# `verdict: **fail` because it was seen in the wild. The verdict token itself
+# stays strict: `\b` keeps prose like "status: passing this now" from matching.
+_PLAN_REVIEW_VERDICT = re.compile(
+    r"^[ \t]*[*#]*[ \t]*status[ \t]*\**[ \t]*:[ \t]*\**[ \t]*(pass|fail)\b",
+    re.IGNORECASE | re.MULTILINE,
+)
+
+
+def _parse_plan_review_outcome(workspace: Workspace) -> str:
+    """Return 'pass' only for an explicit `Status: PASS` line; else 'fail'.
+
+    Reads the newest attempt block only: the report file accumulates one
+    appended block per run, so scanning the whole file returns the *oldest*
+    verdict and a plan rejected once could never pass on re-review.
+    """
+    report = workspace.reports_dir / RUNTIME_OUTPUT_PLAN_REVIEW
+    if not report.exists():
+        return "fail"
+    block = last_attempt_block(report.read_text(encoding="utf-8"))
+    match = _PLAN_REVIEW_VERDICT.search(block)
+    if match is None:
+        return "fail"
+    return "pass" if match.group(1).lower() == "pass" else "fail"
+
+
 def rollback_iteration(workspace: Workspace, stage_id: str) -> None:
     """Undo the iteration counter increment for an aborted stage run.
 
@@ -146,6 +184,9 @@ def parse_agent_outcome(
             workspace.state.ticket_id,
         )
         return "unclear"
+
+    if stage_id == "plan_review":
+        return _parse_plan_review_outcome(workspace)
 
     if stage_id in ("scope_check", "code_review", "qa"):
         runtime_name = STAGE_RUNTIME_OUTPUT.get(stage_id)
@@ -198,6 +239,16 @@ async def handle_agent_stage(
         return
 
     workspace.increment_iteration(stage_id)
+    if stage_id == "plan_review":
+        # `_write_agent_output` only appends, so on re-entry the previous
+        # attempt's report is still here — which makes stage_verifier's
+        # existence check stop being evidence that *this* attempt produced
+        # anything, and lets a run that writes nothing be scored on the stale
+        # verdict. Clear it so "no report" (the fail-closed case) stays
+        # reachable. Nothing downstream needs the history: the reviewer runs
+        # cold by design, and the BA reads the defect list before the
+        # reviewer is re-entered.
+        (workspace.reports_dir / RUNTIME_OUTPUT_PLAN_REVIEW).unlink(missing_ok=True)
     stage_start_commit = stage_verifier.capture_stage_start(workspace, stage_id)
 
     protected = repo_config.architecture.protected_files if repo_config else []

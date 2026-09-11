@@ -8,7 +8,10 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable
 
-from integrations.telegram.handlers.approval import ApprovalHandler
+from integrations.telegram.handlers.approval import (
+    APPROVAL_REJECT_STATE,
+    ApprovalHandler,
+)
 from integrations.telegram.handlers.mode import ModeHandler
 from integrations.telegram.handlers.status import StatusHandler
 from integrations.telegram.intent_parser import IntentParser, ParsedIntent
@@ -348,6 +351,7 @@ class CommandHandler:
 
     _VALID_RETRY_STATES = {
         "analysis": Stage.ANALYSIS,
+        "plan_review": Stage.PLAN_REVIEW,
         "dev": Stage.DEV,
         "scope_check": Stage.SCOPE_CHECK,
         "code_review": Stage.CODE_REVIEW,
@@ -420,7 +424,9 @@ class CommandHandler:
             elif (reports / REPORT_DEV).exists():
                 target_state = Stage.SCOPE_CHECK
             elif (reports / REPORT_BA).exists():
-                target_state = Stage.DEV
+                # Not DEV: retrying into dev would hand the dev agent a plan
+                # no reviewer signed off on. Costs one extra reviewer run.
+                target_state = Stage.PLAN_REVIEW
             else:
                 target_state = ws.state.previous_state or Stage.ANALYSIS
 
@@ -626,7 +632,9 @@ class CommandHandler:
                 if reply_lower == "skip":
                     # Advance past the blocked stage to the next one
                     _NEXT = {
-                        Stage.ANALYSIS: Stage.DEV, Stage.DEV: Stage.SCOPE_CHECK,
+                        Stage.ANALYSIS: Stage.PLAN_REVIEW,
+                        Stage.PLAN_REVIEW: Stage.DEV,
+                        Stage.DEV: Stage.SCOPE_CHECK,
                         Stage.SCOPE_CHECK: Stage.CODE_REVIEW,
                         Stage.CODE_REVIEW: Stage.QA, Stage.QA: Stage.PUSHED,
                         Stage.PUSHED: Stage.PR_REVIEW, Stage.PR_REVIEW: Stage.DONE,
@@ -815,11 +823,19 @@ class CommandHandler:
             if not ws:
                 await self._notifier.send_message(chat_id, f"No workspace awaiting approval for {ticket_id}.", reply_to_message_id=message_id)
                 return
-            ws.transition("FAILED")
-            ws.update_state(error="Rejected by operator via Telegram")
+            # The plan-review gate's own message promises "back to analysis";
+            # marking the ticket FAILED there would make that a lie. Other
+            # gates keep the existing behaviour.
+            target = APPROVAL_REJECT_STATE.get(ws.state.previous_state, "FAILED")
+            ws.transition(target)
+            if target == "FAILED":
+                ws.update_state(error="Rejected by operator via Telegram")
+                _outcome = "Rejected. Marked as FAILED."
+            else:
+                _outcome = f"Rejected. Back to {target}."
             _title = tg_format.read_ticket_title(ws)
             _hdr = tg_format.tg_header("❌", ws.state.company_id, ws.state.ticket_id, _title)
-            await self._notifier.send_message(chat_id, f"{_hdr}\nRejected. Marked as FAILED.", reply_to_message_id=message_id)
+            await self._notifier.send_message(chat_id, f"{_hdr}\n{_outcome}", reply_to_message_id=message_id)
 
         elif action == "reviewed":
             ws = next((w for w in workspaces if w.state.ticket_id == ticket_id and w.state.current_state == "PR_REVIEW"), None)

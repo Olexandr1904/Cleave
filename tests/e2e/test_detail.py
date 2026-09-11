@@ -32,8 +32,10 @@ class TestDetailPipelineBar:
     def test_pipeline_stages_render(self, page: Page, dashboard_server: dict):
         open_detail(page, dashboard_server["base_url"], "SPIKE-1")
         stages = page.locator(".pipeline-stage")
-        # 8 stages: NEW, ANALYSIS, DEV, SCOPE_CHECK, QA, PUSHED, PR_REVIEW, DONE
-        expect(stages).to_have_count(8)
+        # 10 stages, matching PIPELINE_STAGES in dashboard/static/js/helpers.js:
+        # NEW, ANALYSIS, PLAN_REVIEW, DEV, SCOPE_CHECK, CODE_REVIEW, QA,
+        # PUSHED, PR_REVIEW, DONE
+        expect(stages).to_have_count(10)
 
     def test_current_stage_highlighted_for_active_state(
         self, page: Page, dashboard_server: dict

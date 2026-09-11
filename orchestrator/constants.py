@@ -13,6 +13,7 @@ REPORT_QA = "qa.md"
 # These exist whenever the agent ran, regardless of whether it succeeded.
 # Use these for outcome detection, stage verification, and blocked-reason display.
 RUNTIME_OUTPUT_BA = "ba-agent-output.md"
+RUNTIME_OUTPUT_PLAN_REVIEW = "plan-review-agent-output.md"
 RUNTIME_OUTPUT_DEV = "dev-agent-output.md"
 RUNTIME_OUTPUT_SCOPE_GUARD = "scope-guard-agent-output.md"
 RUNTIME_OUTPUT_CODE_REVIEW = "code-review-agent-output.md"
@@ -32,6 +33,7 @@ STAGE_REPORT_FILE: dict[str, str] = {
 # Use for outcome detection, stage verification, and blocked-reason display.
 STAGE_RUNTIME_OUTPUT: dict[str, str] = {
     "analysis": RUNTIME_OUTPUT_BA,
+    "plan_review": RUNTIME_OUTPUT_PLAN_REVIEW,
     "dev": RUNTIME_OUTPUT_DEV,
     "scope_check": RUNTIME_OUTPUT_SCOPE_GUARD,
     "code_review": RUNTIME_OUTPUT_CODE_REVIEW,

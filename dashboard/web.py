@@ -398,9 +398,9 @@ def create_app(
         # Sort: active first (by state order), then by last_updated_at descending
         state_order = {
             Stage.BLOCKED: 0, Stage.AWAITING_APPROVAL: 1, Stage.DEV: 2, Stage.ANALYSIS: 3,
-            Stage.SCOPE_CHECK: 4, Stage.CODE_REVIEW: 5, Stage.QA: 6,
-            Stage.PR_REVIEW: 7, Stage.PUSHED: 8,
-            Stage.NEW: 8, Stage.DONE: 9, Stage.FAILED: 10, Stage.ARCHIVED: 11,
+            Stage.PLAN_REVIEW: 4, Stage.SCOPE_CHECK: 5, Stage.CODE_REVIEW: 6, Stage.QA: 7,
+            Stage.PR_REVIEW: 8, Stage.PUSHED: 9,
+            Stage.NEW: 9, Stage.DONE: 10, Stage.FAILED: 11, Stage.ARCHIVED: 12,
         }
         workspaces.sort(key=lambda w: (
             state_order.get(w["current_state"], 99),

@@ -17,6 +17,7 @@ from typing import Any
 
 from orchestrator.constants import (
     RUNTIME_OUTPUT_CODE_REVIEW,
+    RUNTIME_OUTPUT_PLAN_REVIEW,
     RUNTIME_OUTPUT_QA,
     RUNTIME_OUTPUT_SCOPE_GUARD,
 )
@@ -111,6 +112,8 @@ def verify(
         return _verify_report_exists("scope_check", workspace, RUNTIME_OUTPUT_SCOPE_GUARD)
     if stage_id == "code_review":
         return _verify_report_exists("code_review", workspace, RUNTIME_OUTPUT_CODE_REVIEW)
+    if stage_id == "plan_review":
+        return _verify_report_exists("plan_review", workspace, RUNTIME_OUTPUT_PLAN_REVIEW)
     if stage_id == "qa":
         return _verify_report_exists("qa", workspace, RUNTIME_OUTPUT_QA)
     if stage_id == "push":

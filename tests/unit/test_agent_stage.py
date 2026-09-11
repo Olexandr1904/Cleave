@@ -221,3 +221,104 @@ def test_analysis_proceeds_when_no_questions(tmp_path):
     ws = _make_workspace(tmp_path, "ACME-9")
     (ws.reports_dir / "ba.md").write_text("# Plan")
     assert parse_agent_outcome("analysis", "", ws) == "default"
+
+
+# --- plan_review: a stale report must not be read as this attempt's verdict ---
+# `_write_agent_output` only ever appends, so on re-entry the previous
+# attempt's report is still on disk and stage_verifier's existence check is
+# no longer evidence that *this* attempt produced anything.
+
+def _plan_review_stage_def():
+    stage_def = MagicMock()
+    stage_def.agent = "plan-review-agent"
+    stage_def.max_iterations = 2
+    stage_def.resume_from_previous = False
+    return stage_def
+
+
+async def _run_plan_review(ws, runtime, advanced):
+    from orchestrator.pipeline.agent_stage import handle_agent_stage
+    await handle_agent_stage(
+        ws, "plan_review", _plan_review_stage_def(),
+        workflow=MagicMock(), agent_runtime=runtime, repo_config=None,
+        notifier=None, mode_handler=None, get_chat_id=lambda w: "",
+        dry_run=False, event_bus=None,
+        advance_to_stage_fn=lambda w, s: advanced.append(s),
+        on_ticket_done_fn=AsyncMock(),
+        build_gate_summary_fn=MagicMock(return_value=("", [])),
+        notify_verification_blocked_fn=AsyncMock(),
+        notify_deferred_fn=AsyncMock(),
+        notify_failed_fn=AsyncMock(),
+    )
+
+
+@pytest.mark.asyncio
+async def test_plan_review_stale_report_is_not_reused_as_a_verdict(tmp_path):
+    """A run that writes nothing must block, not inherit the old PASS."""
+    from orchestrator.agent_runtime import _write_agent_output
+    from orchestrator.constants import RUNTIME_OUTPUT_PLAN_REVIEW
+
+    ws = _make_workspace(tmp_path, "T-20", state=Stage.PLAN_REVIEW)
+    _write_agent_output(
+        ws.reports_dir / RUNTIME_OUTPUT_PLAN_REVIEW,
+        "Status: PASS\n\nStale verdict from the previous attempt.",
+    )
+
+    runtime = MagicMock()
+    runtime.execute = AsyncMock(return_value=AgentResult(
+        agent_id="plan-review-agent", success=True, output="done",
+    ))
+    advanced: list[str] = []
+
+    await _run_plan_review(ws, runtime, advanced)
+
+    assert advanced == []
+    assert ws.state.current_state == Stage.BLOCKED
+
+
+@pytest.mark.asyncio
+async def test_plan_review_fresh_report_still_decides_the_outcome(tmp_path):
+    """Control for the test above: a run that does write is parsed normally."""
+    from orchestrator.agent_runtime import _write_agent_output
+    from orchestrator.constants import RUNTIME_OUTPUT_PLAN_REVIEW
+    from orchestrator.workflow_router import StageDefinition, WorkflowDefinition
+
+    ws = _make_workspace(tmp_path, "T-21", state=Stage.PLAN_REVIEW)
+    _write_agent_output(
+        ws.reports_dir / RUNTIME_OUTPUT_PLAN_REVIEW,
+        "Status: FAIL\n\n### Files to Modify\nNo file list.",
+    )
+
+    async def _execute(*args, **kwargs):
+        _write_agent_output(
+            ws.reports_dir / RUNTIME_OUTPUT_PLAN_REVIEW,
+            "Status: PASS\n\nThe file list is now concrete.",
+        )
+        return AgentResult(agent_id="plan-review-agent", success=True, output="done")
+
+    runtime = MagicMock()
+    runtime.execute = _execute
+    advanced: list[str] = []
+
+    from orchestrator.pipeline.agent_stage import handle_agent_stage
+    workflow = WorkflowDefinition(
+        id="t", name="t",
+        stages={"plan_review": StageDefinition(
+            id="plan_review", agent="plan-review-agent",
+            on_pass="dev", on_fail="analysis", max_iterations=2,
+        )},
+    )
+    await handle_agent_stage(
+        ws, "plan_review", workflow.stages["plan_review"],
+        workflow=workflow, agent_runtime=runtime, repo_config=None,
+        notifier=None, mode_handler=None, get_chat_id=lambda w: "",
+        dry_run=False, event_bus=None,
+        advance_to_stage_fn=lambda w, s: advanced.append(s),
+        on_ticket_done_fn=AsyncMock(),
+        build_gate_summary_fn=MagicMock(return_value=("", [])),
+        notify_verification_blocked_fn=AsyncMock(),
+        notify_deferred_fn=AsyncMock(),
+        notify_failed_fn=AsyncMock(),
+    )
+
+    assert advanced == ["dev"]

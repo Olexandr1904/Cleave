@@ -28,7 +28,7 @@ class TestLoadWorkflow:
         assert len(workflow.stages) > 0
 
     def test_all_stages_present(self, workflow):
-        expected = {"analysis", "dev", "scope_check", "code_review", "qa",
+        expected = {"analysis", "plan_review", "dev", "scope_check", "code_review", "qa",
                     "push", "pr_review", "escalate", "done"}
         assert set(workflow.stages.keys()) == expected
 
@@ -60,9 +60,25 @@ class TestLoadWorkflow:
 
 class TestGetNextStage:
     def test_happy_path(self, workflow):
-        """Default workflow progression."""
-        assert get_next_stage("analysis", workflow) == "dev"
+        """Default workflow progression — analysis now hands off to plan_review."""
+        assert get_next_stage("analysis", workflow) == "plan_review"
+        assert get_next_stage("plan_review", workflow, "pass") == "dev"
         assert get_next_stage("dev", workflow) == "scope_check"
+
+    def test_plan_review_bounces_to_analysis(self, workflow):
+        """A defective plan goes back to the BA, not forward to dev."""
+        assert get_next_stage("plan_review", workflow, "fail") == "analysis"
+
+    def test_plan_review_escalates_on_cap(self, workflow):
+        assert workflow.stages["plan_review"].max_iterations == 2
+        assert get_next_stage("plan_review", workflow, "max_iterations") == "escalate"
+
+    def test_plan_review_is_a_cold_judge(self, workflow):
+        """A judge that resumes the author's session inherits the author's excuses."""
+        assert workflow.stages["plan_review"].resume_from_previous is False
+
+    def test_plan_review_agent_mapping(self, workflow):
+        assert workflow.stages["plan_review"].agent == "plan-review-agent"
 
     def test_scope_check_pass(self, workflow):
         """Scope check pass now hands off to code_review, which owns correctness."""
@@ -160,3 +176,16 @@ class TestResumeFlag:
         assert workflow.stages["scope_check"].resume_from_previous is False
         assert workflow.stages["code_review"].resume_from_previous is False
         assert workflow.stages["analysis"].resume_from_previous is False
+
+
+def test_workflow_description_names_every_agent_stage() -> None:
+    """The description is the one-line answer to "what does this pipeline
+    do". It silently omitted plan_review and code_review, both of which are
+    full agent stages that bounce work backwards."""
+    workflow = load_workflow(WORKFLOW_PATH)
+    described = workflow.description.lower()
+    missing = [
+        stage_id for stage_id, stage in workflow.stages.items()
+        if stage.agent and stage_id.replace("_", " ") not in described
+    ]
+    assert missing == [], f"not named in the workflow description: {missing}"

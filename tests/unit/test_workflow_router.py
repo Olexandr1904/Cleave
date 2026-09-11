@@ -176,3 +176,16 @@ class TestResumeFlag:
         assert workflow.stages["scope_check"].resume_from_previous is False
         assert workflow.stages["code_review"].resume_from_previous is False
         assert workflow.stages["analysis"].resume_from_previous is False
+
+
+def test_workflow_description_names_every_agent_stage() -> None:
+    """The description is the one-line answer to "what does this pipeline
+    do". It silently omitted plan_review and code_review, both of which are
+    full agent stages that bounce work backwards."""
+    workflow = load_workflow(WORKFLOW_PATH)
+    described = workflow.description.lower()
+    missing = [
+        stage_id for stage_id, stage in workflow.stages.items()
+        if stage.agent and stage_id.replace("_", " ") not in described
+    ]
+    assert missing == [], f"not named in the workflow description: {missing}"

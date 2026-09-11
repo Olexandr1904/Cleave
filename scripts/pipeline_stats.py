@@ -5,6 +5,12 @@ it cost? Existing data — `stage_transition` and `agent_execution_detail`
 events are already persisted with no retention, so this reports on history
 already on disk.
 
+`terminal_state` is the last *driver-emitted* transition, not necessarily
+where the ticket ended up: only `advance_to_stage` emits `stage_transition`.
+Moves made by the dashboard, by Telegram, by the approval gate and by
+escalation never emit one, so a ticket parked in BLOCKED or resumed by an
+operator still reports the last stage the driver moved it to.
+
 Usage:
     python -m scripts.pipeline_stats [path/to/events.db]
 """
@@ -40,7 +46,10 @@ class TicketStats:
 
 def collect_ticket_stats(db_path: str) -> list[TicketStats]:
     """Aggregate every ticket's stage entries, bounces and spend."""
-    conn = sqlite3.connect(db_path)
+    # Read-only on purpose: a plain connect() on a mistyped path silently
+    # creates an empty database and then fails with "no such table: events",
+    # leaving the typo'd file behind for the next run to trip over.
+    conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
     try:
         rows = conn.execute(
             "SELECT timestamp, event_type, project_id, ticket_id, data_json"

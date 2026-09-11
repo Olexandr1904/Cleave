@@ -1,7 +1,7 @@
 workflow:
   id: "default"
   name: "Standard Ticket Pipeline"
-  description: "Full ticket lifecycle: analysis -> dev -> scope -> qa -> push -> pr review -> done"
+  description: "Full ticket lifecycle: analysis -> plan review -> dev -> scope check -> code review -> qa -> push -> pr review -> done"
 
 stages:
   - id: "analysis"

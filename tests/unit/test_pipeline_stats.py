@@ -5,6 +5,8 @@ import json
 import sqlite3
 from pathlib import Path
 
+import pytest
+
 from scripts.pipeline_stats import collect_ticket_stats
 
 
@@ -95,3 +97,23 @@ def test_terminal_state_breaks_timestamp_ties_by_insertion_order(tmp_path: Path)
 
     s = collect_ticket_stats(str(db))[0]
     assert s.terminal_state == "QA"
+
+
+def test_a_missing_database_is_not_created(tmp_path: Path) -> None:
+    """A module documented as read-only must not leave an empty database
+    behind when the path is mistyped — the caller then re-runs against the
+    file this run created and gets "no such table: events" forever."""
+    missing = tmp_path / "typo.db"
+    with pytest.raises(sqlite3.OperationalError):
+        collect_ticket_stats(str(missing))
+    assert not missing.exists()
+
+
+def test_reporting_does_not_write_to_the_database(tmp_path: Path) -> None:
+    """The connection is opened read-only, so a stray write would raise."""
+    db = tmp_path / "events.db"
+    _seed(db, [(1.0, "stage_transition", "", "proj", "T-1", None,
+                json.dumps({"from_state": "NEW", "to_state": "ANALYSIS"}))])
+    before = db.stat().st_mtime_ns
+    assert collect_ticket_stats(str(db))[0].terminal_state == "ANALYSIS"
+    assert db.stat().st_mtime_ns == before

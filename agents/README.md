@@ -63,6 +63,7 @@ Hard rules the agent must follow.
 | Alice | `ba-agent` | Requirements validation and implementation planning |
 | James | `dev-agent` | Code implementation following plans |
 | Scope Guard | `scope-guard-agent` | Validates dev-agent diffs against the plan and architecture rules; fails the stage if scope creep is detected |
+| Surveyor | `plan-review-agent` | Reviews the BA's implementation plan before any code exists; bounces defective plans back to analysis |
 | QA | `qa-agent` | Writes tests and runs lint / test / build gates |
 | Fix | `fix-agent` | Targeted recovery agent for narrow failure categories |
 | PR Comment Responder | `pr-comment-responder-agent` | Classifies PR review comments and decides Fix / Won't Fix / re-investigate |

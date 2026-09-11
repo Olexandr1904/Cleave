@@ -14,7 +14,7 @@ from integrations.base.notifier import Button
 from integrations.telegram.handlers.approval import APPROVAL_NEXT_STATE
 from integrations.telegram.handlers.mode import ModeHandler
 from orchestrator import tg_format
-from orchestrator.constants import REPORT_BA
+from orchestrator.constants import REPORT_BA, RUNTIME_OUTPUT_PLAN_REVIEW
 from orchestrator.pipeline.agent_stage import _emit, _log_pipeline
 from orchestrator.workflow_router import (
     WorkflowDefinition,
@@ -108,6 +108,22 @@ def _extract_ba_verdict(ba_file: Any) -> str:
     return ""
 
 
+def _extract_plan_review_verdict(report_file: Any) -> str:
+    """One-line plan-review decision for the approval-gate message.
+
+    The plan-review report's first line is always `Status: PASS` or
+    `Status: FAIL` (enforced by the agent's own contract), so the first
+    non-blank line is the verdict — no heading to look for, unlike ba.md.
+    """
+    if not report_file.exists():
+        return ""
+    for line in report_file.read_text(encoding="utf-8").splitlines():
+        stripped = line.strip()
+        if stripped:
+            return tg_format.strip_markdown(stripped)[:240]
+    return ""
+
+
 def build_gate_summary(
     workspace: Workspace, gate_state: str,
 ) -> tuple[str, list[Button]]:
@@ -147,14 +163,19 @@ def build_gate_summary(
         )
         return text, buttons
 
-    if gate_state == Stage.ANALYSIS:
-        # Surface the BA's one-line decision so the operator can sanity-check
-        # whether the ticket was analysed correctly before approving.
-        verdict = _extract_ba_verdict(workspace.reports_dir / REPORT_BA)
-        if verdict:
-            gate_title = f"Analysis complete — BA decision:\n{verdict}"
-        else:
-            gate_title = "Analysis complete."
+    if gate_state == Stage.PLAN_REVIEW:
+        # Surface both verdicts — the BA's plan and the plan-reviewer's
+        # sign-off on it — so the operator can sanity-check a plan the
+        # machine has already vetted before sending it to dev.
+        ba_verdict = _extract_ba_verdict(workspace.reports_dir / REPORT_BA)
+        review_verdict = _extract_plan_review_verdict(
+            workspace.reports_dir / RUNTIME_OUTPUT_PLAN_REVIEW,
+        )
+        gate_title = "Plan review complete."
+        if ba_verdict:
+            gate_title += f"\n\nBA decision:\n{ba_verdict}"
+        if review_verdict:
+            gate_title += f"\n\nPlan reviewer:\n{review_verdict}"
         gate_title += "\n\nApprove = start coding. Reject = back to analysis."
     elif gate_state == Stage.QA:
         gate_title = "QA passed.\n\nApprove = push code & open PR. Reject = back to dev."

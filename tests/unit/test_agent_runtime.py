@@ -790,3 +790,16 @@ class TestSessionId:
         from orchestrator.agent_runtime import session_id_for
 
         assert str(uuid.UUID(session_id_for("T-1", "dev-agent"))) == session_id_for("T-1", "dev-agent")
+
+
+def test_agent_execution_detail_carries_ticket_id() -> None:
+    """Without ticket_id the cost of a run cannot be attributed to a ticket."""
+    import inspect
+    from orchestrator import agent_runtime
+
+    src = inspect.getsource(agent_runtime)
+    emit_line = next(
+        line for line in src.splitlines() if '"agent_execution_detail"' in line
+    )
+    assert "ticket_id=" in emit_line, emit_line
+    assert "project_id=" in emit_line, emit_line

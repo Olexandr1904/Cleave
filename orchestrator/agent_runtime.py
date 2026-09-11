@@ -413,7 +413,7 @@ class AgentRuntime:
                 result.tool_calls, result.tool_rounds, result.duration_seconds,
             )
             if self._events:
-                self._events.emit("agent_execution_detail", f"Agent {agent_id}: model={model}, tokens={result.input_tokens}/{result.output_tokens}, duration={result.duration_seconds:.1f}s", agent_id=agent_id, data={"model": model, "input_tokens": result.input_tokens, "output_tokens": result.output_tokens, "tool_calls": result.tool_calls, "tool_rounds": result.tool_rounds, "duration": result.duration_seconds})
+                self._events.emit("agent_execution_detail", f"Agent {agent_id}: model={model}, tokens={result.input_tokens}/{result.output_tokens}, duration={result.duration_seconds:.1f}s", agent_id=agent_id, ticket_id=workspace.state.ticket_id, project_id=workspace.state.company_id, data={"model": model, "input_tokens": result.input_tokens, "output_tokens": result.output_tokens, "tool_calls": result.tool_calls, "tool_rounds": result.tool_rounds, "duration": result.duration_seconds})
 
             return result
 

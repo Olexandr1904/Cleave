@@ -45,8 +45,8 @@ class TestApprovalHandler:
         assert len(result) == 1
         assert result[0].state.ticket_id == "T-2"
 
-    def test_resolve_next_state_post_analysis(self, handler):
-        ws = _make_workspace("T-1", "AWAITING_APPROVAL", "ANALYSIS")
+    def test_resolve_next_state_post_plan_review(self, handler):
+        ws = _make_workspace("T-1", "AWAITING_APPROVAL", "PLAN_REVIEW")
         next_state = handler.resolve_next_state(ws)
         assert next_state == "DEV"
 

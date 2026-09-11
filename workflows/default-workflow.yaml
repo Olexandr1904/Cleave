@@ -7,8 +7,21 @@ stages:
   - id: "analysis"
     agent: "ba-agent"
     description: "Validate requirements, create implementation plan"
-    next: "dev"
+    next: "plan_review"
     on_unclear: "escalate"
+
+  # The plan is what scope_check, code_review and qa all measure against, and
+  # scope_check takes its file allowlist straight out of it. A defect here is
+  # invisible to every later gate: the diff matches its spec, tests go green,
+  # and the wrong feature ships. Cold context on purpose — a judge that resumes
+  # the author's session inherits the author's justifications.
+  - id: "plan_review"
+    agent: "plan-review-agent"
+    description: "Review the plan itself, before any code exists"
+    on_pass: "dev"
+    on_fail: "analysis"
+    max_iterations: 2
+    on_max_iterations: "escalate"
 
   - id: "dev"
     agent: "dev-agent"

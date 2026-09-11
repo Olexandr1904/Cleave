@@ -8,7 +8,7 @@ from typing import Any
 logger = logging.getLogger(__name__)
 
 APPROVAL_NEXT_STATE = {
-    "ANALYSIS": "DEV",
+    "PLAN_REVIEW": "DEV",
     "QA": "PUSHED",
     "PR_REVIEW": "DONE",
 }

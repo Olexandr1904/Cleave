@@ -380,7 +380,7 @@ class TestHandleCallback:
         return handler
 
     async def test_callback_approve(self, mock_notifier, mock_mode_handler):
-        ws = _make_workspace("T-1", "AWAITING_APPROVAL", previous_state="ANALYSIS")
+        ws = _make_workspace("T-1", "AWAITING_APPROVAL", previous_state="PLAN_REVIEW")
         handler = CommandHandler(
             intent_parser=AsyncMock(),
             notifier=mock_notifier,

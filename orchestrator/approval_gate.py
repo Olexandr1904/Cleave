@@ -14,10 +14,10 @@ from workspace.workspace import Stage
 
 logger = logging.getLogger(__name__)
 
-APPROVAL_GATE_STATES = {Stage.ANALYSIS, Stage.QA}
+APPROVAL_GATE_STATES = {Stage.PLAN_REVIEW, Stage.QA}
 
 GATE_HAPPY_PATH_NEXT_STAGE = {
-    Stage.ANALYSIS: "dev",
+    Stage.PLAN_REVIEW: "dev",
     Stage.QA: "push",
 }
 

@@ -101,8 +101,12 @@ class TestApprovalGates:
         return should_approval_gate(mh, completed, nxt)
 
     # Legacy single-arg form: gate fires for every gate state in manual mode.
-    def test_should_gate_returns_true_for_analysis_in_manual(self):
-        assert self._gate(self._manual(), "ANALYSIS") is True
+    def test_should_gate_returns_true_for_plan_review_in_manual(self):
+        assert self._gate(self._manual(), "PLAN_REVIEW") is True
+
+    def test_analysis_no_longer_gated(self):
+        """The plan gate moved to PLAN_REVIEW: the human reviews a vetted plan."""
+        assert self._gate(self._manual(), "ANALYSIS") is False
 
     def test_should_gate_returns_true_for_qa_in_manual(self):
         assert self._gate(self._manual(), "QA") is True
@@ -118,8 +122,12 @@ class TestApprovalGates:
         assert self._gate(self._manual(), "DEV") is False
 
     # Two-arg form: gate only fires on happy-path transitions.
-    def test_gate_analysis_to_dev_happy_path_fires(self):
-        assert self._gate(self._manual(), "ANALYSIS", "dev") is True
+    def test_gate_plan_review_to_dev_happy_path_fires(self):
+        assert self._gate(self._manual(), "PLAN_REVIEW", "dev") is True
+
+    def test_gate_plan_review_to_analysis_bypasses(self):
+        """A bounced plan is not a happy path — the gate must NOT fire."""
+        assert self._gate(self._manual(), "PLAN_REVIEW", "analysis") is False
 
     def test_gate_analysis_to_escalate_bypasses(self):
         """Unclear analysis escalates — gate must NOT fire."""
@@ -156,9 +164,9 @@ class TestAutoResumeAwaitingApproval:
         orch._mode_handler.get_mode.return_value = "manual"
         return orch
 
-    async def test_auto_mode_resumes_analysis_gate_to_dev(self):
+    async def test_auto_mode_resumes_plan_review_gate_to_dev(self):
         orch = self._auto_orch()
-        ws = _make_workspace("T-1", "AWAITING_APPROVAL", previous_state="ANALYSIS")
+        ws = _make_workspace("T-1", "AWAITING_APPROVAL", previous_state="PLAN_REVIEW")
         # Stop recursion — after the first transition, flip state to terminal
         # so the re-entrant advance returns immediately.
         def _transition(new_state):

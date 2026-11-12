@@ -2,67 +2,58 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-import pytest
-
+from health.credentials import CredentialStatus
 from tests.e2e.conftest import goto_and_wait_for_board, make_fake_projects
-from workspace.workspace import Stage
 
 
-class TestDashboardHealthStrip:
-    def test_all_green_shows_collapsed_pill(
-        self, page, workspace_seeder, dashboard_server_custom, monkeypatch
+class FakeCredentialHealth:
+    def __init__(self, statuses):
+        self._statuses = statuses
+
+    def snapshot(self):
+        return self._statuses
+
+    async def check_all(self):
+        return self._statuses
+
+
+def _status(state: str) -> CredentialStatus:
+    now = datetime.now(timezone.utc)
+    return CredentialStatus(
+        "forge:acme-org/acme-app", "forge", "github", "GitHub acme-org/acme-app",
+        "acme-org/acme-app", "GH_T", "vcs.github.token",
+        state=state, fix="Set a new GH_T in .env", since=now, checked_at=now,
+    )
+
+
+class TestDashboardCredentialStrip:
+    def test_all_ok_hides_strip(
+        self, page, workspace_seeder, dashboard_server_custom
     ):
-        from health.runner import ProjectHealth
-        from health.validators import ValidatorResult
-
         base, seed = workspace_seeder
         seed("ACME-1", "DEV")
-
-        async def fake_check_all(projects, force=False):
-            return [ProjectHealth(
-                project_id="acme",
-                checks=[
-                    ValidatorResult(True, "jira", "ACME", "", ""),
-                    ValidatorResult(True, "github", "acme/acme-app", "", ""),
-                ],
-                checked_at=datetime.now(timezone.utc),
-            )]
-
-        import dashboard.web
-        monkeypatch.setattr(dashboard.web, "check_all", fake_check_all)
-
-        ctx = dashboard_server_custom(projects=make_fake_projects())
+        ctx = dashboard_server_custom(
+            projects=make_fake_projects(),
+            credential_health=FakeCredentialHealth([_status("ok")]),
+        )
 
         goto_and_wait_for_board(page, ctx["base_url"])
-        pill = page.locator(".health-strip.green")
-        assert pill.is_visible()
-        assert "healthy" in pill.inner_text().lower()
+        assert page.locator(".health-strip").count() == 0
 
-    def test_red_shows_expanded_with_fix_hint(
-        self, page, workspace_seeder, dashboard_server_custom, monkeypatch
+    def test_invalid_shows_chip_with_env_var_and_fix(
+        self, page, workspace_seeder, dashboard_server_custom
     ):
-        from health.runner import ProjectHealth
-        from health.validators import ValidatorResult
-
         base, seed = workspace_seeder
         seed("ACME-1", "DEV")
-
-        async def fake_check_all(projects, force=False):
-            return [ProjectHealth(
-                project_id="acme",
-                checks=[
-                    ValidatorResult(False, "jira", "ACME", "HTTP 401", "Check Jira token"),
-                ],
-                checked_at=datetime.now(timezone.utc),
-            )]
-
-        import dashboard.web
-        monkeypatch.setattr(dashboard.web, "check_all", fake_check_all)
-
-        ctx = dashboard_server_custom(projects=make_fake_projects())
+        ctx = dashboard_server_custom(
+            projects=make_fake_projects(),
+            credential_health=FakeCredentialHealth([_status("invalid")]),
+        )
 
         goto_and_wait_for_board(page, ctx["base_url"])
         strip = page.locator(".health-strip.red")
         assert strip.is_visible()
-        assert "HTTP 401" in strip.inner_text()
-        assert "Check Jira token" in strip.inner_text()
+        text = strip.inner_text()
+        assert "invalid or expired" in text
+        assert "GH_T" in text
+        assert "Set a new GH_T in .env" in text

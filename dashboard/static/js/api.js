@@ -52,7 +52,7 @@ export async function loadReport(ticketId, filename, folder) {
 
 export async function loadHealth(force = false) {
   const qs = force ? '?refresh=1' : '';
-  const resp = await fetch(`/api/projects/health${qs}`);
+  const resp = await fetch(`/api/health/credentials${qs}`);
   if (!resp.ok) throw new Error(`health fetch failed: ${resp.status}`);
   return resp.json();
 }
@@ -82,4 +82,19 @@ export async function createProject(payload) {
   });
   const body = await res.json().catch(() => ({}));
   return { status: res.status, body };
+}
+
+export async function loadSwitches() {
+  return fetchJSON('/api/switches');
+}
+
+export async function setSwitch(mode, state, scope = '*') {
+  const resp = await fetch('/api/switches', {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ mode, state, scope }),
+  });
+  const data = await resp.json();
+  if (!resp.ok) throw new Error(data.error || `HTTP ${resp.status}`);
+  return data;
 }

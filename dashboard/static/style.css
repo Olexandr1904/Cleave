@@ -900,6 +900,10 @@
   background: #2d1414;
   border: 1px solid #da3633;
 }
+.health-strip.grey {
+  background: #1c2128;
+  border: 1px solid #6e7681;
+}
 .health-strip-header {
   display: flex;
   align-items: center;
@@ -916,6 +920,7 @@
 .health-dot.green { background: #238636; }
 .health-dot.yellow { background: #e3b341; }
 .health-dot.red { background: #da3633; }
+.health-dot.grey { background: #6e7681; }
 .health-row {
   display: flex;
   align-items: flex-start;
@@ -1083,3 +1088,24 @@
 .pill-saving  { background: #1f6feb33; color: #58a6ff; }
 .pill-saved   { background: #2ea04333; color: #3fb950; }
 .pill-error   { background: #f8514922; color: #f85149; }
+
+/* Running/paused switch panel */
+.switch-panel {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 12px;
+}
+.switch-pill {
+  padding: 3px 12px;
+  border-radius: 12px;
+  font-size: 11px;
+  font-weight: 700;
+  cursor: pointer;
+  border: 1px solid;
+  user-select: none;
+}
+.switch-pill:hover { opacity: 0.85; }
+.switch-pill.running { background: #1a3d1a; color: #56d364; border-color: #2ea043; }
+.switch-pill.paused { background: #3d3318; color: #e3b341; border-color: #9e6a03; }
+.switch-pill.inherited { opacity: 0.6; border-style: dashed; cursor: default; }

@@ -1,6 +1,7 @@
 // board.js — board view rendering
 
 import { loadWorkspaces, loadHealth } from './api.js';
+import { renderSwitchPanel } from './switches.js';
 import { esc, timeAgo, fmtBytes, stateBadgeHtml } from './helpers.js';
 import { approveWorkspace, pauseWorkspace, unpauseWorkspace, retryWorkspace, clearGradleAndRetry } from './actions.js';
 
@@ -49,13 +50,14 @@ export async function renderBoard(projectId, showDone = true) {
     const workspaces = await loadWorkspaces(projectId);
 
     if (workspaces.length === 0) {
-      content.innerHTML = `<div id="health-strip-container"></div>
+      content.innerHTML = `<div id="switch-panel-container"></div><div id="health-strip-container"></div>
         <div class="empty-state">
           <div class="empty-state-icon">📋</div>
           <h2>No projects yet</h2>
           <p>Add your first project to start the autonomous pipeline.</p>
           <button id="empty-add-project" class="btn-primary">+ New Project</button>
         </div>`;
+      renderSwitchPanel(document.getElementById('switch-panel-container'), 'tickets');
       renderHealthStrip(document.getElementById('health-strip-container'));
       document.getElementById('empty-add-project').onclick = () => {
         import('./project-wizard.js').then(({ openWizard }) => openWizard());
@@ -96,7 +98,8 @@ export async function renderBoard(projectId, showDone = true) {
       html += `</div></div>`;
     }
 
-    content.innerHTML = `<div id="health-strip-container"></div>` + html;
+    content.innerHTML = `<div id="switch-panel-container"></div><div id="health-strip-container"></div>` + html;
+    renderSwitchPanel(document.getElementById('switch-panel-container'), 'tickets');
     renderHealthStrip(document.getElementById('health-strip-container'));
 
     // Bind inline approve buttons
@@ -252,36 +255,40 @@ async function renderHealthStrip(container) {
     return;
   }
 
-  const projects = data.projects || [];
-  if (projects.length === 0) {
+  const credentials = data.credentials || [];
+  const needAttention = credentials.filter(c => c.state !== 'ok' && c.state !== 'unknown');
+  if (needAttention.length === 0) {
     container.innerHTML = '';
     return;
   }
 
-  const unhealthy = projects.filter(p => p.status !== 'green');
-  if (unhealthy.length === 0) {
-    container.innerHTML = '';
-    return;
-  }
+  const DOT = { invalid: 'red', no_access: 'red', expiring: 'yellow', unreachable: 'grey' };
+  const local = iso => new Date(iso).toLocaleString();
+  const stateText = c => ({
+    invalid: 'invalid or expired',
+    no_access: 'no access',
+    expiring: c.expires_at ? `expires ${local(c.expires_at)}` : 'expiring',
+    unreachable: 'unreachable',
+  })[c.state] || c.state;
 
-  const rowsHtml = unhealthy.map(p => {
-    const badChecks = p.checks.filter(c => !c.ok);
-    const checksHtml = badChecks.map(c => `
-      <div class="health-check">
-        <span class="health-check-name">${esc(c.name)}</span>
-        <span class="health-check-target">${esc(c.target)}</span>
-        <span class="health-check-reason">${esc(c.reason)}</span>
-        ${c.fix_hint ? `<code class="health-check-fix">${esc(c.fix_hint)}</code>` : ''}
-      </div>`).join('');
-    return `
+  const rowsHtml = needAttention.map(c => `
       <div class="health-row">
-        <span class="health-dot ${esc(p.status)}"></span>
-        <span class="health-project">${esc(p.project_id)}</span>
-        <div class="health-checks">${checksHtml}</div>
-      </div>`;
-  }).join('');
+        <span class="health-dot ${esc(DOT[c.state] || 'grey')}"></span>
+        <span class="health-project">${esc(c.label)}</span>
+        <div class="health-checks">
+          <div class="health-check">
+            <span class="health-check-name">${esc(stateText(c))}</span>
+            ${c.env_var ? `<code>${esc(c.env_var)}</code>` : ''}
+            ${c.since ? `<span class="health-check-target">since ${esc(local(c.since))}</span>` : ''}
+            ${c.checked_at ? `<span class="health-check-target">checked ${esc(local(c.checked_at))}</span>` : ''}
+            ${c.reason ? `<span class="health-check-reason">${esc(c.reason)}</span>` : ''}
+            ${c.fix ? `<code class="health-check-fix">${esc(c.fix)}</code>` : ''}
+          </div>
+        </div>
+      </div>`).join('');
 
-  const topStatus = unhealthy.some(p => p.status === 'red') ? 'red' : 'yellow';
+  const topStatus = needAttention.some(c => DOT[c.state] === 'red') ? 'red'
+    : needAttention.some(c => DOT[c.state] === 'yellow') ? 'yellow' : 'grey';
   const minimized = isHealthMinimized();
   const stripClass = `health-strip ${topStatus}${minimized ? ' minimized' : ''}`;
   const toggleTitle = minimized ? 'Expand' : 'Minimize';
@@ -290,7 +297,7 @@ async function renderHealthStrip(container) {
     <div class="${stripClass}">
       <div class="health-strip-header">
         <span class="health-dot ${topStatus}"></span>
-        <span>${unhealthy.length} project(s) need attention</span>
+        <span>${needAttention.length} credential(s) need attention</span>
         <button class="health-refresh" id="health-toggle" title="${toggleTitle}">${toggleGlyph}</button>
         <button class="health-refresh" id="health-refresh" title="Refresh">&#x21bb;</button>
       </div>

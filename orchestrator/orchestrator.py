@@ -128,6 +128,7 @@ class Orchestrator:
             sweep_quota_window_callback=self._sweep_quota_window,
             get_trackers=lambda: dict(self._trackers),
             get_mode_handler=lambda: self._mode_handler,
+            ticket_gate=lambda p, r: self._tickets_running(p, r),
             event_bus=event_bus,
             dry_run=dry_run,
         )
@@ -222,6 +223,20 @@ class Orchestrator:
     _wake_event = _RuntimeAttr("_wake_event")
     _agent_semaphore = _RuntimeAttr("_agent_semaphore")
 
+    def set_switches(self, switches: Any) -> None:
+        """Attach the running/paused switches (reviewer mode)."""
+        self._switches = switches
+
+    def _tickets_running(self, project_id: str, repo_id: str) -> bool:
+        """True when tickets run for this repo; always True until switches are set."""
+        switches = getattr(self, "_switches", None)
+        return True if switches is None else switches.is_running("tickets", project_id, repo_id)
+
+    def _tickets_paused_globally(self) -> bool:
+        """True when the global tickets switch is paused; always False until switches are set."""
+        switches = getattr(self, "_switches", None)
+        return switches is not None and switches.get("tickets") == "paused"
+
     async def analyze_ticket_ids(self, ticket_ids: list[str]) -> dict[str, list[str]]:
         """Manually queue tickets for analysis (Telegram /analyze callback).
 
@@ -239,6 +254,8 @@ class Orchestrator:
             dry_run=self._dry_run,
             notifier=getattr(self, "_notifier", None),
             create_workspace_fn=self._create_workspace,
+            is_repo_running=self._tickets_running,
+            tickets_paused_globally=self._tickets_paused_globally,
         )
 
     def _get_repo_config(self, workspace: Workspace) -> RepoConfig | None:
@@ -287,6 +304,7 @@ class Orchestrator:
             dry_run=self._dry_run,
             event_bus=getattr(self, "_events", None),
             create_workspace_fn=self._create_workspace,
+            is_repo_running=self._tickets_running,
         )
         self._active_workspaces.extend(new_workspaces)
 
@@ -449,6 +467,7 @@ class Orchestrator:
             sweep_quota_window_callback=self._sweep_quota_window,
             get_trackers=lambda: getattr(self, "_trackers", {}),
             get_mode_handler=lambda: getattr(self, "_mode_handler", None),
+            ticket_gate=lambda p, r: self._tickets_running(p, r),
             event_bus=getattr(self, "_events", None),
             dry_run=getattr(self, "_dry_run", False),
         )

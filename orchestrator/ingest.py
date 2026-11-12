@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from config.schemas import GlobalConfig, LoadedProject, RepoConfig
 from integrations.base.notifier import NotifierInterface
@@ -153,6 +153,7 @@ async def poll_and_create_workspaces(
     dry_run: bool,
     event_bus: Any | None,
     create_workspace_fn: Any = None,
+    is_repo_running: Callable[[str, str], bool] | None = None,
 ) -> list[Workspace]:
     """Poll each project's tracker for new tickets and create workspaces.
 
@@ -168,6 +169,14 @@ async def poll_and_create_workspaces(
     for project_id, project in projects.items():
         tracker = trackers.get(project_id)
         if tracker is None:
+            continue
+
+        # Tickets paused for every repo of this project: nothing to poll for.
+        repo_ids = list(project.repos)
+        if (
+            is_repo_running is not None and repo_ids
+            and not any(is_repo_running(project_id, repo_id) for repo_id in repo_ids)
+        ):
             continue
 
         tracker_cfg = project.config.tracker
@@ -225,6 +234,9 @@ async def poll_and_create_workspaces(
             _project_create = create_workspace_fn
 
         for pt in prioritized:
+            if is_repo_running is not None and not is_repo_running(project_id, pt.repo_id):
+                continue
+
             if active_count >= max_parallel:
                 logger.info(
                     "Project %s at max capacity (%d/%d), skipping remaining",
@@ -294,6 +306,8 @@ async def analyze_ticket_ids(
     dry_run: bool,
     notifier: NotifierInterface | None = None,
     create_workspace_fn: Any = None,
+    is_repo_running: Callable[[str, str], bool] | None = None,
+    tickets_paused_globally: Callable[[], bool] | None = None,
 ) -> dict[str, list[str]]:
     """Look up each ticket across all configured trackers (first-match wins),
     filter out duplicates of already-active workspaces, then create workspaces
@@ -345,6 +359,15 @@ async def analyze_ticket_ids(
         repo_config = project.repos.get(pt.repo_id)
         if not repo_config:
             result["invalid"].append(f"{found_ticket.id}: repo {pt.repo_id} not loaded")
+            continue
+
+        if is_repo_running is not None and not is_repo_running(pt.project_id, pt.repo_id):
+            if tickets_paused_globally is not None and tickets_paused_globally():
+                reason = 'tickets are paused globally — send "tickets start"'
+            else:
+                reason = (f"tickets are paused for {pt.project_id}/{pt.repo_id} "
+                          f'— send "tickets start {pt.project_id}/{pt.repo_id}"')
+            result["invalid"].append(f"{found_ticket.id}: {reason}")
             continue
 
         if create_workspace_fn is None:

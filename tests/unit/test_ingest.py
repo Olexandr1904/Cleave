@@ -129,3 +129,72 @@ async def test_create_workspace_uses_schema_key_for_trello_transition():
     assert status_arg == "in_progress", (
         f"Expected 'in_progress' for Trello but got {status_arg!r}"
     )
+
+
+def _two_repo_project():
+    from config.schemas import RepoConfig, RepoInfo
+    proj = _make_loaded_project("acme")
+    proj.repos = {"a": RepoConfig(repo=RepoInfo(id="a"), tracker_label="la"),
+                  "b": RepoConfig(repo=RepoInfo(id="b"), tracker_label="lb")}
+    return proj
+
+
+def _ticket(tid, label):
+    from integrations.base.tracker import TicketData
+    return TicketData(id=tid, url="u", summary="s", description="d", labels=["ai-pipeline", label])
+
+
+async def _poll(tmp_path, tracker, project, gate, create):
+    from config.schemas import GlobalConfig, WorkspacesConfig
+    from orchestrator.ingest import poll_and_create_workspaces
+    return await poll_and_create_workspaces(
+        trackers={"acme": tracker}, projects={"acme": project}, active_workspaces=[],
+        global_config=GlobalConfig(workspaces=WorkspacesConfig(base_dir=str(tmp_path))),
+        workspace_manager=MagicMock(), default_model_provider=lambda: "m", repo_vcs={},
+        notifier=None, dry_run=False, event_bus=None, create_workspace_fn=create,
+        is_repo_running=gate)
+
+
+@pytest.mark.asyncio
+async def test_poll_skips_tracker_when_all_repos_paused(tmp_path):
+    tracker = AsyncMock()
+    await _poll(tmp_path, tracker, _two_repo_project(), lambda p, r: False, AsyncMock())
+    tracker.poll_tickets.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_poll_creates_no_workspace_for_paused_repo(tmp_path):
+    tracker = AsyncMock()
+    tracker.poll_tickets.return_value = [_ticket("ACME-1", "la"), _ticket("ACME-2", "lb")]
+    create = AsyncMock(return_value=MagicMock())
+    await _poll(tmp_path, tracker, _two_repo_project(), lambda p, r: r == "b", create)
+    assert [c.args[0].ticket.id for c in create.await_args_list] == ["ACME-2"]
+
+
+async def _analyze_paused(create, **gates):
+    from orchestrator.ingest import analyze_ticket_ids
+    tracker = AsyncMock()
+    tracker.get_ticket.return_value = _ticket("ACME-1", "la")
+    return await analyze_ticket_ids(
+        ["ACME-1"], trackers={"acme": tracker}, projects={"acme": _two_repo_project()},
+        active_workspaces=[], workspace_manager=MagicMock(), default_model_provider=lambda: "m",
+        repo_vcs={}, dry_run=False, create_workspace_fn=create, is_repo_running=lambda p, r: False,
+        **gates)
+
+
+@pytest.mark.asyncio
+async def test_analyze_refuses_paused_repo():
+    create = AsyncMock()
+    result = await _analyze_paused(create, tickets_paused_globally=lambda: False)
+    assert result == {"valid": [], "invalid": [
+        'ACME-1: tickets are paused for acme/a — send "tickets start acme/a"']}
+    create.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_analyze_refuses_when_paused_globally():
+    create = AsyncMock()
+    result = await _analyze_paused(create, tickets_paused_globally=lambda: True)
+    assert result == {"valid": [], "invalid": [
+        'ACME-1: tickets are paused globally — send "tickets start"']}
+    create.assert_not_awaited()

@@ -253,6 +253,7 @@ async def validate_jira(
             return {
                 "success": False,
                 "error": f"Jira returned HTTP {response.status_code} for project '{project_key}'",
+                "status": response.status_code,
             }
     except httpx.TimeoutException:
         return {"success": False, "error": f"Connection to {url} timed out"}
@@ -289,9 +290,16 @@ async def validate_github(token: str, owner: str, repo: str) -> dict[str, Any]:
                     "full_name": data.get("full_name", f"{owner}/{repo}"),
                     "default_branch": data.get("default_branch", "main"),
                 }
+            if response.status_code == 403 and (
+                response.headers.get("x-ratelimit-remaining") == "0"
+                or "rate limit" in response.text.lower()
+            ):
+                # A rate-limited token is not a token without access: report it as a 429.
+                return {"success": False, "error": "GitHub rate limit (HTTP 403)", "status": 429}
             return {
                 "success": False,
                 "error": f"GitHub returned HTTP {response.status_code} for {owner}/{repo}",
+                "status": response.status_code,
             }
     except httpx.TimeoutException:
         return {"success": False, "error": "Connection to GitHub timed out"}
@@ -325,6 +333,7 @@ async def validate_gitlab(
             return {
                 "success": False,
                 "error": f"GitLab returned HTTP {response.status_code} for project {project_id}",
+                "status": response.status_code,
             }
     except httpx.TimeoutException:
         return {"success": False, "error": f"Connection to {url} timed out"}
@@ -344,7 +353,7 @@ async def validate_trello(*, api_key: str, token: str, board_id: str) -> dict:
                 params={"key": api_key, "token": token},
             )
             if me.status_code in (401, 403):
-                return {"success": False, "error": "Invalid Trello API key or token"}
+                return {"success": False, "error": "Invalid Trello API key or token", "status": me.status_code}
             me.raise_for_status()
 
             lists = await client.get(
@@ -352,11 +361,25 @@ async def validate_trello(*, api_key: str, token: str, board_id: str) -> dict:
                 params={"key": api_key, "token": token},
             )
             if lists.status_code == 404:
-                return {"success": False, "error": f"Board {board_id!r} not found or not accessible"}
+                return {"success": False, "error": f"Board {board_id!r} not found or not accessible", "status": 404}
+            if lists.status_code in (401, 403):
+                # The token passed /members/me, so it is valid but cannot see this board.
+                return {
+                    "success": False,
+                    "error": f"Trello denied access to board {board_id} (HTTP {lists.status_code})",
+                    "status": 403,
+                }
             lists.raise_for_status()
             lists_data = lists.json()
+        except httpx.HTTPStatusError as e:
+            return {
+                "success": False,
+                "error": f"Trello returned HTTP {e.response.status_code}",
+                "status": e.response.status_code,
+            }
         except httpx.HTTPError as e:
-            return {"success": False, "error": f"{type(e).__name__}: {e}"}
+            # The error text carries the request URL (key and token): class name only.
+            return {"success": False, "error": type(e).__name__}
 
     return {
         "success": True,

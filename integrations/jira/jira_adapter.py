@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import logging
+from collections.abc import Callable
 from typing import Any
 
 import httpx
 
+from integrations.base.auth_failure import auth_failure_hook
 from integrations.base.tracker import (
     StatusChange,
     TicketComment,
@@ -33,7 +35,10 @@ class JiraAdapter(TrackerInterface):
         trigger_labels: list[str] | None = None,
         ignore_labels: list[str] | None = None,
         statuses: dict[str, str] | None = None,
+        *, on_auth_failure: Callable[[int], None] | None = None,
     ) -> None:
+        # Every client this adapter builds reports a 401/403 through this hook.
+        self._auth_hooks = {"response": [auth_failure_hook(on_auth_failure)]}
         self._url = url.rstrip("/")
         self._email = email
         self._token = token
@@ -51,6 +56,7 @@ class JiraAdapter(TrackerInterface):
             auth=(email, token),
             timeout=TIMEOUT,
             headers={"Accept": "application/json"},
+            event_hooks=self._auth_hooks,
         )
 
     async def _request(self, method: str, path: str, **kwargs: Any) -> dict:
@@ -277,7 +283,7 @@ class JiraAdapter(TrackerInterface):
             f"{self._email}:{self._token}".encode()
         ).decode()
         headers = {"Authorization": f"Basic {creds}"}
-        async with httpx.AsyncClient(timeout=TIMEOUT) as client:
+        async with httpx.AsyncClient(timeout=TIMEOUT, event_hooks=self._auth_hooks) as client:
             resp = await client.get(url, headers=headers, follow_redirects=True)
             if resp.status_code != 200:
                 raise httpx.HTTPStatusError(

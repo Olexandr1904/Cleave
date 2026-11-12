@@ -19,7 +19,6 @@ from starlette.staticfiles import StaticFiles
 
 from dashboard.event_store import EventStore
 from dashboard.events import EventBus
-from health.runner import check_all
 from orchestrator.model_resolver import model_short_name
 from workspace.workspace import Stage
 
@@ -349,6 +348,8 @@ def create_app(
     config_dir: str | None = None,
     atlas_fn: Any | None = None,
     env_path: Any | None = None,
+    switches: Any | None = None,
+    credential_health: Any | None = None,
 ) -> Starlette:
     """Create the Starlette dashboard application."""
 
@@ -435,30 +436,16 @@ def create_app(
                 return PlainTextResponse(f"File not found: {folder}/{filename}", status_code=404)
         return PlainTextResponse(f"Workspace not found: {ticket_id}", status_code=404)
 
-    async def projects_health(request: Request) -> JSONResponse:
-        force = request.query_params.get("refresh") == "1"
-        if not projects:
-            return JSONResponse({"projects": []})
-        results = await check_all(projects, force=force)
+    async def credentials_health(request: Request) -> JSONResponse:
+        if credential_health is None:
+            return JSONResponse({"credentials": [], "checked_at": None})
+        if request.query_params.get("refresh") == "1":
+            await credential_health.check_all()
+        credentials = [s.to_dict() for s in credential_health.snapshot()]
+        checked = [c["checked_at"] for c in credentials if c["checked_at"]]
         return JSONResponse({
-            "projects": [
-                {
-                    "project_id": r.project_id,
-                    "status": r.status,
-                    "checks": [
-                        {
-                            "name": c.name,
-                            "target": c.target,
-                            "ok": c.ok,
-                            "reason": c.reason,
-                            "fix_hint": c.fix_hint,
-                        }
-                        for c in r.checks
-                    ],
-                    "checked_at": r.checked_at.isoformat(),
-                }
-                for r in results
-            ]
+            "credentials": credentials,
+            "checked_at": max(checked) if checked else None,
         })
 
     async def get_settings_model(request: Request) -> JSONResponse:
@@ -495,7 +482,7 @@ def create_app(
         Route("/api/health", health),
         Route("/api/events", get_events),
         Route("/api/projects", get_projects),
-        Route("/api/projects/health", projects_health),
+        Route("/api/health/credentials", credentials_health),
         Route("/api/projects/{project_id}/tickets", get_project_tickets),
         Route("/api/tickets/{ticket_id:path}/events", get_ticket_events),
         Route("/api/workspaces", get_workspaces),
@@ -514,6 +501,10 @@ def create_app(
             global_config=global_config,
         )
         routes.extend(action_routes)
+
+    if switches is not None:
+        from dashboard.switches_api import build_switch_routes
+        routes.extend(build_switch_routes(switches, lambda: projects or {}))
 
     # Project-create route
     from dashboard.project_create import build_create_route

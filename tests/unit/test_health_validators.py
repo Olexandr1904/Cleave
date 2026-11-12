@@ -156,3 +156,82 @@ class TestCheckGitRemote:
     def test_not_a_git_dir(self, tmp_path):
         r = check_git_remote(tmp_path)
         assert r.ok is False
+
+
+import json, os, stat, time
+import httpx, respx
+from health.validators import check_claude_login, check_telegram
+
+
+def _fake_claude(tmp_path, body: str) -> str:
+    p = tmp_path / "claude"
+    p.write_text("#!/bin/sh\n" + body)
+    p.chmod(p.stat().st_mode | stat.S_IEXEC)
+    return str(p)
+
+
+async def test_check_github_failure_passes_status():
+    with patch("health.validators.config_tools.validate_github",
+               new=AsyncMock(return_value={"success": False, "error": "HTTP 403", "status": 403})):
+        assert (await check_github("t", "o", "r")).extra["status"] == 403
+
+
+@respx.mock
+async def test_check_telegram_ok_and_401():
+    route = respx.get("https://api.telegram.org/bot123:abc/getMe")
+    route.respond(200, json={"ok": True, "result": {}})
+    assert (await check_telegram("123:abc")).ok
+    route.respond(401, json={"ok": False})
+    r = await check_telegram("123:abc")
+    assert not r.ok and r.extra["status"] == 401
+
+
+@respx.mock
+async def test_check_telegram_network_error_hides_token():
+    respx.get("https://api.telegram.org/bot123:SECRET/getMe").mock(side_effect=httpx.ConnectError("https://api.telegram.org/bot123:SECRET/getMe"))
+    r = await check_telegram("123:SECRET")
+    assert r.reason == "ConnectError" and "SECRET" not in repr(r)
+
+
+async def test_check_claude_login_logged_in(tmp_path):
+    bin_ = _fake_claude(tmp_path, '[ "$*" = "auth status --json" ] || exit 9\n'
+                                  'echo \'{"loggedIn": true, "loginExpiresAt": "2026-11-25T10:00:00.000Z"}\'\n')
+    r = await check_claude_login(bin_)
+    assert r.ok and r.extra["expires_at"] == "2026-11-25T10:00:00.000Z"
+
+
+async def test_check_claude_login_logged_out_exit_1(tmp_path):
+    r = await check_claude_login(_fake_claude(tmp_path, 'echo \'{"loggedIn": false, "loginExpiresAt": null}\'\nexit 1\n'))
+    assert not r.ok and r.extra["logged_in"] is False
+
+
+async def test_check_claude_login_env_is_scrubbed(tmp_path, monkeypatch):
+    monkeypatch.setenv("CLAUDE_API_KEY", "k1")
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "k2")
+    monkeypatch.setenv("SOME_OTHER_VAR", "x")
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path / "profile"))
+    dump = tmp_path / "env.txt"
+    bin_ = _fake_claude(tmp_path, f'env > {dump}\necho \'{{"loggedIn": true, "loginExpiresAt": null}}\'\n')
+    assert (await check_claude_login(bin_)).ok
+    lines = dump.read_text().splitlines()
+    keys = {line.split("=", 1)[0] for line in lines}
+    assert {"HOME", "PATH"} <= keys          # the shell itself may add PWD, SHLVL, _
+    assert f"CLAUDE_CONFIG_DIR={tmp_path / 'profile'}" in lines
+    assert not keys & {"CLAUDE_API_KEY", "ANTHROPIC_API_KEY", "SOME_OTHER_VAR"}
+    assert keys <= {"HOME", "PATH", "LANG", "TMPDIR", "USER", "CLAUDE_CONFIG_DIR", "PWD", "SHLVL", "_", "OLDPWD"}
+
+
+async def test_check_claude_login_timeout_kills_and_reports(tmp_path):
+    t0 = time.monotonic()
+    r = await check_claude_login(_fake_claude(tmp_path, "sleep 30\n"), timeout_seconds=0.5)
+    assert not r.ok and "timed out" in r.reason and time.monotonic() - t0 < 5
+
+
+async def test_check_claude_login_non_json(tmp_path):
+    r = await check_claude_login(_fake_claude(tmp_path, "echo 'Not logged in · Please run /login'\n"))
+    assert not r.ok and r.extra["logged_in"] is None
+
+
+async def test_check_claude_login_missing_binary(tmp_path):
+    r = await check_claude_login(str(tmp_path / "nope"))
+    assert not r.ok and r.reason == "claude not found"

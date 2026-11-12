@@ -142,6 +142,30 @@ class FailureSummarizerConfig:
 
 
 @dataclass
+class ReviewerJobConfig:
+    model: str = ""
+    effort: str = ""
+    timeout_seconds: int = 0
+
+
+def _default_reviewer_jobs() -> dict[str, ReviewerJobConfig]:
+    return {
+        "review": ReviewerJobConfig("opus", "xhigh", 3600),
+        "recheck": ReviewerJobConfig("opus", "xhigh", 3600),
+        "edit": ReviewerJobConfig("sonnet", "", 300),
+        "draft": ReviewerJobConfig("sonnet", "", 300),
+        "command": ReviewerJobConfig("sonnet", "", 60),
+    }
+
+
+@dataclass
+class ReviewerGlobalConfig:
+    db_path: str = ""
+    telegram_chat_id: str = ""
+    jobs: dict[str, ReviewerJobConfig] = field(default_factory=_default_reviewer_jobs)
+
+
+@dataclass
 class GlobalConfig:
     # Host OS — selects OS-divergent host behavior (currently the Take Control
     # terminal launcher). "unix" (Linux) or "mac" (macOS). See config/host_os.py.
@@ -157,6 +181,9 @@ class GlobalConfig:
     intent_parser: IntentParserConfig = field(default_factory=IntentParserConfig)
     dashboard: DashboardConfig = field(default_factory=DashboardConfig)
     failure_summarizer: FailureSummarizerConfig = field(default_factory=FailureSummarizerConfig)
+    reviewer: ReviewerGlobalConfig = field(default_factory=ReviewerGlobalConfig)
+    # dotted YAML path -> name of the first ${VAR} in that value (never the value)
+    env_refs: dict[str, str] = field(default_factory=dict)
 
 
 # --- Jira config (project-level) ---
@@ -344,6 +371,55 @@ class ProjectConfig:
     parallelism: ParallelismConfig = field(default_factory=ParallelismConfig)
     defaults: DefaultsConfig = field(default_factory=DefaultsConfig)
     pipeline: PipelineConfig = field(default_factory=PipelineConfig)
+    env_refs: dict[str, str] = field(default_factory=dict)
+
+
+# --- Reviewer config (repo-level) ---
+
+# Placeholders a reviewer command or path may use; later plans expand exactly these.
+REVIEWER_PLACEHOLDERS = frozenset(
+    {"repo", "pr", "head9", "worktree", "merge_base", "report", "plan", "job_dir", "ledger", "event"}
+)
+
+
+@dataclass
+class ReadinessPartConfig:
+    kind: str = "command"
+    status_command: list[str] = field(default_factory=list)
+    threads_command: list[str] = field(default_factory=list)
+
+
+@dataclass
+class ProcessPartConfig:
+    doc: str = ""
+    prepare_section: str = "Prepare"
+    recheck_section: str = "Re-check"
+    run_dir: str = ""
+    replies_plan: str = ""
+    worktree_dir: str = ""
+    prepare_steps: list[list[str]] = field(default_factory=list)
+    helper_scripts: list[str] = field(default_factory=list)
+
+
+@dataclass
+class PosterPartConfig:
+    kind: str = "command"
+    review_command: list[str] = field(default_factory=list)
+    replies_command: list[str] = field(default_factory=list)
+    dry_run_flag: str = "--dry-run"
+    confirm_flag: str = "--yes"
+
+
+@dataclass
+class ReviewerConfig:
+    enabled: bool = False
+    base_branch: str = ""  # defaults to vcs.default_branch when loaded
+    poll_interval_seconds: int = 300
+    quiet_minutes: int = 30
+    max_files_auto: int = 40
+    readiness: ReadinessPartConfig = field(default_factory=ReadinessPartConfig)
+    process: ProcessPartConfig = field(default_factory=ProcessPartConfig)
+    poster: PosterPartConfig = field(default_factory=PosterPartConfig)
 
 
 # --- Repo config ---
@@ -377,6 +453,8 @@ class RepoConfig:
     tracker: TrackerConfig = field(default_factory=TrackerConfig)
     telegram: TelegramConfig = field(default_factory=TelegramConfig)
     defaults: DefaultsConfig = field(default_factory=DefaultsConfig)
+    reviewer: ReviewerConfig = field(default_factory=ReviewerConfig)
+    env_refs: dict[str, str] = field(default_factory=dict)
 
 
 # --- Loaded project with its repos ---

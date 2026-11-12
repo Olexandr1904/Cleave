@@ -21,6 +21,7 @@ from integrations.config.config_tools import (
     validate_github,
     validate_gitlab,
     validate_jenkins,
+    validate_trello,
 )
 
 
@@ -441,3 +442,77 @@ class TestValidationPathEncoding:
         await validate_gitlab("token", "acme/api", "https://gitlab.com")
         raw_path = respx.calls.last.request.url.raw_path.decode()
         assert "acme%2Fapi" in raw_path
+
+
+@respx.mock
+async def test_validate_github_failure_carries_status():
+    respx.get("https://api.github.com/repos/o/r").respond(401)
+    assert (await validate_github(token="t", owner="o", repo="r"))["status"] == 401
+
+
+@respx.mock
+async def test_validate_jira_failure_carries_status():
+    respx.get("https://x/rest/api/3/project/K").respond(404)
+    assert (await validate_jira(url="https://x", token="t", email="e", project_key="K"))["status"] == 404
+
+
+@respx.mock
+async def test_validate_trello_auth_failure_carries_status():
+    respx.route(url__startswith="https://api.trello.com/1/members/me").respond(401)
+    assert (await validate_trello(api_key="k", token="t", board_id="b"))["status"] == 401
+
+
+@respx.mock
+async def test_validate_github_timeout_has_no_status():
+    respx.get("https://api.github.com/repos/o/r").mock(side_effect=httpx.ConnectTimeout("x"))
+    assert "status" not in await validate_github(token="t", owner="o", repo="r")
+
+
+@respx.mock
+async def test_validate_trello_http_error_hides_credentials():
+    respx.route(url__startswith="https://api.trello.com/1/members/me").respond(200, json={})
+    respx.route(url__startswith="https://api.trello.com/1/boards/b/lists").respond(500)
+    result = await validate_trello(api_key="KEYSECRET", token="TOKSECRET", board_id="b")
+    assert result["status"] == 500
+    assert "KEYSECRET" not in repr(result) and "TOKSECRET" not in repr(result)
+
+
+@respx.mock
+async def test_validate_trello_request_error_hides_credentials():
+    respx.route(url__startswith="https://api.trello.com/1/members/me").mock(
+        side_effect=httpx.ConnectError("https://api.trello.com/1/members/me?key=KEYSECRET&token=TOKSECRET")
+    )
+    result = await validate_trello(api_key="KEYSECRET", token="TOKSECRET", board_id="b")
+    assert result["success"] is False
+    assert "KEYSECRET" not in repr(result) and "TOKSECRET" not in repr(result)
+
+
+@pytest.mark.parametrize("code", [401, 403])
+@respx.mock
+async def test_validate_trello_board_denied_is_no_access(code):
+    respx.route(url__startswith="https://api.trello.com/1/members/me").respond(200, json={})
+    respx.route(url__startswith="https://api.trello.com/1/boards/b/lists").respond(code)
+    assert await validate_trello(api_key="k", token="t", board_id="b") == {
+        "success": False, "error": f"Trello denied access to board b (HTTP {code})", "status": 403,
+    }
+
+
+@pytest.mark.parametrize("headers,body", [
+    ({"x-ratelimit-remaining": "0"}, {"message": "Forbidden"}),
+    ({}, {"message": "API rate limit exceeded for user ID 1."}),
+    ({}, {"message": "You have exceeded a secondary rate limit."}),
+])
+@respx.mock
+async def test_validate_github_rate_limit_403_is_429(headers, body):
+    respx.get("https://api.github.com/repos/o/r").respond(403, headers=headers, json=body)
+    result = await validate_github(token="t", owner="o", repo="r")
+    assert (result["status"], result["error"]) == (429, "GitHub rate limit (HTTP 403)")
+
+
+@respx.mock
+async def test_validate_github_plain_403_stays_403():
+    respx.get("https://api.github.com/repos/o/r").respond(
+        403, headers={"x-ratelimit-remaining": "4999"}, json={"message": "Must have admin rights"},
+    )
+    result = await validate_github(token="t", owner="o", repo="r")
+    assert (result["status"], result["error"]) == (403, "GitHub returned HTTP 403 for o/r")

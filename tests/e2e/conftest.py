@@ -209,6 +209,7 @@ def _start_server(
     db_path: str,
     seed_events: list[Event] | None = None,
     projects: dict[str, Any] | None = None,
+    credential_health: Any | None = None,
 ) -> dict[str, Any]:
     """Start uvicorn in a background thread. Returns server control dict."""
     import asyncio
@@ -242,6 +243,7 @@ def _start_server(
                 mode_handler=mode_handler,
                 global_config=FakeGlobalConfig(),
                 projects=projects,
+                credential_health=credential_health,
             )
             config = uvicorn.Config(
                 app=app, host="127.0.0.1", port=port,
@@ -320,10 +322,11 @@ def dashboard_server_custom(workspace_seeder, tmp_path: Path):
     base, _seed = workspace_seeder
     contexts: list[dict[str, Any]] = []
 
-    def start(events: list[Event] | None = None, projects=None):
+    def start(events: list[Event] | None = None, projects=None, credential_health=None):
         ctx = _start_server(
             base, str(tmp_path / "events.db"),
             seed_events=events, projects=projects,
+            credential_health=credential_health,
         )
         contexts.append(ctx)
         return ctx

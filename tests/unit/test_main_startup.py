@@ -19,6 +19,7 @@ def test_main_runs_dashboard_with_zero_projects(tmp_path):
         ws=tmp_path / "ws",
         log=tmp_path / "log",
         db=tmp_path / "events.db",
+        rv=tmp_path / "rv" / "reviewer.db",
     )
     (cfg / "global.yaml").write_text(global_yaml, encoding="utf-8")
 
@@ -71,4 +72,6 @@ operator:
     code_style: ''
     commit_format: ''
   rules: []
+reviewer:
+  db_path: {rv}
 """

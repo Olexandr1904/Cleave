@@ -34,7 +34,7 @@ If the AI can't help, the rest of this doc covers the structured diagnostics.
 
 ### 1. Dashboard health strip
 
-If the dashboard is reachable, the **Project Health** strip on the Board (per project) is the fastest signal — green / yellow / red, with click-to-expand fix hints. See [docs/dashboard.md](dashboard.md#project-health-strip) for what each check covers.
+If the dashboard is reachable, the **credential strip** on the Board is the fastest signal — one chip per credential that needs attention (red / yellow / grey), with the env var name and the fix. It is hidden when everything is ok. See [docs/dashboard.md](dashboard.md#credential-strip) for what each check covers.
 
 ### 2. Pre-flight health check (CLI)
 
@@ -195,7 +195,7 @@ If you've gone through the above and the failure is in the orchestrator, an agen
 
 ## See also
 
-- [docs/dashboard.md](dashboard.md) — Project Health strip details
+- [docs/dashboard.md](dashboard.md) — credential strip details
 - [docs/telegram.md](telegram.md) — Telegram-side diagnostics (`/status`, intent classification)
 - [docs/labels.md](labels.md) — Jira label semantics
 - [docs/setup-guide.md](setup-guide.md) — full installation reference, including pre-flight checks

@@ -59,6 +59,14 @@ class TestParseArgs:
 FIXTURES_DIR = str(Path(__file__).parent.parent / "fixtures" / "config")
 
 
+@pytest.fixture(autouse=True)
+def _reviewer_db_in_tmp_path(tmp_path, monkeypatch):
+    """The fixture config has no reviewer.db_path: never let main() open ~/CleaveData."""
+    monkeypatch.setattr(
+        "orchestrator.reviewer.db.reviewer_db_path", lambda _cfg: tmp_path / "reviewer.db",
+    )
+
+
 class TestMain:
     @staticmethod
     def _set_all_env(monkeypatch):

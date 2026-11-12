@@ -15,8 +15,14 @@ from integrations.telegram.handlers.approval import (
 from integrations.telegram.handlers.mode import ModeHandler
 from integrations.telegram.handlers.status import StatusHandler
 from integrations.telegram.intent_parser import IntentParser, ParsedIntent
+from integrations.telegram.switch_commands import (
+    format_switch_status,
+    parse_switch_command,
+    resolve_scope,
+)
 from orchestrator import tg_format
 from orchestrator.constants import REPORT_BA, REPORT_DEV, REPORT_QA, REPORT_SCOPE_GUARD
+from orchestrator.switches import GLOBAL, switch_scopes
 from workspace.workspace import Stage
 
 logger = logging.getLogger(__name__)
@@ -103,7 +109,11 @@ class CommandHandler:
         recent_completions_fn: Callable[[], list[tuple[str, str, float]]] | None = None,
         allowed_chat_ids: set[str] | None = None,
         event_bus: Any | None = None,
+        switches: Any | None = None,
+        get_projects: Callable[[], dict[str, Any]] | None = None,
     ) -> None:
+        self._switches = switches
+        self._get_projects = get_projects or (lambda: {})
         self._intent_parser = intent_parser
         self._notifier = notifier
         self._mode_handler = mode_handler
@@ -172,6 +182,10 @@ class CommandHandler:
             logger.warning(
                 "Rejecting command from unauthorized chat_id=%s", chat_id,
             )
+            return
+        command = parse_switch_command(text) if self._switches is not None else None
+        if command is not None:
+            await self._handle_switch_command(command, chat_id)
             return
         # Send a visible processing message so the user knows we're working
         processing_msg_id = None
@@ -253,25 +267,51 @@ class CommandHandler:
             else:
                 msg = f"No active workspace found for {ticket_id}."
         else:
-            now = time.time()
-            uptime = 0.0
-            if self._started_at:
-                try:
-                    start = datetime.fromisoformat(self._started_at)
-                    uptime = (datetime.now(timezone.utc) - start).total_seconds()
-                except (ValueError, TypeError):
-                    pass
-            poll_ago = now - self._last_poll_time
-            active = [ws for ws in workspaces if ws.state.current_state not in (Stage.DONE, Stage.FAILED, Stage.ARCHIVED)]
-            recent = self._recent_completions_fn() if self._recent_completions_fn else []
-            msg = self._status_handler.format_summary(
-                mode=self._mode_handler.get_mode(),
-                uptime_seconds=uptime,
-                last_poll_ago_seconds=poll_ago,
-                active_workspaces=active,
-                recent_completions=recent,
-            )
+            msg = self._summary_text(workspaces)
+            if self._switches is not None:
+                scopes = switch_scopes(self._get_projects())
+                msg = format_switch_status(self._switches.snapshot(scopes)) + "\n\n" + msg
         await self._reply(chat_id, msg, processing_msg_id)
+
+    def _summary_text(self, workspaces: list[Any]) -> str:
+        now = time.time()
+        uptime = 0.0
+        if self._started_at:
+            try:
+                start = datetime.fromisoformat(self._started_at)
+                uptime = (datetime.now(timezone.utc) - start).total_seconds()
+            except (ValueError, TypeError):
+                pass
+        poll_ago = now - self._last_poll_time
+        active = [ws for ws in workspaces if ws.state.current_state not in (Stage.DONE, Stage.FAILED, Stage.ARCHIVED)]
+        recent = self._recent_completions_fn() if self._recent_completions_fn else []
+        return self._status_handler.format_summary(
+            mode=self._mode_handler.get_mode(),
+            uptime_seconds=uptime,
+            last_poll_ago_seconds=poll_ago,
+            active_workspaces=active,
+            recent_completions=recent,
+        )
+
+    async def _handle_switch_command(self, command: Any, chat_id: str) -> None:
+        projects = self._get_projects()
+        scopes = switch_scopes(projects)
+        if command.kind == "status":
+            text = format_switch_status(self._switches.snapshot(scopes))
+            text += "\n\n" + self._summary_text(self._active_workspaces_fn())
+            await self._notifier.send_message(chat_id, text)
+            return
+        scope = GLOBAL
+        if command.repo:
+            scope, error = resolve_scope(command.repo, scopes[command.mode])
+            if scope is None and command.mode == "reviews":
+                other, other_error = resolve_scope(command.repo, scopes["tickets"])
+                error = f"Reviews are not enabled for {other} (reviewer.enabled in YAML)" if other else other_error
+            if scope is None:
+                await self._notifier.send_message(chat_id, error)
+                return
+        self._switches.set(command.mode, command.state, scope, by="telegram")
+        await self._notifier.send_message(chat_id, format_switch_status(self._switches.snapshot(scopes)))
 
     async def _handle_set_mode(self, intent: ParsedIntent, chat_id: str, processing_msg_id: int | None = None) -> None:
         mode = intent.params.get("mode", "")

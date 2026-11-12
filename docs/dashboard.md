@@ -68,15 +68,31 @@ Buttons only appear when relevant for the workspace's current state:
 | **Take Control** | Any active state except already-MANUAL_CONTROL | Pause workspace, hand to a human Claude session |
 | **Release** | MANUAL_CONTROL | Re-enter pipeline at ANALYSIS |
 
-### Project Health strip
+### Tickets switch panel
 
-Above the project's cards, a coloured strip shows the result of [the per-project health check](features/dashboard.md#fr16):
+The Board has a **Tickets** switch panel: one global pill (`Tickets: running ▶` or `Tickets: paused ⏸`) plus one pill per repo, each `running` or `paused`. Click a pill to flip it. While a switch is paused, the ticket pipeline picks up no new tickets for that scope **and** stops advancing every existing workspace in that scope. An agent stage that is already running finishes, then the workspace waits. Approve and retry are still accepted, but nothing moves until tickets run again.
 
-- **Green** — every check passed
-- **Yellow** — git identity / git remote check failing (degraded but not blocking)
-- **Red** — Jira or VCS reachability check failing; click to expand and see fix hints
+When the global switch is paused, every repo is paused with it. A repo pill whose own switch is still running is then drawn dimmed with a dashed border, and hovering it shows the tooltip `Paused globally — start Tickets first`. There is no banner. Those pills cannot be clicked until the global switch is running again.
 
-The active checks for each project are Jira (URL/token/project key) and the configured VCS (GitHub or GitLab). The git-identity and git-remote validators ship in `health/validators.py` but are not currently wired into the dashboard health aggregator — so red is the practical signal today. A manual **refresh** button on the strip bypasses the 60 s cache.
+The switches are stored in `~/CleaveData/reviewer/reviewer.db` and survive daemon restarts. **First start after upgrading:** the daemon creates that database with **tickets paused** and reviews running, so the ticket pipeline picks up nothing until you click the `Tickets: paused ⏸` pill to switch it to running, or send `tickets start` in Telegram (see [docs/telegram.md](telegram.md#switch-commands)).
+
+### Credential strip
+
+Above the cards, a strip shows one chip per credential that needs attention. The credentials checked are the forge and tracker tokens (per repo / project), the Telegram bot token, and the `claude` login on the host. Each chip shows one of these states:
+
+- **invalid** (red, chip text `invalid or expired`) — the credential was rejected or has expired
+- **no_access** (red, chip text `no access`) — the credential is valid but cannot reach the repo or project
+- **expiring** (yellow, chip text `expires <local time>`) — the `claude` login expires within 3 days
+- **unreachable** (grey, chip text `unreachable`) — the service could not be reached (or `claude` is not on the daemon's PATH), so the credential could not be judged
+
+Click a chip to see the env var name (never the value), `since <local time>` (when it entered this state), `checked <local time>` (when it was last checked) and the fix, e.g. `Create a new token, put it in .env as GITHUB_TOKEN, restart the daemon.` The strip is hidden when every credential is ok.
+
+Credentials are re-checked in the background every 15 minutes, and immediately after any adapter gets a 401/403. Telegram gets a line when a credential changes state, and again 3 days and 1 day before the `claude` login expires (nothing is sent about the Telegram token itself):
+
+- `⚠️ <label>: invalid or expired. <fix>`
+- `⚠️ <label>: no access (HTTP 403). <fix>`
+- `✅ <label>: working again.`
+- `⏳ The claude login on the host expires 2026-11-24 12:00. Log in again on the host in a GUI terminal.`
 
 ---
 
@@ -118,18 +134,18 @@ See [docs/labels.md](labels.md) for per-ticket overrides.
 
 ---
 
-## Project Health (cross-cutting)
+## Credential health (cross-cutting)
 
-Per-project validators that run on a cache (warm-loaded at daemon startup, refreshable from the Board, 60 s TTL):
+Credential checks run in the background every 15 minutes (and at once after an adapter 401/403); the results feed the [credential strip](#credential-strip) on the Board:
 
-| Check | What it verifies | Fix hint shown on failure |
+| Credential | What it verifies | Fix hint shown on failure |
 |---|---|---|
-| `jira` | Atlassian API reachable + project key valid | URL/token, project key |
-| `github` (or `gitlab`) | Repo reachable + token has scope | Token, owner/repo |
+| Forge token (GitHub / GitLab), per repo | Token is accepted and can reach the repo | New token in `.env`, or check access (SSO for classic GitHub tokens) |
+| Tracker token (Jira / Trello), per project | Token is accepted and can reach the project | New token in `.env`, or check access |
+| Telegram bot token | `getMe` succeeds | New token in `.env` |
+| `claude` login on the host | Logged in, and not expiring within 3 days | Log in again on the host; if `claude` is not found, add its directory to the daemon's PATH |
 
-The `git_identity` and `git_remote` validators live in `health/validators.py` and contribute to the yellow/red aggregation logic, but `health/runner.check_project` does not currently call them — so they don't appear on the strip until they're wired in.
-
-Stage verifiers also run after each agent stage to catch silent failures (e.g. dev-agent ran but never committed) — these don't show up in the health strip but transition the workspace to BLOCKED with a real reason instead of silently advancing.
+Stage verifiers also run after each agent stage to catch silent failures (e.g. dev-agent ran but never committed) — these don't show up in the credential strip but transition the workspace to BLOCKED with a real reason instead of silently advancing.
 
 ---
 
@@ -173,7 +189,8 @@ Read endpoints (`GET`):
 - `/api/events` — recent events with optional `project_id` / `ticket_id` filters
 - `/api/projects` — projects with workspace counts
 - `/api/projects/{id}/tickets` — ticket history per project
-- `/api/projects/health` — health check results (60 s cache; `?refresh=1` bypasses)
+- `/api/health/credentials` — credential states (`?refresh=1` re-checks now)
+- `/api/switches` — running/paused switches (also `PUT` with `{"mode": "tickets"|"reviews", "state": "running"|"paused", "scope": "*"|"<project>/<repo>"}`)
 - `/api/workspaces` — every workspace from disk, with state.json + report/meta listings
 - `/api/workspaces/{ticket_id}/report/{filename}?folder=reports|meta|logs` — fetch one file
 - `/api/settings/model` — global default model (also `PUT` to change)

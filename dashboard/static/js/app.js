@@ -190,14 +190,14 @@ function renderModeIndicator(mode) {
         <strong>Auto mode</strong><br>
         Jira is polled for new tickets. Approval gates are skipped — tickets flow through stages automatically.<br><br>
         <strong>Manual mode</strong><br>
-        Jira polling is paused. Tickets stop at approval gates (Analysis, QA, PR Review) and wait for your approval in the dashboard.
+        Tickets stop at approval gates (Analysis, QA, PR Review) and wait for your approval in the dashboard. Polling continues — use the Tickets switch on the Board to pause the pipeline.
       </span>
     </span>`;
 
   container.querySelector('#mode-toggle').addEventListener('click', () => {
     const warn = isAuto
-      ? 'Switching to <strong>Manual</strong> will pause Jira polling and enable approval gates. Tickets will wait for your approval at each stage.'
-      : 'Switching to <strong>Auto</strong> will resume Jira polling and skip approval gates. Pending approvals will be auto-approved.';
+      ? 'Switching to <strong>Manual</strong> enables approval gates; polling continues. Tickets will wait for your approval at each stage.'
+      : 'Switching to <strong>Auto</strong> skips approval gates. Pending approvals will be auto-approved.';
 
     showConfirmDialog(
       `Switch to ${targetLabel} mode?`,

@@ -98,3 +98,12 @@ operator:
     - "Always include ticket ID in commit messages"
     - "Follow existing test patterns in the repo"
     - "Do not refactor outside ticket scope"
+
+# Reviewer mode defaults (optional). Paths use ${HOME}; nothing expands `~`.
+# reviewer:
+#   db_path: "${HOME}/CleaveData/reviewer/reviewer.db"
+#   jobs:
+#     review:
+#       model: "opus"
+#       effort: "xhigh"
+#       timeout_seconds: 3600

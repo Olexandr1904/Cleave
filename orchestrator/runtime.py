@@ -51,6 +51,7 @@ class Runtime:
         sweep_quota_window_callback: Callable | None = None,
         get_trackers: Callable | None = None,
         get_mode_handler: Callable | None = None,
+        ticket_gate: Callable[[str, str], bool] | None = None,
         event_bus: Any | None = None,
         dry_run: bool = False,
     ) -> None:
@@ -63,6 +64,7 @@ class Runtime:
         self._sweep_quota_window_callback = sweep_quota_window_callback
         self._get_trackers = get_trackers
         self._get_mode_handler = get_mode_handler
+        self._ticket_gate = ticket_gate
         self._events = event_bus
         self._dry_run = dry_run
 
@@ -218,6 +220,10 @@ class Runtime:
         _SKIP = {Stage.DONE, Stage.ARCHIVED, Stage.BLOCKED,
                  Stage.MANUAL_CONTROL, Stage.DEFERRED, Stage.FAILED, Stage.PAUSED}
         active = [ws for ws in self._active_workspaces if ws.state.current_state not in _SKIP]
+        # Tickets paused for a repo: its workspaces wait (a running stage already finished).
+        if self._ticket_gate is not None:
+            active = [ws for ws in active
+                      if self._ticket_gate(ws.state.company_id, ws.state.repo_id)]
         if active:
             await asyncio.gather(*[self._advance_one(ws) for ws in active])
 

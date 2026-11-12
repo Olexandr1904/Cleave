@@ -4,10 +4,12 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from collections.abc import Callable
 from typing import Any
 
 import httpx
 
+from integrations.base.auth_failure import auth_failure_hook
 from integrations.base.vcs import PRComment, PRStatus, VCSInterface
 
 logger = logging.getLogger(__name__)
@@ -21,7 +23,10 @@ SUBPROCESS_TIMEOUT = 300
 class GitHubAdapter(VCSInterface):
     """GitHub REST API + git CLI adapter."""
 
-    def __init__(self, token: str, owner: str, repo: str) -> None:
+    def __init__(
+        self, token: str, owner: str, repo: str,
+        *, on_auth_failure: Callable[[int], None] | None = None,
+    ) -> None:
         self._owner = owner
         self._repo = repo
         # _token is read by _graphql_request; httpx headers cover REST only.
@@ -34,6 +39,7 @@ class GitHubAdapter(VCSInterface):
                 "X-GitHub-Api-Version": "2022-11-28",
             },
             timeout=TIMEOUT,
+            event_hooks={"response": [auth_failure_hook(on_auth_failure)]},
         )
 
     @property

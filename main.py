@@ -10,6 +10,7 @@ from __future__ import annotations
 import argparse
 import logging
 import sys
+from typing import Callable
 
 logger = logging.getLogger(__name__)
 
@@ -17,7 +18,7 @@ from config.schemas import RepoConfig
 from integrations.base.vcs import VCSInterface
 
 
-def _build_tracker_for_project(cfg, project_id):
+def _build_tracker_for_project(cfg, project_id, on_auth_failure=None):
     """Build a TrackerInterface from a TrackerConfig.
 
     Returns None if the provider's credentials are missing (lenient behavior —
@@ -37,6 +38,7 @@ def _build_tracker_for_project(cfg, project_id):
                 "in_review": j.statuses.in_review,
                 "done": j.statuses.done,
             },
+            on_auth_failure=on_auth_failure,
         )
     if cfg.provider == "trello" and cfg.trello.api_key and cfg.trello.token and cfg.trello.board_id:
         from integrations.trello.trello_adapter import TrelloAdapter
@@ -53,6 +55,7 @@ def _build_tracker_for_project(cfg, project_id):
                 "in_review": t.lists.in_review,
                 "done": t.lists.done,
             },
+            on_auth_failure=on_auth_failure,
         )
     # No matching provider configured or credentials missing — caller will
     # treat this project as "no tracker".
@@ -63,7 +66,9 @@ def _build_tracker_for_project(cfg, project_id):
     return None
 
 
-def _build_vcs_adapter(repo_cfg: RepoConfig) -> VCSInterface | None:
+def _build_vcs_adapter(
+    repo_cfg: RepoConfig, on_auth_failure: Callable[[int], None] | None = None,
+) -> VCSInterface | None:
     """Return the VCS adapter for this repo, or None if the provider is
     unsupported or required credentials are missing."""
     provider = repo_cfg.vcs.provider
@@ -73,6 +78,7 @@ def _build_vcs_adapter(repo_cfg: RepoConfig) -> VCSInterface | None:
             token=repo_cfg.vcs.github.token,
             owner=repo_cfg.vcs.github.owner,
             repo=repo_cfg.vcs.github.repo,
+            on_auth_failure=on_auth_failure,
         )
     if provider == "gitlab" and repo_cfg.vcs.gitlab.token:
         from integrations.gitlab.gitlab_adapter import GitLabAdapter
@@ -80,8 +86,15 @@ def _build_vcs_adapter(repo_cfg: RepoConfig) -> VCSInterface | None:
             token=repo_cfg.vcs.gitlab.token,
             project_id=repo_cfg.vcs.gitlab.project_id,
             url=repo_cfg.vcs.gitlab.url or "https://gitlab.com",
+            on_auth_failure=on_auth_failure,
         )
     return None
+
+
+def _quiet_http_loggers() -> None:
+    """httpx logs full request URLs at INFO; the Telegram Bot API URL carries the token."""
+    for name in ("httpx", "httpcore"):
+        logging.getLogger(name).setLevel(logging.WARNING)
 
 
 def get_version() -> str:
@@ -213,6 +226,7 @@ def main(argv: list[str] | None = None) -> int:
     log_level = getattr(logging, global_config.logging.level.upper(), logging.INFO)
     log_format = "%(asctime)s [%(levelname)s] %(name)s: %(message)s"
     logging.basicConfig(level=log_level, format=log_format)
+    _quiet_http_loggers()
 
     from logging.handlers import RotatingFileHandler
 
@@ -343,12 +357,40 @@ def main(argv: list[str] | None = None) -> int:
     vcs = None
     notifier = None
 
+    # Credential health — built before the adapters so they can report a 401/403 to it.
+    import shutil
+
+    from health.credentials import CredentialHealth, build_credentials
+    from integrations.telegram.resolve import daemon_bot_token, operator_chat_id
+
+    claude_bin = shutil.which("claude") or "claude"
+
+    async def _credential_line(text: str) -> None:
+        """Send a credential-health line to the operator chat; nothing without Telegram."""
+        if notifier is None:
+            return
+        chat_id = operator_chat_id(global_config, projects)
+        if chat_id:
+            await notifier.send_message(chat_id, text)
+
+    credential_health = CredentialHealth(
+        lambda: build_credentials(global_config, projects, claude_bin),
+        send_line=_credential_line,
+    )
+
+    def _auth_reporter(key: str) -> Callable[[int], None]:
+        """The adapter callback that reports a 401/403 on credential `key`."""
+        return lambda status: credential_health.report_auth_failure(key, status)
+
 
     # Build a tracker per project. Provider is dispatched on tracker.provider.
     from integrations.base.tracker import TrackerInterface
     trackers: dict[str, TrackerInterface] = {}
     for project_id, project in projects.items():
-        tracker = _build_tracker_for_project(project.config.tracker, project_id)
+        tracker = _build_tracker_for_project(
+            project.config.tracker, project_id,
+            on_auth_failure=_auth_reporter(f"tracker:{project_id}"),
+        )
         if tracker is not None:
             trackers[project_id] = tracker
             print(f"  Tracker for {project_id}: {project.config.tracker.provider}")
@@ -358,7 +400,9 @@ def main(argv: list[str] | None = None) -> int:
     vcs_adapters: dict[str, tuple[VCSInterface, RepoConfig]] = {}
     for proj_id, proj in projects.items():
         for repo_id, repo_cfg in proj.repos.items():
-            adapter = _build_vcs_adapter(repo_cfg)
+            adapter = _build_vcs_adapter(
+                repo_cfg, on_auth_failure=_auth_reporter(f"forge:{proj_id}/{repo_id}"),
+            )
             if adapter is None:
                 continue
             vcs_adapters[repo_id] = (adapter, repo_cfg)
@@ -371,22 +415,19 @@ def main(argv: list[str] | None = None) -> int:
     # per-project, so global is usually empty; without this fallback the
     # notifier stays None and every escalation dead-ends at FAILED with
     # "No notifier configured for escalation".
-    tg_token = global_config.telegram.bot_token
-    if not tg_token:
-        for proj in projects.values():
-            if proj.config.telegram.bot_token:
-                tg_token = proj.config.telegram.bot_token
-                break
+    tg_token, _ = daemon_bot_token(global_config, projects)
     if tg_token:
         from integrations.telegram.telegram_adapter import TelegramAdapter
 
         notifier = TelegramAdapter(bot_token=tg_token, event_bus=event_bus)
         print("  Telegram adapter initialized")
 
-    def _build_repo_adapters(project, logger_):
+    def _build_repo_adapters(project_id, project, logger_):
         """Build + register VCS adapters for each repo in a single project."""
         for repo_id, repo_cfg in project.repos.items():
-            adapter = _build_vcs_adapter(repo_cfg)
+            adapter = _build_vcs_adapter(
+                repo_cfg, on_auth_failure=_auth_reporter(f"forge:{project_id}/{repo_id}"),
+            )
             if adapter is None:
                 continue
             orchestrator.register_repo_vcs(repo_id, adapter, repo_cfg)
@@ -397,11 +438,12 @@ def main(argv: list[str] | None = None) -> int:
 
     def on_project_added(project_id, new_project):
         log = logging.getLogger(__name__)
-        _build_repo_adapters(new_project, log)
+        _build_repo_adapters(project_id, new_project, log)
 
         if orchestrator.get_tracker_for_project(project_id) is None:
             new_tracker = _build_tracker_for_project(
                 new_project.config.tracker, project_id,
+                on_auth_failure=_auth_reporter(f"tracker:{project_id}"),
             )
             if new_tracker is not None:
                 orchestrator.register_tracker(project_id, new_tracker)
@@ -459,6 +501,24 @@ def main(argv: list[str] | None = None) -> int:
     orchestrator.set_mode_handler(mode_handler)
     print(f"  Mode handler initialized (mode: {mode_handler.get_mode()})")
 
+    # Running/paused switches (tickets, reviews), persisted in reviewer.db
+    from orchestrator.reviewer.db import connect, reviewer_db_path
+    from orchestrator.switches import Switches
+
+    switches = Switches(connect(reviewer_db_path(global_config.reviewer)))
+    orchestrator.set_switches(switches)
+
+    def _on_switch_changed(mode: str, scope: str, state: str, by: str) -> None:
+        event_bus.emit(
+            "switch_changed", f"Switch {mode} {scope}: {state} (by {by})",
+            data={"mode": mode, "scope": scope, "state": state, "by": by},
+        )
+        if mode == "tickets" and state == "running":
+            orchestrator._wake_event.set()
+
+    switches.add_listener(_on_switch_changed)
+    print(f"  Switches: tickets={switches.get('tickets')}, reviews={switches.get('reviews')}")
+
     # Initialize command handler for Telegram free-text control
     command_handler = None
     if notifier is not None:
@@ -505,6 +565,8 @@ def main(argv: list[str] | None = None) -> int:
                 recent_completions_fn=orchestrator.get_recent_completions,
                 allowed_chat_ids=allowed_chat_ids or None,
                 event_bus=event_bus,
+                switches=switches,
+                get_projects=lambda: projects,
             )
             command_handler._wake_fn = lambda: orchestrator._wake_event.set()
             notifier.set_command_handler(command_handler)
@@ -523,6 +585,10 @@ def main(argv: list[str] | None = None) -> int:
         # Initialize persistent event store
         await event_store.initialize()
         event_bus.add_listener(lambda e: asyncio.ensure_future(event_store.insert(e)))
+
+        # Credential health checks run in the background, with or without the dashboard.
+        credential_stop = asyncio.Event()
+        credential_task = asyncio.create_task(credential_health.run(credential_stop))
 
         # Init runtime settings table (model picker).
         import aiosqlite as _aiosqlite
@@ -614,6 +680,8 @@ def main(argv: list[str] | None = None) -> int:
                 projects=projects,
                 config_dir=args.config,
                 atlas_fn=_production_atlas_fn,
+                switches=switches,
+                credential_health=credential_health,
             )
             config = uvicorn.Config(
                 app, host=dash_config.host, port=dash_config.port,
@@ -622,17 +690,6 @@ def main(argv: list[str] | None = None) -> int:
             web_server = uvicorn.Server(config)
             web_server_task = asyncio.create_task(web_server.serve())
             print(f"  Dashboard: http://{dash_config.host}:{dash_config.port}")
-
-            # Warm the health-check cache so the first dashboard load is instant.
-            if projects:
-                try:
-                    from health.runner import check_all as _warm_health
-                    await _warm_health(projects)
-                    print("  Health check: warmed cache")
-                except Exception as e:
-                    logging.getLogger(__name__).warning(
-                        "Failed to warm health cache: %s", e,
-                    )
 
         event_bus.emit("daemon_started", f"Cleave v{version} started")
 
@@ -663,6 +720,14 @@ def main(argv: list[str] | None = None) -> int:
         try:
             await orchestrator.run()
         finally:
+            # First, while Telegram can still deliver a line from a check in flight.
+            credential_stop.set()
+            try:
+                await asyncio.wait_for(credential_task, timeout=5.0)
+            except asyncio.TimeoutError:  # wait_for has cancelled the task
+                logging.getLogger(__name__).warning(
+                    "Credential health did not stop within 5s; cancelled",
+                )
             if tg_active:
                 try:
                     await notifier.stop_polling()

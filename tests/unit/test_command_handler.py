@@ -32,29 +32,32 @@ def _make_workspace(ticket_id, state, previous_state=None):
     return ws
 
 
+@pytest.fixture
+def mock_intent_parser():
+    parser = AsyncMock()
+    parser.parse = AsyncMock(return_value=ParsedIntent(
+        intent="status", params={}, reply="Here is the status",
+    ))
+    return parser
+
+
+@pytest.fixture
+def mock_notifier():
+    notifier = AsyncMock()
+    notifier.send_message = AsyncMock(return_value=1)
+    notifier.edit_message = AsyncMock()
+    notifier.delete_message = AsyncMock()
+    return notifier
+
+
+@pytest.fixture
+def mock_mode_handler():
+    handler = MagicMock()
+    handler.get_mode.return_value = "auto"
+    return handler
+
+
 class TestCommandHandler:
-    @pytest.fixture
-    def mock_intent_parser(self):
-        parser = AsyncMock()
-        parser.parse = AsyncMock(return_value=ParsedIntent(
-            intent="status", params={}, reply="Here is the status",
-        ))
-        return parser
-
-    @pytest.fixture
-    def mock_notifier(self):
-        notifier = AsyncMock()
-        notifier.send_message = AsyncMock(return_value=1)
-        notifier.edit_message = AsyncMock()
-        notifier.delete_message = AsyncMock()
-        return notifier
-
-    @pytest.fixture
-    def mock_mode_handler(self):
-        handler = MagicMock()
-        handler.get_mode.return_value = "auto"
-        return handler
-
     @pytest.fixture
     def command_handler(self, mock_intent_parser, mock_notifier, mock_mode_handler):
         return CommandHandler(
@@ -523,3 +526,70 @@ class TestHandleCallback:
         await handler.handle_callback("bogus", "T-1", "12345", 42)
         call_args = mock_notifier.send_message.call_args[0]
         assert "Unknown" in call_args[1] or "unknown" in call_args[1]
+
+
+from config.schemas import LoadedProject, RepoConfig, ReviewerConfig
+from orchestrator.reviewer.db import connect
+from orchestrator.switches import Switches
+
+
+def _switch_handler(tmp_path, parser, notifier, mode_handler):
+    projects = {"acme": LoadedProject(repos={"app": RepoConfig(reviewer=ReviewerConfig(enabled=True)),
+                                             "web": RepoConfig()})}
+    sw = Switches(connect(tmp_path / "r.db"))
+    h = CommandHandler(intent_parser=parser, notifier=notifier, mode_handler=mode_handler,
+                       active_workspaces_fn=lambda: [], allowed_chat_ids={"1"},
+                       switches=sw, get_projects=lambda: projects)
+    return h, sw
+
+
+class TestSwitchCommands:
+    async def test_pause_reviews_skips_llm(self, tmp_path, mock_intent_parser, mock_notifier, mock_mode_handler):
+        h, sw = _switch_handler(tmp_path, mock_intent_parser, mock_notifier, mock_mode_handler)
+        await h.handle_message("ревью пауза", "1")
+        assert sw.get("reviews") == "paused"
+        mock_intent_parser.parse.assert_not_awaited()
+        assert "Reviews: paused" in mock_notifier.send_message.await_args.args[1]
+
+    async def test_repo_scoped_and_not_enabled(self, tmp_path, mock_intent_parser, mock_notifier, mock_mode_handler):
+        h, sw = _switch_handler(tmp_path, mock_intent_parser, mock_notifier, mock_mode_handler)
+        await h.handle_message("тикеты старт web", "1")
+        assert sw.get("tickets", "acme/web") == "running"
+        await h.handle_message("ревью пауза web", "1")
+        assert sw.get("reviews", "acme/web") == "running"
+        assert mock_notifier.send_message.await_args.args[1] == (
+            "Reviews are not enabled for acme/web (reviewer.enabled in YAML)")
+
+    async def test_status_shows_switches_and_summary(self, tmp_path, mock_intent_parser, mock_notifier, mock_mode_handler):
+        h, _ = _switch_handler(tmp_path, mock_intent_parser, mock_notifier, mock_mode_handler)
+        await h.handle_message("статус", "1")
+        text = mock_notifier.send_message.await_args.args[1]
+        assert text.startswith("Tickets: paused") and "Reviews: running" in text
+        assert text.split("\n\n", 1)[1]  # the existing summary follows
+        mock_intent_parser.parse.assert_not_awaited()
+
+    async def test_status_intent_shows_switches_first(self, tmp_path, mock_intent_parser, mock_notifier, mock_mode_handler):
+        h, _ = _switch_handler(tmp_path, mock_intent_parser, mock_notifier, mock_mode_handler)
+        await h.handle_message("what's running", "1")
+        mock_intent_parser.parse.assert_awaited_once()  # the LLM `status` intent, not the fixed command
+        text = mock_notifier.edit_message.await_args.args[2]
+        assert text.startswith("Tickets: paused\n· acme/app — paused (global)")
+        assert text.split("\n\n", 1)[1].startswith("Cleave Status")  # then the existing summary
+
+    async def test_status_intent_with_ticket_id_has_no_switches(self, tmp_path, mock_intent_parser, mock_notifier, mock_mode_handler):
+        h, _ = _switch_handler(tmp_path, mock_intent_parser, mock_notifier, mock_mode_handler)
+        mock_intent_parser.parse.return_value = ParsedIntent(intent="status", params={"ticket_id": "ACME-1"})
+        await h.handle_message("status of ACME-1", "1")
+        assert mock_notifier.edit_message.await_args.args[2] == "No active workspace found for ACME-1."
+
+    async def test_disallowed_chat_ignored(self, tmp_path, mock_intent_parser, mock_notifier, mock_mode_handler):
+        h, sw = _switch_handler(tmp_path, mock_intent_parser, mock_notifier, mock_mode_handler)
+        await h.handle_message("ревью пауза", "999")
+        assert sw.get("reviews") == "running"
+        mock_notifier.send_message.assert_not_awaited()
+
+    async def test_mixed_case_repo_id(self, tmp_path, mock_intent_parser, mock_notifier, mock_mode_handler):
+        h, sw = _switch_handler(tmp_path, mock_intent_parser, mock_notifier, mock_mode_handler)
+        h._get_projects = lambda: {"acme": LoadedProject(repos={"App": RepoConfig()})}
+        await h.handle_message("тикеты старт App", "1")
+        assert sw.get("tickets", "acme/App") == "running"

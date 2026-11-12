@@ -1,6 +1,6 @@
 # Telegram Bot Reference
 
-Every command, free-text intent, inline button, and reply pattern Cleave's Telegram bot understands.
+Every command, switch command, free-text intent, inline button, and reply pattern Cleave's Telegram bot understands.
 
 This doc is a user-facing reference. For the implementation/spec, see [docs/features/telegram-notifications.md](features/telegram-notifications.md).
 
@@ -26,6 +26,41 @@ If the allowlist ends up empty for any reason, the bot is locked down (fail-safe
 
 ---
 
+## Switch commands
+
+Fixed commands pause and resume the ticket pipeline and reviewer mode. They are not replies, and they run before the LLM intent parser (allowlisted chats only):
+
+| Command | Effect |
+|---|---|
+| `tickets pause` / `tickets start` | Pause / resume the ticket pipeline globally |
+| `reviews pause` / `reviews start` | Pause / resume reviews globally |
+| any of the above + a repo id, e.g. `tickets pause app` or `reviews start acme/app` | Same, for one repo (`repo` or `project/repo`) |
+| `status` | The switch block (tickets and reviews, global and per repo), then the pipeline summary |
+
+Commands are case-insensitive. Russian/Ukrainian words are accepted as input synonyms: `тикеты` / `тікети` for `tickets`; `ревью` / `рев'ю` (ASCII or typographic apostrophe) for `reviews`; `пауза` for `pause`; `старт` for `start`; `статус` for `status`. Replies are in English whichever spelling you use.
+
+The switch block looks like this (`(global)` marks a repo that is paused only because the global switch is):
+
+```
+Tickets: paused
+· acme/app — paused (global)
+· acme/web — paused
+Reviews: running
+· acme/app — running
+```
+
+With no repos it shows `· no repos` for tickets and `· no repos with reviews` for reviews. Errors for a repo id:
+
+- `Unknown repo "nope". Known: acme/app, acme/web`
+- `"app" exists in several projects: acme/app, beta/app — use project/repo`
+- `Reviews are not enabled for acme/web (reviewer.enabled in YAML)` — `reviews pause <repo>` or `reviews start <repo>` for a repo whose `reviewer.enabled` is off
+
+While tickets are paused, `analyze` refuses the ticket and names the command that resumes it: `ACME-1: tickets are paused globally — send "tickets start"`, or `ACME-1: tickets are paused for acme/app — send "tickets start acme/app"` when only that repo is paused.
+
+The switches are stored in `~/CleaveData/reviewer/reviewer.db` and survive restarts. **First start after upgrading:** the database is created with **tickets paused** and reviews running, so the ticket pipeline picks up nothing until you send `tickets start` (or click the `Tickets: paused ⏸` pill on the Board to switch it to running).
+
+---
+
 ## Free-text commands
 
 The bot does not require slash prefixes. Free-text messages are classified by Claude using full pipeline context (mode, awaiting approvals, active workspaces, blocked workspaces, deferred workspaces) — so "yes" resolves the one pending approval if there's only one, "the bug is X" gets routed as `provide_input` if a workspace is BLOCKED, etc.
@@ -34,7 +69,7 @@ Recognized intents (from `integrations/telegram/intent_parser.py`):
 
 | Intent | Trigger phrases | Effect |
 |---|---|---|
-| `status` | `/status`, `status`, `what's running`, `pipeline status` | Pipeline summary: mode, uptime, active workspaces, recent completions |
+| `status` | `/status`, `status`, `what's running`, `pipeline status` | The switch block first, then the pipeline summary: mode, uptime, active workspaces, recent completions |
 | `status` (drill-down) | `/status TICKET-123`, `status of TICKET-123` | Per-workspace detail: stage, branch, Jira URL, PR URL, iteration counts |
 | `analyze` | `analyze TICKET-1, TICKET-2`, `pick up TICKET-1` | Validate tickets against Jira and create workspaces (used in manual mode) |
 | `approve` | `approve`, `approve TICKET-1`, `yes` (when one approval pending) | Resolve an AWAITING_APPROVAL gate to its happy-path next state |

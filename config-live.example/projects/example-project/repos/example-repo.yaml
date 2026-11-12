@@ -74,3 +74,32 @@ pr_description_template: |
 
 parallelism:
   max_concurrent_tickets: 2
+
+# Optional: reviewer mode (reviews colleagues' PRs). Validated only when enabled.
+reviewer:
+  enabled: false
+  base_branch: develop
+  poll_interval_seconds: 300
+  quiet_minutes: 30
+  max_files_auto: 40
+  readiness:
+    kind: command                                   # later: rule
+    status_command: ["python3", "tools/threads/threads.py", "--repo", "{repo}", "status"]
+    threads_command: ["python3", "tools/threads/threads.py", "--repo", "{repo}", "threads", "{pr}"]
+  process:
+    doc: docs/review/code-review-process.md         # repo-relative, read from base_branch
+    prepare_section: "Prepare"                       # heading Cleave replaces and hashes
+    recheck_section: "Re-check"
+    run_dir: "tools/review/runs/PR_{pr}"             # where the document expects its artifacts
+    replies_plan: "tools/threads/runs/PR_{pr}/replies_{head9}.json"
+    worktree_dir: "../review-wt/PR_{pr}"             # relative to the review clone
+    prepare_steps:
+      - ["python3", "tools/review/anchors.py", "{pr}", "--worktree", "{worktree}", "--base", "{merge_base}"]
+    helper_scripts: ["tools/review/*.py"]            # python3 targets the model may run
+  poster:
+    kind: command
+    review_command: ["python3", "tools/review/post.py", "{pr}", "--repo", "{repo}", "--report", "{report}",
+                     "--anchors", "{job_dir}/anchors.json", "--ledger", "{ledger}", "--event", "{event}"]
+    replies_command: ["python3", "tools/threads/threads.py", "--repo", "{repo}", "post", "{pr}", "--plan", "{plan}"]
+    dry_run_flag: "--dry-run"
+    confirm_flag: "--yes"

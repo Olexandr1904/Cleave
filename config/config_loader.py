@@ -25,6 +25,7 @@ from config.schemas import (
     BuildConfig,
     CIConfig,
     ClaudeConfig,
+    DashboardConfig,
     DefaultsConfig,
     FailureSummarizerConfig,
     GitConfig,
@@ -33,6 +34,7 @@ from config.schemas import (
     GlobalConfig,
     HeartbeatConfig,
     HelpersConfig,
+    IntentParserConfig,
     JenkinsConfig,
     JiraConfig,
     JiraStatusesConfig,
@@ -42,10 +44,18 @@ from config.schemas import (
     MaxIterationsConfig,
     OperatorProfile,
     ParallelismConfig,
+    PipelineConfig,
+    PosterPartConfig,
+    ProcessPartConfig,
     ProjectConfig,
     ProjectInfo,
     RepoConfig,
+    ReadinessPartConfig,
     RepoInfo,
+    REVIEWER_PLACEHOLDERS,
+    ReviewerConfig,
+    ReviewerGlobalConfig,
+    ReviewerJobConfig,
     TelegramConfig,
     TestConfig,
     TrackerConfig,
@@ -102,6 +112,25 @@ def resolve_env_vars_recursive(data: Any) -> Any:
     return data
 
 
+def env_var_refs(raw: Any, prefix: str = "") -> dict[str, str]:
+    """Map dotted config paths to the first ${VAR} name in that string value.
+
+    Computed from the raw (unresolved) YAML, so it never holds a value.
+    """
+    refs: dict[str, str] = {}
+    if isinstance(raw, str):
+        match = ENV_VAR_PATTERN.search(raw)
+        if match and prefix:
+            refs[prefix] = match.group(1)
+    elif isinstance(raw, dict):
+        for key, value in raw.items():
+            refs.update(env_var_refs(value, f"{prefix}.{key}" if prefix else str(key)))
+    elif isinstance(raw, list):
+        for index, value in enumerate(raw):
+            refs.update(env_var_refs(value, f"{prefix}.{index}" if prefix else str(index)))
+    return refs
+
+
 def _parse_section(data: dict, section_name: str, dataclass_type: type, file_path: str) -> Any:
     """Parse a config section into a dataclass instance."""
     section_data = data.get(section_name, {})
@@ -115,6 +144,42 @@ def _parse_section(data: dict, section_name: str, dataclass_type: type, file_pat
             file_path=file_path,
             field=section_name,
         ) from e
+
+
+def _mapping(value: Any, field_name: str, file_path: str) -> dict:
+    """A copy of a YAML section: {} when empty, ConfigError when it is not a mapping."""
+    if not value:
+        return {}
+    if not isinstance(value, dict):
+        raise ConfigError(f"'{field_name}' must be a mapping", file_path=file_path, field=field_name)
+    return dict(value)
+
+
+def _parse_reviewer_global(data: dict, file_path: str) -> ReviewerGlobalConfig:
+    """Parse the `reviewer:` section; job entries merge over the per-kind defaults."""
+    section = _mapping(data.get("reviewer"), "reviewer", file_path)
+    jobs_raw = _mapping(section.pop("jobs", None), "reviewer.jobs", file_path)
+    try:
+        reviewer = ReviewerGlobalConfig(**section)
+    except TypeError as e:
+        raise ConfigError(
+            f"Invalid fields in 'reviewer': {e}", file_path=file_path, field="reviewer",
+        ) from e
+    for kind, job_raw in jobs_raw.items():
+        where = f"reviewer.jobs.{kind}"
+        if kind not in reviewer.jobs:
+            raise ConfigError(
+                f"Unknown reviewer job kind '{kind}' (expected one of {sorted(reviewer.jobs)})",
+                file_path=file_path, field=where,
+            )
+        job = _mapping(job_raw, where, file_path)
+        try:
+            reviewer.jobs[kind] = ReviewerJobConfig(**{**reviewer.jobs[kind].__dict__, **job})
+        except TypeError as e:
+            raise ConfigError(
+                f"Invalid fields in '{where}': {e}", file_path=file_path, field=where,
+            ) from e
+    return reviewer
 
 
 def load_global_config(config_dir: str) -> GlobalConfig:
@@ -175,6 +240,11 @@ def load_global_config(config_dir: str) -> GlobalConfig:
         heartbeat=_parse_section(data, "heartbeat", HeartbeatConfig, file_str),
         operator=_parse_section(data, "operator", OperatorProfile, file_str),
         failure_summarizer=_parse_section(data, "failure_summarizer", FailureSummarizerConfig, file_str),
+        pipeline=_parse_section(data, "pipeline", PipelineConfig, file_str),
+        intent_parser=_parse_section(data, "intent_parser", IntentParserConfig, file_str),
+        dashboard=_parse_section(data, "dashboard", DashboardConfig, file_str),
+        reviewer=_parse_reviewer_global(data, file_str),
+        env_refs=env_var_refs(raw_data),
     )
 
 
@@ -189,17 +259,17 @@ def merge_dicts(base: dict, override: dict) -> dict:
     return result
 
 
-def _load_yaml_file(path: Path) -> dict:
-    """Load a YAML file, resolve env vars, return dict. Returns {} if empty."""
+def _load_yaml_file(path: Path) -> tuple[dict, dict[str, str]]:
+    """Load a YAML file; return (data with env vars resolved, env refs). {} data if empty."""
     if not path.exists():
         raise ConfigError(f"Config file not found: {path}", file_path=str(path))
     with open(path) as f:
         raw = yaml.safe_load(f)
     if raw is None:
-        return {}
+        return {}, {}
     if not isinstance(raw, dict):
         raise ConfigError(f"Config must be a YAML mapping", file_path=str(path))
-    return resolve_env_vars_recursive(raw)
+    return resolve_env_vars_recursive(raw), env_var_refs(raw)
 
 
 def _parse_jira_section(data: dict, file_path: str) -> JiraConfig:
@@ -395,7 +465,7 @@ def _load_project_config(project_dir: Path, global_defaults: dict) -> ProjectCon
     if not project_yaml.exists():
         return None
 
-    data = _load_yaml_file(project_yaml)
+    data, env_refs = _load_yaml_file(project_yaml)
     file_str = str(project_yaml)
 
     return ProjectConfig(
@@ -404,12 +474,100 @@ def _load_project_config(project_dir: Path, global_defaults: dict) -> ProjectCon
         telegram=_parse_section(data, "telegram", TelegramConfig, file_str),
         parallelism=_parse_section(data, "parallelism", ParallelismConfig, file_str),
         defaults=_parse_defaults_section(data, file_str),
+        env_refs=env_refs,
     )
+
+
+PLACEHOLDER_PATTERN = re.compile(r"\{(\w+)\}")
+
+
+def _parse_reviewer_section(
+    data: dict, vcs: VCSConfig, file_path: str, repo_enabled: bool = True,
+) -> ReviewerConfig:
+    """Parse the repo's `reviewer:` section; full validation only when it and the repo are enabled."""
+    raw = _mapping(data.get("reviewer"), "reviewer", file_path)
+    parts = {}
+    for name, cls in (("readiness", ReadinessPartConfig), ("process", ProcessPartConfig), ("poster", PosterPartConfig)):
+        part = _mapping(raw.pop(name, None), f"reviewer.{name}", file_path)
+        try:
+            parts[name] = cls(**part)
+        except TypeError as e:
+            raise ConfigError(
+                f"Invalid fields in 'reviewer.{name}': {e}", file_path=file_path, field=f"reviewer.{name}",
+            ) from e
+    try:
+        reviewer = ReviewerConfig(**raw, **parts)
+    except TypeError as e:
+        raise ConfigError(f"Invalid fields in 'reviewer': {e}", file_path=file_path, field="reviewer") from e
+    if not reviewer.base_branch:
+        reviewer.base_branch = vcs.default_branch
+    if not reviewer.enabled or not repo_enabled:
+        return reviewer
+
+    def fail(message: str, field_name: str) -> ConfigError:
+        return ConfigError(message, file_path=file_path, field=field_name)
+
+    if vcs.provider != "github":
+        raise fail("reviewer mode supports only GitHub repos in this version", "reviewer")
+    for part_name in ("readiness", "poster"):
+        kind = parts[part_name].kind
+        if kind != "command":
+            raise fail(f"reviewer.{part_name}.kind '{kind}' is not built in this version", f"reviewer.{part_name}.kind")
+
+    readiness, process, poster = parts["readiness"], parts["process"], parts["poster"]
+    required = [
+        ("readiness", "status_command", readiness.status_command),
+        ("readiness", "threads_command", readiness.threads_command),
+        ("process", "doc", process.doc),
+        ("process", "run_dir", process.run_dir),
+        ("process", "replies_plan", process.replies_plan),
+        ("process", "worktree_dir", process.worktree_dir),
+        ("poster", "review_command", poster.review_command),
+        ("poster", "replies_command", poster.replies_command),
+        ("poster", "dry_run_flag", poster.dry_run_flag),
+        ("poster", "confirm_flag", poster.confirm_flag),
+    ]
+    for part_name, name, value in required:
+        if not value:
+            raise fail(f"reviewer.{part_name}.{name} is required", f"reviewer.{part_name}.{name}")
+    for name in ("doc", "run_dir", "replies_plan", "worktree_dir"):
+        if not isinstance(getattr(process, name), str):
+            raise fail(f"reviewer.process.{name} must be a string", f"reviewer.process.{name}")
+
+    def check_command(value: Any, field_name: str) -> list[str]:
+        if not isinstance(value, list) or not all(isinstance(x, str) for x in value):
+            raise fail(f"{field_name} must be a list of strings", field_name)
+        return value
+
+    commands = {
+        "reviewer.readiness.status_command": check_command(readiness.status_command, "reviewer.readiness.status_command"),
+        "reviewer.readiness.threads_command": check_command(readiness.threads_command, "reviewer.readiness.threads_command"),
+        "reviewer.poster.review_command": check_command(poster.review_command, "reviewer.poster.review_command"),
+        "reviewer.poster.replies_command": check_command(poster.replies_command, "reviewer.poster.replies_command"),
+    }
+    if not isinstance(process.prepare_steps, list):
+        raise fail("reviewer.process.prepare_steps must be a list of lists of strings", "reviewer.process.prepare_steps")
+    for i, step in enumerate(process.prepare_steps):
+        commands[f"reviewer.process.prepare_steps.{i}"] = check_command(step, f"reviewer.process.prepare_steps.{i}")
+    check_command(process.helper_scripts, "reviewer.process.helper_scripts")
+
+    for name in ("doc", "run_dir", "replies_plan"):
+        value = getattr(process, name)
+        if Path(value).is_absolute() or ".." in Path(value).parts:
+            raise fail(f"reviewer.process.{name} must be repo-relative", f"reviewer.process.{name}")
+
+    texts = [(f, s) for f, cmd in commands.items() for s in cmd]
+    texts += [(f"reviewer.process.{n}", getattr(process, n)) for n in ("run_dir", "replies_plan", "worktree_dir")]
+    for field_name, text in texts:
+        for placeholder in PLACEHOLDER_PATTERN.findall(text):
+            if placeholder not in REVIEWER_PLACEHOLDERS:
+                raise fail(f"{field_name}: unknown placeholder '{{{placeholder}}}'", field_name)
+    return reviewer
 
 
 def _load_repo_config(repo_path: Path, project_config: ProjectConfig, global_defaults_raw: dict) -> RepoConfig:
     """Load a single repo yaml and merge with project config."""
-    data = _load_yaml_file(repo_path)
+    data, env_refs = _load_yaml_file(repo_path)
     file_str = str(repo_path)
 
     repo_cfg = RepoConfig(
@@ -430,7 +588,10 @@ def _load_repo_config(repo_path: Path, project_config: ProjectConfig, global_def
         tracker=project_config.tracker,
         telegram=project_config.telegram if project_config.telegram.default_chat_id or project_config.telegram.bot_token else TelegramConfig(),
         defaults=_parse_defaults_section(data, file_str) if data.get("defaults") else project_config.defaults,
+        env_refs=env_refs,
     )
+
+    repo_cfg.reviewer = _parse_reviewer_section(data, repo_cfg.vcs, file_str, repo_cfg.repo.enabled)
 
     # Backward-compat: accept the old `jira_repo_label` key.
     if repo_cfg.jira_repo_label and not repo_cfg.tracker_label:

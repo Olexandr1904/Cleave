@@ -33,7 +33,7 @@ Per-ticket sandbox under `workspaces.base_dir`, no shared state, file-based stat
 - **Telegram** — escalations, reply-to-unblock, free-text intent classification, inline action buttons. ([commands reference](docs/telegram.md))
 
 ### Dashboard
-Embedded web UI at [http://localhost:8080](http://localhost:8080) — Board, Ticket Detail with reports viewer, Event Log, Settings (model picker), Project Health strip, Take Control, and a **+ New Project** wizard that validates credentials live and writes config for you. ([dashboard reference](docs/dashboard.md))
+Embedded web UI at [http://localhost:8080](http://localhost:8080) — Board, Ticket Detail with reports viewer, Event Log, Settings (model picker), credential strip, Tickets switch panel, Take Control, and a **+ New Project** wizard that validates credentials live and writes config for you. ([dashboard reference](docs/dashboard.md))
 
 ### Operations
 Auto / manual mode, approve / reject / retry from dashboard or Telegram, DEFERRED auto-resume on quota or transient errors, stage verifier (catches silent agent failures), project hot-reload (no restart). 3-level config cascade — `global.yaml` → `project.yaml` → `repo.yaml`. ([config docs](docs/features/configuration-cascade.md))
@@ -65,6 +65,8 @@ ls .claude/settings.json   # must exist — it's committed to the repo
 ```
 
 Then open [http://localhost:8080](http://localhost:8080) → click **+ New Project** → the wizard validates your Jira, GitHub, and Telegram credentials against live APIs and writes `config-live/projects/<id>/{project,repos/*}.yaml`. The daemon hot-reloads the project — no restart.
+
+**Tickets start paused.** The first daemon start creates `~/CleaveData/reviewer/reviewer.db` with the **tickets** switch paused and reviews running, so the ticket pipeline picks up nothing until you send `tickets start` in Telegram or click the `Tickets: paused ⏸` pill on the Board to switch it to running. The switches survive restarts. ([dashboard](docs/dashboard.md#tickets-switch-panel), [Telegram](docs/telegram.md#switch-commands))
 
 For a dry run that polls Jira and logs everything it *would* do without writing or pushing:
 

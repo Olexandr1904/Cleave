@@ -222,3 +222,39 @@ class TestAutoResumeAwaitingApproval:
         ws = _make_workspace("T-5", "AWAITING_APPROVAL", previous_state="DEV")
         await orch.advance_workspace(ws)
         ws.transition.assert_not_called()
+
+
+@pytest.fixture
+def orchestrator():
+    return _make_orchestrator()
+
+
+def test_tickets_running_without_switches_is_true(orchestrator):
+    assert orchestrator._tickets_running("acme", "app") is True
+
+
+def test_tickets_running_reads_switches(orchestrator, tmp_path):
+    from orchestrator.reviewer.db import connect
+    from orchestrator.switches import Switches
+    orchestrator.set_switches(Switches(connect(tmp_path / "r.db")))
+    assert orchestrator._tickets_running("acme", "app") is False  # first boot: paused
+
+
+def test_tickets_paused_globally(orchestrator, tmp_path):
+    from orchestrator.reviewer.db import connect
+    from orchestrator.switches import Switches
+    assert orchestrator._tickets_paused_globally() is False  # no switches yet
+    switches = Switches(connect(tmp_path / "r.db"))
+    orchestrator.set_switches(switches)
+    assert orchestrator._tickets_paused_globally() is True  # first boot: paused
+    switches.set("tickets", "running")
+    switches.set("tickets", "paused", "acme/app")
+    assert orchestrator._tickets_paused_globally() is False  # only the repo is paused
+
+
+async def test_analyze_ticket_ids_passes_both_gates(orchestrator):
+    with patch("orchestrator.ingest.analyze_ticket_ids", new=AsyncMock(return_value={})) as impl:
+        await orchestrator.analyze_ticket_ids(["ACME-1"])
+    kwargs = impl.await_args.kwargs
+    assert kwargs["is_repo_running"] == orchestrator._tickets_running
+    assert kwargs["tickets_paused_globally"] == orchestrator._tickets_paused_globally

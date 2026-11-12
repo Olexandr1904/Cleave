@@ -4,11 +4,13 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from collections.abc import Callable
 from typing import Any
 from urllib.parse import quote
 
 import httpx
 
+from integrations.base.auth_failure import auth_failure_hook
 from integrations.base.vcs import PRComment, PRStatus, VCSInterface
 
 logger = logging.getLogger(__name__)
@@ -24,6 +26,7 @@ class GitLabAdapter(VCSInterface):
 
     def __init__(
         self, token: str, project_id: str, url: str = "https://gitlab.com",
+        *, on_auth_failure: Callable[[int], None] | None = None,
     ) -> None:
         self._token = token
         self._project_id = project_id
@@ -33,6 +36,7 @@ class GitLabAdapter(VCSInterface):
             base_url=f"{self._url}/api/v4",
             headers={"Private-Token": token, "Accept": "application/json"},
             timeout=TIMEOUT,
+            event_hooks={"response": [auth_failure_hook(on_auth_failure)]},
         )
         # note_id -> discussion_id, keyed by mr_iid; populated lazily by
         # get_pr_comments and used by reply_to_comment / resolve_comment.

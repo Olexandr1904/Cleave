@@ -7,10 +7,16 @@ exception class in `reason`.
 
 from __future__ import annotations
 
+import asyncio
+import json
+import os
+import signal
 import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
+
+import httpx
 
 from integrations.config import config_tools
 
@@ -53,6 +59,7 @@ async def check_jira(url: str, email: str, token: str, project_key: str) -> Vali
         ok=False, name="jira", target=project_key,
         reason=result.get("error", "Jira check failed"),
         fix_hint="Verify Jira URL, email, token, and project key in project config",
+        extra={"status": result.get("status")},
     )
 
 
@@ -73,6 +80,7 @@ async def check_github(token: str, owner: str, repo: str) -> ValidatorResult:
         ok=False, name="github", target=target,
         reason=result.get("error", "GitHub check failed"),
         fix_hint=f"Verify GitHub token has access to {target}",
+        extra={"status": result.get("status")},
     )
 
 
@@ -92,6 +100,7 @@ async def check_gitlab(token: str, project_id: str, url: str = "https://gitlab.c
         ok=False, name="gitlab", target=project_id,
         reason=result.get("error", "GitLab check failed"),
         fix_hint=f"Verify GitLab token has access to project {project_id}",
+        extra={"status": result.get("status")},
     )
 
 
@@ -229,4 +238,109 @@ async def check_trello(api_key: str, token: str, board_id: str) -> ValidatorResu
         ok=False, name="trello", target=board_id,
         reason=result.get("error", "Trello check failed"),
         fix_hint="Verify token has access to the board",
+        extra={"status": result.get("status")},
+    )
+
+
+async def check_telegram(token: str) -> ValidatorResult:
+    """Check that the Telegram bot token is accepted (getMe).
+
+    The Bot API URL carries the token, so failures report only the HTTP
+    status or the exception class name, never the exception text.
+    """
+    try:
+        async with httpx.AsyncClient(timeout=config_tools.VALIDATE_TIMEOUT) as client:
+            response = await client.get(f"https://api.telegram.org/bot{token}/getMe")
+    except Exception as e:
+        return ValidatorResult(
+            ok=False, name="telegram", target="bot",
+            reason=type(e).__name__,
+            fix_hint="Check the Telegram bot token and network access",
+            extra={"status": None},
+        )
+    if response.status_code == 200:
+        try:
+            body_ok = bool(response.json().get("ok"))
+        except Exception:
+            body_ok = False
+        if body_ok:
+            return ValidatorResult(ok=True, name="telegram", target="bot", reason="", fix_hint="")
+    return ValidatorResult(
+        ok=False, name="telegram", target="bot",
+        reason=f"Telegram returned HTTP {response.status_code}",
+        fix_hint="Check the Telegram bot token",
+        extra={"status": response.status_code},
+    )
+
+
+# CLAUDE_CONFIG_DIR selects the login profile, so the check sees the pipeline's login.
+_CLAUDE_ENV_KEYS = ("HOME", "PATH", "LANG", "TMPDIR", "USER", "CLAUDE_CONFIG_DIR")
+
+
+def _kill_group(proc: asyncio.subprocess.Process) -> None:
+    """Kill the process and anything it spawned (own session, so pgid == pid)."""
+    try:
+        os.killpg(proc.pid, signal.SIGKILL)
+    except ProcessLookupError:
+        pass
+
+
+async def check_claude_login(claude_bin: str, timeout_seconds: float = 30.0) -> ValidatorResult:
+    """Check the `claude` CLI login via `claude auth status --json`.
+
+    Runs with a scrubbed environment (no API key) and parses stdout whatever
+    the exit code: a logged-out CLI exits 1 but still prints JSON.
+    """
+    def _unknown(reason: str) -> ValidatorResult:
+        return ValidatorResult(
+            ok=False, name="claude_login", target="host", reason=reason,
+            fix_hint="Run `claude` on the host and log in with /login",
+            extra={"logged_in": None, "expires_at": None, "status": None},
+        )
+
+    env = {k: os.environ[k] for k in _CLAUDE_ENV_KEYS if k in os.environ}
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            claude_bin, "auth", "status", "--json",
+            stdin=asyncio.subprocess.DEVNULL,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.DEVNULL,
+            env=env,
+            start_new_session=True,
+        )
+    except FileNotFoundError:
+        return _unknown("claude not found")
+    except Exception as e:
+        return _unknown(type(e).__name__)
+    try:
+        stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=timeout_seconds)
+    except asyncio.TimeoutError:
+        _kill_group(proc)
+        await proc.wait()
+        return _unknown("claude auth status timed out")
+    except BaseException:
+        _kill_group(proc)
+        await proc.wait()
+        raise
+    try:
+        data = json.loads(stdout.decode("utf-8", errors="replace"))
+        logged_in = data["loggedIn"]
+        if not isinstance(logged_in, bool):
+            raise ValueError
+    except (ValueError, KeyError, TypeError):
+        return _unknown("unexpected claude auth status output")
+    if logged_in:
+        expires_at = data.get("loginExpiresAt")
+        return ValidatorResult(
+            ok=True, name="claude_login", target="host", reason="", fix_hint="",
+            extra={
+                "logged_in": True,
+                "expires_at": expires_at if isinstance(expires_at, str) else None,
+                "status": None,
+            },
+        )
+    return ValidatorResult(
+        ok=False, name="claude_login", target="host", reason="not logged in",
+        fix_hint="Run `claude` on the host and log in with /login",
+        extra={"logged_in": False, "expires_at": None, "status": None},
     )

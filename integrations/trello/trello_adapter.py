@@ -5,11 +5,13 @@ from __future__ import annotations
 import asyncio
 import logging
 from datetime import datetime, timezone
+from collections.abc import Callable
 from typing import Any
 from urllib.parse import urlparse
 
 import httpx
 
+from integrations.base.auth_failure import auth_failure_hook
 from integrations.base.tracker import (
     StatusChange,
     TicketComment,
@@ -61,6 +63,7 @@ class TrelloAdapter(TrackerInterface):
         trigger_labels: list[str] | None = None,
         ignore_labels: list[str] | None = None,
         list_mapping: dict[str, str] | None = None,
+        on_auth_failure: Callable[[int], None] | None = None,
     ) -> None:
         self._key = api_key
         self._token = token
@@ -77,7 +80,9 @@ class TrelloAdapter(TrackerInterface):
             base_url=API_BASE,
             timeout=TIMEOUT,
             params={"key": self._key, "token": self._token},
+            event_hooks={"response": [auth_failure_hook(on_auth_failure)]},
         )
+        # No auth hook: attachments are also fetched from third-party hosts without the token.
         self._raw_client = httpx.AsyncClient(timeout=TIMEOUT)
         self._list_id_to_name: dict[str, str] = {}
 

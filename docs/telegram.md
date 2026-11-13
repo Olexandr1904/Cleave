@@ -152,6 +152,21 @@ Cleave sends Telegram notifications in these situations:
 
 A typing indicator is shown while the intent parser thinks, so you can tell the bot is listening.
 
+### Reviewer lines
+
+For each repo with reviews enabled (see the [Reviews view](dashboard.md#reviews-view)), the reviewer sends one-line messages to `reviewer.telegram_chat_id` in `global.yaml`, or, when that is empty, to the operator chat (`telegram.default_chat_id` in `global.yaml`, else the first project's). They are sent while reviews are paused too.
+
+| Line | When |
+|---|---|
+| `[acme/app] #1720: your turn — merge · https://github.com/acme-org/acme-app/pull/1720` | A new turn of yours that is not a review or a re-check (those queue jobs instead) |
+| `[acme/app] #1718: replies in 3 thread(s) — handle them locally · <PR url>` | New replies to you in review threads |
+| `[acme/app] #1730 is large (57 files) — no automatic review · <PR url>` | Once per head, after the quiet window, for a PR to review with at least `reviewer.max_files_auto` changed files. **Review now** on the dashboard still queues a review |
+| `[acme/app] readiness command failed: <reason>. Keeping the last board; next try in 10 min.` | The first failed poll of a streak, when the repo's readiness command is what failed. The later failures of the streak send nothing, whatever fails, until a poll succeeds |
+| `[acme/app] poll failed: <reason>. Keeping the last board; next try in 10 min.` | The first failed poll of a streak, when the review clone, a GitHub read or anything else is what failed. The later failures of the streak send nothing, a readiness failure included |
+| `[acme/app] reviews are off: docs/review/code-review-process.md is not on develop.` | Once, when the base branch has no process document (again if it goes missing after coming back) |
+
+The first poll of a repo records the turns that already exist without sending a line for them. Once credential health has flagged the forge token as failing, the reviewer sends no line for it: credential health sends its own (see the [credential strip](dashboard.md#credential-strip)). Until then (say, at daemon start with a rejected token), the first poll can fail and send one `poll failed: git clone failed …` line (`git fetch failed …` once the review clone exists). A line that could not be sent is not sent again, except the large-PR and missing-document lines, which are retried on the next poll (with no Telegram bot or chat configured, on the first start that has both).
+
 ---
 
 ## Manual vs auto mode

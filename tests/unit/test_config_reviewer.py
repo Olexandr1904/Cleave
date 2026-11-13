@@ -183,6 +183,28 @@ def test_malformed_repo_reviewer_section_raises_config_error(data, field):
         _parse_reviewer_section(data, _vcs(), "r.yaml")
     assert (e.value.file_path, e.value.field) == ("r.yaml", field)
 
+@pytest.mark.parametrize("name,value", [
+    ("poll_interval_seconds", 59), ("poll_interval_seconds", 0), ("poll_interval_seconds", -300),
+    ("poll_interval_seconds", "300"), ("poll_interval_seconds", 300.0),
+    ("poll_interval_seconds", True),
+    ("quiet_minutes", -1), ("quiet_minutes", "30"), ("quiet_minutes", False),
+    ("max_files_auto", 0), ("max_files_auto", 40.5), ("max_files_auto", True),
+])
+def test_reviewer_numbers_out_of_range_raise(name, value):
+    with pytest.raises(ConfigError) as e:
+        _parse_reviewer_section(_with((name, value)), _vcs(), "r.yaml")
+    assert e.value.field == f"reviewer.{name}" and f"reviewer.{name}" in str(e.value)
+
+def test_reviewer_numbers_at_their_bounds_load():
+    data = _with(("poll_interval_seconds", 60))
+    data["reviewer"].update(quiet_minutes=0, max_files_auto=1)
+    r = _parse_reviewer_section(data, _vcs(), "r.yaml")
+    assert (r.poll_interval_seconds, r.quiet_minutes, r.max_files_auto) == (60, 0, 1)
+
+def test_reviewer_numbers_unchecked_when_disabled():
+    data = {"reviewer": {"enabled": False, "poll_interval_seconds": 0, "max_files_auto": 0}}
+    assert _parse_reviewer_section(data, _vcs(), "r.yaml").poll_interval_seconds == 0
+
 @pytest.mark.parametrize("text,field", [
     ("reviewer: yes-please\n", "reviewer"),
     ("reviewer:\n  - db_path\n", "reviewer"),

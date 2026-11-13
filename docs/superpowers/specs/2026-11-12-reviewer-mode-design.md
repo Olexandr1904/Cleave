@@ -158,7 +158,8 @@ exactly this shape, so it is the contract):
 {"me": "<login>",
  "prs": [{"number": 1712, "title": "...", "url": "...", "author": "<login>", "draft": false,
           "checks": "SUCCESS", "involves_me": true, "threads_truncated": false,
-          "turns": [{"login": "<login>", "action": "review", "threads": [], "reviewer": true}]}]}
+          "turns": [{"login": "<login>", "action": "review", "threads": []},
+                    {"login": "<author>", "action": "address_review", "threads": [], "reviewer": "<login>"}]}]}
 ```
 
 `action` values the core acts on: `review` and `recheck` (jobs). Every other action is shown and produces at most a
@@ -232,7 +233,7 @@ configured absolute path on the host for a repo that does not carry one. The doc
 **Prepare — done by Cleave's code, not by the model.** The preparation step is the only part of a review that needs
 the network and the token, so the daemon does it and hands the model a ready run directory:
 
-1. In the review clone (`${HOME}/CleaveData/reviewer/repos/<repo_id>`, a plain clone owned by Cleave), fetch
+1. In the review clone (`${HOME}/CleaveData/reviewer/repos/<project_id>/<repo_id>`, a plain clone owned by Cleave), fetch
    `origin/<base_branch>` and switch the clone to it, detached. Fetch the PR head through the forge reader's ref
    (GitHub: `+pull/N/head:refs/pr-review/N`); check the fetched SHA equals the head from the API. Git gets the
    token through the environment of that one subprocess (e.g. `GIT_ASKPASS`, or an `http.extraheader` passed as
@@ -434,9 +435,10 @@ resolved thread is gone from the unresolved list, each review-body answer is mar
 - PRs waiting on others appear only on the dashboard.
 - **First poll** (empty board): author-side turns that already exist are recorded as the baseline without a Telegram
   line; `review` and `recheck` turns are queued as on any later poll.
-- **The ticket pipeline's own PRs** (a PR number that some ticket workspace's `state.json` records as its
+- **The ticket pipeline's own PRs** (a PR number that an active ticket workspace's `state.json` records as its
   `pr_number`) show on the board labelled «конвейер» and produce no turn lines: the pipeline's own PR review stage
-  already handles their threads. They use the same token, so they look like the operator's PRs.
+  already handles their threads. Once the ticket is DONE the pipeline stops watching the PR, so it becomes an
+  ordinary PR of the operator's: turn lines resume (operator's decision, 2026-11-13). They use the same token, so they look like the operator's PRs.
 - **A turn that disappears** while its job is queued or its report is unposted (for example the operator reviewed
   the PR from the laptop) cancels the queued job and marks the report stale; a reply to it then answers «устарело».
 
@@ -528,7 +530,9 @@ heading, and numbers are never reused).
   job state (queued / running / done / posted / failed / deferred / superseded / skipped), counts, age.
 - **Detail:** the rendered report, each number's state (posted / ticked / open), the posted-ledger links, the job
   history (duration, cost from the stream result), the Telegram message link if any.
-- **Actions:** Review now, Skip this head, the switches. **No posting from the dashboard** — Telegram is the one
+- **Actions:** Review now, Skip this head, the switches. Review now and Skip refuse a request another site's page
+  could send from the operator's browser (no JSON content type, or a cross-site `Origin` / `Sec-Fetch-Site`):
+  403, operator's decision 2026-11-13, because Review now starts a model run. **No posting from the dashboard** — Telegram is the one
   posting path (see Security). A repo whose base branch has no process document cannot enable reviews; the tab says
   why.
 

@@ -509,6 +509,12 @@ def _parse_reviewer_section(
 
     if vcs.provider != "github":
         raise fail("reviewer mode supports only GitHub repos in this version", "reviewer")
+    for name, least in (("poll_interval_seconds", 60), ("quiet_minutes", 0), ("max_files_auto", 1)):
+        value = getattr(reviewer, name)
+        # bool is an int subclass; `true` is never a count.
+        if not isinstance(value, int) or isinstance(value, bool) or value < least:
+            field_name = f"reviewer.{name}"
+            raise fail(f"{field_name} must be an integer of at least {least}", field_name)
     for part_name in ("readiness", "poster"):
         kind = parts[part_name].kind
         if kind != "command":

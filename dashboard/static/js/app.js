@@ -5,6 +5,7 @@ import { esc, stateBadgeHtml } from './helpers.js';
 import { renderBoard } from './board.js';
 import { renderDetail } from './detail.js';
 import { renderEventsHtml } from './events.js';
+import { renderReviews } from './reviews.js';
 import { setMode, showConfirmDialog } from './actions.js';
 
 const state = {
@@ -33,6 +34,17 @@ function showBoard(projectId, fromHash) {
   scheduleAutoRefresh();
   doRenderBoard();
   if (!fromHash) setHash(projectId ? `#/board/${projectId}` : '#/board');
+}
+
+function showReviews(fromHash) {
+  state.view = 'reviews';
+  state.ticketId = null;
+  document.getElementById('view-title').textContent = 'Reviews';
+  document.getElementById('toolbar-eventlog-controls').style.display = 'none';
+  updateActiveNav('nav-reviews');
+  scheduleAutoRefresh();
+  renderReviews();
+  if (!fromHash) setHash('#/reviews');
 }
 
 function showEventLog(fromHash) {
@@ -69,10 +81,11 @@ function showDetail(ticketId, fromHash) {
 
 function routeFromHash() {
   const h = location.hash || '#/board';
-  const m = h.match(/^#\/(board|eventlog|settings|ticket)(?:\/(.+))?$/);
+  const m = h.match(/^#\/(board|reviews|eventlog|settings|ticket)(?:\/(.+))?$/);
   if (!m) { showBoard(null, true); return; }
   const [, view, arg] = m;
   if (view === 'board') showBoard(arg || null, true);
+  else if (view === 'reviews') showReviews(true);
   else if (view === 'eventlog') showEventLog(true);
   else if (view === 'settings') showSettings(true);
   else if (view === 'ticket' && arg) showDetail(arg, true);
@@ -226,6 +239,7 @@ function scheduleAutoRefresh() {
   if (cb && cb.checked) {
     state.timer = setInterval(() => {
       if (state.view === 'board') doRenderBoard();
+      else if (state.view === 'reviews') renderReviews();
       else if (state.view === 'eventlog') doRenderEventLog();
       updateDaemonStatus();
     }, 30000);
@@ -236,6 +250,7 @@ function scheduleAutoRefresh() {
 async function init() {
   // Bind nav
   document.getElementById('nav-board').addEventListener('click', () => showBoard(null));
+  document.getElementById('nav-reviews').addEventListener('click', () => showReviews());
   document.getElementById('nav-eventlog').addEventListener('click', () => showEventLog());
   document.getElementById('nav-settings').addEventListener('click', () => showSettings());
 
@@ -262,6 +277,7 @@ async function init() {
   // Bind refresh
   document.getElementById('toolbar-refresh-btn').addEventListener('click', () => {
     if (state.view === 'board') doRenderBoard();
+    else if (state.view === 'reviews') renderReviews();
     else if (state.view === 'eventlog') doRenderEventLog();
     else if (state.view === 'detail') renderDetail(state.ticketId, (pid) => showBoard(pid));
   });

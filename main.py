@@ -8,14 +8,17 @@ and starts the orchestrator.
 from __future__ import annotations
 
 import argparse
+import asyncio
 import logging
 import sys
+from collections.abc import Awaitable, Coroutine
 from typing import Callable
 
 logger = logging.getLogger(__name__)
 
-from config.schemas import RepoConfig
+from config.schemas import GlobalConfig, LoadedProject, RepoConfig
 from integrations.base.vcs import VCSInterface
+from orchestrator.reviewer.service import RepoContext, _where
 
 
 def _build_tracker_for_project(cfg, project_id, on_auth_failure=None):
@@ -89,6 +92,113 @@ def _build_vcs_adapter(
             on_auth_failure=on_auth_failure,
         )
     return None
+
+
+def _reviewer_contexts(
+    global_config: GlobalConfig,
+    projects: dict[str, LoadedProject],
+    on_auth_failure: Callable[[str], Callable[[int], None]],
+    *,
+    dry_run: bool = False,
+) -> list[RepoContext]:
+    """One reviewer context per loaded repo with reviews enabled (GitHub only, checked at load).
+
+    Each builds its own GitHub adapter, reporting a 401/403 through `on_auth_failure(key)` on the
+    repo's `forge:<project>/<repo>` credential. A repo without a forge token is skipped with a
+    warning. A dry run gets none: the reviewer would clone, send lines and write reviewer.db.
+    """
+    if dry_run:
+        if any(r.reviewer.enabled for p in projects.values() for r in p.repos.values()):
+            print("  Reviewer: off (dry-run)")
+        return []
+
+    from orchestrator.reviewer.clone import ReviewClone, github_clone_url
+    from orchestrator.reviewer.db import reviewer_db_path
+    from orchestrator.reviewer.forge_github import GitHubForgeReader
+    from orchestrator.reviewer.readiness import CommandReadiness
+
+    clones_dir = reviewer_db_path(global_config.reviewer).parent / "repos"
+    contexts: list[RepoContext] = []
+    for project_id, project in projects.items():
+        for repo_id, repo_cfg in project.repos.items():
+            cfg = repo_cfg.reviewer
+            if not cfg.enabled:
+                continue
+            adapter = _build_vcs_adapter(
+                repo_cfg, on_auth_failure=on_auth_failure(f"forge:{project_id}/{repo_id}"),
+            )
+            if adapter is None:
+                logger.warning(
+                    "Reviews enabled for %s/%s, but it has no forge token; not reviewed",
+                    project_id, repo_id,
+                )
+                continue
+            github = repo_cfg.vcs.github
+            contexts.append(RepoContext(
+                project_id, repo_id, cfg,
+                clone=ReviewClone(
+                    clones_dir / project_id / repo_id, github_clone_url(github.owner, github.repo),
+                    cfg.base_branch, github.token,
+                ),
+                readiness=CommandReadiness(
+                    cfg.readiness, repo=f"{github.owner}/{github.repo}", token=github.token,
+                ),
+                forge=GitHubForgeReader(adapter),
+            ))
+    return contexts
+
+
+def _reviewer_send_line(
+    notifier, global_config: GlobalConfig, projects: dict[str, LoadedProject],
+) -> Callable[[str], Awaitable[None]] | None:
+    """Sends a reviewer line to the reviewer chat, else the operator chat; a failed send raises.
+
+    None when there is no target (no Telegram, or no chat id): then no line counts as delivered.
+    """
+    from integrations.telegram.resolve import operator_chat_id
+
+    chat_id = global_config.reviewer.telegram_chat_id or operator_chat_id(global_config, projects)
+    if notifier is None or not chat_id:
+        return None
+
+    async def send(text: str) -> None:
+        await notifier.send_message(chat_id, text)
+
+    return send
+
+
+def _start_background(name: str, coro: Coroutine) -> asyncio.Task:
+    """A background task that logs, once, if it ends on an exception: else it would stop silently.
+
+    Logged with the exception's class and raising file:line only: its message can carry
+    subprocess stderr, so a token. A cancelled task or a clean return is not logged.
+    """
+    def report(task: asyncio.Task) -> None:
+        if not task.cancelled() and task.exception() is not None:
+            logger.error("%s stopped unexpectedly: %s", name, _where(task.exception()))
+
+    task = asyncio.create_task(coro)
+    task.add_done_callback(report)
+    return task
+
+
+async def _stop_background(
+    background: dict[str, tuple[asyncio.Task | None, asyncio.Event]], timeout: float,
+) -> None:
+    """Set every stop event, then wait for all the tasks under one budget; cancel the late ones.
+
+    A None task (the reviewer, with no repo to review) is skipped. A task that raised never
+    stops the rest: the callback of _start_background has logged it.
+    """
+    names = {task: name for name, (task, _) in background.items() if task is not None}
+    for _, stop in background.values():
+        stop.set()
+    _, pending = await asyncio.wait(set(names), timeout=timeout)
+    for task in pending:
+        logger.warning("%s did not stop within %gs; cancelled", names[task], timeout)
+        task.cancel()
+    if pending:
+        await asyncio.wait(pending)
 
 
 def _quiet_http_loggers() -> None:
@@ -519,6 +629,32 @@ def main(argv: list[str] | None = None) -> int:
     switches.add_listener(_on_switch_changed)
     print(f"  Switches: tickets={switches.get('tickets')}, reviews={switches.get('reviews')}")
 
+    # Reviewer: polls each repo with reviewer.enabled. Repos added by hot reload wait for a restart.
+    from orchestrator.reviewer.service import ReviewerService
+    from orchestrator.reviewer.store import ReviewerStore
+
+    reviewer = None
+    reviewer_contexts = _reviewer_contexts(
+        global_config, projects, _auth_reporter, dry_run=args.dry_run,
+    )
+    if reviewer_contexts:
+        def _pipeline_prs(project_id: str, repo_id: str) -> set[int]:
+            """The PRs the ticket pipeline has open for this repo."""
+            return {
+                ws.state.pr_number for ws in orchestrator.get_active_workspaces()
+                if ws.state.company_id == project_id and ws.state.repo_id == repo_id
+                and ws.state.pr_number is not None
+            }
+
+        reviewer = ReviewerService(
+            reviewer_contexts,
+            ReviewerStore(connect(reviewer_db_path(global_config.reviewer))),
+            switches, credential_health.failing,
+            _reviewer_send_line(notifier, global_config, projects), _pipeline_prs,
+            event_bus=event_bus,
+        )
+        print(f"  Reviewer: {len(reviewer_contexts)} repo(s)")
+
     # Initialize command handler for Telegram free-text control
     command_handler = None
     if notifier is not None:
@@ -588,7 +724,14 @@ def main(argv: list[str] | None = None) -> int:
 
         # Credential health checks run in the background, with or without the dashboard.
         credential_stop = asyncio.Event()
-        credential_task = asyncio.create_task(credential_health.run(credential_stop))
+        credential_task = _start_background(
+            "Credential health", credential_health.run(credential_stop),
+        )
+        reviewer_stop = asyncio.Event()
+        reviewer_task = (
+            _start_background("Reviewer", reviewer.run(reviewer_stop))
+            if reviewer is not None else None
+        )
 
         # Init runtime settings table (model picker).
         import aiosqlite as _aiosqlite
@@ -682,6 +825,7 @@ def main(argv: list[str] | None = None) -> int:
                 atlas_fn=_production_atlas_fn,
                 switches=switches,
                 credential_health=credential_health,
+                reviewer=reviewer,
             )
             config = uvicorn.Config(
                 app, host=dash_config.host, port=dash_config.port,
@@ -721,13 +865,10 @@ def main(argv: list[str] | None = None) -> int:
             await orchestrator.run()
         finally:
             # First, while Telegram can still deliver a line from a check in flight.
-            credential_stop.set()
-            try:
-                await asyncio.wait_for(credential_task, timeout=5.0)
-            except asyncio.TimeoutError:  # wait_for has cancelled the task
-                logging.getLogger(__name__).warning(
-                    "Credential health did not stop within 5s; cancelled",
-                )
+            await _stop_background({
+                "Credential health": (credential_task, credential_stop),
+                "Reviewer": (reviewer_task, reviewer_stop),
+            }, timeout=5.0)
             if tg_active:
                 try:
                     await notifier.stop_polling()

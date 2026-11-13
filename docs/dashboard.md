@@ -23,7 +23,7 @@ If `projects` is empty when the daemon starts, the dashboard still comes up so y
 
 ## Sidebar
 
-- **Board** / **Event Log** / **Settings** — top-level navigation
+- **Board** / **Reviews** / **Event Log** / **Settings** — top-level navigation
 - **Projects** — auto-derived from workspaces and configured projects; click one to filter the Board to that project
 - **Daemon** — live status block: mode (auto/manual), uptime, current global model
 
@@ -31,7 +31,7 @@ If `projects` is empty when the daemon starts, the dashboard still comes up so y
 
 ## Toolbar
 
-- **View title** — Board / Ticket detail / Event Log / Settings
+- **View title** — Board / Reviews / Ticket detail / Event Log / Settings
 - **Stats** — count of active vs done workspaces (Board view)
 - **Mode indicator** — `AUTO` / `MANUAL`, click-through to toggle
 - **Hide done** — checkbox to remove DONE/ARCHIVED workspaces from the Board
@@ -93,6 +93,59 @@ Credentials are re-checked in the background every 15 minutes, and immediately a
 - `⚠️ <label>: no access (HTTP 403). <fix>`
 - `✅ <label>: working again.`
 - `⏳ The claude login on the host expires 2026-11-24 12:00. Log in again on the host in a GUI terminal.`
+
+---
+
+## Reviews view
+
+**Reviews** in the sidebar (`#/reviews`) shows the reviews board of every repo with `reviewer.enabled: true` in its repo YAML: the open PRs that involve you, and whose turn it is on each. With no such repo the view says `No repo has reviews enabled.` It refreshes with the toolbar's **Refresh** and **Auto** like the Board.
+
+Nothing is posted from the dashboard: Telegram is the only posting path. In this version jobs stay `queued`; the review runner comes in a later version.
+
+### Reviews switch panel
+
+The same pill panel as the Board's [Tickets switch panel](#tickets-switch-panel), for reviews: one global pill (`Reviews: running ▶` or `Reviews: paused ⏸`) plus one pill per repo with reviews enabled. While reviews are paused, the board keeps refreshing and the [reviewer lines](telegram.md#reviewer-lines) are still sent, but no job is queued automatically. **Review now** still queues one.
+
+### Repo status
+
+Each repo has a header `<project>/<repo> · <status>`; for every status but `ok`, the line under it gives the reason:
+
+| Status | Meaning |
+|---|---|
+| `new` | Not polled yet |
+| `ok` | The last poll succeeded |
+| `doc_missing` | The base branch has no process document (`reviewer.process.doc`). The board refreshes, but no job is queued. The line reads `reviews are off: <doc> not on <base>` |
+| `token_failing` | Credential health reports the repo's forge token as failing (see the [credential strip](#credential-strip)). The repo is not read until the token passes again |
+| `readiness_failed` | The readiness command failed, timed out or printed something that is not a board snapshot |
+| `error` | Updating the review clone or a GitHub read failed |
+
+Each repo is polled every `reviewer.poll_interval_seconds` (default 300, at least 60). A failed poll keeps the last board and backs off: the next try comes after twice the poll interval, the delay doubles after each further failure up to 1 hour (never less than the poll interval), and the first poll that succeeds resets it.
+
+### My turn / Waiting on others
+
+Under each repo header there are two tables:
+
+- **My turn** — PRs where you have a turn (review, re-check, merge, …), except the ticket pipeline's own PRs
+- **Waiting on others** — every other PR on the board, the pipeline's PRs included (marked `pipeline`)
+
+Columns: the PR number (links to GitHub), title, ticket key, your roles, the turns (yours in bold, others as `login: action`), the state of the PR's latest job (`queued`, `running`, `done`, `posted`, `failed`, `deferred`, `superseded`, `skipped`, `cancelled`, `stale`; `skipped` also when the PR has no job and you skipped its current head), and when the PR last changed.
+
+A review is queued automatically when your turn is a review, the head has been quiet for `reviewer.quiet_minutes` (default 30), the head is not skipped, reviews are running and the process document is on the base branch. A PR with at least `reviewer.max_files_auto` (default 40) changed files is not reviewed automatically: Telegram gets a line instead.
+
+Row buttons:
+
+| Button | When it appears | What it does |
+|---|---|---|
+| **Review now** | Every row | Queues a review at the PR's current head, whatever the quiet window, the PR's size, a skip or the reviews switch. Refused with `already queued` when a review at that head is queued or running |
+| **Skip** | Your turn is a review and the current head is not skipped yet, or a review is queued at it (**Review now** after a skip) | Skips this head: its queued review is dropped and none is queued for it again. A new push makes a new head, reviewed as usual |
+
+Polls, new turns and job changes are also recorded in the [Event Log](#event-log-view) as `reviewer_poll`, `reviewer_poll_failed`, `reviewer_turn` and `reviewer_job` events (not in its type filter yet).
+
+### Review clone
+
+Each reviewed repo has a Cleave-owned single-branch clone of its base branch at `<reviewer data dir>/repos/<project_id>/<repo_id>` (default `~/CleaveData/reviewer/repos/<project_id>/<repo_id>`), created on the first poll. The forge token reaches git only through the environment of that one git process: it is never written to `.git/config` or the keychain.
+
+Repos added by hot reload (the **+ New Project** wizard) are not on the Reviews view until the daemon restarts.
 
 ---
 
@@ -191,6 +244,7 @@ Read endpoints (`GET`):
 - `/api/projects/{id}/tickets` — ticket history per project
 - `/api/health/credentials` — credential states (`?refresh=1` re-checks now)
 - `/api/switches` — running/paused switches (also `PUT` with `{"mode": "tickets"|"reviews", "state": "running"|"paused", "scope": "*"|"<project>/<repo>"}`)
+- `/api/reviews` — per repo with reviews enabled: status, reason, poll times and the `my_turn` / `waiting` PRs (the `/api/reviews` routes exist only when at least one repo has reviews enabled)
 - `/api/workspaces` — every workspace from disk, with state.json + report/meta listings
 - `/api/workspaces/{ticket_id}/report/{filename}?folder=reports|meta|logs` — fetch one file
 - `/api/settings/model` — global default model (also `PUT` to change)
@@ -205,6 +259,7 @@ Write endpoints (`POST`):
 - `/api/workspaces/{id}/rerun` — DONE-only: re-clone source, refresh ticket data from tracker, restart pipeline from ANALYSIS; body `{ "reason": "<non-empty string>" }`
 - `/api/workspaces/{id}/clear-gradle-and-retry` — server-side validates the workspace is FAILED and the error matches the AAPT2 signature before wiping caches
 - `/api/projects/create` and `/api/projects/validate-step` — the wizard's two endpoints (validate one step against live APIs, then commit)
+- `/api/reviews/review-now` and `/api/reviews/skip` — body `{"scope": "<project>/<repo>", "number": <PR number>}`; 404 for a PR not on the board, 409 from review-now when a review at that head is already queued or running; 403 `cross-site request refused` unless the body is sent as `Content-Type: application/json` and any `Origin` / `Sec-Fetch-Site` header says the request comes from the dashboard itself (so another site open in the browser cannot queue a review; curl, which sends neither header, works)
 
 ---
 

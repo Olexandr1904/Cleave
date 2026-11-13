@@ -33,7 +33,7 @@ Per-ticket sandbox under `workspaces.base_dir`, no shared state, file-based stat
 - **Telegram** — escalations, reply-to-unblock, free-text intent classification, inline action buttons. ([commands reference](docs/telegram.md))
 
 ### Dashboard
-Embedded web UI at [http://localhost:8080](http://localhost:8080) — Board, Ticket Detail with reports viewer, Event Log, Settings (model picker), credential strip, Tickets switch panel, Take Control, and a **+ New Project** wizard that validates credentials live and writes config for you. ([dashboard reference](docs/dashboard.md))
+Embedded web UI at [http://localhost:8080](http://localhost:8080) — Board, Reviews (the PRs that involve you on repos with reviewer mode on), Ticket Detail with reports viewer, Event Log, Settings (model picker), credential strip, Tickets switch panel, Take Control, and a **+ New Project** wizard that validates credentials live and writes config for you. ([dashboard reference](docs/dashboard.md))
 
 ### Operations
 Auto / manual mode, approve / reject / retry from dashboard or Telegram, DEFERRED auto-resume on quota or transient errors, stage verifier (catches silent agent failures), project hot-reload (no restart). 3-level config cascade — `global.yaml` → `project.yaml` → `repo.yaml`. ([config docs](docs/features/configuration-cascade.md))

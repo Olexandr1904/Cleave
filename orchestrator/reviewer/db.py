@@ -11,6 +11,17 @@ MIGRATIONS: list[str] = [
     "CREATE TABLE switches (mode TEXT NOT NULL, scope TEXT NOT NULL, "
     "state TEXT NOT NULL, changed_at TEXT NOT NULL, changed_by TEXT NOT NULL, "
     "PRIMARY KEY (mode, scope))",
+    "CREATE TABLE board_prs (scope TEXT NOT NULL, number INTEGER NOT NULL, data TEXT NOT NULL, "
+    "PRIMARY KEY (scope, number)); "
+    "CREATE TABLE repo_state (scope TEXT PRIMARY KEY, data TEXT NOT NULL); "
+    "CREATE TABLE jobs (id TEXT PRIMARY KEY, scope TEXT NOT NULL, number INTEGER NOT NULL, "
+    "kind TEXT NOT NULL, head_sha TEXT NOT NULL, key TEXT NOT NULL, state TEXT NOT NULL, "
+    "reason TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL); "
+    "CREATE INDEX jobs_pr ON jobs (scope, number); "
+    "CREATE TABLE skips (scope TEXT NOT NULL, number INTEGER NOT NULL, head_sha TEXT NOT NULL, "
+    "created_at TEXT NOT NULL, PRIMARY KEY (scope, number, head_sha)); "
+    "CREATE TABLE notices (scope TEXT NOT NULL, number INTEGER NOT NULL, kind TEXT NOT NULL, "
+    "key TEXT NOT NULL, sent_at TEXT NOT NULL, PRIMARY KEY (scope, number, kind, key))",
 ]
 
 

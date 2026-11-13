@@ -98,3 +98,30 @@ export async function setSwitch(mode, state, scope = '*') {
   if (!resp.ok) throw new Error(data.error || `HTTP ${resp.status}`);
   return data;
 }
+
+export async function loadReviews() {
+  const resp = await fetch('/api/reviews');
+  // The review routes exist only when some repo has reviews enabled.
+  if (resp.status === 404) return { repos: [] };
+  if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+  return resp.json();
+}
+
+async function postReviewAction(url, scope, number) {
+  const resp = await fetch(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ scope, number }),
+  });
+  const data = await resp.json().catch(() => ({}));
+  if (!resp.ok) throw new Error(data.error || `HTTP ${resp.status}`);
+  return data;
+}
+
+export async function reviewNow(scope, number) {
+  return postReviewAction('/api/reviews/review-now', scope, number);
+}
+
+export async function skipReview(scope, number) {
+  return postReviewAction('/api/reviews/skip', scope, number);
+}

@@ -1109,3 +1109,24 @@
 .switch-pill.running { background: #1a3d1a; color: #56d364; border-color: #2ea043; }
 .switch-pill.paused { background: #3d3318; color: #e3b341; border-color: #9e6a03; }
 .switch-pill.inherited { opacity: 0.6; border-style: dashed; cursor: default; }
+
+/* Reviews tab (repo groups and badges reuse the Board's .project-group and .state-badge) */
+.reviews-switches { padding: 12px 16px 0; }
+.reviews-reason { color: #e3b341; font-size: 12px; margin-bottom: 8px; }
+.reviews-group-title { color: #c9d1d9; font-size: 12px; font-weight: 600; margin: 8px 0 4px; }
+.reviews-empty { color: #6e7681; font-size: 12px; margin-bottom: 8px; }
+.reviews-table { width: 100%; border-collapse: collapse; font-size: 12px; margin-bottom: 8px; }
+.reviews-table th {
+  text-align: left;
+  color: #8b949e;
+  font-size: 11px;
+  font-weight: 600;
+  padding: 4px 8px;
+  border-bottom: 1px solid #30363d;
+}
+.reviews-table td { padding: 5px 8px; border-bottom: 1px solid #21262d; vertical-align: top; }
+.reviews-table tr:hover td { background: #161b22; }
+.reviews-table a { color: #58a6ff; text-decoration: none; }
+.reviews-table a:hover { text-decoration: underline; }
+.reviews-actions { text-align: right; white-space: nowrap; }
+.reviews-actions button + button { margin-left: 4px; }

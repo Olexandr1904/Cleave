@@ -107,6 +107,14 @@ export async function loadReviews() {
   return resp.json();
 }
 
+export async function loadReviewDetail(scope, number) {
+  const qs = `scope=${encodeURIComponent(scope)}&number=${encodeURIComponent(number)}`;
+  const resp = await fetch(`/api/reviews/pr?${qs}`);
+  const data = await resp.json().catch(() => ({}));
+  if (!resp.ok) throw new Error(data.error || `HTTP ${resp.status}`);
+  return data;
+}
+
 async function postReviewAction(url, scope, number) {
   const resp = await fetch(url, {
     method: 'POST',

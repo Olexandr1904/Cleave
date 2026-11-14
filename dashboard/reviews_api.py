@@ -1,4 +1,5 @@
-"""Dashboard routes for the Reviews tab: the board, Review now and Skip. Nothing here posts."""
+"""Dashboard routes for the Reviews tab: the board, a PR's detail, Review now and Skip. Nothing here
+posts."""
 from __future__ import annotations
 
 from typing import Any
@@ -17,15 +18,19 @@ def _job(job: Job | None) -> dict | None:
     return {"id": job.id, "kind": job.kind, "state": job.state, "head": job.head_sha[:9]}
 
 
-def _pr(row: BoardRow, job: Job | None, skipped: bool) -> dict:
+def _pr(row: BoardRow, repo: dict) -> dict:
+    job = repo["jobs"].get(row.number)
     return {
         "number": row.number, "title": row.title, "url": row.url, "ticket_key": row.ticket_key,
         "roles": row.roles,
         "my_turns": list(dict.fromkeys(row.my_actions)),  # one address_review per reviewer
         "other_turns": [{"login": t["login"], "action": t["action"]} for t in row.other_turns],
         "pipeline": row.pipeline, "draft": row.draft, "changed_files": row.changed_files,
-        "head": row.head_sha[:9], "job": _job(job), "last_change": row.last_change,
-        "skipped": skipped,  # the current head is skipped
+        "head": row.head_sha[:9],
+        "job": None if job is None else {**_job(job), **repo["job_info"][row.number]},
+        "last_change": row.last_change,
+        "skipped": row.number in repo["skipped"],  # the current head is skipped
+        "large": row.number in repo["large"],  # not reviewed automatically
     }
 
 
@@ -33,7 +38,7 @@ def _repo(repo: dict) -> dict:
     my_turn, waiting = [], []
     for row in sorted(repo["rows"], key=lambda r: r.number, reverse=True):
         group = my_turn if row.my_turns and not row.pipeline else waiting
-        group.append(_pr(row, repo["jobs"].get(row.number), row.number in repo["skipped"]))
+        group.append(_pr(row, repo))
     return {
         "scope": repo["scope"], "status": repo["status"], "reason": repo["reason"],
         "last_poll_at": repo["last_poll_at"], "next_poll_at": repo["next_poll_at"],
@@ -77,6 +82,19 @@ def build_review_routes(service: Any) -> list[Route]:
     async def get_reviews(request: Request) -> JSONResponse:
         return JSONResponse({"repos": [_repo(r) for r in service.overview()]})
 
+    async def get_pr(request: Request) -> JSONResponse:
+        scope = request.query_params.get("scope")
+        if not scope:
+            return JSONResponse({"error": "scope is required"}, status_code=400)
+        try:
+            number = int(request.query_params.get("number", ""))
+        except ValueError:
+            return JSONResponse({"error": "number must be an integer"}, status_code=400)
+        try:
+            return JSONResponse(service.detail(scope, number))
+        except LookupError as e:
+            return JSONResponse({"error": str(e)}, status_code=404)
+
     async def post_review_now(request: Request) -> JSONResponse:
         target = await _target(request)
         if isinstance(target, JSONResponse):
@@ -101,6 +119,7 @@ def build_review_routes(service: Any) -> list[Route]:
 
     return [
         Route("/api/reviews", get_reviews, methods=["GET"]),
+        Route("/api/reviews/pr", get_pr, methods=["GET"]),
         Route("/api/reviews/review-now", post_review_now, methods=["POST"]),
         Route("/api/reviews/skip", post_skip, methods=["POST"]),
     ]

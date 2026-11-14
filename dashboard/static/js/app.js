@@ -18,6 +18,12 @@ const state = {
 };
 
 // ── Navigation ──
+// The Board's "Hide done" and "+ New Project" are hidden on the Reviews tab, where they do nothing.
+function showBoardControls(show) {
+  document.querySelector('label.toggle-done').style.display = show ? '' : 'none';
+  document.getElementById('new-project-btn').style.display = show ? '' : 'none';
+}
+
 function setHash(h) {
   state._suppressHashChange = true;
   if (location.hash !== h) location.hash = h;
@@ -30,6 +36,7 @@ function showBoard(projectId, fromHash) {
   state.ticketId = null;
   document.getElementById('view-title').textContent = projectId ? `Board: ${projectId}` : 'Board';
   document.getElementById('toolbar-eventlog-controls').style.display = 'none';
+  showBoardControls(true);
   updateActiveNav(projectId ? `nav-proj-${projectId}` : 'nav-board');
   scheduleAutoRefresh();
   doRenderBoard();
@@ -41,6 +48,7 @@ function showReviews(fromHash) {
   state.ticketId = null;
   document.getElementById('view-title').textContent = 'Reviews';
   document.getElementById('toolbar-eventlog-controls').style.display = 'none';
+  showBoardControls(false);
   updateActiveNav('nav-reviews');
   scheduleAutoRefresh();
   renderReviews();
@@ -52,6 +60,7 @@ function showEventLog(fromHash) {
   state.ticketId = null;
   document.getElementById('view-title').textContent = 'Event Log';
   document.getElementById('toolbar-eventlog-controls').style.display = 'flex';
+  showBoardControls(true);
   updateActiveNav('nav-eventlog');
   scheduleAutoRefresh();
   doRenderEventLog();
@@ -63,6 +72,7 @@ function showSettings(fromHash) {
   state.ticketId = null;
   document.getElementById('view-title').textContent = 'Settings';
   document.getElementById('toolbar-eventlog-controls').style.display = 'none';
+  showBoardControls(true);
   updateActiveNav('nav-settings');
   stopAutoRefresh();
   import('./settings.js').then(({ renderSettings }) => renderSettings());
@@ -73,6 +83,7 @@ function showDetail(ticketId, fromHash) {
   state.view = 'detail';
   state.ticketId = ticketId;
   document.getElementById('toolbar-eventlog-controls').style.display = 'none';
+  showBoardControls(true);
   document.getElementById('view-title').textContent = `Ticket: ${ticketId}`;
   stopAutoRefresh();
   renderDetail(ticketId, (projectId) => showBoard(projectId));

@@ -93,6 +93,9 @@ reviewer:
     run_dir: "tools/review/runs/PR_{pr}"             # where the document expects its artifacts
     replies_plan: "tools/threads/runs/PR_{pr}/replies_{head9}.json"
     worktree_dir: "../review-wt/PR_{pr}"             # relative to the review clone
+    # Prepare steps run on the host with HOME, outside the session's sandbox. A step that builds or runs the
+    # PR's own code (`cd {worktree} && ./gradlew ...`) runs PR-authored code there. The config guard stops only
+    # scripts in the session-writable directories and launcher operands in the worktree.
     prepare_steps:
       - ["python3", "tools/review/anchors.py", "{pr}", "--worktree", "{worktree}", "--base", "{merge_base}"]
     helper_scripts: ["tools/review/*.py"]            # python3 targets the model may run

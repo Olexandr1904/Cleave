@@ -1,5 +1,6 @@
 # tests/unit/test_reviewer_forge_github.py
 from __future__ import annotations
+import dataclasses
 from unittest.mock import AsyncMock
 import httpx, pytest, respx
 from integrations.github.github_adapter import GitHubAdapter
@@ -122,3 +123,66 @@ async def test_reviewed_by_cached_per_login_and_updated_at():
 async def test_reviewed_by_skips_review_without_user():
     respx.get(f"{BASE}/pulls/5/reviews").respond(200, json=[{"user": None, "state": "APPROVED"}])
     assert await reader().reviewed_by(5, "octo", "t") is False
+
+
+@respx.mock
+async def test_pr_full():
+    route = respx.get(f"{BASE}/pulls/1712").respond(200, json={
+        **PR, "body": None, "base": {"ref": "develop", "sha": "b" * 40}, "additions": 120, "deletions": 30})
+    r = reader()
+    full = await r.pr_full(1712)
+    assert dataclasses.asdict(full) == {
+        "number": 1712, "title": "Fix cart sync", "body": "", "url": "https://github.com/acme-org/acme-app/pull/1712",
+        "state": "open", "head_sha": "a" * 40, "base": "develop", "additions": 120, "deletions": 30,
+        "changed_files": 14}
+    await r.pr_full(1712)
+    assert route.call_count == 2   # uncached
+
+
+@respx.mock
+async def test_comments_all_pages_and_shapes():
+    inline = respx.get(f"{BASE}/pulls/1712/comments")
+    inline.side_effect = [
+        httpx.Response(200, json=[{"id": i, "user": {"login": "octo2"}, "path": "app/Cart.kt", "line": i + 1,
+                                   "original_line": 1, "body": f"c{i}", "diff_hunk": "@@"} for i in range(100)]),
+        httpx.Response(200, json=[{"id": 100, "user": None, "path": "app/Sync.kt", "line": None,
+                                   "original_line": 8, "body": "outdated", "diff_hunk": "@@"}])]
+    respx.get(f"{BASE}/pulls/1712/reviews").respond(200, json=[
+        {"user": {"login": "octo2"}, "state": "CHANGES_REQUESTED", "body": "See inline"},
+        {"user": {"login": "octo3"}, "state": "APPROVED", "body": ""},
+        {"user": None, "state": "COMMENTED", "body": "lgtm"}])
+    respx.get(f"{BASE}/issues/1712/comments").respond(200, json=[
+        {"user": {"login": "octo-author"}, "body": "Ready"}, {"user": None, "body": "old"}])
+    c = await reader().comments(1712)
+    assert [call.request.url.params["page"] for call in inline.calls] == ["1", "2"]
+    assert len(c.inline) == 101
+    assert c.inline[0] == {"login": "octo2", "path": "app/Cart.kt", "line": 1, "id": 0, "body": "c0"}
+    assert c.inline[100] == {"login": "ghost", "path": "app/Sync.kt", "line": 8, "id": 100, "body": "outdated"}
+    assert c.reviews == ({"login": "octo2", "state": "CHANGES_REQUESTED", "body": "See inline"},
+                         {"login": "ghost", "state": "COMMENTED", "body": "lgtm"})
+    assert c.conversation == ({"login": "octo-author", "body": "Ready"}, {"login": "ghost", "body": "old"})
+
+
+@respx.mock
+async def test_pr_full_401_is_forge_error():
+    respx.get(f"{BASE}/pulls/1712").respond(401, json={"message": "Bad credentials tok"})
+    with pytest.raises(ForgeError, match="^GitHub 401$"):
+        await reader().pr_full(1712)
+
+
+# --- Code-review fix wave 2 ---
+
+@pytest.mark.parametrize("respond, text, unavailable", [
+    (lambda route: route.respond(502, text="upstream"), "GitHub 502", True),
+    (lambda route: route.respond(404, json={"message": "Not Found"}), "GitHub 404", False),
+    (lambda route: route.mock(side_effect=httpx.ReadTimeout("timed out")), "ReadTimeout", True),
+    (lambda route: route.mock(side_effect=httpx.ConnectError("refused")), "ConnectError", True),
+    (lambda route: route.respond(200, text="<html>not json</html>"), "JSONDecodeError", False),
+])
+@respx.mock
+async def test_forge_error_tells_whether_github_is_unavailable(monkeypatch, respond, text, unavailable):
+    monkeypatch.setattr("integrations.github.github_adapter.asyncio.sleep", AsyncMock())
+    respond(respx.get(f"{BASE}/pulls/9"))
+    with pytest.raises(ForgeError, match=f"^{text}$") as e:
+        await reader().pr_full(9)
+    assert e.value.unavailable is unavailable

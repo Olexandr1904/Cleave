@@ -274,7 +274,7 @@ async def check_telegram(token: str) -> ValidatorResult:
 
 
 # CLAUDE_CONFIG_DIR selects the login profile, so the check sees the pipeline's login.
-_CLAUDE_ENV_KEYS = ("HOME", "PATH", "LANG", "TMPDIR", "USER", "CLAUDE_CONFIG_DIR")
+CLAUDE_ENV_KEYS = ("HOME", "PATH", "LANG", "TMPDIR", "USER", "CLAUDE_CONFIG_DIR")
 
 
 def _kill_group(proc: asyncio.subprocess.Process) -> None:
@@ -298,7 +298,7 @@ async def check_claude_login(claude_bin: str, timeout_seconds: float = 30.0) -> 
             extra={"logged_in": None, "expires_at": None, "status": None},
         )
 
-    env = {k: os.environ[k] for k in _CLAUDE_ENV_KEYS if k in os.environ}
+    env = {k: os.environ[k] for k in CLAUDE_ENV_KEYS if k in os.environ}
     try:
         proc = await asyncio.create_subprocess_exec(
             claude_bin, "auth", "status", "--json",

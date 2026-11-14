@@ -45,6 +45,15 @@ class QuotaExhaustedError(RuntimeError):
         self.retry_at = retry_at
 
 
+class CLIError(RuntimeError):
+    """The CLI run ended in an error. result_error: the `result` text of its final result event when that
+    event has is_error true (the CLI's own error text, never the model's), else ""."""
+
+    def __init__(self, message: str, result_error: str = "") -> None:
+        super().__init__(message)
+        self.result_error = result_error
+
+
 def _classify_cli_error(stdout: str, stderr: str) -> QuotaExhaustedError | None:
     """Return a QuotaExhaustedError if stdout/stderr look like a quota hit, else None."""
     # Structured parse first: JSON stdout with is_error=true.
@@ -203,6 +212,9 @@ class ClaudeCodeAdapter(LLMInterface):
         effort: str = "",
         session_id: str = "",
         resume: bool = False,
+        env: dict[str, str] | None = None,
+        raw_allowed_tools: list[str] | None = None,
+        extra_args: list[str] | None = None,
     ) -> LLMResponse:
         """Execute a prompt with Claude Code in a specific workspace directory.
 
@@ -233,6 +245,12 @@ class ClaudeCodeAdapter(LLMInterface):
                 beyond cwd. Passed as --add-dir flags to the CLI. Used to
                 expose meta/ (ticket attachments, comments), a sibling of
                 the source/ cwd.
+            env: The subprocess's whole environment. None = inherit the
+                daemon's environment.
+            raw_allowed_tools: Claude Code permission rules passed verbatim
+                (e.g. "Bash(git diff:*)"), appended after the mapped
+                allowed_tools in the one --allowedTools value.
+            extra_args: CLI flags inserted right after -p.
 
         Returns:
             LLMResponse with the final text output and usage stats.
@@ -251,6 +269,9 @@ class ClaudeCodeAdapter(LLMInterface):
             add_dirs=add_dirs,
             effort=effort,
             session_id=session_id,
+            env=env,
+            raw_allowed_tools=raw_allowed_tools,
+            extra_args=extra_args,
         )
         if not (resume and session_id):
             return await self._run_cli(**kwargs)
@@ -351,6 +372,9 @@ class ClaudeCodeAdapter(LLMInterface):
         effort: str = "",
         session_id: str = "",
         resume: bool = False,
+        env: dict[str, str] | None = None,
+        raw_allowed_tools: list[str] | None = None,
+        extra_args: list[str] | None = None,
     ) -> LLMResponse:
         """Run claude CLI subprocess in stream-json mode.
 
@@ -361,7 +385,7 @@ class ClaudeCodeAdapter(LLMInterface):
         produces a clear "last activity at T-N seconds" trail. On timeout
         we dump the accumulated state to progress_log_path before raising.
         """
-        cmd = [self._claude_bin, "-p"]
+        cmd = [self._claude_bin, "-p", *(extra_args or [])]
 
         # System text goes to --append-system-prompt, never into the user turn.
         # Concatenated, HARD_SAFETY_RULES sat at the same level as the ticket
@@ -394,10 +418,10 @@ class ClaudeCodeAdapter(LLMInterface):
         turns = max_turns or self._max_turns
         cmd.extend(["--max-turns", str(turns)])
 
-        # Allowed tools
-        if allowed_tools is not None:
-            cc_tools = self._map_tools(allowed_tools)
-            cmd.extend(["--allowedTools", ",".join(cc_tools) if cc_tools else ""])
+        # Allowed tools: mapped names first, then raw permission rules verbatim.
+        if allowed_tools is not None or raw_allowed_tools is not None:
+            cc_tools = self._map_tools(allowed_tools or []) + (raw_allowed_tools or [])
+            cmd.extend(["--allowedTools", ",".join(cc_tools)])
 
         # Extra directories the agent's tools may read beyond cwd. Ticket
         # metadata (attachments, comments) lives in meta/, a sibling of the
@@ -429,6 +453,7 @@ class ClaudeCodeAdapter(LLMInterface):
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
             cwd=cwd,
+            env=env,
             start_new_session=True,
         )
         if pid_callback is not None and proc.pid:
@@ -618,6 +643,9 @@ class ClaudeCodeAdapter(LLMInterface):
         # something meaningful for diagnosis.
         content = final.get("result", "") or progress.last_text or ""
         is_error = final.get("is_error", False)
+        # The result event's own error text, without content's fallback to the model's last text.
+        result = final.get("result")
+        result_error = result if is_error and isinstance(result, str) else ""
 
         # Reconstruct a stdout-shaped string for _classify_cli_error so the
         # existing quota/rate-limit detection keeps working without us
@@ -647,9 +675,10 @@ class ClaudeCodeAdapter(LLMInterface):
                 f"end status=cli_error rc={rc} duration={progress.elapsed():.1f}s "
                 f"stderr_chars={len(stderr_str)}",
             )
-            raise RuntimeError(
+            raise CLIError(
                 f"Claude Code CLI exited with code {rc}. "
-                f"stderr={stderr_str[:500]!r} last_event={progress.last_event_kind!r}"
+                f"stderr={stderr_str[:500]!r} last_event={progress.last_event_kind!r}",
+                result_error,
             )
 
         if is_error:
@@ -665,7 +694,7 @@ class ClaudeCodeAdapter(LLMInterface):
                 progress_log_path,
                 f"end status=is_error rc=0 duration={progress.elapsed():.1f}s",
             )
-            raise RuntimeError(f"Claude Code returned error: {str(content)[:500]}")
+            raise CLIError(f"Claude Code returned error: {str(content)[:500]}", result_error)
 
         usage = final.get("usage", {}) if isinstance(final, dict) else {}
         input_tokens = usage.get("input_tokens", 0)
@@ -698,6 +727,8 @@ class ClaudeCodeAdapter(LLMInterface):
             output_tokens=output_tokens,
             model=use_model or (final.get("model", "") if isinstance(final, dict) else ""),
             stop_reason=stop_reason,
+            cost_usd=float(total_cost),
+            num_turns=num_turns,
         )
 
     def _map_tools(self, our_tools: list[str]) -> list[str]:

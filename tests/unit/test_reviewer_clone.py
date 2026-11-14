@@ -3,7 +3,9 @@ from __future__ import annotations
 import base64, os, subprocess, time
 from pathlib import Path
 import pytest
+from orchestrator.reviewer import clone as clone_module
 from orchestrator.reviewer.clone import CloneError, ReviewClone, git_env, github_clone_url
+from orchestrator.reviewer.commands import CommandResult
 
 def git(*args, cwd=None):
     return subprocess.run(["git", *args], cwd=cwd, check=True, capture_output=True, text=True).stdout.strip()
@@ -28,6 +30,23 @@ def origin(tmp_path):
     git("push", "origin", "HEAD:develop", cwd=work)
     return bare, work
 
+@pytest.fixture
+def pr7(tmp_path, origin):
+    """origin plus PR 7: one commit on top of develop, pushed to refs/pull/7/head as GitHub keeps it."""
+    bare, work = origin
+    pr_work = tmp_path / "pr-work"
+    git("clone", str(bare), str(pr_work))
+    (pr_work / "feature.txt").write_text("feature")
+    git("add", ".", cwd=pr_work)
+    git("-c", "user.name=t", "-c", "user.email=t@t", "commit", "-m", "pr", cwd=pr_work)
+    git("push", "origin", "HEAD:refs/pull/7/head", cwd=pr_work)
+    return bare, git("rev-parse", "HEAD", cwd=work), git("rev-parse", "HEAD", cwd=pr_work)
+
+async def refreshed(tmp_path, bare):
+    clone = ReviewClone(tmp_path / "clone", f"file://{bare}", "develop", "tok")
+    await clone.refresh()
+    return clone
+
 def test_git_env_carries_token_only_as_header(monkeypatch):
     monkeypatch.setenv("GH_TOKEN", "leak")
     env = git_env("tok")
@@ -35,9 +54,25 @@ def test_git_env_carries_token_only_as_header(monkeypatch):
     assert env["GIT_CONFIG_VALUE_0"] == ""
     assert env["GIT_CONFIG_VALUE_1"] == "AUTHORIZATION: basic " + base64.b64encode(b"x-access-token:tok").decode()
     assert "GH_TOKEN" not in env
-    assert env["GIT_CONFIG_COUNT"] == "4"
+    assert env["GIT_CONFIG_COUNT"] == "6"
     assert (env["GIT_CONFIG_KEY_2"], env["GIT_CONFIG_VALUE_2"]) == ("maintenance.autoDetach", "false")
     assert (env["GIT_CONFIG_KEY_3"], env["GIT_CONFIG_VALUE_3"]) == ("gc.autoDetach", "false")
+    assert (env["GIT_CONFIG_KEY_4"], env["GIT_CONFIG_VALUE_4"]) == ("core.hooksPath", "/dev/null")
+    assert (env["GIT_CONFIG_KEY_5"], env["GIT_CONFIG_VALUE_5"]) == ("core.fsmonitor", "false")
+
+async def test_refresh_runs_no_planted_hook_or_fsmonitor(tmp_path, origin):
+    # Environment config outranks .git/config: nothing planted in the clone runs in a git call with the token.
+    bare, work = origin
+    clone = await refreshed(tmp_path, bare)
+    git_dir = tmp_path / "clone" / ".git"
+    for name, script, status in (("hook", git_dir / "hooks" / "post-checkout", 0),
+                                 ("fsmonitor", tmp_path / "fsmonitor.sh", 1)):
+        script.write_text(f"#!/bin/sh\ntouch {tmp_path / name}-ran\nexit {status}\n")
+        script.chmod(0o755)
+    with (git_dir / "config").open("a") as f:
+        f.write(f"[core]\n\tfsmonitor = {tmp_path / 'fsmonitor.sh'}\n")
+    await clone.refresh()
+    assert not (tmp_path / "hook-ran").exists() and not (tmp_path / "fsmonitor-ran").exists()
 
 def test_git_env_empties_global_helper(tmp_path, monkeypatch):
     (tmp_path / ".gitconfig").write_text("[credential]\n\thelper = osxkeychain\n")
@@ -124,8 +159,12 @@ async def test_refresh_follows_a_changed_url(tmp_path, origin):
     assert git("config", "--get", "remote.origin.url", cwd=path) == f"file://{bare_b}"
     assert "tok" not in (path / ".git" / "config").read_text()
 
-async def test_refresh_returns_only_after_auto_maintenance(tmp_path, origin):
+async def test_refresh_returns_only_after_auto_maintenance(tmp_path, origin, monkeypatch):
     bare, work = origin
+    # The probe is a hook, and git_env turns hooks off (its last two entries): here git reads only the
+    # first four, the maintenance ones included.
+    real_env = clone_module.git_env
+    monkeypatch.setattr(clone_module, "git_env", lambda token: {**real_env(token), "GIT_CONFIG_COUNT": "4"})
     clone = ReviewClone(tmp_path / "clone", f"file://{bare}", "develop", "tok")
     await clone.refresh()
     # Make the next fetch's auto maintenance run gc: the gc strategy (git's default is heuristic),
@@ -169,3 +208,129 @@ async def test_refresh_keeps_local_base_branch_current(tmp_path, origin):
 
 def test_github_clone_url():
     assert github_clone_url("acme-org", "acme-app") == "https://github.com/acme-org/acme-app.git"
+
+async def test_fetch_pr_head_makes_local_branch(tmp_path, pr7):
+    bare, _, head = pr7
+    clone = await refreshed(tmp_path, bare)
+    assert await clone.fetch_pr_head(7) == head
+    assert git("rev-parse", "pr-review/7", cwd=clone.path) == head
+    assert "tok" not in (clone.path / ".git" / "config").read_text()
+
+async def test_merge_base(tmp_path, origin, pr7):
+    _, work = origin
+    bare, base, _ = pr7
+    commit_and_push(work, "later.txt")   # develop moves on after the PR forked
+    clone = await refreshed(tmp_path, bare)
+    head = await clone.fetch_pr_head(7)
+    assert await clone.merge_base(head) == base
+
+async def test_add_and_remove_worktree(tmp_path, pr7):
+    bare, _, head = pr7
+    clone = await refreshed(tmp_path, bare)
+    await clone.fetch_pr_head(7)
+    wt = tmp_path / "wt"
+    await clone.add_worktree(wt, head)
+    assert (wt / "feature.txt").read_text() == "feature"
+    assert git("rev-parse", "HEAD", cwd=wt) == head
+    assert await clone.remove_worktree(wt) == "" and not wt.exists()
+    assert await clone.remove_worktree(wt) == ""   # no longer registered
+
+async def test_remove_worktree_refuses_with_changes(tmp_path, pr7):
+    bare, _, head = pr7
+    clone = await refreshed(tmp_path, bare)
+    await clone.fetch_pr_head(7)
+    wt = tmp_path / "wt"
+    await clone.add_worktree(wt, head)
+    (wt / "stray.txt").write_text("x")
+    assert await clone.remove_worktree(wt) != ""
+    assert (wt / "stray.txt").exists()
+
+async def test_add_worktree_replaces_registered_leftover(tmp_path, pr7):
+    bare, base, head = pr7
+    clone = await refreshed(tmp_path, bare)
+    await clone.fetch_pr_head(7)
+    wt = tmp_path / "wt"
+    await clone.add_worktree(wt, base)
+    await clone.add_worktree(wt, head)
+    assert git("rev-parse", "HEAD", cwd=wt) == head
+
+async def test_add_worktree_refuses_leftover_with_changes(tmp_path, pr7):
+    bare, base, head = pr7
+    clone = await refreshed(tmp_path, bare)
+    await clone.fetch_pr_head(7)
+    wt = tmp_path / "wt"
+    await clone.add_worktree(wt, base)
+    (wt / "stray.txt").write_text("x")
+    with pytest.raises(CloneError) as e:
+        await clone.add_worktree(wt, head)
+    assert str(e.value).startswith(f"worktree path in use: {wt} — ")
+    assert (wt / "stray.txt").exists() and git("rev-parse", "HEAD", cwd=wt) == base
+
+async def test_add_worktree_rejects_foreign_path(tmp_path, pr7):
+    bare, _, head = pr7
+    clone = await refreshed(tmp_path, bare)
+    await clone.fetch_pr_head(7)
+    wt = tmp_path / "wt"
+    wt.mkdir()
+    (wt / "keep.txt").write_text("x")
+    with pytest.raises(CloneError, match="is not a worktree"):
+        await clone.add_worktree(wt, head)
+    assert (wt / "keep.txt").exists()
+
+async def test_session_phase_is_left_however_the_session_ends(tmp_path):
+    clone = ReviewClone(tmp_path / "clone", "file:///nowhere", "develop", "tok")
+    assert clone.in_session is False
+    with pytest.raises(ZeroDivisionError):
+        async with clone.session_phase({}):
+            assert clone.in_session and not clone.session_lock.locked()
+            1 / 0
+    assert clone.in_session is False and not clone.session_lock.locked()
+
+async def test_session_phase_tells_which_guarded_git_files_changed(tmp_path):
+    from orchestrator.reviewer.clone import guarded_git_files
+    git_dir = tmp_path / "clone" / ".git"
+    (git_dir / "info").mkdir(parents=True)
+    config, attributes = git_dir / "config", git_dir / "info" / "attributes"
+    config.write_text("[core]\n")
+    clone = ReviewClone(tmp_path / "clone", "file:///nowhere", "develop", "tok")
+    saved = guarded_git_files(clone.path)
+    assert saved == {config: b"[core]\n", attributes: None}
+    async with clone.session_phase(saved):
+        assert clone.changed_git_files() == []
+        attributes.write_text("* filter=x\n")
+        assert clone.changed_git_files() == [attributes]
+        attributes.unlink()
+        config.unlink()
+        config.symlink_to(tmp_path / "elsewhere")
+        assert clone.changed_git_files() == [config]
+    assert clone.changed_git_files() == []   # out of the phase: nothing to compare with
+
+async def test_pr_symlinks_check_out_as_plain_files(tmp_path, origin):
+    bare, _ = origin
+    pr_work = tmp_path / "pr-work"
+    git("clone", str(bare), str(pr_work))
+    (pr_work / "hosts-link").symlink_to("/etc/hosts")
+    (pr_work / "up").symlink_to("..", target_is_directory=True)
+    git("add", ".", cwd=pr_work)
+    git("-c", "user.name=t", "-c", "user.email=t@t", "commit", "-m", "links", cwd=pr_work)
+    git("push", "origin", "HEAD:refs/pull/8/head", cwd=pr_work)
+    clone = await refreshed(tmp_path, bare)
+    head = await clone.fetch_pr_head(8)
+    wt = tmp_path / "wt"
+    await clone.add_worktree(wt, head)
+    for name, target in (("hosts-link", "/etc/hosts"), ("up", "..")):
+        assert not (wt / name).is_symlink() and (wt / name).read_text() == target
+    assert await clone.remove_worktree(wt) == "" and not wt.exists()   # the plain files are no change
+
+async def test_worktree_error_is_redacted(tmp_path, monkeypatch):
+    wt = tmp_path / "wt-SECRET"
+    async def failing(argv, **kwargs):
+        return CommandResult(returncode=128, stdout="", stderr=f"fatal: cannot lock '{wt}'\n", timed_out=False)
+    monkeypatch.setattr("orchestrator.reviewer.clone.run_command", failing)
+    clone = ReviewClone(tmp_path / "clone", "file:///nowhere", "develop", token="SECRET")
+    with pytest.raises(CloneError) as e:
+        await clone.add_worktree(wt, "a" * 40)
+    assert "***" in str(e.value) and "SECRET" not in str(e.value)
+    reason = await clone.remove_worktree(wt)
+    assert "***" in reason and "SECRET" not in reason
+    assert clone.redact("x SECRET y") == "x *** y"

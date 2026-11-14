@@ -24,6 +24,8 @@ class LLMResponse:
     model: str = ""
     tool_use: list[ToolUseRequest] = field(default_factory=list)
     stop_reason: str = ""
+    cost_usd: float = 0.0
+    num_turns: int = 0
 
 
 class LLMInterface(ABC):

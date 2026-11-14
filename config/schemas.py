@@ -150,8 +150,8 @@ class ReviewerJobConfig:
 
 def _default_reviewer_jobs() -> dict[str, ReviewerJobConfig]:
     return {
-        "review": ReviewerJobConfig("opus", "xhigh", 3600),
-        "recheck": ReviewerJobConfig("opus", "xhigh", 3600),
+        "review": ReviewerJobConfig("opus", "xhigh", 5400),
+        "recheck": ReviewerJobConfig("opus", "xhigh", 5400),
         "edit": ReviewerJobConfig("sonnet", "", 300),
         "draft": ReviewerJobConfig("sonnet", "", 300),
         "command": ReviewerJobConfig("sonnet", "", 60),
@@ -376,10 +376,17 @@ class ProjectConfig:
 
 # --- Reviewer config (repo-level) ---
 
-# Placeholders a reviewer command or path may use; later plans expand exactly these.
+# Every placeholder a reviewer command may use: the poster's commands take them all (a later plan expands
+# exactly these).
 REVIEWER_PLACEHOLDERS = frozenset(
     {"repo", "pr", "head9", "worktree", "merge_base", "report", "plan", "job_dir", "ledger", "event"}
 )
+# What the runtime fills, per field: config validation accepts exactly these, and the code filling a field
+# passes exactly its set (commands.placeholder_values), so the two cannot drift.
+JOB_PATH_PLACEHOLDERS = frozenset({"pr", "head9"})  # process.run_dir, replies_plan, worktree_dir
+PREPARE_STEP_PLACEHOLDERS = frozenset({"pr", "worktree", "merge_base", "head9", "repo"})
+STATUS_COMMAND_PLACEHOLDERS = frozenset({"repo"})
+THREADS_COMMAND_PLACEHOLDERS = frozenset({"repo", "pr"})
 
 
 @dataclass

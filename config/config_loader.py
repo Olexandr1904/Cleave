@@ -10,7 +10,9 @@ from __future__ import annotations
 
 import logging
 import os
+import posixpath
 import re
+import shlex
 from pathlib import Path
 from typing import Any
 
@@ -35,6 +37,7 @@ from config.schemas import (
     HeartbeatConfig,
     HelpersConfig,
     IntentParserConfig,
+    JOB_PATH_PLACEHOLDERS,
     JenkinsConfig,
     JiraConfig,
     JiraStatusesConfig,
@@ -46,6 +49,7 @@ from config.schemas import (
     ParallelismConfig,
     PipelineConfig,
     PosterPartConfig,
+    PREPARE_STEP_PLACEHOLDERS,
     ProcessPartConfig,
     ProjectConfig,
     ProjectInfo,
@@ -56,8 +60,10 @@ from config.schemas import (
     ReviewerConfig,
     ReviewerGlobalConfig,
     ReviewerJobConfig,
+    STATUS_COMMAND_PLACEHOLDERS,
     TelegramConfig,
     TestConfig,
+    THREADS_COMMAND_PLACEHOLDERS,
     TrackerConfig,
     TrelloConfig,
     TrelloListMapping,
@@ -479,6 +485,80 @@ def _load_project_config(project_dir: Path, global_defaults: dict) -> ProjectCon
 
 
 PLACEHOLDER_PATTERN = re.compile(r"\{(\w+)\}")
+# Files a command may be given from an untrusted directory: data it reads.
+_DATA_FILES = (".md", ".json", ".txt", ".diff", ".patch", ".log")
+# Programs that run a script, a package or a directory named by an argument.
+_LAUNCHER = re.compile(
+    r"python|python3|python3\..+|node|deno|bun|sh|bash|zsh|ruby|perl|php|env|uv|uvx|npx|poetry|pipenv|pipx")
+_SHELL = re.compile(r"sh|bash|zsh|dash")
+_SHELL_CODE_OPTION = re.compile(r"-[a-z]*c[a-z]*")  # -c, -lc, -ec
+# An argument naming a file, such as the script a launcher runs: no option, no NAME=value.
+_FILE_ARG = re.compile(r"(?!-|[A-Za-z_]\w*=)(\S*/\S*|\S*\.\w+)")
+
+
+def _dir_pattern(directory: str) -> re.Pattern[str]:
+    """A directory template as a pattern for the paths that name it, its placeholders matching any name: at
+    any path boundary (an absolute path into the clone, or a word of `sh -c` code, too) and whatever the
+    case (the host's APFS)."""
+    pattern = "".join("[^/]*" if i % 2 else re.escape(piece)
+                      for i, piece in enumerate(PLACEHOLDER_PATTERN.split(posixpath.normpath(directory))))
+    return re.compile(rf"(?<![\w.-]){pattern}(?![\w.-])", re.IGNORECASE)
+
+
+def _named_dirs(arg: str, patterns: dict[str, re.Pattern[str]]) -> list[tuple[str, bool]]:
+    """The directories an argument names, each with whether it names a path inside the directory rather than
+    the directory itself."""
+    path = posixpath.normpath(arg)
+    return [(name, path[m.end():m.end() + 1] == "/")
+            for name, pattern in patterns.items() for m in pattern.finditer(path)]
+
+
+def _shell_commands(code: str) -> list[list[str]]:
+    """The simple commands of `sh -c` code: its words split at ;, &, | and parentheses; the target of a
+    redirection stays an argument."""
+    lexer = shlex.shlex(code, posix=True, punctuation_chars=True)
+    lexer.whitespace_split = True
+    try:
+        words = list(lexer)
+    except ValueError:  # an unbalanced quote: sh refuses the code anyway
+        words = code.split()
+    commands: list[list[str]] = [[]]
+    for word in words:
+        if not set(word) <= set("();<>|&"):
+            commands[-1].append(word)
+        elif not set(word) & set("<>"):
+            commands.append([])
+    return [command for command in commands if command]
+
+
+def _untrusted_use(command: list[str], patterns: dict[str, re.Pattern[str]]) -> tuple[int, str] | None:
+    """Where a command would run code from one of the directories: the argument's index and the directory's
+    name, or None. Its program inside one; a launcher's operand (its first argument naming a file) inside one,
+    whatever its extension; any other argument inside one, unless it names a data file; the directory itself
+    given to a launcher before its operand (`python3 dir/` runs dir/__main__.py); and the same for each
+    command of `sh -c` code."""
+    if not command:
+        return None
+    for name, inside in _named_dirs(command[0], patterns):
+        if inside:
+            return 0, name
+    program = posixpath.basename(command[0])
+    if _SHELL.fullmatch(program) and any(_SHELL_CODE_OPTION.fullmatch(arg) for arg in command[1:]):
+        for i, arg in enumerate(command[1:], 1):
+            for inner in [] if arg.startswith("-") else _shell_commands(arg):
+                if hit := _untrusted_use(inner, patterns):
+                    return i, hit[1]
+        return None
+    launcher, file_seen = _LAUNCHER.fullmatch(program), False
+    for i, arg in enumerate(command[1:], 1):
+        names_a_file = bool(_FILE_ARG.fullmatch(arg))
+        # An interpreter ignores the extension: the file a launcher runs is never data.
+        data = arg.lower().endswith(_DATA_FILES) and not (launcher and not file_seen and names_a_file)
+        for name, inside in _named_dirs(arg, patterns):
+            if (inside and not data) or (not inside and launcher and not file_seen):
+                return i, name
+        file_seen = file_seen or names_a_file
+    return None
 
 
 def _parse_reviewer_section(
@@ -561,13 +641,52 @@ def _parse_reviewer_section(
         value = getattr(process, name)
         if Path(value).is_absolute() or ".." in Path(value).parts:
             raise fail(f"reviewer.process.{name} must be repo-relative", f"reviewer.process.{name}")
+    # The review session may write the run directory and the replies plan's. At the repo root its Edit rule
+    # would cover the whole clone, and the guard below would have no directory to look for.
+    writable = {"run_dir": process.run_dir, "replies_plan": posixpath.dirname(posixpath.normpath(process.replies_plan))}
+    if posixpath.normpath(writable["run_dir"]) == ".":
+        raise fail("reviewer.process.run_dir must be a subdirectory of the repo, not its root: the review "
+                   "session may write it", "reviewer.process.run_dir")
+    if posixpath.normpath(writable["replies_plan"]) == ".":
+        raise fail("reviewer.process.replies_plan must be in a subdirectory of the repo, not at its root: the "
+                   "review session may write its directory", "reviewer.process.replies_plan")
+    if posixpath.normpath(process.worktree_dir) == ".":
+        raise fail("reviewer.process.worktree_dir must not be the repo root: it holds the PR's own code",
+                   "reviewer.process.worktree_dir")
 
     texts = [(f, s) for f, cmd in commands.items() for s in cmd]
     texts += [(f"reviewer.process.{n}", getattr(process, n)) for n in ("run_dir", "replies_plan", "worktree_dir")]
+    # What the runtime fills for each field; the poster's commands take every placeholder.
+    filled = {
+        "reviewer.readiness.status_command": STATUS_COMMAND_PLACEHOLDERS,
+        "reviewer.readiness.threads_command": THREADS_COMMAND_PLACEHOLDERS,
+        **{f"reviewer.process.{n}": JOB_PATH_PLACEHOLDERS for n in ("run_dir", "replies_plan", "worktree_dir")},
+        **{f"reviewer.process.prepare_steps.{i}": PREPARE_STEP_PLACEHOLDERS for i in range(len(process.prepare_steps))},
+    }
     for field_name, text in texts:
+        names = filled.get(field_name, REVIEWER_PLACEHOLDERS)
         for placeholder in PLACEHOLDER_PATTERN.findall(text):
             if placeholder not in REVIEWER_PLACEHOLDERS:
                 raise fail(f"{field_name}: unknown placeholder '{{{placeholder}}}'", field_name)
+            if placeholder not in names:
+                takes = ", ".join(f"{{{n}}}" for n in sorted(names))
+                raise fail(f"{field_name}: placeholder '{{{placeholder}}}' is never filled there; it takes {takes}",
+                           field_name)
+
+    # A script run from one of these directories would be the session's code or the PR author's, run on the
+    # host: prepare steps with HOME, the readiness and poster commands with the forge token.
+    untrusted = {**writable, "worktree_dir": process.worktree_dir}
+    why = {**dict.fromkeys(writable, "which the review session may write"),
+           "worktree_dir": "which holds the PR's own code"}
+    patterns = {name: _dir_pattern(directory) for name, directory in untrusted.items()}
+    in_untrusted = {"report": f"{process.run_dir}/report_{{head9}}.md", "plan": process.replies_plan,
+                    "worktree": process.worktree_dir}
+    for field_name, command in commands.items():
+        expanded = [PLACEHOLDER_PATTERN.sub(lambda m: in_untrusted.get(m[1], m[0]), arg) for arg in command]
+        if hit := _untrusted_use(expanded, patterns):
+            i, name = hit
+            raise fail(f"{field_name} runs {command[i]!r} from inside reviewer.process.{name}, {why[name]}",
+                       field_name)
     return reviewer
 
 

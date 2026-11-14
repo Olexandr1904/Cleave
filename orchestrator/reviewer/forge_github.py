@@ -1,4 +1,5 @@
-"""GitHub reads for the reviews board: open PRs, PR details, whether a login has reviewed."""
+"""GitHub reads for the reviews board and review jobs: open PRs, PR details, whether a login has
+reviewed, the full PR and its comments."""
 from __future__ import annotations
 
 import re
@@ -6,7 +7,7 @@ import re
 import httpx
 
 from integrations.github.github_adapter import GitHubAdapter
-from orchestrator.reviewer.models import PRDetails
+from orchestrator.reviewer.models import PRComments, PRDetails, PRFull
 
 _PAGE = 100
 _MAX_PAGES = 100
@@ -14,16 +15,33 @@ _STATUS = re.compile(r"→ (\d{3})")
 
 
 class ForgeError(Exception):
-    pass
+    """A failed GitHub read, as its HTTP status ("GitHub 404") or the exception's class. unavailable: GitHub
+    answered 5xx or was not reached (a timeout or a connection error), so the read may succeed later."""
+
+    def __init__(self, text: str, unavailable: bool = False) -> None:
+        super().__init__(text)
+        self.unavailable = unavailable
+
+
+# GitHub not reached, or no answer from it: httpx's timeouts and network errors, and the builtin ones should any
+# get past httpx.
+_UNREACHED = (httpx.TimeoutException, httpx.NetworkError, httpx.RemoteProtocolError, TimeoutError, ConnectionError)
 
 
 def _forge_error(e: Exception) -> ForgeError:
     # Never the response body: it is GitHub's text, not ours, and may echo request data.
     if isinstance(e, httpx.HTTPStatusError):
-        return ForgeError(f"GitHub {e.response.status_code}")
-    if isinstance(e, RuntimeError) and (m := _STATUS.search(str(e))):
-        return ForgeError(f"GitHub {m.group(1)}")
-    return ForgeError(type(e).__name__)
+        status = e.response.status_code
+    elif isinstance(e, RuntimeError) and (m := _STATUS.search(str(e))):
+        status = int(m.group(1))
+    else:
+        return ForgeError(type(e).__name__, unavailable=isinstance(e, _UNREACHED))
+    return ForgeError(f"GitHub {status}", unavailable=status >= 500)
+
+
+def _login(item: dict) -> str:
+    # The user is null when the account was deleted; GitHub shows it as "ghost".
+    return (item.get("user") or {"login": "ghost"})["login"]
 
 
 class GitHubForgeReader:
@@ -86,3 +104,33 @@ class GitHubForgeReader:
             )
             cached = self._reviewed[key] = (updated_at, done)
         return cached[1]
+
+    async def pr_full(self, number: int) -> PRFull:
+        # Uncached: a job reads the PR once, right before it starts.
+        pr = await self._get(f"{self._adapter._repo_path}/pulls/{number}")
+        return PRFull(
+            number=pr["number"],
+            title=pr["title"],
+            body=pr["body"] or "",
+            url=pr["html_url"],
+            state=pr["state"],
+            head_sha=pr["head"]["sha"],
+            base=pr["base"]["ref"],
+            additions=pr["additions"],
+            deletions=pr["deletions"],
+            changed_files=pr["changed_files"],
+        )
+
+    async def comments(self, number: int) -> PRComments:
+        repo = self._adapter._repo_path
+        inline = await self._all_pages(f"{repo}/pulls/{number}/comments")
+        reviews = await self._all_pages(f"{repo}/pulls/{number}/reviews")
+        conversation = await self._all_pages(f"{repo}/issues/{number}/comments")
+        return PRComments(
+            # An outdated comment has no line on the current diff; original_line is where it was made.
+            inline=tuple({"login": _login(c), "path": c["path"], "line": c.get("line") or c.get("original_line"),
+                          "id": c["id"], "body": c["body"]} for c in inline),
+            reviews=tuple({"login": _login(r), "state": r["state"], "body": r["body"]}
+                          for r in reviews if r.get("body")),
+            conversation=tuple({"login": _login(c), "body": c["body"]} for c in conversation),
+        )

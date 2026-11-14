@@ -1,9 +1,9 @@
 # tests/unit/test_reviewer_readiness.py
 from __future__ import annotations
-import json, re, stat, time
+import json, re, stat, subprocess, time
 import pytest
 from config.schemas import ReadinessPartConfig
-from orchestrator.reviewer.commands import expand, part_env, redact, run_command
+from orchestrator.reviewer.commands import CommandResult, expand, part_env, redact, run_command
 from orchestrator.reviewer.readiness import (CommandReadiness, ReadinessError, parse_board_snapshot,
                                              parse_threads_snapshot)
 
@@ -48,6 +48,27 @@ def test_expand_and_env_and_redact(monkeypatch):
     env = part_env("tok")
     assert env["GH_TOKEN"] == env["GITHUB_TOKEN"] == "tok" and "ANTHROPIC_API_KEY" not in env
     assert redact("auth tok failed for tok", ["tok", ""]) == "auth *** failed for ***"
+
+def test_part_env_runs_no_planted_hook_or_fsmonitor(tmp_path, monkeypatch):
+    """A part command carries the token: git config planted in the clone or the host's never runs a program
+    in its git calls."""
+    (tmp_path / ".gitconfig").write_text("[core]\n\taskPass = /usr/bin/false\n")
+    monkeypatch.setenv("HOME", str(tmp_path))
+    repo = tmp_path / "repo"
+    subprocess.run(["git", "init", "-q", str(repo)], check=True)
+    for name, path in (("hook", repo / ".git" / "hooks" / "pre-commit"), ("fsmonitor", tmp_path / "fsmonitor.sh")):
+        path.write_text(f"#!/bin/sh\ntouch {tmp_path / name}-ran\n")
+        path.chmod(0o755)
+    with (repo / ".git" / "config").open("a") as f:
+        f.write(f"[core]\n\tfsmonitor = {tmp_path / 'fsmonitor.sh'}\n")
+    env = part_env("tok")
+    assert (env["GIT_CONFIG_NOSYSTEM"], env["GIT_CONFIG_GLOBAL"]) == ("1", "/dev/null")
+    def git(*args):
+        return subprocess.run(["git", *args], cwd=repo, env=env, capture_output=True, text=True)
+    assert git("-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "--allow-empty", "-m", "x").returncode == 0
+    git("status")
+    assert not (tmp_path / "hook-ran").exists() and not (tmp_path / "fsmonitor-ran").exists()
+    assert git("config", "--get", "core.askpass").stdout == ""   # the host's global config is not read
 
 async def test_board_runs_status_command(tmp_path):
     tool = script(tmp_path, f'[ "$1 $2" = "--repo acme-org/acme-app" ] || exit 9\n'
@@ -107,3 +128,25 @@ async def test_failure_reason_redacts_before_cutting(tmp_path):
     with pytest.raises(ReadinessError) as e:
         await r.board(tmp_path)
     assert str(e.value) == "exit 3: " + "x" * 195 + "***" and "SECRE" not in str(e.value)
+
+
+# --- Code-review fix wave 1 ---
+
+async def test_readiness_fills_every_placeholder_its_commands_may_use(tmp_path, monkeypatch):
+    """Config validation accepts exactly these sets in the two commands: CommandReadiness fills each."""
+    from config.schemas import STATUS_COMMAND_PLACEHOLDERS, THREADS_COMMAND_PLACEHOLDERS
+    threads = {"number": 7, "author": "a", "head_sha": "c" * 40, "threads": [], "review_bodies": []}
+    calls = []
+    async def ran(argv, *, cwd, env, timeout):
+        calls.append(argv)
+        return CommandResult(0, json.dumps(SNAP if len(calls) == 1 else threads), "", False)
+    monkeypatch.setattr("orchestrator.reviewer.readiness.run_command", ran)
+    def command(names):
+        return ["tool", *(f"{{{n}}}" for n in sorted(names))]
+    r = CommandReadiness(ReadinessPartConfig(status_command=command(STATUS_COMMAND_PLACEHOLDERS),
+                                             threads_command=command(THREADS_COMMAND_PLACEHOLDERS)),
+                         repo="o/r", token="t")
+    await r.board(tmp_path)
+    await r.threads(tmp_path, 7)
+    assert [len(argv) - 1 for argv in calls] == [len(STATUS_COMMAND_PLACEHOLDERS), len(THREADS_COMMAND_PLACEHOLDERS)]
+    assert all("{" not in arg for argv in calls for arg in argv)

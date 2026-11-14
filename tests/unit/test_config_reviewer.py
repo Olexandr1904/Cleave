@@ -20,7 +20,7 @@ def test_unknown_dashboard_field_names_the_section(tmp_path):
 def test_reviewer_global_defaults(tmp_path):
     r = _global(tmp_path, "os: mac\n").reviewer
     assert (r.db_path, r.telegram_chat_id) == ("", "")
-    assert (r.jobs["review"].model, r.jobs["review"].effort, r.jobs["review"].timeout_seconds) == ("opus", "xhigh", 3600)
+    assert (r.jobs["review"].model, r.jobs["review"].effort, r.jobs["review"].timeout_seconds) == ("opus", "xhigh", 5400)
     assert (r.jobs["recheck"].model, r.jobs["recheck"].effort) == ("opus", "xhigh")
     assert (r.jobs["edit"].model, r.jobs["edit"].timeout_seconds) == ("sonnet", 300)
     assert (r.jobs["command"].model, r.jobs["command"].timeout_seconds) == ("sonnet", 60)
@@ -28,9 +28,9 @@ def test_reviewer_global_defaults(tmp_path):
 def test_reviewer_global_job_override_merges(tmp_path, monkeypatch):
     monkeypatch.setenv("HOME", "/h")
     r = _global(tmp_path, 'reviewer:\n  db_path: "${HOME}/x/reviewer.db"\n'
-                          "  jobs:\n    review:\n      timeout_seconds: 5400\n").reviewer
+                          "  jobs:\n    review:\n      timeout_seconds: 7200\n").reviewer
     assert r.db_path == "/h/x/reviewer.db"
-    assert (r.jobs["review"].model, r.jobs["review"].effort, r.jobs["review"].timeout_seconds) == ("opus", "xhigh", 5400)
+    assert (r.jobs["review"].model, r.jobs["review"].effort, r.jobs["review"].timeout_seconds) == ("opus", "xhigh", 7200)
 
 def test_reviewer_global_unknown_job_kind_raises(tmp_path):
     with pytest.raises(ConfigError, match="reviewer.jobs"):
@@ -58,7 +58,7 @@ def test_env_refs_record_variable_names(tmp_path, monkeypatch):
 from pathlib import Path
 import yaml
 from config.config_loader import _parse_reviewer_section
-from config.schemas import VCSConfig
+from config.schemas import ReviewerGlobalConfig, VCSConfig
 
 FULL = """
 reviewer:
@@ -143,6 +143,32 @@ def test_reviewer_command_must_be_list():
     with pytest.raises(ConfigError, match="list"):
         _parse_reviewer_section(_with(("readiness.status_command", "python3 t.py status")), _vcs(), "r.yaml")
 
+@pytest.mark.parametrize("field, command", [
+    ("readiness.status_command", ["python3", "tools/review/runs/PR_7/evil.py", "--repo", "{repo}", "status"]),
+    ("readiness.threads_command", ["sh", "-c", "./tools/review/runs/PR_{pr}/../PR_{pr}/threads.sh"]),
+    ("poster.review_command", ["tools/threads/runs/PR_{pr}/post.sh", "{pr}"]),
+    ("poster.replies_command", ["python3", "-u", "Tools/Threads/Runs/PR_7/post.py"]),   # APFS ignores case
+    ("process.prepare_steps", [["python3", "tools/review/runs/PR_{pr}/anchors.py", "{pr}"]]),
+])
+def test_reviewer_command_running_a_script_the_session_may_write_raises(field, command):
+    """The review session may write the run directory and the replies plan's: a command that runs a script
+    from there would run the session's code, with the token for the readiness and poster commands."""
+    with pytest.raises(ConfigError) as e:
+        _parse_reviewer_section(_with((field, command)), _vcs(), "r.yaml")
+    where = f"reviewer.{field}" + (".0" if field == "process.prepare_steps" else "")
+    assert e.value.field == where and str(e.value).startswith(f"{where} runs ")
+
+def test_reviewer_command_may_name_the_run_directory_as_data():
+    data = _with(("poster.replies_command", ["python3", "tools/threads/threads.py", "post", "{pr}",
+                                             "--plan", "tools/threads/runs/PR_{pr}/replies.json"]))
+    data["reviewer"]["process"]["prepare_steps"] = [["python3", "tools/review/anchors.py",
+                                                     "--out", "tools/review/runs/PR_{pr}/anchors.json"]]
+    assert _parse_reviewer_section(data, _vcs(), "r.yaml").enabled
+
+def test_review_job_default_timeout():
+    jobs = ReviewerGlobalConfig().jobs
+    assert (jobs["review"].timeout_seconds, jobs["recheck"].timeout_seconds) == (5400, 5400)
+
 def test_example_repo_reviewer_block_validates_when_enabled():
     path = Path("config-live.example/projects/example-project/repos/example-repo.yaml")
     data = yaml.safe_load(path.read_text())
@@ -217,3 +243,110 @@ def test_malformed_global_reviewer_section_raises_config_error(tmp_path, text, f
     with pytest.raises(ConfigError) as e:
         _global(tmp_path, text)
     assert (e.value.file_path, e.value.field) == (str(tmp_path / "global.yaml"), field)
+
+
+# --- Code-review fix wave 1 ---
+
+@pytest.mark.parametrize("name, value", [
+    ("run_dir", "."), ("run_dir", "./"),
+    ("replies_plan", "replies_{pr}.json"), ("replies_plan", "./replies_{pr}.json"),
+])
+def test_reviewer_session_writable_path_at_the_repo_root_raises(name, value):
+    """At the repo root the session's Edit rule would cover the whole clone, and the guard would look for
+    an empty directory."""
+    field = f"reviewer.process.{name}"
+    with pytest.raises(ConfigError) as e:
+        _parse_reviewer_section(_with((f"process.{name}", value)), _vcs(), "r.yaml")
+    assert e.value.field == field and str(e.value).startswith(f"{field} must ") and "root" in str(e.value)
+
+def test_reviewer_replies_plan_in_a_subdirectory_loads():
+    data = _with(("process.replies_plan", "tools/review/replies_{pr}.json"))
+    # A re-check session may write tools/review/ then: FULL's scripts there move out of it.
+    data["reviewer"]["process"]["prepare_steps"] = [["python3", "tools/anchors.py", "{pr}"]]
+    data["reviewer"]["poster"]["review_command"] = ["python3", "tools/post.py", "{pr}", "--report", "{report}"]
+    assert _parse_reviewer_section(data, _vcs(), "r.yaml").process.replies_plan == "tools/review/replies_{pr}.json"
+
+@pytest.mark.parametrize("field, command", [
+    ("process.prepare_steps", [["python3", "{worktree}/tools/gen.py"]]),
+    ("readiness.threads_command", ["../review-wt/PR_{pr}/x.sh"]),
+    ("poster.review_command", ["../review-wt/PR_{pr}/x.sh"]),
+])
+def test_reviewer_command_running_the_prs_own_code_raises(field, command):
+    """Prepare steps run on the host with HOME, the readiness and poster commands with the forge token: a
+    script in the worktree is the PR author's code."""
+    with pytest.raises(ConfigError) as e:
+        _parse_reviewer_section(_with((field, command)), _vcs(), "r.yaml")
+    where = f"reviewer.{field}" + (".0" if field == "process.prepare_steps" else "")
+    assert e.value.field == where and str(e.value).startswith(f"{where} runs ")
+    assert "reviewer.process.worktree_dir" in str(e.value)
+
+def test_reviewer_command_may_pass_the_worktree_to_a_host_program():
+    step = ["detekt", "--input", "{worktree}"]
+    assert _parse_reviewer_section(_with(("process.prepare_steps", [step])), _vcs(), "r.yaml").process.prepare_steps == [step]
+
+def test_reviewer_worktree_dir_at_the_repo_root_raises():
+    with pytest.raises(ConfigError) as e:
+        _parse_reviewer_section(_with(("process.worktree_dir", "./")), _vcs(), "r.yaml")
+    assert e.value.field == "reviewer.process.worktree_dir" and "root" in str(e.value)
+
+@pytest.mark.parametrize("field, command", [
+    ("readiness.threads_command", ["env", "python3", "tools/review/runs/PR_{pr}/x.py"]),
+    ("readiness.threads_command", ["python3", "-W", "ignore", "tools/review/runs/PR_{pr}/x.py"]),
+    ("readiness.threads_command", ["/usr/bin/env", "python3", "tools/review/runs/PR_{pr}/x.py"]),
+    ("poster.review_command", ["uv", "run", "tools/review/runs/PR_{pr}/x.py"]),
+    ("poster.review_command", ["npx", "./tools/review/runs/PR_{pr}/cli.js"]),
+    ("poster.review_command", ["python3", "tools/review/runs/PR_{pr}"]),   # runs its __main__.py
+    ("process.prepare_steps", [["python3", "{worktree}"]]),
+    ("process.prepare_steps", [["uv", "run", "--directory", "{worktree}", "pytest"]]),
+    ("process.prepare_steps", [["sh", "-c", "cd tools && python3 {worktree}"]]),
+])
+def test_reviewer_command_running_untrusted_code_through_a_launcher_raises(field, command):
+    """Any argument may be what a launcher runs, not only the first one that is no option."""
+    with pytest.raises(ConfigError) as e:
+        _parse_reviewer_section(_with((field, command)), _vcs(), "r.yaml")
+    where = f"reviewer.{field}" + (".0" if field == "process.prepare_steps" else "")
+    assert e.value.field == where and str(e.value).startswith(f"{where} runs ")
+
+@pytest.mark.parametrize("field, command", [
+    ("poster.review_command", ["python3", "tools/post.py", "tools/review/runs/PR_{pr}/report_{head9}.md"]),
+    ("readiness.threads_command", ["sh", "-c", "./tools/threads/run.sh {pr}"]),
+    ("process.prepare_steps", [["python3", "-W", "ignore", "tools/review/anchors.py", "--worktree", "{worktree}"]]),
+    ("process.prepare_steps", [["sh", "-c", "detekt --input {worktree} > tools/review/runs/PR_{pr}/detekt.txt"]]),
+])
+def test_reviewer_command_reading_untrusted_data_loads(field, command):
+    """A data file from an untrusted directory, or the worktree given to a script the base branch holds."""
+    assert _parse_reviewer_section(_with((field, command)), _vcs(), "r.yaml").enabled
+
+@pytest.mark.parametrize("field, value, placeholder", [
+    ("process.worktree_dir", "../wt/{repo}/PR_{pr}", "repo"),
+    ("process.prepare_steps", [["python3", "tools/review/anchors.py", "--out", "{job_dir}/anchors.json"]], "job_dir"),
+    ("process.run_dir", "tools/review/runs/PR_{pr}_{merge_base}", "merge_base"),
+    ("readiness.status_command", ["python3", "tools/threads/threads.py", "status", "{pr}"], "pr"),
+    ("readiness.threads_command", ["python3", "tools/threads/threads.py", "threads", "{head9}"], "head9"),
+])
+def test_reviewer_placeholder_the_runtime_never_fills_there_raises(field, value, placeholder):
+    """Validation accepts, per field, exactly what the runtime fills there: anything else loads a config whose
+    every job (or every poll) fails."""
+    with pytest.raises(ConfigError) as e:
+        _parse_reviewer_section(_with((field, value)), _vcs(), "r.yaml")
+    where = f"reviewer.{field}" + (".0" if field == "process.prepare_steps" else "")
+    assert e.value.field == where and str(e.value).startswith(f"{where}: placeholder '{{{placeholder}}}' ")
+
+def test_reviewer_placeholders_the_runtime_fills_load():
+    data = _with(("process.worktree_dir", "../wt/PR_{pr}_{head9}"))
+    data["reviewer"]["process"]["prepare_steps"] = [
+        ["tools/gen.sh", "{pr}", "{worktree}", "{merge_base}", "{head9}", "{repo}"]]
+    data["reviewer"]["readiness"]["threads_command"] = ["python3", "tools/threads/threads.py", "{repo}", "{pr}"]
+    assert _parse_reviewer_section(data, _vcs(), "r.yaml").enabled
+
+@pytest.mark.parametrize("field, command", [
+    ("poster.review_command", ["python3", "{report}"]),
+    ("poster.review_command", ["node", "tools/review/runs/PR_{pr}/x.md"]),
+    ("poster.replies_command", ["sh", "{plan}"]),
+])
+def test_reviewer_launcher_running_a_session_file_raises_whatever_its_extension(field, command):
+    """An interpreter ignores the extension: the file a launcher runs is never data."""
+    with pytest.raises(ConfigError) as e:
+        _parse_reviewer_section(_with((field, command)), _vcs(), "r.yaml")
+    where = f"reviewer.{field}"
+    assert e.value.field == where and str(e.value).startswith(f"{where} runs ")

@@ -1,4 +1,5 @@
-"""ReviewerStore: board rows, repo state, jobs, skips and notices in reviewer.db."""
+"""ReviewerStore: board rows, repo state, jobs, job runs, skips, notices, anchors and
+preparation hashes in reviewer.db."""
 from __future__ import annotations
 
 import dataclasses
@@ -7,9 +8,11 @@ import sqlite3
 import threading
 from uuid import uuid4
 
-from orchestrator.reviewer.models import JOB_STATES, BoardRow, Job, RepoState
+from orchestrator.reviewer.models import JOB_STATES, BoardRow, Job, JobRun, RepoState
 
-_JOB_COLUMNS = "id, scope, number, kind, head_sha, key, state, reason, created_at, updated_at"
+_JOB_COLUMNS = (
+    "id, scope, number, kind, head_sha, key, state, reason, created_at, updated_at, retry_at"
+)
 
 
 class ReviewerStore:
@@ -55,7 +58,7 @@ class ReviewerStore:
         job = Job(uuid4().hex[:12], scope, number, kind, head_sha, key, "queued", "", now, now)
         with self._lock:
             self._conn.execute(
-                f"INSERT INTO jobs ({_JOB_COLUMNS}) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                f"INSERT INTO jobs ({_JOB_COLUMNS}) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 dataclasses.astuple(job),
             )
         return job
@@ -70,19 +73,65 @@ class ReviewerStore:
         sql += " ORDER BY created_at DESC, rowid DESC"
         return [Job(*r) for r in self._conn.execute(sql, args)]
 
-    def set_job_state(self, job_id: str, state: str, reason: str, now: str) -> None:
+    def job(self, job_id: str) -> Job | None:
+        found = self._conn.execute(
+            f"SELECT {_JOB_COLUMNS} FROM jobs WHERE id = ?", (job_id,)
+        ).fetchone()
+        return None if found is None else Job(*found)
+
+    def jobs_in_state(self, state: str) -> list[Job]:
+        sql = f"SELECT {_JOB_COLUMNS} FROM jobs WHERE state = ? ORDER BY created_at, rowid"
+        return [Job(*r) for r in self._conn.execute(sql, (state,))]
+
+    def runnable_jobs(self, now: str) -> list[Job]:
+        # A queued job has no retry_at ("" sorts first) unless it waits for GitHub to be available again.
+        sql = (
+            f"SELECT {_JOB_COLUMNS} FROM jobs WHERE kind IN ('review', 'recheck') "
+            "AND state IN ('queued', 'deferred') AND retry_at <= ? "
+            "ORDER BY created_at, rowid"
+        )
+        return [Job(*r) for r in self._conn.execute(sql, (now,))]
+
+    def set_job_state(
+        self, job_id: str, state: str, reason: str, now: str, retry_at: str = ""
+    ) -> None:
         if state not in JOB_STATES:
             raise ValueError(f"unknown job state: {state!r}")
         with self._lock:
             self._conn.execute(
-                "UPDATE jobs SET state = ?, reason = ?, updated_at = ? WHERE id = ?",
-                (state, reason, now, job_id),
+                "UPDATE jobs SET state = ?, reason = ?, updated_at = ?, retry_at = ? WHERE id = ?",
+                (state, reason, now, retry_at, job_id),
             )
 
-    def skip(self, scope: str, number: int, head_sha: str, now: str) -> None:
+    def save_run(self, run: JobRun) -> None:
         with self._lock:
             self._conn.execute(
-                "INSERT OR IGNORE INTO skips (scope, number, head_sha, created_at) VALUES (?, ?, ?, ?)",
+                "INSERT OR REPLACE INTO job_runs (job_id, data) VALUES (?, ?)",
+                (run.job_id, run.to_json()),
+            )
+
+    def run(self, job_id: str) -> JobRun | None:
+        found = self._conn.execute(
+            "SELECT data FROM job_runs WHERE job_id = ?", (job_id,)
+        ).fetchone()
+        return None if found is None else JobRun.from_json(found[0])
+
+    def done_unsent(self) -> list[tuple[Job, JobRun]]:
+        # No column of job_runs (job_id, data) shares a name with one of jobs.
+        sql = (
+            f"SELECT {_JOB_COLUMNS}, data FROM jobs "
+            "JOIN job_runs ON job_runs.job_id = jobs.id "
+            "WHERE state = 'done' AND json_extract(data, '$.message_sent') = 0 "
+            "ORDER BY created_at, jobs.rowid"
+        )
+        return [(Job(*r[:-1]), JobRun.from_json(r[-1])) for r in self._conn.execute(sql)]
+
+    def skip(self, scope: str, number: int, head_sha: str, now: str) -> None:
+        """Skip the head; skipped again, it keeps the later time (see skipped_at)."""
+        with self._lock:
+            self._conn.execute(
+                "INSERT INTO skips (scope, number, head_sha, created_at) VALUES (?, ?, ?, ?) "
+                "ON CONFLICT (scope, number, head_sha) DO UPDATE SET created_at = excluded.created_at",
                 (scope, number, head_sha, now),
             )
 
@@ -91,6 +140,14 @@ class ReviewerStore:
             "SELECT 1 FROM skips WHERE scope = ? AND number = ? AND head_sha = ?",
             (scope, number, head_sha),
         ).fetchone() is not None
+
+    def skipped_at(self, scope: str, number: int, head_sha: str) -> str:
+        """When the head was last skipped; "" when it is not."""
+        found = self._conn.execute(
+            "SELECT created_at FROM skips WHERE scope = ? AND number = ? AND head_sha = ?",
+            (scope, number, head_sha),
+        ).fetchone()
+        return "" if found is None else found[0]
 
     def notice_sent(self, scope: str, number: int, kind: str, key: str) -> bool:
         return self._conn.execute(
@@ -110,4 +167,31 @@ class ReviewerStore:
             self._conn.execute(
                 "DELETE FROM notices WHERE scope = ? AND number = ? AND kind = ?",
                 (scope, number, kind),
+            )
+
+    def add_anchor(self, chat_id: str, message_id: int, job_id: str, now: str) -> None:
+        with self._lock:
+            self._conn.execute(
+                "INSERT OR REPLACE INTO anchors (chat_id, message_id, job_id, created_at) "
+                "VALUES (?, ?, ?, ?)",
+                (chat_id, message_id, job_id, now),
+            )
+
+    def anchor_job(self, chat_id: str, message_id: int) -> str | None:
+        found = self._conn.execute(
+            "SELECT job_id FROM anchors WHERE chat_id = ? AND message_id = ?", (chat_id, message_id)
+        ).fetchone()
+        return None if found is None else found[0]
+
+    def prepare_hash(self, scope: str) -> str:
+        found = self._conn.execute(
+            "SELECT hash FROM prepare_hashes WHERE scope = ?", (scope,)
+        ).fetchone()
+        return "" if found is None else found[0]
+
+    def set_prepare_hash(self, scope: str, value: str, now: str) -> None:
+        with self._lock:
+            self._conn.execute(
+                "INSERT OR REPLACE INTO prepare_hashes (scope, hash, updated_at) VALUES (?, ?, ?)",
+                (scope, value, now),
             )

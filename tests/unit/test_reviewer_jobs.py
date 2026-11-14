@@ -151,3 +151,37 @@ def test_pipeline_row_and_done_job_wait_for_new_review():
     p = plan([row(pipeline=True)], {1: [job(head=B, state="queued")]})
     assert p.queue == [] and p.states == []
     assert plan([row(head=B, seen=RECENT)], {1: [job(head=A, state="done")]}).states == []
+
+
+def test_deferred_review_is_pending():
+    assert plan([row()], {1: [job(state="deferred")]}).queue == []
+    assert plan([row(actions=BOTH)], {1: [job(state="deferred")]}).queue == []
+
+
+def test_new_head_supersedes_deferred():
+    p = plan([row(head=B)], {1: [job(head=A, state="deferred", jid="d")]})
+    assert ("d", "superseded", "new head") in p.states
+
+
+def test_recheck_new_threads_supersede_deferred():
+    r = row(actions=(("recheck", ("T2", "T1")),))
+    p = plan([r], {1: [job("recheck", key=f"{A}:T1", state="deferred", jid="old")]})
+    assert p.states == [("old", "superseded", "new threads")]
+
+
+def test_gone_turn_cancels_deferred():
+    p = plan([], {1: [job(state="deferred", jid="d")]}, gone=[TurnChange(1, "review", ())])
+    assert p.states == [("d", "cancelled", "turn gone")]
+
+
+def test_turn_back_ignores_stale_next_to_deferred():
+    deferred = Job("d", "acme/app", 1, "review", A, A, "deferred", "", OLD, OLD)
+    newer_stale = Job("s", "acme/app", 1, "review", A, A, "stale", "", RECENT, RECENT)
+    p = plan([row()], {1: [deferred, newer_stale]})
+    assert ("s", "done", "turn back") not in p.states
+
+
+def test_gone_turn_never_cancels_a_review_now():
+    review_now = [job(state="queued", key=f"{A}:now", jid="q"), job(state="deferred", key=f"{A}:now", jid="d")]
+    assert plan([row(actions=())], {1: review_now}, gone=[TurnChange(1, "review", ())]).states == []
+    assert plan([], {1: review_now}, gone=[TurnChange(1, "review", ())]).states == []

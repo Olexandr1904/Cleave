@@ -22,6 +22,12 @@ MIGRATIONS: list[str] = [
     "created_at TEXT NOT NULL, PRIMARY KEY (scope, number, head_sha)); "
     "CREATE TABLE notices (scope TEXT NOT NULL, number INTEGER NOT NULL, kind TEXT NOT NULL, "
     "key TEXT NOT NULL, sent_at TEXT NOT NULL, PRIMARY KEY (scope, number, kind, key))",
+    "ALTER TABLE jobs ADD COLUMN retry_at TEXT NOT NULL DEFAULT ''; "
+    "CREATE TABLE job_runs (job_id TEXT PRIMARY KEY, data TEXT NOT NULL); "
+    "CREATE TABLE anchors (chat_id TEXT NOT NULL, message_id INTEGER NOT NULL, "
+    "job_id TEXT NOT NULL, created_at TEXT NOT NULL, PRIMARY KEY (chat_id, message_id)); "
+    "CREATE TABLE prepare_hashes (scope TEXT PRIMARY KEY, hash TEXT NOT NULL, "
+    "updated_at TEXT NOT NULL)",
 ]
 
 

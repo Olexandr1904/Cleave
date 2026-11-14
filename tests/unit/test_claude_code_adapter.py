@@ -493,3 +493,66 @@ class TestSessionResume:
                     prompt="p", cwd="/tmp", allowed_tools=["read_file"],
                     session_id=self.SESSION, resume=True,
                 )
+
+
+class TestIsolatedSession:
+    """The review runner starts an isolated session: a scrubbed environment,
+    raw permission rules, extra CLI flags, and the run's cost and turns."""
+
+    @pytest.fixture
+    def adapter(self):
+        return ClaudeCodeAdapter(model_provider=lambda: "claude-sonnet-4-5")
+
+    @staticmethod
+    def _ok_proc(**result_fields):
+        result_event = json.dumps({
+            "type": "result", "subtype": "success", "is_error": False,
+            "result": "done", "usage": {"input_tokens": 1, "output_tokens": 1},
+            **result_fields,
+        }).encode()
+        return _make_streaming_proc([result_event], [], rc=0)
+
+    async def test_env_passed_to_subprocess(self, adapter):
+        env = {"HOME": "/h", "PATH": "/p"}
+        with patch("asyncio.create_subprocess_exec", return_value=self._ok_proc()) as m:
+            await adapter.execute_in_workspace(
+                prompt="p", cwd="/tmp", allowed_tools=["read_file"], env=env,
+            )
+        assert m.call_args.kwargs["env"] == env
+
+    async def test_no_env_keeps_inherited(self, adapter):
+        with patch("asyncio.create_subprocess_exec", return_value=self._ok_proc()) as m:
+            await adapter.execute_in_workspace(
+                prompt="p", cwd="/tmp", allowed_tools=["read_file"],
+            )
+        assert m.call_args.kwargs.get("env") is None
+
+    async def test_raw_allowed_tools_passthrough(self, adapter):
+        with patch("asyncio.create_subprocess_exec", return_value=self._ok_proc()) as m:
+            await adapter.execute_in_workspace(
+                prompt="p", cwd="/tmp", allowed_tools=["read_file"],
+                raw_allowed_tools=[
+                    "Bash(git diff:*)", "Skill(code-review *)", "Edit(//abs/run/**)",
+                ],
+            )
+        cmd = list(m.call_args[0])
+        assert cmd[cmd.index("--allowedTools") + 1] == (
+            "Read,Bash(git diff:*),Skill(code-review *),Edit(//abs/run/**)"
+        )
+
+    async def test_extra_args_after_p(self, adapter):
+        with patch("asyncio.create_subprocess_exec", return_value=self._ok_proc()) as m:
+            await adapter.execute_in_workspace(
+                prompt="p", cwd="/tmp", allowed_tools=["read_file"],
+                extra_args=["--restricted", "--settings", "/s.json", "--tools", "Read,Bash"],
+            )
+        cmd = list(m.call_args[0])
+        assert cmd[1:6] == ["-p", "--restricted", "--settings", "/s.json", "--tools"]
+
+    async def test_cost_and_turns_in_response(self, adapter):
+        proc = self._ok_proc(total_cost_usd=2.14, num_turns=31)
+        with patch("asyncio.create_subprocess_exec", return_value=proc):
+            response = await adapter.execute_in_workspace(
+                prompt="p", cwd="/tmp", allowed_tools=["read_file"],
+            )
+        assert response.cost_usd == 2.14 and response.num_turns == 31

@@ -11,13 +11,14 @@ import argparse
 import asyncio
 import logging
 import sys
-from collections.abc import Awaitable, Coroutine
+from collections.abc import Coroutine
 from typing import Callable
 
 logger = logging.getLogger(__name__)
 
 from config.schemas import GlobalConfig, LoadedProject, RepoConfig
 from integrations.base.vcs import VCSInterface
+from orchestrator.reviewer.chat import ReviewerChat
 from orchestrator.reviewer.service import RepoContext, _where
 
 
@@ -148,10 +149,10 @@ def _reviewer_contexts(
     return contexts
 
 
-def _reviewer_send_line(
+def _reviewer_chat(
     notifier, global_config: GlobalConfig, projects: dict[str, LoadedProject],
-) -> Callable[[str], Awaitable[None]] | None:
-    """Sends a reviewer line to the reviewer chat, else the operator chat; a failed send raises.
+) -> ReviewerChat | None:
+    """The reviewer chat, else the operator chat; a failed send raises.
 
     None when there is no target (no Telegram, or no chat id): then no line counts as delivered.
     """
@@ -160,11 +161,15 @@ def _reviewer_send_line(
     chat_id = global_config.reviewer.telegram_chat_id or operator_chat_id(global_config, projects)
     if notifier is None or not chat_id:
         return None
+    return ReviewerChat(notifier, chat_id)
 
-    async def send(text: str) -> None:
-        await notifier.send_message(chat_id, text)
 
-    return send
+def _review_anchor(store) -> Callable[[str, int], bool] | None:
+    """For the command handler: whether a Telegram message is one of the reviewer's (a reply anchor in
+    reviewer.db). None without a reviewer: replies then go where they always went."""
+    if store is None:
+        return None
+    return lambda chat_id, message_id: store.anchor_job(chat_id, message_id) is not None
 
 
 def _start_background(name: str, coro: Coroutine) -> asyncio.Task:
@@ -182,13 +187,26 @@ def _start_background(name: str, coro: Coroutine) -> asyncio.Task:
     return task
 
 
+def _start_reviewer(reviewer, runner) -> dict[str, tuple[asyncio.Task, asyncio.Event]]:
+    """Start the reviewer's poll and its job runner, each with its own stop event, for _stop_background.
+
+    Nothing without a repo to review: then neither is built and both are None.
+    """
+    background = {}
+    for name, part in (("Reviewer", reviewer), ("Review jobs", runner)):
+        if part is not None:
+            stop = asyncio.Event()
+            background[name] = (_start_background(name, part.run(stop)), stop)
+    return background
+
+
 async def _stop_background(
     background: dict[str, tuple[asyncio.Task | None, asyncio.Event]], timeout: float,
 ) -> None:
     """Set every stop event, then wait for all the tasks under one budget; cancel the late ones.
 
-    A None task (the reviewer, with no repo to review) is skipped. A task that raised never
-    stops the rest: the callback of _start_background has logged it.
+    A None task is skipped. A task that raised never stops the rest: the callback of
+    _start_background has logged it.
     """
     names = {task: name for name, (task, _) in background.items() if task is not None}
     for _, stop in background.values():
@@ -629,15 +647,21 @@ def main(argv: list[str] | None = None) -> int:
     switches.add_listener(_on_switch_changed)
     print(f"  Switches: tickets={switches.get('tickets')}, reviews={switches.get('reviews')}")
 
-    # Reviewer: polls each repo with reviewer.enabled. Repos added by hot reload wait for a restart.
+    # Reviewer: polls each repo with reviewer.enabled and runs its review jobs, one at a time.
+    # Repos added by hot reload wait for a restart.
     from orchestrator.reviewer.service import ReviewerService
     from orchestrator.reviewer.store import ReviewerStore
 
     reviewer = None
+    review_jobs = None
+    reviewer_store = None
     reviewer_contexts = _reviewer_contexts(
         global_config, projects, _auth_reporter, dry_run=args.dry_run,
     )
     if reviewer_contexts:
+        from integrations.llm.claude_code_adapter import ClaudeCodeAdapter
+        from orchestrator.reviewer.runner import JobRunner, RunnerConfig
+
         def _pipeline_prs(project_id: str, repo_id: str) -> set[int]:
             """The PRs the ticket pipeline has open for this repo."""
             return {
@@ -646,14 +670,27 @@ def main(argv: list[str] | None = None) -> int:
                 and ws.state.pr_number is not None
             }
 
+        reviewer_store = ReviewerStore(connect(reviewer_db_path(global_config.reviewer)))
+        reviewer_chat = _reviewer_chat(notifier, global_config, projects)
         reviewer = ReviewerService(
-            reviewer_contexts,
-            ReviewerStore(connect(reviewer_db_path(global_config.reviewer))),
-            switches, credential_health.failing,
-            _reviewer_send_line(notifier, global_config, projects), _pipeline_prs,
+            reviewer_contexts, reviewer_store, switches, credential_health.failing,
+            reviewer_chat.send if reviewer_chat is not None else None, _pipeline_prs,
             event_bus=event_bus,
         )
-        print(f"  Reviewer: {len(reviewer_contexts)} repo(s)")
+        # The model session runs on the claude.ai login (the CLI), never the API key; it may read
+        # neither the repo's .env nor the config directory.
+        review_jobs = JobRunner(
+            reviewer_contexts, reviewer_store, switches,
+            credential_health.failing, credential_health.report_auth_failure,
+            reviewer_chat, ClaudeCodeAdapter(), trackers,
+            RunnerConfig(
+                reviewer_db_path(global_config.reviewer).parent / "jobs",
+                [Path(__file__).parent / ".env", Path(args.config).absolute()],
+                global_config.reviewer.jobs,
+            ),
+            event_bus=event_bus,
+        )
+        print(f"  Reviewer: {len(reviewer_contexts)} repo(s), jobs on")
 
     # Initialize command handler for Telegram free-text control
     command_handler = None
@@ -703,6 +740,7 @@ def main(argv: list[str] | None = None) -> int:
                 event_bus=event_bus,
                 switches=switches,
                 get_projects=lambda: projects,
+                review_anchor=_review_anchor(reviewer_store),
             )
             command_handler._wake_fn = lambda: orchestrator._wake_event.set()
             notifier.set_command_handler(command_handler)
@@ -727,11 +765,7 @@ def main(argv: list[str] | None = None) -> int:
         credential_task = _start_background(
             "Credential health", credential_health.run(credential_stop),
         )
-        reviewer_stop = asyncio.Event()
-        reviewer_task = (
-            _start_background("Reviewer", reviewer.run(reviewer_stop))
-            if reviewer is not None else None
-        )
+        reviewer_tasks = _start_reviewer(reviewer, review_jobs)
 
         # Init runtime settings table (model picker).
         import aiosqlite as _aiosqlite
@@ -864,10 +898,11 @@ def main(argv: list[str] | None = None) -> int:
         try:
             await orchestrator.run()
         finally:
-            # First, while Telegram can still deliver a line from a check in flight.
+            # First, while Telegram can still deliver a line from a check in flight. A review job
+            # still running is cancelled: the adapter kills the CLI's process group.
             await _stop_background({
                 "Credential health": (credential_task, credential_stop),
-                "Reviewer": (reviewer_task, reviewer_stop),
+                **reviewer_tasks,
             }, timeout=5.0)
             if tg_active:
                 try:

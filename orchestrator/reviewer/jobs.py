@@ -10,8 +10,10 @@ from orchestrator.reviewer.board import JOB_ACTIONS, BoardUpdate
 from orchestrator.reviewer.lines import large_line, turn_line
 from orchestrator.reviewer.models import Job
 
-_GONE_STATES = {"queued": "cancelled", "done": "stale"}
+_GONE_STATES = {"queued": "cancelled", "deferred": "cancelled", "done": "stale"}
 _MAX_FAILURES = 2  # spec, Failure handling: two failures at one head stop auto-retries
+# The key of a review the operator asked for ("Review now") ends with it; an automatic review's key is its head.
+REVIEW_NOW_SUFFIX = ":now"
 
 
 @dataclass(frozen=True)
@@ -40,7 +42,7 @@ def _blocked(same: list[Job]) -> bool:
 
 def _turn_back(same: list[Job], states: dict[str, tuple[str, str]]) -> None:
     """A turn that comes back makes the newest report current again, when it went stale."""
-    if same and not any(j.state in ("queued", "running", "done") for j in same):
+    if same and not any(j.state in ("queued", "running", "deferred", "done") for j in same):
         newest = max(same, key=lambda j: j.created_at)
         if newest.state == "stale":
             states.setdefault(newest.id, ("done", "turn back"))
@@ -73,14 +75,14 @@ def plan_jobs(
         if "review" in row.my_actions:
             reviews = [j for j in jobs if j.kind == "review"]
             for j in reviews:
-                if j.state == "queued" and j.head_sha != head:
+                if j.state in ("queued", "deferred") and j.head_sha != head:
                     states.setdefault(j.id, ("superseded", "new head"))
             at_head = [j for j in reviews if j.head_sha == head]
             _turn_back(at_head, states)
             blocked = _blocked(at_head)
             skipped = is_skipped(number, head)
             large = row.changed_files >= cfg.max_files_auto
-            pending = any(j.state in ("queued", "running") for j in at_head)
+            pending = any(j.state in ("queued", "running", "deferred") for j in at_head)
             waited = now - datetime.fromisoformat(row.head_first_seen_at) >= quiet
             if not (blocked or skipped) and waited:
                 if large:
@@ -100,15 +102,19 @@ def plan_jobs(
             _turn_back(same_key, states)
             if review_settled and reviews_running and not _blocked(same_key):
                 for j in rechecks:
-                    if j.state == "queued" and j.key != key:
+                    if j.state in ("queued", "deferred") and j.key != key:
                         states.setdefault(j.id, ("superseded", "new threads"))
                 plan.queue.append((number, "recheck", head, key))
     for change in update.gone_turns:
         if change.action not in JOB_ACTIONS:
             continue
         for j in jobs_by_pr.get(change.number, []):
-            if j.kind == change.action and j.state in _GONE_STATES:
-                states.setdefault(j.id, (_GONE_STATES[j.state], "turn gone"))
+            if j.kind != change.action or j.state not in _GONE_STATES:
+                continue
+            state = _GONE_STATES[j.state]
+            if state == "cancelled" and j.key.endswith(REVIEW_NOW_SUFFIX):
+                continue  # the operator asked for it: it needs no turn, and only a skip drops it
+            states.setdefault(j.id, (state, "turn gone"))
     plan.states = [(job_id, state, reason) for job_id, (state, reason) in states.items()]
     if not first_poll:
         for change in update.new_turns:

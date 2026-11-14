@@ -8,6 +8,10 @@ from dataclasses import dataclass
 from pathlib import Path
 
 _BASE_ENV_KEYS = ("HOME", "PATH", "LANG", "TMPDIR", "USER")
+# A git that reads no host system or global config (credential helpers, askPass, insteadOf) and never prompts.
+NO_HOST_GIT_ENV = {"GIT_TERMINAL_PROMPT": "0", "GIT_CONFIG_NOSYSTEM": "1", "GIT_CONFIG_GLOBAL": "/dev/null"}
+# Config validation only checks `{name}` placeholders; expand()'s format_map rejects the rest with these.
+TEMPLATE_ERRORS = (ValueError, AttributeError, IndexError, TypeError)
 
 
 def base_env() -> dict[str, str]:
@@ -16,15 +20,29 @@ def base_env() -> dict[str, str]:
 
 
 def part_env(token: str) -> dict[str, str]:
-    """base_env() plus the forge token for `gh`, with every interactive prompt off."""
+    """base_env() plus the forge token for `gh`, with every interactive prompt off. The command's own git
+    reads no host system or global config and runs no hook or fsmonitor (environment config outranks
+    .git/config). Nothing else of .git/config (a filter, a helper, http.*) is overridden here: a job writes the
+    clone's .git/config and .git/info/attributes back after its session, and a poll runs no readiness during a
+    session that changed them."""
     return {
         **base_env(),
         "GH_TOKEN": token,
         "GITHUB_TOKEN": token,
         "GH_PROMPT_DISABLED": "1",
-        "GIT_TERMINAL_PROMPT": "0",
+        **NO_HOST_GIT_ENV,
+        "GIT_CONFIG_COUNT": "2",
+        "GIT_CONFIG_KEY_0": "core.hooksPath",
+        "GIT_CONFIG_VALUE_0": "/dev/null",
+        "GIT_CONFIG_KEY_1": "core.fsmonitor",
+        "GIT_CONFIG_VALUE_1": "false",
         "NO_COLOR": "1",
     }
+
+
+def placeholder_values(names: frozenset[str], **values: str) -> dict[str, str]:
+    """The values of exactly `names`: the placeholders config validation accepts for the field being filled."""
+    return {name: values[name] for name in names}
 
 
 def expand(template: list[str], values: dict[str, str]) -> list[str]:

@@ -106,4 +106,4 @@ operator:
 #     review:
 #       model: "opus"
 #       effort: "xhigh"
-#       timeout_seconds: 3600
+#       timeout_seconds: 5400

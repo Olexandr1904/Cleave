@@ -10,17 +10,20 @@ from dashboard.event_store import EventStore
 from dashboard.events import EventBus
 from dashboard.web import create_app
 from orchestrator.reviewer.db import connect
-from orchestrator.reviewer.models import BoardRow, Job
+from orchestrator.reviewer.models import BoardRow, Job, JobRun
+from orchestrator.reviewer.report import parse_report
 from orchestrator.reviewer.service import RepoContext, ReviewerService
 from orchestrator.reviewer.store import ReviewerStore
 from orchestrator.switches import Switches
+from tests.unit.test_reviewer_report import HEAD as RHEAD, REPORT
 
 HEAD = "0123456789abcdef0123456789abcdef01234567"
 STAMP = "2026-11-12T10:00:00+00:00"
 PR_KEYS = {
     "number", "title", "url", "ticket_key", "roles", "my_turns", "other_turns", "pipeline",
-    "draft", "changed_files", "head", "job", "last_change", "skipped",
+    "draft", "changed_files", "head", "job", "last_change", "skipped", "large",
 }
+QUEUED_INFO = {"retry_at": "", "started_at": "", "reason": "", "message_sent": False, "findings": None}
 
 
 def _row(number, my_turns=(), other_turns=(), pipeline=False):
@@ -58,7 +61,8 @@ class FakeService:
         return [{
             "scope": "acme/app", "status": "ok", "reason": "",
             "last_poll_at": STAMP, "next_poll_at": "2026-11-12T10:05:00+00:00",
-            "rows": self.rows, "jobs": {1: _job(1)}, "skipped": set(),
+            "rows": self.rows, "jobs": {1: _job(1)}, "job_info": {1: QUEUED_INFO},
+            "skipped": set(), "large": {3},
         }]
 
     def review_now(self, scope, number):
@@ -71,6 +75,21 @@ class FakeService:
         self.calls.append(("skip", scope, number))
         if self.skip_error is not None:
             raise self.skip_error
+
+    def detail(self, scope, number):
+        self.calls.append(("detail", scope, number))
+        if number != 1:
+            raise LookupError(f"no PR #{number} in {scope}")
+        return DETAIL
+
+
+DETAIL = {
+    "row": {"number": 1, "title": "ACME-1 change 1"},
+    "jobs": [{"id": "j1", "kind": "review", "state": "done", "duration_s": 120}],
+    "report_job": "j1", "report": {"event": "COMMENT", "items": []},
+    "replies_job": None, "replies": [],
+    "tg_lines": {"1": "npe"}, "report_text": "# Review",
+}
 
 
 @pytest.fixture
@@ -101,13 +120,15 @@ def test_get_reviews_groups_and_trims(client):
     pr = repo["my_turn"][0]
     assert set(pr) == PR_KEYS
     assert pr["head"] == HEAD[:9] and len(pr["head"]) == 9
-    assert pr["job"] == {"id": "j1", "kind": "review", "state": "queued", "head": HEAD[:9]}
+    assert pr["job"] == {"id": "j1", "kind": "review", "state": "queued", "head": HEAD[:9], **QUEUED_INFO}
     assert len(pr["job"]["head"]) == 9
     assert pr["my_turns"] == ["review"]
     assert pr["other_turns"] == [{"login": "dev", "action": "address_review"}]
     assert (pr["ticket_key"], pr["roles"], pr["pipeline"]) == ("ACME-1", ["reviewer"], False)
     assert repo["waiting"][1]["pipeline"] is True
     assert repo["waiting"][0]["job"] is None
+    assert [(p["number"], p["large"]) for p in repo["waiting"]] == [(3, True), (2, False)]
+    assert pr["large"] is False
 
 
 def test_my_turns_listed_once_in_first_seen_order(store):
@@ -212,6 +233,60 @@ def test_skipped_follows_the_current_head(store, tmp_path):
     prs = {p["number"]: p for p in repo["my_turn"]}
     assert (prs[1]["skipped"], prs[1]["job"]) == (True, None)
     assert prs[2]["skipped"] is False
+
+
+def test_board_jobs_carry_their_run_and_large_prs_are_flagged(store, tmp_path):
+    conn = connect(tmp_path / "rv" / "reviewer.db")
+    rv = ReviewerStore(conn)
+    cfg = ReviewerConfig(enabled=True, base_branch="develop", max_files_auto=10)
+    service = ReviewerService([RepoContext("acme", "app", cfg, None, None, None)], rv, Switches(conn),
+                              lambda key: False, None, lambda project_id, repo_id: set())
+    review = [{"action": "review", "threads": []}]
+    large = dataclasses.replace(_row(3, my_turns=review), changed_files=10)
+    rv.replace_board("acme/app", {1: _row(1, my_turns=review), 2: _row(2, my_turns=review), 3: large})
+    done = rv.add_job("acme/app", 1, "review", HEAD, HEAD, STAMP)
+    rv.set_job_state(done.id, "done", "", STAMP)
+    rv.save_run(JobRun(done.id, started_at=STAMP, report=parse_report(REPORT, RHEAD).to_dict(),
+                       message_ids=[501, 502], message_sent=True))
+    deferred = rv.add_job("acme/app", 2, "review", HEAD, HEAD, STAMP)
+    rv.set_job_state(deferred.id, "deferred", "usage limit reached", STAMP,
+                     retry_at="2026-11-12T10:48:00+00:00")
+    queued = rv.add_job("acme/app", 3, "review", HEAD, f"{HEAD}:now", STAMP)
+    c = TestClient(create_app(EventBus(), store, reviewer=service))
+    [repo] = c.get("/api/reviews").json()["repos"]
+    prs = {p["number"]: p for p in repo["my_turn"]}
+    assert prs[1]["job"] == {
+        "id": done.id, "kind": "review", "state": "done", "head": HEAD[:9], "retry_at": "",
+        "started_at": STAMP, "reason": "", "message_sent": True,
+        "findings": {"critical": 1, "major": 1, "minor": 1, "question": 2, "preexisting": 1, "dropped": 3},
+    }
+    assert {k: prs[2]["job"][k] for k in ("state", "retry_at", "reason", "message_sent")} == {
+        "state": "deferred", "retry_at": "2026-11-12T10:48:00+00:00", "reason": "usage limit reached",
+        "message_sent": False,
+    }
+    assert (prs[3]["job"]["id"], prs[3]["job"]["state"], prs[3]["job"]["findings"]) == (
+        queued.id, "queued", None)
+    assert [prs[n]["large"] for n in (1, 2, 3)] == [False, False, True]
+
+
+def test_detail_route(client):
+    c, svc = client
+    r = c.get("/api/reviews/pr", params={"scope": "acme/app", "number": "1"})
+    assert r.status_code == 200 and r.json() == DETAIL
+    assert svc.calls == [("detail", "acme/app", 1)]
+    for params in (
+        {"scope": "acme/app", "number": "x"},
+        {"scope": "acme/app", "number": "1.5"},
+        {"scope": "acme/app"},
+        {"number": "1"},
+        {"scope": "", "number": "1"},
+    ):
+        r = c.get("/api/reviews/pr", params=params)
+        assert r.status_code == 400 and r.json()["error"], params
+    r = c.get("/api/reviews/pr", params={"scope": "acme/app", "number": "9"})
+    assert r.status_code == 404 and r.json() == {"error": "no PR #9 in acme/app"}
+    assert c.post("/api/reviews/pr", json={"scope": "acme/app", "number": 1}).status_code == 405
+    assert len(svc.calls) == 2   # a bad query and a POST never reach the service
 
 
 def test_routes_absent_without_service(store):

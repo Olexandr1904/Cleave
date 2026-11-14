@@ -5,8 +5,10 @@ import json
 import re
 from pathlib import Path
 
-from config.schemas import ReadinessPartConfig
-from orchestrator.reviewer.commands import expand, part_env, redact, run_command, stderr_tail
+from config.schemas import STATUS_COMMAND_PLACEHOLDERS, THREADS_COMMAND_PLACEHOLDERS, ReadinessPartConfig
+from orchestrator.reviewer.commands import (
+    TEMPLATE_ERRORS, expand, part_env, placeholder_values, redact, run_command, stderr_tail,
+)
 from orchestrator.reviewer.models import BoardSnapshot, SnapshotPR, Turn
 
 _MISSING = object()
@@ -108,17 +110,17 @@ class CommandReadiness:
         return f"CommandReadiness(repo={self.repo!r})"
 
     async def board(self, clone_dir: Path) -> BoardSnapshot:
-        return parse_board_snapshot(await self._run(self._cfg.status_command, {"repo": self.repo}, clone_dir))
+        values = placeholder_values(STATUS_COMMAND_PLACEHOLDERS, repo=self.repo)
+        return parse_board_snapshot(await self._run(self._cfg.status_command, values, clone_dir))
 
     async def threads(self, clone_dir: Path, pr: int) -> dict:
-        values = {"repo": self.repo, "pr": str(pr)}
+        values = placeholder_values(THREADS_COMMAND_PLACEHOLDERS, repo=self.repo, pr=str(pr))
         return parse_threads_snapshot(await self._run(self._cfg.threads_command, values, clone_dir))
 
     async def _run(self, template: list[str], values: dict[str, str], clone_dir: Path) -> str:
         try:
             argv = expand(template, values)
-        except (ValueError, AttributeError, IndexError, TypeError) as e:
-            # Config validation only checks `{name}` placeholders; format_map rejects the rest here.
+        except TEMPLATE_ERRORS as e:
             raise ReadinessError(f"bad command template: {e}") from None
         result = await run_command(argv, cwd=clone_dir, env=part_env(self._token), timeout=self._timeout)
         if result.timed_out:

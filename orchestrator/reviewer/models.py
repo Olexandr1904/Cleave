@@ -1,9 +1,9 @@
-"""Reviewer-mode data: readiness snapshot, PR details, board rows, repo state, jobs."""
+"""Reviewer-mode data: readiness snapshot, PR details and comments, board rows, repo state, jobs, job runs."""
 from __future__ import annotations
 
 import dataclasses
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 JOB_STATES = (
     "queued", "running", "done", "posted", "failed",
@@ -52,6 +52,27 @@ class PRDetails:
     updated_at: str
 
 
+@dataclass(frozen=True)
+class PRFull:
+    number: int
+    title: str
+    body: str
+    url: str
+    state: str
+    head_sha: str
+    base: str
+    additions: int
+    deletions: int
+    changed_files: int
+
+
+@dataclass(frozen=True)
+class PRComments:
+    inline: tuple[dict, ...]  # {"login", "path", "line", "id", "body"}; line may be None
+    reviews: tuple[dict, ...]  # {"login", "state", "body"}, reviews with a body only
+    conversation: tuple[dict, ...]  # {"login", "body"}
+
+
 @dataclass
 class BoardRow:
     # Fields added later must have defaults: rows already stored lack them.
@@ -96,6 +117,7 @@ class RepoState:
     last_poll_at: str = ""
     last_ok_at: str = ""
     next_poll_at: str = ""
+    me: str = ""  # the readiness snapshot's login
 
 
 @dataclass
@@ -110,3 +132,38 @@ class Job:
     reason: str
     created_at: str
     updated_at: str
+    retry_at: str = ""
+
+
+@dataclass
+class JobRun:
+    # Fields added later must have defaults: runs already stored lack them.
+    job_id: str
+    started_at: str = ""
+    finished_at: str = ""
+    cost_usd: float = 0.0
+    turns: int = 0
+    error: str = ""
+    job_dir: str = ""
+    title: str = ""
+    url: str = ""
+    ticket_key: str = ""
+    files: int = 0
+    report: dict = field(default_factory=dict)
+    replies: list = field(default_factory=list)
+    tg_lines: dict = field(default_factory=dict)  # keys are strings in JSON
+    message_ids: list[int] = field(default_factory=list)
+    message_sent: bool = False
+    notes: list[str] = field(default_factory=list)
+    send_attempts: int = 0  # failed deliveries of the message
+    last_attempt_at: str = ""  # the last delivery attempt
+    deferrals: int = 0  # the job's usage-limit and login deferrals so far
+    requeues: int = 0  # the job's "GitHub unavailable" requeues since its last Prepare that got through
+
+    def to_json(self) -> str:
+        return json.dumps(dataclasses.asdict(self))
+
+    @classmethod
+    def from_json(cls, text: str) -> JobRun:
+        known = {f.name for f in dataclasses.fields(cls)}
+        return cls(**{k: v for k, v in json.loads(text).items() if k in known})

@@ -54,6 +54,8 @@ def _ensure_msg_ids(c: dict) -> list[int]:
     return c["msg_ids"]
 
 
+_REVIEW_REPLY_ANSWER = "Replies to review messages are handled from the next version on; nothing was done."
+
 _FIX_TOKENS = ("fix it", "fix", "fxi", "fifx", "fixx", "fx", "fi", "yes")
 _WONT_FIX_TOKENS = (
     "won't fix", "wont fix", "do not fix", "don't fix", "dont fix",
@@ -95,6 +97,9 @@ def _classify_reply(text: str) -> tuple[str, str, str]:
 class CommandHandler:
     """Routes incoming Telegram messages to the appropriate handler."""
 
+    # (chat_id, message_id) -> whether the message is one of the reviewer's (a reply anchor); None: no reviewer.
+    _review_anchor: Callable[[str, int], bool] | None = None
+
     def __init__(
         self,
         intent_parser: IntentParser,
@@ -111,8 +116,10 @@ class CommandHandler:
         event_bus: Any | None = None,
         switches: Any | None = None,
         get_projects: Callable[[], dict[str, Any]] | None = None,
+        review_anchor: Callable[[str, int], bool] | None = None,
     ) -> None:
         self._switches = switches
+        self._review_anchor = review_anchor
         self._get_projects = get_projects or (lambda: {})
         self._intent_parser = intent_parser
         self._notifier = notifier
@@ -571,10 +578,26 @@ class CommandHandler:
         ]
         return f"Already started: {', '.join(parts)}."
 
+    def _is_review_anchor(self, chat_id: str, message_id: int) -> bool:
+        """Whether the message is one of the reviewer's; a failed lookup (logged with its class only) counts
+        as no, so the reply still reaches the pipeline."""
+        if self._review_anchor is None:
+            return False
+        try:
+            return self._review_anchor(chat_id, message_id)
+        except Exception as e:
+            logger.warning("Reply anchor not looked up: %s", type(e).__name__)
+            return False
+
     async def handle_reply(self, reply_to_msg_id: int, text: str, chat_id: str) -> bool:
         """Handle a reply to an escalation message. Returns True if matched."""
         if self._allowed_chat_ids is not None and chat_id not in self._allowed_chat_ids:
             return False
+        # A reply to a reviewer message (only ever one Cleave sent to that chat) is not the ticket
+        # pipeline's: its intent parser would read the message's hint ("post 1 2 4 approve") as an approval.
+        if self._is_review_anchor(chat_id, reply_to_msg_id):
+            await self._notifier.send_message(chat_id, _REVIEW_REPLY_ANSWER)
+            return True
         workspaces = self._active_workspaces_fn()
 
         # Check escalated PR comment replies first (pending_review_comments)

@@ -2,6 +2,7 @@
 from __future__ import annotations
 import asyncio
 import dataclasses
+import json
 import logging
 import sqlite3
 from datetime import datetime, timedelta, timezone
@@ -11,11 +12,15 @@ from dashboard.events import EventBus
 from orchestrator.reviewer.clone import CloneError
 from orchestrator.reviewer.db import connect
 from orchestrator.reviewer.forge_github import ForgeError
-from orchestrator.reviewer.models import BoardSnapshot, PRDetails, RepoState, SnapshotPR, Turn
+from orchestrator.reviewer.models import (
+    BoardSnapshot, JobRun, PRDetails, RepoState, SnapshotPR, Turn,
+)
 from orchestrator.reviewer.readiness import ReadinessError
+from orchestrator.reviewer.report import parse_report
 from orchestrator.reviewer.service import RepoContext, ReviewerService
 from orchestrator.reviewer.store import ReviewerStore
 from orchestrator.switches import Switches
+from tests.unit.test_reviewer_report import HEAD as RHEAD, REPORT
 
 T0 = datetime(2026, 11, 20, 10, 0, tzinfo=timezone.utc)
 A = "a" * 40
@@ -24,11 +29,15 @@ CFG = ReviewerConfig(enabled=True, base_branch="develop", process=ProcessPartCon
 DOC_LINE = f"[acme/app] reviews are off: {DOC} is not on develop."
 
 class FakeClone:
-    def __init__(self, path, doc=True, fail=None): self.path, self.doc, self.fail = path, doc, fail
+    in_session = False
+    def __init__(self, path, doc=True, fail=None):
+        self.path, self.doc, self.fail = path, doc, fail
+        self.lock, self.session_lock = asyncio.Lock(), asyncio.Lock()
     async def refresh(self):
         if self.fail: raise self.fail
         return "c" * 40
     def has_file(self, rel): return self.doc
+    def changed_git_files(self): return []
 
 class FakeReadiness:
     def __init__(self, snapshot=None, fail=None): self.snapshot, self.fail = snapshot, fail
@@ -84,6 +93,12 @@ class CountingClone(FakeClone):
     async def refresh(self):
         self.refreshes += 1
         return await super().refresh()
+
+class CountingReadiness(FakeReadiness):
+    boards = 0
+    async def board(self, clone_dir):
+        self.boards += 1
+        return await super().board(clone_dir)
 
 async def run_briefly(service):
     """run() for 50 ms: its first round, then its wait. Raises if run() itself raises."""
@@ -258,7 +273,7 @@ async def test_review_now_and_skip(tmp_path):
     await rig.service.poll(c)   # the head was just seen: the quiet window is not over
     assert rig.store.jobs("acme/app") == []
     job = rig.service.review_now("acme/app", 1)
-    assert (job.number, job.kind, job.head_sha, job.key, job.state) == (1, "review", A, A, "queued")
+    assert (job.number, job.kind, job.head_sha, job.key, job.state) == (1, "review", A, f"{A}:now", "queued")
     with pytest.raises(ValueError, match="already queued"):
         rig.service.review_now("acme/app", 1)
     rig.service.skip("acme/app", 1)
@@ -458,3 +473,321 @@ async def test_unexpected_error_logs_class_and_frame_only(tmp_path, caplog):
         await rig.service.poll(c)
     assert "KeyError at " in caplog.text and "test_reviewer_service.py:" in caplog.text
     assert "hidden-detail" not in caplog.text
+
+# --- Plan 4: deferred jobs, the clone lock, the operator's login ---
+
+def deferred_review(rig):
+    job = rig.store.add_job("acme/app", 1, "review", A, A, T0.isoformat())
+    rig.store.set_job_state(job.id, "deferred", "", T0.isoformat())
+    return job
+
+async def test_review_now_refuses_with_deferred(tmp_path):
+    c = ctx(tmp_path, *review_pr())
+    rig = Rig(tmp_path, c)
+    await rig.service.poll(c)
+    deferred_review(rig)
+    with pytest.raises(ValueError, match="already queued"):
+        rig.service.review_now("acme/app", 1)
+
+async def test_skip_drops_deferred(tmp_path):
+    c = ctx(tmp_path, *review_pr())
+    rig = Rig(tmp_path, c)
+    await rig.service.poll(c)
+    job = deferred_review(rig)
+    rig.service.skip("acme/app", 1)
+    [skipped] = rig.store.jobs("acme/app")
+    assert (skipped.id, skipped.state, skipped.reason) == (job.id, "skipped", "skipped by operator")
+
+async def test_poll_skips_refresh_during_a_jobs_session(tmp_path):
+    clone = CountingClone(tmp_path / "app")
+    readiness = CountingReadiness(review_snap())
+    c = ctx(tmp_path, readiness, FakeForge({1: det(1)}), clone=clone)
+    rig = Rig(tmp_path, c)
+    async with clone.lock:   # a job holds the clone, in its session phase
+        clone.in_session = True
+        await rig.service.poll(c)
+    assert (clone.refreshes, readiness.boards) == (0, 1)
+    assert rig.state().status == "ok"
+
+class PreparingClone(CountingClone):
+    """A clone a job holds outside its session phase (Prepare or cleanup); counts how often a poll looks."""
+    looks = 0
+    @property
+    def in_session(self):
+        self.looks += 1
+        return False
+
+async def test_poll_leaves_a_clone_a_job_prepares_or_cleans_up(tmp_path):
+    clone = PreparingClone(tmp_path / "app")
+    readiness = CountingReadiness(review_snap())
+    c = ctx(tmp_path, readiness, FakeForge({1: det(1)}), clone=clone)
+    rig = Rig(tmp_path, c)
+    async with clone.lock:   # the job preparing it holds the clone
+        await run_briefly(rig.service)
+    assert (clone.refreshes, readiness.boards, clone.looks) == (0, 0, 1)   # no readiness, and no spin
+    assert rig.state().last_poll_at == "" and rig.store.board("acme/app") == {}   # nothing recorded
+    rig.t = T0 + timedelta(seconds=4)
+    await run_briefly(rig.service)
+    assert readiness.boards == 0   # tried again a few seconds later, not at once
+    rig.t = T0 + timedelta(seconds=5)
+    await run_briefly(rig.service)
+    assert (clone.refreshes, readiness.boards) == (1, 1) and rig.state().status == "ok"
+
+async def test_poll_records_me(tmp_path):
+    c = ctx(tmp_path, *review_pr())
+    rig = Rig(tmp_path, c)
+    await rig.service.poll(c)
+    assert rig.store.repo_state("acme/app").me == "octo"
+
+# --- Plan 4: the PR detail view ---
+
+DETAIL_KEYS = {"row", "jobs", "report_job", "report", "replies_job", "replies", "tg_lines",
+               "report_text"}
+JOB_KEYS = {"id", "kind", "state", "reason", "head", "created_at", "updated_at", "retry_at",
+            "started_at", "finished_at", "duration_s", "cost_usd", "turns", "message_ids", "message_sent",
+            "notes"}
+
+def finished_job(rig, tmp_path, state, report_text=None, report=None, kind="review", at=T0, **run):
+    """A job at RHEAD in `state` with a saved run; its copy holds `report_text` when given."""
+    job = rig.store.add_job("acme/app", 1, kind, RHEAD, RHEAD, at.isoformat())
+    rig.store.set_job_state(job.id, state, "", at.isoformat())
+    job_dir = tmp_path / "jobs" / job.id
+    job_dir.mkdir(parents=True)
+    if report_text is not None:
+        (job_dir / f"report_{RHEAD[:9]}.md").write_text(report_text)
+    if run.get("replies"):   # the plan's copy, as the runner keeps it
+        (job_dir / "replies_plan.json").write_text(json.dumps(run["replies"]))
+    rig.store.save_run(JobRun(job.id, job_dir=str(job_dir), report=report or {}, **run))
+    return job
+
+async def test_detail_shapes(tmp_path):
+    c = ctx(tmp_path, FakeReadiness(review_snap()), FakeForge({1: det(1, head=RHEAD)}))
+    rig = Rig(tmp_path, c)
+    await rig.service.poll(c)   # the board row
+    job = finished_job(rig, tmp_path, "done", REPORT, parse_report(REPORT, RHEAD).to_dict(),
+                       started_at=T0.isoformat(),
+                       finished_at=(T0 + timedelta(seconds=120)).isoformat(),
+                       cost_usd=2.0, turns=14, message_ids=[501, 502], tg_lines={"1": "npe"})
+    d = rig.service.detail("acme/app", 1)
+    assert set(d) == DETAIL_KEYS
+    assert (d["row"]["number"], d["row"]["head_sha"]) == (1, RHEAD)
+    [j] = d["jobs"]
+    assert set(j) == JOB_KEYS
+    assert j["duration_s"] == 120
+    assert (j["id"], j["kind"], j["state"], j["head"], j["cost_usd"], j["turns"]) == (
+        job.id, "review", "done", RHEAD[:9], 2.0, 14)
+    assert j["message_ids"] == [501, 502]
+    assert d["report_job"] == job.id
+    assert d["report"]["items"][0]["number"] == 1
+    assert d["report_text"].startswith("# Review")
+    assert (d["replies_job"], d["replies"], d["tg_lines"]) == (None, [], {"1": "npe"})
+
+async def test_detail_without_report(tmp_path):
+    rig = Rig(tmp_path)
+    job = rig.store.add_job("acme/app", 1, "review", RHEAD, RHEAD, T0.isoformat())
+    d = rig.service.detail("acme/app", 1)   # no board row: its job alone finds the PR
+    assert d["row"] is None and [j["id"] for j in d["jobs"]] == [job.id]
+    assert (d["jobs"][0]["state"], d["jobs"][0]["duration_s"]) == ("queued", None)
+    assert (d["report_job"], d["report"], d["report_text"]) == (None, None, None)
+
+async def test_detail_shows_unreadable_report(tmp_path):
+    rig = Rig(tmp_path)
+    finished_job(rig, tmp_path, "done", REPORT, parse_report(REPORT, RHEAD).to_dict())
+    unreadable = "# Review: no event\n" + "x" * 300_000
+    failed = finished_job(rig, tmp_path, "failed", unreadable, at=T0 + timedelta(minutes=5))
+    d = rig.service.detail("acme/app", 1)
+    assert d["report_job"] == failed.id   # the newest report, parsed or not
+    assert d["report"] is None
+    assert d["report_text"] == unreadable[:200_000]
+
+async def test_detail_replies_from_newest_recheck(tmp_path):
+    rig = Rig(tmp_path)
+    old = [{"n": 1, "thread_id": "T1", "body": "Old."}]
+    new = [{"n": 2, "thread_id": "T2", "body": "Fixed, thanks."}]
+    finished_job(rig, tmp_path, "done", kind="recheck", replies=old)
+    newest = finished_job(rig, tmp_path, "done", kind="recheck", replies=new,
+                          at=T0 + timedelta(minutes=5))
+    d = rig.service.detail("acme/app", 1)
+    assert (d["replies_job"], d["replies"]) == (newest.id, new)
+
+# --- Fix round 1 (Task 10) ---
+
+async def test_detail_prefers_the_report_named_by_the_head(tmp_path):
+    rig = Rig(tmp_path)
+    job = finished_job(rig, tmp_path, "done", REPORT, parse_report(REPORT, RHEAD).to_dict())
+    (tmp_path / "jobs" / job.id / "report_0.md").write_text("# Decoy")   # sorts first
+    d = rig.service.detail("acme/app", 1)
+    assert (d["report_job"], d["report_text"]) == (job.id, REPORT)
+
+async def test_detail_skips_a_directory_named_like_a_report(tmp_path):
+    rig = Rig(tmp_path)
+    job = finished_job(rig, tmp_path, "failed")   # its copy holds no report_<head9>.md
+    job_dir = tmp_path / "jobs" / job.id
+    (job_dir / "report_0.md").mkdir()
+    (job_dir / "report_0.md" / "inside.md").write_text("# Inside")
+    d = rig.service.detail("acme/app", 1)
+    assert (d["report_job"], d["report_text"]) == (None, None)
+    (job_dir / "report_1.md").write_text("# Review: misnamed")
+    d = rig.service.detail("acme/app", 1)
+    assert (d["report_job"], d["report_text"]) == (job.id, "# Review: misnamed")
+
+async def test_detail_never_takes_a_recheck_copy_as_the_report(tmp_path):
+    rig = Rig(tmp_path)
+    review = finished_job(rig, tmp_path, "done", REPORT, parse_report(REPORT, RHEAD).to_dict())
+    finished_job(rig, tmp_path, "done", "# Review: in a re-check copy", kind="recheck",
+                 at=T0 + timedelta(minutes=5))
+    d = rig.service.detail("acme/app", 1)
+    assert (d["report_job"], d["report_text"]) == (review.id, REPORT)
+
+async def test_detail_replies_survive_a_running_recheck(tmp_path):
+    rig = Rig(tmp_path)
+    drafted = [{"n": 1, "thread_id": "T1", "body": "Fixed, thanks."}]
+    done = finished_job(rig, tmp_path, "done", kind="recheck", replies=drafted)
+    finished_job(rig, tmp_path, "running", kind="recheck", at=T0 + timedelta(minutes=5),
+                 started_at=(T0 + timedelta(minutes=5)).isoformat())
+    d = rig.service.detail("acme/app", 1)
+    assert (d["replies_job"], d["replies"]) == (done.id, drafted)
+
+async def test_detail_unknown_pr(tmp_path):
+    rig = Rig(tmp_path)
+    with pytest.raises(LookupError):
+        rig.service.detail("acme/app", 1)
+
+# --- Final fix wave ---
+
+async def test_review_now_is_still_a_review_at_its_head_for_the_poll(tmp_path):
+    """Its key marks it (Review now), but plan 3's rules see a review at that head: done, it keeps the poll
+    from queueing another; queued, a new head supersedes it."""
+    r, forge = review_pr()
+    c = ctx(tmp_path, r, forge)
+    rig = Rig(tmp_path, c)
+    await rig.service.poll(c)
+    job = rig.service.review_now("acme/app", 1)
+    rig.store.set_job_state(job.id, "done", "", T0.isoformat())
+    rig.t = T0 + timedelta(minutes=31)
+    await rig.service.poll(c)
+    assert [j.id for j in rig.store.jobs("acme/app")] == [job.id]
+    rig.store.set_job_state(job.id, "queued", "", T0.isoformat())
+    forge.d[1] = det(1, head="b" * 40)
+    await rig.service.poll(c)
+    assert (rig.store.job(job.id).state, rig.store.job(job.id).reason) == ("superseded", "new head")
+
+def recheck_with_plan(rig, tmp_path, state, plan=True, at=T0):
+    job = finished_job(rig, tmp_path, state, kind="recheck", at=at)
+    if plan:
+        (tmp_path / "jobs" / job.id / "replies_plan.json").write_text("[]")
+    return job
+
+@pytest.mark.parametrize("state", ["superseded", "cancelled", "deferred", "stale", "queued"])
+async def test_detail_replies_only_from_a_run_with_a_plan(tmp_path, state):
+    """A re-check superseded or cancelled at Prepare, or deferred by the usage limit, has a stored run but
+    no plan: it never hides the last drafted replies."""
+    rig = Rig(tmp_path)
+    drafted = [{"n": 1, "thread_id": "T1", "body": "Fixed, thanks."}]
+    done = finished_job(rig, tmp_path, "done", kind="recheck", replies=drafted)
+    recheck_with_plan(rig, tmp_path, state, plan=False, at=T0 + timedelta(minutes=5))
+    d = rig.service.detail("acme/app", 1)
+    assert (d["replies_job"], d["replies"]) == (done.id, drafted)
+
+async def test_detail_replies_never_from_a_failed_run(tmp_path):
+    rig = Rig(tmp_path)
+    done = recheck_with_plan(rig, tmp_path, "done")
+    recheck_with_plan(rig, tmp_path, "failed", at=T0 + timedelta(minutes=5))   # a plan it could not read
+    assert rig.service.detail("acme/app", 1)["replies_job"] == done.id
+
+async def test_detail_survives_an_unreadable_report(tmp_path, monkeypatch):
+    rig = Rig(tmp_path)
+    job = finished_job(rig, tmp_path, "done", REPORT, parse_report(REPORT, RHEAD).to_dict())
+    real_open = type(tmp_path).open
+    def refusing(path, *args, **kwargs):
+        if path.name.startswith("report_"):
+            raise PermissionError(13, "Permission denied")
+        return real_open(path, *args, **kwargs)
+    monkeypatch.setattr(type(tmp_path), "open", refusing)
+    d = rig.service.detail("acme/app", 1)
+    assert (d["report_job"], d["report_text"]) == (job.id, None)
+    assert d["report"]["items"][0]["number"] == 1   # the parsed report still shows
+
+@pytest.mark.parametrize("started_at, finished_at", [
+    ("not a time", T0.isoformat()), (T0.isoformat(), "2026-13-40T99:00:00"), (T0.isoformat(), 5)])
+async def test_detail_survives_malformed_run_times(tmp_path, started_at, finished_at):
+    rig = Rig(tmp_path)
+    finished_job(rig, tmp_path, "done", started_at=started_at, finished_at=finished_at)
+    [j] = rig.service.detail("acme/app", 1)["jobs"]
+    assert j["duration_s"] is None
+
+# --- Task 12: the Reviews tab redesign ---
+
+async def test_overview_job_info(tmp_path):
+    """The latest job of each PR as the board shows it: its run's start and delivery, its next try and
+    reason, and a review's findings counted by kind."""
+    three = snap(*(spr(n, [Turn("octo", "review")]) for n in (1, 2, 3)))
+    c = ctx(tmp_path, FakeReadiness(three), FakeForge({n: det(n) for n in (1, 2, 3)}))
+    rig = Rig(tmp_path, c)
+    await rig.service.poll(c)   # the board rows; the quiet window keeps it from queueing
+    done = finished_job(rig, tmp_path, "done", REPORT, parse_report(REPORT, RHEAD).to_dict(),
+                        started_at=T0.isoformat(), message_ids=[501, 502], message_sent=True)
+    retry = (T0 + timedelta(minutes=48)).isoformat()
+    deferred = rig.store.add_job("acme/app", 2, "review", A, A, T0.isoformat())
+    rig.store.set_job_state(deferred.id, "deferred", "usage limit reached", T0.isoformat(), retry_at=retry)
+    rig.store.add_job("acme/app", 3, "review", A, A, T0.isoformat())   # queued, no run yet
+    [repo] = rig.service.overview()
+    assert repo["jobs"][1].id == done.id
+    assert repo["job_info"][1] == {
+        "retry_at": "", "started_at": T0.isoformat(), "reason": "", "message_sent": True,
+        "findings": {"critical": 1, "major": 1, "minor": 1, "question": 2, "preexisting": 1,
+                     "dropped": 3},
+    }
+    assert repo["job_info"][2] == {
+        "retry_at": retry, "started_at": "", "reason": "usage limit reached", "message_sent": False,
+        "findings": None,
+    }
+    assert repo["job_info"][3]["findings"] is None
+
+async def test_overview_findings_only_for_a_review_with_a_parsed_report(tmp_path):
+    c = ctx(tmp_path, *review_pr())
+    rig = Rig(tmp_path, c)
+    await rig.service.poll(c)   # the board row
+    finished_job(rig, tmp_path, "failed", "# Review: no event")   # a report that did not parse
+    assert rig.service.overview()[0]["job_info"][1]["findings"] is None
+    finished_job(rig, tmp_path, "done", kind="recheck", replies=[{"n": 1, "thread_id": "T1", "body": "x"}],
+                 report=parse_report(REPORT, RHEAD).to_dict(), at=T0 + timedelta(minutes=5))
+    assert rig.service.overview()[0]["job_info"][1]["findings"] is None
+
+async def test_overview_flags_large_prs(tmp_path):
+    snapshot = snap(spr(1, [Turn("octo", "review")]), spr(2, [Turn("octo", "review")]))
+    c = ctx(tmp_path, FakeReadiness(snapshot), FakeForge({1: det(1, files=40), 2: det(2, files=39)}))
+    rig = Rig(tmp_path, c)
+    await rig.service.poll(c)
+    assert rig.service.overview()[0]["large"] == {1}   # CFG.max_files_auto is 40
+
+async def test_detail_jobs_carry_message_sent(tmp_path):
+    rig = Rig(tmp_path)
+    finished_job(rig, tmp_path, "done", message_ids=[501], message_sent=True)
+    finished_job(rig, tmp_path, "done", message_ids=[502], at=T0 + timedelta(minutes=5))
+    assert [j["message_sent"] for j in rig.service.detail("acme/app", 1)["jobs"]] == [False, True]
+
+# --- Code-review fix wave 2 ---
+
+async def test_review_now_survives_the_turn_going(tmp_path):
+    r, forge = review_pr()
+    c = ctx(tmp_path, r, forge)
+    rig = Rig(tmp_path, c)
+    await rig.service.poll(c)
+    job = rig.service.review_now("acme/app", 1)
+    r.snapshot = snap(spr(1, []))   # the PR now waits on others: the review turn is gone
+    await rig.service.poll(c)
+    assert (rig.store.job(job.id).state, rig.store.job(job.id).reason) == ("queued", "")
+    rig.service.skip("acme/app", 1)   # a skip still drops it
+    assert rig.store.job(job.id).state == "skipped"
+
+async def test_overview_reads_runs_only_for_prs_on_the_board(tmp_path, monkeypatch):
+    c = ctx(tmp_path, *review_pr())
+    rig = Rig(tmp_path, c)
+    await rig.service.poll(c)   # PR 1 on the board
+    on_board = finished_job(rig, tmp_path, "done", REPORT, parse_report(REPORT, RHEAD).to_dict())
+    rig.store.add_job("acme/app", 9, "review", A, A, T0.isoformat())   # a PR closed since: off the board
+    read, real = [], rig.store.run
+    monkeypatch.setattr(rig.store, "run", lambda job_id: read.append(job_id) or real(job_id))
+    [repo] = rig.service.overview()
+    assert read == [on_board.id] and set(repo["job_info"]) == {1}

@@ -5,17 +5,18 @@ import asyncio
 import logging
 import traceback
 from collections.abc import Awaitable, Callable
-from dataclasses import dataclass, field, replace
+from dataclasses import asdict, dataclass, field, replace
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from typing import Any
 
 from config.schemas import ReviewerConfig
 from orchestrator.reviewer.board import build_board
 from orchestrator.reviewer.clone import CloneError
 from orchestrator.reviewer.forge_github import ForgeError
-from orchestrator.reviewer.jobs import Notice, plan_jobs
+from orchestrator.reviewer.jobs import REVIEW_NOW_SUFFIX, Notice, plan_jobs
 from orchestrator.reviewer.lines import doc_missing_line, poll_failed_line, readiness_failed_line
-from orchestrator.reviewer.models import BoardRow, Job, RepoState
+from orchestrator.reviewer.models import BoardRow, BoardSnapshot, Job, JobRun, RepoState
 from orchestrator.reviewer.readiness import ReadinessError
 from orchestrator.reviewer.store import ReviewerStore
 from orchestrator.switches import Switches, scope_of
@@ -24,6 +25,8 @@ logger = logging.getLogger(__name__)
 
 _MAX_WAIT_SECONDS = 60
 _MIN_INTERVAL_SECONDS = 60
+_CLONE_BUSY_RETRY_SECONDS = 5  # a repo whose clone a job prepares or cleans up is polled again this soon
+_MAX_REPORT_TEXT = 200_000  # characters of a report the detail view returns
 
 
 def utcnow() -> datetime:
@@ -40,12 +43,77 @@ def _interval(cfg: ReviewerConfig) -> int:
     return max(cfg.poll_interval_seconds, _MIN_INTERVAL_SECONDS)
 
 
+def _report_file(job: Job, run: JobRun | None) -> Path | None:
+    """The report in a job's copy, whether it parsed or not: the one named by the job's head, else
+    the first other regular `report_*.md` (a report written under another name stays visible)."""
+    if run is None or not run.job_dir:
+        return None
+    job_dir = Path(run.job_dir)
+    named = job_dir / f"report_{job.head_sha[:9]}.md"
+    if named.is_file():
+        return named
+    return next((p for p in sorted(job_dir.glob("report_*.md")) if p.is_file()), None)
+
+
+def _has_plan(job: Job, run: JobRun | None) -> bool:
+    """Whether a re-check run drafted a replies plan: its copy holds one, and it did not fail reading it. A
+    run superseded or cancelled at Prepare, or deferred, has none."""
+    return (run is not None and job.state != "failed" and bool(run.job_dir)
+            and (Path(run.job_dir) / "replies_plan.json").is_file())
+
+
+def _duration(run: JobRun) -> int | None:
+    if not (run.started_at and run.finished_at):
+        return None
+    try:
+        elapsed = datetime.fromisoformat(run.finished_at) - datetime.fromisoformat(run.started_at)
+    except (ValueError, TypeError):  # a malformed stored time: no duration, not a failed page
+        return None
+    return round(elapsed.total_seconds())
+
+
+def _job_detail(job: Job, run: JobRun | None) -> dict:
+    run = run or JobRun(job.id)
+    return {
+        "id": job.id, "kind": job.kind, "state": job.state, "reason": job.reason,
+        "head": job.head_sha[:9], "created_at": job.created_at, "updated_at": job.updated_at,
+        "retry_at": job.retry_at, "started_at": run.started_at, "finished_at": run.finished_at,
+        "duration_s": _duration(run), "cost_usd": run.cost_usd, "turns": run.turns,
+        "message_ids": run.message_ids, "message_sent": run.message_sent, "notes": run.notes,
+    }
+
+
+# The board's names for the report's finding kinds.
+_FINDING_KINDS = {"red": "critical", "orange": "major", "yellow": "minor", "question": "question",
+                  "preexisting": "preexisting"}
+
+
+def _findings(job: Job, run: JobRun) -> dict | None:
+    """A review's parsed report as its number of findings of each kind and of dropped candidates; None
+    for a re-check or a review without one."""
+    if job.kind != "review" or not run.report:
+        return None
+    counts = dict.fromkeys(_FINDING_KINDS.values(), 0)
+    for item in run.report["items"]:
+        counts[_FINDING_KINDS[item["kind"]]] += 1
+    return {**counts, "dropped": len(run.report["dropped"])}
+
+
+def _job_info(job: Job, run: JobRun | None) -> dict:
+    """What the board shows of a PR's latest job besides its id, kind, state and head."""
+    run = run or JobRun(job.id)
+    return {
+        "retry_at": job.retry_at, "started_at": run.started_at, "reason": job.reason,
+        "message_sent": run.message_sent, "findings": _findings(job, run),
+    }
+
+
 @dataclass
 class RepoContext:
     project_id: str
     repo_id: str
     cfg: ReviewerConfig
-    clone: Any  # refresh() -> sha, has_file(rel), path
+    clone: Any  # refresh() -> sha, has_file(rel), path, lock, session_lock, in_session (see ReviewClone)
     readiness: Any  # board(clone_dir) -> BoardSnapshot
     forge: Any  # open_prs(), details(number, updated_at), reviewed_by(number, login, updated_at)
 
@@ -56,7 +124,7 @@ class RepoContext:
 
 @dataclass
 class _Outcome:
-    """A recorded poll: when the repo is next due, and what is left once the store is written."""
+    """A poll done: when the repo is next due, and what is left once the store is written."""
     next_poll_at: datetime
     events: list[tuple[str, str, dict]] = field(default_factory=list)
     lines: list[str] = field(default_factory=list)
@@ -126,7 +194,8 @@ class ReviewerService:
             return now
 
     async def poll(self, ctx: RepoContext) -> None:
-        """One poll of one repo. Never raises (cancellation aside): failures become its status."""
+        """One poll of one repo. Never raises (cancellation aside): failures become its status. A repo whose
+        clone a job prepares or cleans up is left alone, nothing recorded: it stays due, tried again shortly."""
         now = self._now()
         try:
             outcome = await self._record(ctx, now)
@@ -134,14 +203,19 @@ class ReviewerService:
             logger.warning("Reviewer poll of %s not recorded: %s", ctx.scope, _where(e))
             self._next_due[ctx.scope] = now + timedelta(seconds=self._max_backoff)
             return
+        if outcome is None:
+            logger.debug("Reviewer poll of %s: a job prepares or cleans up the clone, polled shortly", ctx.scope)
+            self._next_due[ctx.scope] = now + timedelta(seconds=_CLONE_BUSY_RETRY_SECONDS)
+            return
         self._next_due[ctx.scope] = outcome.next_poll_at
         try:
             await self._finish(ctx, outcome, now.isoformat())
         except Exception as e:  # after the last state write: the poll stays recorded as it is
             logger.warning("Reviewer poll of %s: lines not all sent: %s", ctx.scope, _where(e))
 
-    async def _record(self, ctx: RepoContext, now: datetime) -> _Outcome:
-        """The poll up to its state write; a failure is recorded from the state as it was loaded."""
+    async def _record(self, ctx: RepoContext, now: datetime) -> _Outcome | None:
+        """The poll up to its state write; a failure is recorded from the state as it was loaded. None: the
+        poll was left for later, nothing recorded."""
         state = replace(self._store.repo_state(ctx.scope), last_poll_at=now.isoformat())
         try:
             return await self._poll(ctx, state, now)
@@ -154,7 +228,7 @@ class ReviewerService:
         logger.warning("Reviewer poll of %s failed (%s): %s", ctx.scope, status, logged)
         return self._fail(ctx, state, now, status, reason)
 
-    async def _poll(self, ctx: RepoContext, state: RepoState, now: datetime) -> _Outcome:
+    async def _poll(self, ctx: RepoContext, state: RepoState, now: datetime) -> _Outcome | None:
         scope, cfg = ctx.scope, ctx.cfg
         stamp = state.last_poll_at
         next_at = now + timedelta(seconds=_interval(cfg))
@@ -166,15 +240,22 @@ class ReviewerService:
             ))
             return _Outcome(next_at)
 
-        await ctx.clone.refresh()
-        doc, base = cfg.process.doc, cfg.base_branch
-        doc_ok = ctx.clone.has_file(doc)
-        notices = []
-        if doc_ok:
-            self._store.clear_notice(scope, 0, "doc_missing")
+        clone = ctx.clone
+        if not clone.lock.locked():
+            async with clone.lock:  # no job runs: refresh, then read the clone
+                await clone.refresh()
+                doc_ok, notices, snapshot = await self._read_clone(ctx)
         else:
-            notices.append(Notice(0, "doc_missing", doc, doc_missing_line(scope, doc, base)))
-        snapshot = await ctx.readiness.board(ctx.clone.path)
+            async with clone.session_lock:
+                if not clone.in_session:  # a job prepares or cleans up the clone
+                    return None
+                if changed := clone.changed_git_files():  # the job's restore and failure deal with it
+                    logger.warning("Reviewer poll of %s: the session changed %s; no readiness until it ends",
+                                   scope, ", ".join(map(str, changed)))
+                    return _Outcome(next_at)
+                # A job's session: the clone stays at the base the job prepared from, read as it is.
+                doc_ok, notices, snapshot = await self._read_clone(ctx)
+        doc, base = cfg.process.doc, cfg.base_branch
         open_prs = await ctx.forge.open_prs()
         details, reviewed = {}, {}
         for pr in snapshot.prs:
@@ -208,7 +289,7 @@ class ReviewerService:
         # so a failure streak and its back-off carry on.
         self._store.save_repo_state(replace(
             state, status=status, reason=reason, first_poll_done=True, failures=0,
-            last_ok_at=stamp, next_poll_at=next_at.isoformat(),
+            last_ok_at=stamp, next_poll_at=next_at.isoformat(), me=snapshot.me,
         ))
 
         rows = len(update.rows)
@@ -223,6 +304,18 @@ class ReviewerService:
             {"scope": scope, "number": job.number, "kind": job.kind, "state": job_state},
         ) for job, job_state in changed]
         return _Outcome(next_at, events, plan.lines, notices + plan.notices)
+
+    async def _read_clone(self, ctx: RepoContext) -> tuple[bool, list[Notice], BoardSnapshot]:
+        """Whether the process doc is on the base (and its notice), then the readiness snapshot; the caller
+        holds the clone as a poll may (see ReviewClone)."""
+        doc, base = ctx.cfg.process.doc, ctx.cfg.base_branch
+        doc_ok = ctx.clone.has_file(doc)
+        notices = []
+        if doc_ok:
+            self._store.clear_notice(ctx.scope, 0, "doc_missing")
+        else:
+            notices.append(Notice(0, "doc_missing", doc, doc_missing_line(ctx.scope, doc, base)))
+        return doc_ok, notices, await ctx.readiness.board(ctx.clone.path)
 
     def _fail(
         self, ctx: RepoContext, state: RepoState, now: datetime, status: str, reason: str,
@@ -279,20 +372,24 @@ class ReviewerService:
         stamp = self._now().isoformat()
         at_head = [j for j in self._store.jobs(scope, number)
                    if j.kind == "review" and j.head_sha == head]
-        if any(j.state in ("queued", "running") for j in at_head):
+        if any(j.state in ("queued", "running", "deferred") for j in at_head):
             raise ValueError("already queued")
         for job in at_head:
             if job.state in ("done", "stale"):
                 self._store.set_job_state(job.id, "superseded", "new review", stamp)
-        return self._store.add_job(scope, number, "review", head, head, stamp)
+        # Its key marks it, so the runner settles it without a review turn; at its head it is a review all
+        # the same.
+        return self._store.add_job(scope, number, "review", head, f"{head}{REVIEW_NOW_SUFFIX}", stamp)
 
     def skip(self, scope: str, number: int) -> None:
-        """Skip the row's head: its queued reviews are dropped and none is queued for it again."""
+        """Skip the row's head: its queued and deferred reviews are dropped and none is queued for
+        it again."""
         head = self._row(scope, number).head_sha
         stamp = self._now().isoformat()
         self._store.skip(scope, number, head, stamp)
         for job in self._store.jobs(scope, number):
-            if job.kind == "review" and job.head_sha == head and job.state == "queued":
+            if (job.kind == "review" and job.head_sha == head
+                    and job.state in ("queued", "deferred")):
                 self._store.set_job_state(job.id, "skipped", "skipped by operator", stamp)
 
     def _row(self, scope: str, number: int) -> BoardRow:
@@ -302,8 +399,9 @@ class ReviewerService:
         return row
 
     def overview(self) -> list[dict]:
-        """Per repo: its state, its board rows, the latest job of each PR and the PRs whose
-        current head is skipped."""
+        """Per repo: its state, its board rows, the latest job of each PR with what the board shows of it
+        (job_info, for the PRs on the board only), the PRs whose current head is skipped and the PRs too large
+        to review automatically."""
         repos = []
         for ctx in self._repos:
             state = self._store.repo_state(ctx.scope)
@@ -315,7 +413,44 @@ class ReviewerService:
                 "scope": ctx.scope, "status": state.status, "reason": state.reason,
                 "last_poll_at": state.last_poll_at, "next_poll_at": state.next_poll_at,
                 "rows": rows, "jobs": latest,
+                "job_info": {r.number: _job_info(latest[r.number], self._store.run(latest[r.number].id))
+                             for r in rows if r.number in latest},
                 "skipped": {r.number for r in rows
                             if self._store.is_skipped(ctx.scope, r.number, r.head_sha)},
+                "large": {r.number for r in rows if r.changed_files >= ctx.cfg.max_files_auto},
             })
         return repos
+
+    def detail(self, scope: str, number: int) -> dict:
+        """One PR: its board row, its jobs (newest first), the newest review report and the replies
+        of the newest re-check that drafted a plan. Read-only."""
+        row = self._store.board(scope).get(number)
+        jobs = self._store.jobs(scope, number)
+        if row is None and not jobs:
+            raise LookupError(f"no PR #{number} in {scope}")
+        runs = {job.id: self._store.run(job.id) for job in jobs}
+        no_run = JobRun("")
+        report_job, report_run, report_text = None, no_run, None
+        for job in jobs:
+            path = _report_file(job, runs[job.id]) if job.kind == "review" else None
+            if path is not None:
+                report_job, report_run = job.id, runs[job.id]
+                try:
+                    with path.open(encoding="utf-8", errors="replace") as f:
+                        report_text = f.read(_MAX_REPORT_TEXT)
+                except OSError as e:  # the parsed report still shows
+                    logger.warning("Reviewer report %s not read: %s", path, type(e).__name__)
+                break
+        recheck = next(
+            (j for j in jobs if j.kind == "recheck" and _has_plan(j, runs[j.id])), None
+        )
+        return {
+            "row": None if row is None else asdict(row),
+            "jobs": [_job_detail(job, runs[job.id]) for job in jobs],
+            "report_job": report_job,
+            "report": report_run.report or None,  # {} when the report did not parse
+            "replies_job": recheck.id if recheck else None,
+            "replies": runs[recheck.id].replies if recheck else [],
+            "tg_lines": report_run.tg_lines,
+            "report_text": report_text,
+        }

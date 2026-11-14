@@ -1,14 +1,19 @@
-"""Tests for main's reviewer wiring: one reviewer context per loaded repo with reviews on, and
-the background tasks (credential health, reviewer) started and stopped around the daemon."""
+"""Tests for main's reviewer wiring: one reviewer context per loaded repo with reviews on, the
+reviewer chat, and the background tasks (credential health, reviewer, review jobs) started and
+stopped around the daemon."""
 from __future__ import annotations
 
 import asyncio
 import logging
 import time
+from pathlib import Path
 
 import pytest
 import respx
 
+import main
+import orchestrator.reviewer.runner as runner_module
+import orchestrator.reviewer.service as service_module
 from config.schemas import (
     GitHubConfig,
     GlobalConfig,
@@ -20,8 +25,18 @@ from config.schemas import (
     TelegramConfig,
     VCSConfig,
 )
-from main import _reviewer_contexts, _reviewer_send_line, _start_background, _stop_background
+from health.credentials import CredentialHealth
+from main import (
+    _review_anchor,
+    _reviewer_chat,
+    _reviewer_contexts,
+    _start_background,
+    _start_reviewer,
+    _stop_background,
+)
+from orchestrator.orchestrator import Orchestrator
 from orchestrator.reviewer.forge_github import ForgeError
+from tests.unit.test_main_startup import _MINIMAL_GLOBAL_YAML
 
 
 def _repo(name: str, *, reviews: bool, owner: str = "acme-org", token: str = "tok") -> RepoConfig:
@@ -115,25 +130,152 @@ class _Notifier:
         if self._fail:
             raise self._fail
         self.sent.append((chat_id, text))
+        return 500 + len(self.sent)  # the Telegram message id
 
 
-async def test_reviewer_send_line_none_without_a_target():
+async def test_reviewer_chat_target():
     reviewer_chat = GlobalConfig(reviewer=ReviewerGlobalConfig(telegram_chat_id="42"))
-    assert _reviewer_send_line(None, reviewer_chat, {}) is None   # no Telegram
-    assert _reviewer_send_line(_Notifier(), GlobalConfig(), {}) is None   # no chat id
+    project = LoadedProject(config=ProjectConfig(telegram=TelegramConfig(default_chat_id="7")))
+    assert _reviewer_chat(None, reviewer_chat, {"acme": project}) is None   # no Telegram
+    assert _reviewer_chat(_Notifier(), GlobalConfig(), {}) is None   # no chat id
+
     notifier = _Notifier()
-    await _reviewer_send_line(notifier, reviewer_chat, {})("line")
+    chat = _reviewer_chat(notifier, reviewer_chat, {"acme": project})
+    assert chat.chat_id == "42"   # the reviewer chat first
+    assert await chat.send("line") == 501
     assert notifier.sent == [("42", "line")]
 
-
-async def test_reviewer_send_line_falls_back_to_the_operator_chat_and_raises_on_failure():
-    project = LoadedProject(config=ProjectConfig(telegram=TelegramConfig(default_chat_id="7")))
-    notifier = _Notifier()
-    await _reviewer_send_line(notifier, GlobalConfig(), {"acme": project})("line")
-    assert notifier.sent == [("7", "line")]
-    broken = _reviewer_send_line(_Notifier(fail=RuntimeError("down")), GlobalConfig(), {"acme": project})
+    fallback = _reviewer_chat(_Notifier(), GlobalConfig(), {"acme": project})
+    assert fallback.chat_id == "7"   # else the operator chat
+    assert await fallback.send("line") == 501
+    broken = _reviewer_chat(_Notifier(fail=RuntimeError("down")), GlobalConfig(), {"acme": project})
     with pytest.raises(RuntimeError):
-        await broken("line")
+        await broken.send("line")
+
+
+def test_review_anchor_reads_the_reviewer_store(tmp_path):
+    from orchestrator.reviewer.db import connect
+    from orchestrator.reviewer.store import ReviewerStore
+    store = ReviewerStore(connect(tmp_path / "rv" / "reviewer.db"))
+    store.add_anchor("-1001", 100, "job1", "2026-11-20T10:00:00+00:00")
+    anchor = _review_anchor(store)
+    assert anchor("-1001", 100) is True
+    assert anchor("-1001", 101) is False and anchor("-1002", 100) is False
+    assert _review_anchor(None) is None   # no reviewer: replies go where they always went
+
+
+class _Part:
+    """The reviewer service or the job runner: run(stop) returns once stop is set."""
+
+    def __init__(self):
+        self.stops: list[asyncio.Event] = []
+
+    async def run(self, stop):
+        self.stops.append(stop)
+        await stop.wait()
+
+
+async def test_runner_wired_next_to_reviewer():
+    reviewer, runner = _Part(), _Part()
+    background = _start_reviewer(reviewer, runner)   # repos to review: both are built
+    assert list(background) == ["Reviewer", "Review jobs"]
+    await asyncio.sleep(0)
+    assert reviewer.stops == [background["Reviewer"][1]]
+    assert runner.stops == [background["Review jobs"][1]]
+
+    credential_stop = asyncio.Event()
+    credential = _start_background("Credential health", credential_stop.wait())
+    await _stop_background({"Credential health": (credential, credential_stop), **background}, timeout=1.0)
+    for task, _ in background.values():
+        assert task.done() and not task.cancelled()   # stopped by its event, not cancelled
+
+    assert _start_reviewer(None, None) == {}   # no repo to review: neither is built
+
+
+class _Built(_Part):
+    """Stands in for the ReviewerService or the JobRunner main builds, keeping its arguments."""
+
+    def __init__(self, *args, **kwargs):
+        super().__init__()
+        self.args, self.kwargs = args, kwargs
+
+
+def _run_main(tmp_path, monkeypatch, contexts):
+    """main() from start to shutdown, over a config with no project and the dashboard off, with
+    `contexts` as the reviewer's. Returns the config directory, what main built as the reviewer
+    service and the job runner, and the names it gave _stop_background."""
+    cfg = tmp_path / "config-live"
+    (cfg / "projects").mkdir(parents=True)
+    (cfg / "global.yaml").write_text(_MINIMAL_GLOBAL_YAML.format(
+        ws=tmp_path / "ws", log=tmp_path / "log", db=tmp_path / "events.db", rv=tmp_path / "rv" / "reviewer.db",
+    ) + f"dashboard:\n  enabled: false\n  db_path: {tmp_path / 'events.db'}\n", encoding="utf-8")
+    built: dict[str, _Built] = {}
+
+    def recorder(name):
+        def build(*args, **kwargs):
+            built[name] = _Built(*args, **kwargs)
+            return built[name]
+        return build
+
+    stopped: list[str] = []
+
+    async def stop_background(background, timeout):
+        stopped.extend(background)
+        await _stop_background(background, timeout)
+
+    async def idle(self, stop):
+        await stop.wait()
+
+    async def no_tickets(self):
+        return None
+
+    monkeypatch.setenv("GRADLE_USER_HOME", str(tmp_path / "gradle"))   # main caps build memory there
+    monkeypatch.setattr(main, "_reviewer_contexts", lambda *args, **kwargs: contexts)
+    monkeypatch.setattr(main, "_stop_background", stop_background)
+    monkeypatch.setattr(service_module, "ReviewerService", recorder("service"))
+    monkeypatch.setattr(runner_module, "JobRunner", recorder("runner"))
+    monkeypatch.setattr(CredentialHealth, "run", idle)
+    monkeypatch.setattr(Orchestrator, "run", no_tickets)   # the daemon shuts down at once
+    root = logging.getLogger()
+    before = list(root.handlers)
+    monkeypatch.setattr(root, "handlers", list(before))   # main adds its log file's handler
+    try:
+        assert main.main(["--config", str(cfg)]) == 0
+    finally:
+        for handler in root.handlers:
+            if handler not in before:
+                handler.close()
+    return cfg, built, stopped
+
+
+def test_main_builds_the_runner_with_reviewer_contexts(tmp_path, monkeypatch, capsys):
+    ctx = object()
+    cfg, built, stopped = _run_main(tmp_path, monkeypatch, [ctx])
+
+    assert "  Reviewer: 1 repo(s), jobs on\n" in capsys.readouterr().out
+    service, runner = built["service"], built["runner"]
+    contexts, store, switches, failing, report_auth_failure, chat, llm, trackers, config = runner.args
+    assert contexts == [ctx]
+    assert store is service.args[1] and switches is service.args[2]   # the service's own
+    assert isinstance(failing.__self__, CredentialHealth) and failing.__name__ == "failing"
+    assert report_auth_failure.__self__ is failing.__self__
+    assert report_auth_failure.__name__ == "report_auth_failure"
+    assert chat is None and service.args[4] is None   # no Telegram configured
+    assert type(llm).__name__ == "ClaudeCodeAdapter" and trackers == {}
+    assert config.jobs_dir == tmp_path / "rv" / "jobs"
+    assert config.secret_paths == [Path(main.__file__).parent / ".env", cfg.absolute()]
+    assert runner.kwargs["event_bus"] is service.kwargs["event_bus"] is not None
+    # The "Review jobs" task ran next to the reviewer's and was stopped with it, by its event.
+    assert stopped == ["Credential health", "Reviewer", "Review jobs"]
+    assert [s.is_set() for s in (*service.stops, *runner.stops)] == [True, True]
+
+
+def test_main_builds_no_runner_without_reviewer_contexts(tmp_path, monkeypatch, capsys):
+    _, built, stopped = _run_main(tmp_path, monkeypatch, [])
+
+    assert built == {}
+    assert stopped == ["Credential health"]
+    assert "Reviewer:" not in capsys.readouterr().out
 
 
 async def _forever():

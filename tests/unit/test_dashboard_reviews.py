@@ -8,6 +8,7 @@ from starlette.testclient import TestClient
 from config.schemas import ReviewerConfig
 from dashboard.event_store import EventStore
 from dashboard.events import EventBus
+from dashboard.reviews_api import build_review_routes
 from dashboard.web import create_app
 from orchestrator.reviewer.db import connect
 from orchestrator.reviewer.models import BoardRow, Job, JobRun
@@ -287,6 +288,17 @@ def test_detail_route(client):
     assert r.status_code == 404 and r.json() == {"error": "no PR #9 in acme/app"}
     assert c.post("/api/reviews/pr", json={"scope": "acme/app", "number": 1}).status_code == 405
     assert len(svc.calls) == 2   # a bad query and a POST never reach the service
+
+
+def test_no_posting_route():
+    """Nothing in the dashboard posts or confirms: its review routes are the board, a PR's detail, Review now and
+    Skip (Starlette answers HEAD on a GET route with the GET handler)."""
+    routes = build_review_routes(FakeService())
+    assert sorted((method, r.path) for r in routes for method in r.methods - {"HEAD"}) == [
+        ("GET", "/api/reviews"), ("GET", "/api/reviews/pr"),
+        ("POST", "/api/reviews/review-now"), ("POST", "/api/reviews/skip"),
+    ]
+    assert len(routes) == 4
 
 
 def test_routes_absent_without_service(store):

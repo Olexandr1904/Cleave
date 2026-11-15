@@ -9,11 +9,13 @@ from datetime import datetime, timedelta, timezone
 import pytest
 from config.schemas import ProcessPartConfig, ReviewerConfig
 from dashboard.events import EventBus
-from orchestrator.reviewer.clone import CloneError
+from orchestrator.reviewer import service as service_module
+from orchestrator.reviewer.chat import ReviewerChat
+from orchestrator.reviewer.clone import CloneError, ReviewClone
 from orchestrator.reviewer.db import connect
 from orchestrator.reviewer.forge_github import ForgeError
 from orchestrator.reviewer.models import (
-    BoardSnapshot, JobRun, PRDetails, RepoState, SnapshotPR, Turn,
+    Anchor, BoardSnapshot, JobRun, Post, PRDetails, RepoState, SnapshotPR, Turn,
 )
 from orchestrator.reviewer.readiness import ReadinessError
 from orchestrator.reviewer.report import parse_report
@@ -118,7 +120,7 @@ class Rig:
         self.service = ReviewerService(list(contexts), self.store, self.switches, failing,
                                        send or self._send, lambda project_id, repo_id: set(),
                                        event_bus=bus, now=lambda: self.t)
-    async def _send(self, line): self.lines.append(line)
+    async def _send(self, line, **anchor): self.lines.append(line)
     def state(self, scope="acme/app"): return self.store.repo_state(scope)
 
 async def test_poll_builds_board_and_queues_review(tmp_path):
@@ -304,6 +306,18 @@ async def test_review_now_supersedes_done_and_stale_at_head(tmp_path):
     assert by_id[old.id] == by_id[recheck.id] == ("done", "")
     assert by_id[new.id] == ("queued", "")
 
+async def test_review_now_supersedes_posted(tmp_path):
+    c = ctx(tmp_path, *review_pr())
+    rig = Rig(tmp_path, c)
+    await rig.service.poll(c)
+    now = T0.isoformat()
+    posted = rig.store.add_job("acme/app", 1, "review", A, A, now)
+    rig.store.set_job_state(posted.id, "posted", "", now)
+    new = rig.service.review_now("acme/app", 1)
+    got = rig.store.job(posted.id)
+    assert (got.state, got.reason) == ("superseded", "new review")
+    assert (new.key, new.state) == (f"{A}:now", "queued") and new.id != posted.id
+
 async def test_failing_repo_does_not_block_others(tmp_path):
     stop = asyncio.Event()
     bad = ctx(tmp_path, FakeReadiness(fail=ReadinessError("exit 1: no")), FakeForge({}), repo="web")
@@ -323,7 +337,7 @@ async def test_run_polls_only_due_repos(tmp_path):
     assert touched == [] and rig.state("acme/app").status == "ok"
 
 async def test_send_line_failure_is_harmless(tmp_path, caplog):
-    async def broken(line): raise RuntimeError("chat 12345 unreachable")
+    async def broken(line, **anchor): raise RuntimeError("chat 12345 unreachable")
     r = FakeReadiness(snap(spr(2, [], author="octo")))
     c = ctx(tmp_path, r, FakeForge({2: det(2, author="octo", requested=())}))
     rig = Rig(tmp_path, c, send=broken)
@@ -336,7 +350,7 @@ async def test_send_line_failure_is_harmless(tmp_path, caplog):
 
 async def test_notice_sent_again_after_a_failed_send(tmp_path):
     sent, failures = [], [RuntimeError("down")]
-    async def flaky(line):
+    async def flaky(line, **anchor):
         if failures: raise failures.pop()
         sent.append(line)
     c = ctx(tmp_path, *review_pr(), clone=FakeClone(tmp_path / "app", doc=False))
@@ -456,6 +470,32 @@ async def test_failed_ok_save_continues_the_failure_streak(tmp_path, monkeypatch
     assert s.next_poll_at == (T0 + timedelta(seconds=2400)).isoformat()   # 300 * 2 ** 3
     assert rig.lines == []   # not the first failure of the streak
 
+class Notifier:
+    """A Telegram notifier whose message ids count up from 501."""
+    def __init__(self): self.sent = []
+    async def send_message(self, chat_id, text, buttons=None, reply_to_message_id=None):
+        self.sent.append(text)
+        return 500 + len(self.sent)
+
+async def test_large_notice_anchored_with_pr(tmp_path):
+    def board(merge_turns):
+        return snap(spr(1730, [Turn("octo", "review")]), spr(2, merge_turns, author="octo"))
+    r = FakeReadiness(board([]))
+    c = ctx(tmp_path, r, FakeForge({1730: det(1730, files=40), 2: det(2, author="octo", requested=())}))
+    rig = Rig(tmp_path, c)
+    notifier = Notifier()
+    chat = ReviewerChat(notifier, "-1001", store=rig.store, now=lambda: rig.t)
+    service = ReviewerService([c], rig.store, rig.switches, lambda key: False, chat.send,
+                              lambda project_id, repo_id: set(), now=lambda: rig.t)
+    await service.poll(c)
+    rig.t = T0 + timedelta(minutes=31)   # the large PR's quiet window is over, and a merge turn comes
+    r.snapshot = board([Turn("octo", "merge")])
+    await service.poll(c)
+    assert notifier.sent == ["[acme/app] #2: your turn — merge · u2",
+                             "[acme/app] #1730 is large (40 files) — no automatic review · u1730"]
+    assert rig.store.anchor("-1001", 501) == Anchor("", "acme/app", 0)   # a turn line: the repo's
+    assert rig.store.anchor("-1001", 502) == Anchor("", "acme/app", 1730)
+
 async def test_next_poll_far_ahead_counts_as_due(tmp_path):
     clone = CountingClone(tmp_path / "app")
     c = ctx(tmp_path, *review_pr(), clone=clone)
@@ -533,6 +573,65 @@ async def test_poll_leaves_a_clone_a_job_prepares_or_cleans_up(tmp_path):
     await run_briefly(rig.service)
     assert (clone.refreshes, readiness.boards) == (1, 1) and rig.state().status == "ok"
 
+async def test_a_post_in_a_session_does_not_hold_up_other_repos(tmp_path, monkeypatch):
+    """A post reading the clone in a job's session phase holds session_lock through its runs: the poll of that
+    repo waits for it at most a bound and leaves the repo for later, and the next repo is polled all the same."""
+    monkeypatch.setattr(service_module, "_CLONE_WAIT_SECONDS", 0.05)
+    clone = ReviewClone(tmp_path / "app", "file:///nowhere", "develop", "tok")
+    in_session, leave, inside, done, stop = (asyncio.Event() for _ in range(5))
+    async def job():
+        async with clone.lock, clone.session_phase({}):
+            in_session.set()
+            await leave.wait()
+    async def post():
+        async with clone.reader(step=0.01):
+            inside.set()
+            await done.wait()
+    readiness = CountingReadiness(review_snap())
+    busy = ctx(tmp_path, readiness, FakeForge({1: det(1)}), clone=clone)
+    rig = Rig(tmp_path, busy, ctx(tmp_path, EndsRound(stop, review_snap()), FakeForge({1: det(1)}), repo="web"))
+    tasks = [asyncio.create_task(job())]
+    await in_session.wait()
+    tasks.append(asyncio.create_task(post()))
+    await inside.wait()
+    loop = asyncio.get_running_loop()
+    started = loop.time()
+    try:
+        await asyncio.wait_for(rig.service.run(stop), 5)
+    finally:
+        done.set()
+        leave.set()
+        await asyncio.gather(*tasks)
+    assert loop.time() - started < 1
+    assert readiness.boards == 0 and rig.state("acme/app").last_poll_at == ""   # left for later
+    assert rig.state("acme/web").status == "ok"
+
+async def test_poll_waits_at_most_a_bound_on_a_lock_that_looks_free(tmp_path, monkeypatch):
+    """locked() reads False while a queued post is about to take the lock: the poll waits for it at most a
+    bound, then leaves the repo for later."""
+    monkeypatch.setattr(service_module, "_CLONE_WAIT_SECONDS", 0.05)
+    clone, readiness = CountingClone(tmp_path / "app"), CountingReadiness(review_snap())
+    c = ctx(tmp_path, readiness, FakeForge({1: det(1)}), clone=clone)
+    rig = Rig(tmp_path, c)
+    queued, inside, done = asyncio.Event(), asyncio.Event(), asyncio.Event()
+    async def post():   # a post's lease, queued behind the previous holder
+        queued.set()
+        async with clone.lock:
+            inside.set()
+            await done.wait()
+    await clone.lock.acquire()
+    task = asyncio.create_task(post())
+    await queued.wait()
+    clone.lock.release()
+    assert not clone.lock.locked()   # looks free; the post takes it first
+    try:
+        await asyncio.wait_for(rig.service.poll(c), 5)
+    finally:
+        done.set()
+        await task
+    assert inside.is_set() and (clone.refreshes, readiness.boards) == (0, 0)
+    assert rig.state().last_poll_at == ""   # left for later
+
 async def test_poll_records_me(tmp_path):
     c = ctx(tmp_path, *review_pr())
     rig = Rig(tmp_path, c)
@@ -542,7 +641,7 @@ async def test_poll_records_me(tmp_path):
 # --- Plan 4: the PR detail view ---
 
 DETAIL_KEYS = {"row", "jobs", "report_job", "report", "replies_job", "replies", "tg_lines",
-               "report_text"}
+               "report_text", "number_states", "reply_states", "posts"}
 JOB_KEYS = {"id", "kind", "state", "reason", "head", "created_at", "updated_at", "retry_at",
             "started_at", "finished_at", "duration_s", "cost_usd", "turns", "message_ids", "message_sent",
             "notes"}
@@ -791,3 +890,110 @@ async def test_overview_reads_runs_only_for_prs_on_the_board(tmp_path, monkeypat
     monkeypatch.setattr(rig.store, "run", lambda job_id: read.append(job_id) or real(job_id))
     [repo] = rig.service.overview()
     assert read == [on_board.id] and set(repo["job_info"]) == {1}
+
+# --- Plan 5 Task 17: number states and posts ---
+
+def landed(item, where="inline"):
+    """A report item as a Post records it once it landed."""
+    return {"n": item["number"], "path": item["path"], "line": item["line"], "title": item["title"], "where": where}
+
+def post(rig, post_id, job, state, at=T0, kind="review", **fields):
+    p = Post(post_id, job.id, job.scope, job.number, job.head_sha, kind, state, at.isoformat(), **fields)
+    rig.store.save_post(p)
+    return p
+
+async def test_detail_number_states(tmp_path):
+    rig = Rig(tmp_path)
+    report = parse_report(REPORT, RHEAD).to_dict()
+    review = finished_job(rig, tmp_path, "posted", REPORT, report)
+    post(rig, "p1", review, "posted", numbers=[1], landed=[landed(report["items"][0])], comments=1)
+    post(rig, "p2", review, "failed", at=T0 + timedelta(minutes=1), numbers=[1, 4], error="GitHub head moved")
+    replies = [{"n": 1, "thread_id": "T1", "body": "Fixed, thanks."}, {"n": 3, "thread_id": "T3", "body": "Done."}]
+    recheck = finished_job(rig, tmp_path, "done", kind="recheck", replies=replies, at=T0 + timedelta(minutes=5))
+    post(rig, "p3", recheck, "posted", at=T0 + timedelta(minutes=6), kind="replies", numbers=[1],
+         landed=[{"n": 1, "path": "", "line": None, "title": "", "where": "reply"}])
+    d = rig.service.detail("acme/app", 1)
+    assert d["number_states"] == {"1": "posted", "2": "open", "3": "open", "4": "ticked", "5": "open", "6": "open"}
+    assert d["reply_states"] == {"1": "posted", "3": "open"}
+
+async def test_detail_reads_the_posts_once(tmp_path, monkeypatch):
+    """The posts detail() loads are the ones the number states come from (/code-review C15)."""
+    rig = Rig(tmp_path)
+    report = parse_report(REPORT, RHEAD).to_dict()
+    review = finished_job(rig, tmp_path, "posted", REPORT, report)
+    post(rig, "p1", review, "posted", numbers=[1], landed=[landed(report["items"][0])], comments=1)
+    replies = [{"n": 1, "thread_id": "T1", "body": "Fixed, thanks."}]
+    recheck = finished_job(rig, tmp_path, "done", kind="recheck", replies=replies, at=T0 + timedelta(minutes=5))
+    post(rig, "p2", recheck, "posted", at=T0 + timedelta(minutes=6), kind="replies", numbers=[1],
+         landed=[{"n": 1, "path": "", "line": None, "title": "", "where": "reply"}])
+    reads, real = [], rig.store.posts
+    monkeypatch.setattr(rig.store, "posts", lambda scope, number: reads.append((scope, number)) or real(scope, number))
+    d = rig.service.detail("acme/app", 1)
+    assert reads == [("acme/app", 1)]
+    assert (d["number_states"]["1"], d["number_states"]["2"], d["reply_states"]) == ("posted", "open", {"1": "posted"})
+
+@pytest.mark.parametrize("state", ["posting", "failed", "partial", "unverified", "interrupted"])
+async def test_detail_ticked_in_a_post_of_that_job_that_did_not_land(tmp_path, state):
+    rig = Rig(tmp_path)
+    report = parse_report(REPORT, RHEAD).to_dict()
+    older = finished_job(rig, tmp_path, "superseded", REPORT, report)
+    review = finished_job(rig, tmp_path, "posted", REPORT, report, at=T0 + timedelta(minutes=5))
+    post(rig, "p1", older, "failed", numbers=[3])   # another job's post: no tick here
+    post(rig, "p2", review, state, at=T0 + timedelta(minutes=6), numbers=[1, 2],
+         landed=[landed(report["items"][0])] if state == "partial" else [])
+    states = rig.service.detail("acme/app", 1)["number_states"]
+    assert (states["1"], states["2"], states["3"]) == ("posted" if state == "partial" else "ticked", "ticked", "open")
+
+async def test_detail_posted_at_the_report_head_only(tmp_path):
+    rig = Rig(tmp_path)
+    report = parse_report(REPORT, RHEAD).to_dict()
+    review = finished_job(rig, tmp_path, "posted", REPORT, report)
+    elsewhere = dataclasses.replace(review, head_sha="b" * 40)   # the same finding, landed at another head
+    post(rig, "p1", elsewhere, "posted", numbers=[2], landed=[landed(report["items"][1], "moved")])
+    assert rig.service.detail("acme/app", 1)["number_states"]["2"] == "open"
+
+async def test_detail_without_report_or_replies_has_no_states(tmp_path):
+    rig = Rig(tmp_path)
+    rig.store.add_job("acme/app", 1, "review", RHEAD, RHEAD, T0.isoformat())
+    d = rig.service.detail("acme/app", 1)
+    assert (d["number_states"], d["reply_states"], d["posts"]) == ({}, {}, [])
+
+async def test_detail_posts(tmp_path):
+    rig = Rig(tmp_path)
+    review = finished_job(rig, tmp_path, "posted", REPORT, parse_report(REPORT, RHEAD).to_dict())
+    url = "https://github.com/acme-org/acme-app/pull/1#pullrequestreview-9"
+    post(rig, "p1", review, "failed", numbers=[4], error="GitHub head moved")
+    post(rig, "p2", review, "posted", at=T0 + timedelta(minutes=1), numbers=[1, 2], event="REQUEST_CHANGES",
+         urls=[url], comments=2, review_ids=[9], summary_posted=True)
+    post(rig, "p3", dataclasses.replace(review, number=2), "posted")   # another PR's
+    assert rig.service.detail("acme/app", 1)["posts"] == [
+        {"id": "p2", "kind": "review", "state": "posted", "job_id": review.id, "head": RHEAD[:9],
+         "created_at": (T0 + timedelta(minutes=1)).isoformat(), "numbers": [1, 2], "event": "REQUEST_CHANGES",
+         "urls": [url], "comments": 2, "error": ""},
+        {"id": "p1", "kind": "review", "state": "failed", "job_id": review.id, "head": RHEAD[:9],
+         "created_at": T0.isoformat(), "numbers": [4], "event": "", "urls": [], "comments": 0,
+         "error": "GitHub head moved"},
+    ]
+
+async def test_overview_latest_ignores_small_jobs(tmp_path):
+    c = ctx(tmp_path, *review_pr())
+    rig = Rig(tmp_path, c)
+    await rig.service.poll(c)   # the board row
+    review = finished_job(rig, tmp_path, "done", REPORT, parse_report(REPORT, RHEAD).to_dict())
+    for n, kind in enumerate(("edit", "draft"), start=1):
+        at = (T0 + timedelta(minutes=n)).isoformat()   # newer than the review
+        small = rig.store.add_job("acme/app", 1, kind, RHEAD, f"{RHEAD}:{kind}", at)
+        rig.store.set_job_state(small.id, "done", "", at)
+    [repo] = rig.service.overview()
+    assert repo["jobs"][1].id == review.id
+    assert repo["job_info"][1]["findings"]["critical"] == 1
+
+async def test_report_text_prefers_base(tmp_path):
+    rig = Rig(tmp_path)
+    job = finished_job(rig, tmp_path, "done", REPORT, parse_report(REPORT, RHEAD).to_dict())
+    base = tmp_path / "jobs" / job.id / "posting" / "report.base.md"
+    base.parent.mkdir()
+    edited = REPORT.replace("NPE on an empty list", "NPE on an empty cart")
+    base.write_text(edited)
+    d = rig.service.detail("acme/app", 1)
+    assert (d["report_job"], d["report_text"]) == (job.id, edited)

@@ -1,5 +1,5 @@
-"""GitHub reads for the reviews board and review jobs: open PRs, PR details, whether a login has
-reviewed, the full PR and its comments."""
+"""GitHub reads for the reviews board, review jobs and posting: open PRs, PR details, whether a login has
+reviewed, the full PR, its comments, its reviews and one review's comments; and the one approve call."""
 from __future__ import annotations
 
 import re
@@ -7,7 +7,7 @@ import re
 import httpx
 
 from integrations.github.github_adapter import GitHubAdapter
-from orchestrator.reviewer.models import PRComments, PRDetails, PRFull
+from orchestrator.reviewer.models import ForgeReview, PRComments, PRDetails, PRFull
 
 _PAGE = 100
 _MAX_PAGES = 100
@@ -42,6 +42,12 @@ def _forge_error(e: Exception) -> ForgeError:
 def _login(item: dict) -> str:
     # The user is null when the account was deleted; GitHub shows it as "ghost".
     return (item.get("user") or {"login": "ghost"})["login"]
+
+
+def _review(r: dict) -> ForgeReview:
+    # submitted_at is null while the review is pending; commit_id is null when the commit is gone from git.
+    return ForgeReview(id=r["id"], login=_login(r), state=r["state"], commit_id=r["commit_id"] or "",
+                       submitted_at=r.get("submitted_at") or "", body=r.get("body") or "", url=r["html_url"])
 
 
 class GitHubForgeReader:
@@ -119,6 +125,7 @@ class GitHubForgeReader:
             additions=pr["additions"],
             deletions=pr["deletions"],
             changed_files=pr["changed_files"],
+            closed_at=pr["closed_at"] or "",
         )
 
     async def comments(self, number: int) -> PRComments:
@@ -134,3 +141,33 @@ class GitHubForgeReader:
                           for r in reviews if r.get("body")),
             conversation=tuple({"login": _login(c), "body": c["body"]} for c in conversation),
         )
+
+    async def reviews(self, number: int) -> list[ForgeReview]:
+        # Uncached: posting compares the reviews before and after a post.
+        reviews = await self._all_pages(f"{self._adapter._repo_path}/pulls/{number}/reviews")
+        return [_review(r) for r in reviews]
+
+    async def review_comments(self, number: int, review_id: int) -> list[dict]:
+        comments = await self._all_pages(f"{self._adapter._repo_path}/pulls/{number}/reviews/{review_id}/comments")
+        # An outdated comment has no line on the current diff; original_line is where it was made.
+        return [{"path": c["path"], "line": c.get("line") or c.get("original_line"), "body": c["body"]}
+                for c in comments]
+
+    async def approve(self, number: int, head: str) -> ForgeReview:
+        """Approve the PR at `head` with exactly one POST, never retried.
+
+        A ForgeError's `unavailable` is the outcome. True: the approve may have landed (no answer, a 5xx, or a
+        2xx that could not be read), so verify on GitHub and never retry. False: GitHub refused it (a 3xx, which
+        is not followed, or a 4xx), so it was definitely not posted.
+        """
+        # One request, never _request: its retries after a timeout or a 5xx could approve twice.
+        try:
+            response = await self._adapter._client.request(
+                "POST", f"{self._adapter._repo_path}/pulls/{number}/reviews",
+                json={"commit_id": head, "event": "APPROVE"})
+            if response.is_success:
+                return _review(response.json())
+        except Exception as e:
+            # Never the message: it may echo request data.
+            raise ForgeError(type(e).__name__, unavailable=True) from None
+        raise ForgeError(f"GitHub {response.status_code}", unavailable=response.status_code >= 500)

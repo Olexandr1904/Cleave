@@ -33,7 +33,7 @@ Per-ticket sandbox under `workspaces.base_dir`, no shared state, file-based stat
 - **Telegram** — escalations, reply-to-unblock, free-text intent classification, inline action buttons. ([commands reference](docs/telegram.md))
 
 ### Reviewer mode
-On repos with `reviewer.enabled`, reviews and re-checks of the PRs where it is your turn now run unattended (the repo's own review process, in an isolated Claude Code session on your claude.ai login) and the result comes to Telegram; nothing is posted to GitHub. ([Telegram](docs/telegram.md#review-and-re-check-messages), [dashboard](docs/dashboard.md#reviews-view))
+On repos with `reviewer.enabled`, reviews and re-checks of the PRs where it is your turn now run unattended (the repo's own review process, in an isolated Claude Code session on your claude.ai login) and the result comes to Telegram; you post it by replying to the message (`post 1 2 4 approve`). Cleave posts only the numbers you name, through the repo's own poster tool (a dry run first), only at the head that was reviewed, and checks on GitHub afterwards that it landed. ([Telegram](docs/telegram.md#replying-to-reviewer-messages), [dashboard](docs/dashboard.md#reviews-view))
 
 ### Dashboard
 Embedded web UI at [http://localhost:8080](http://localhost:8080) — Board, Reviews (the PRs that involve you on repos with reviewer mode on), Ticket Detail with reports viewer, Event Log, Settings (model picker), credential strip, Tickets switch panel, Take Control, and a **+ New Project** wizard that validates credentials live and writes config for you. ([dashboard reference](docs/dashboard.md))

@@ -128,15 +128,21 @@ def allowed_tools(kind: str, clone_dir: Path, paths: JobPaths, helper_scripts: l
     return tools
 
 
+def _secret_rules(paths: list[Path]) -> list[str]:
+    """The secrets as rule paths: each configured path and, when it is a symlink, its target; `/**` after a
+    directory."""
+    rules = []
+    for path in paths:
+        suffix = "/**" if path.is_dir() else ""
+        rules += [f"{_rule_path(t)}{suffix}" for t in dict.fromkeys((path.absolute(), path.resolve()))]
+    return rules
+
+
 def settings_json(secret_paths: list[Path], clone_dir: Path, paths: JobPaths, kind: str) -> dict:
     """Cleave's own settings file for the session. The Bash sandbox bounds every command at the OS level: no
     secret reads, no reads outside the working directories, no writes to the clone or the worktree, no network,
     and no command outside it. The deny rules also refuse network and ref-moving commands and credential reads."""
-    secrets = []
-    for path in secret_paths:
-        suffix = "/**" if path.is_dir() else ""
-        # Both the configured path and, when it is a symlink, its target.
-        secrets += [f"{_rule_path(t)}{suffix}" for t in dict.fromkeys((path.absolute(), path.resolve()))]
+    secrets = _secret_rules(secret_paths)
     return {
         "permissions": {
             "deny": [*_DENY, *(f"Read({s})" for s in secrets)],
@@ -230,13 +236,19 @@ async def run_session(
             progress_log_path=session_dir / "progress.log",
             raw_stream_path=session_dir / "stream.jsonl",
         )
-    except QuotaExhaustedError as e:  # the runner settles a missing or past reset time
-        return SessionOutcome("quota", retry_at=e.retry_at)
     except Exception as e:
-        if _is_login(e):
-            return SessionOutcome("login")
-        return SessionOutcome("failed", error=" ".join(str(e).split())[:_ERROR_LIMIT])
+        return _outcome(e)
     return SessionOutcome("ok", cost_usd=response.cost_usd, turns=response.num_turns)
+
+
+def _outcome(e: Exception) -> SessionOutcome:
+    """How a session that raised `e` ended: the usage limit with the CLI's reset time (the runner settles a
+    missing or past one), the login, or failed with the error on one line of at most 300 characters."""
+    if isinstance(e, QuotaExhaustedError):
+        return SessionOutcome("quota", retry_at=e.retry_at)
+    if _is_login(e):
+        return SessionOutcome("login")
+    return SessionOutcome("failed", error=" ".join(str(e).split())[:_ERROR_LIMIT])
 
 
 def _is_login(error: Exception) -> bool:

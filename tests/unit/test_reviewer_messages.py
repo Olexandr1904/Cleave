@@ -4,7 +4,7 @@ import dataclasses
 from datetime import datetime, timezone
 from pathlib import Path
 from orchestrator.reviewer.lines import (
-    drift_line, job_deferred_line, job_failed_line, login_line, worktree_left_line)
+    drift_line, job_deferred_line, job_failed_line, login_line, outdated_line, worktree_left_line)
 from orchestrator.reviewer.messages import message_parts, recheck_message, review_message, split_message
 from orchestrator.reviewer.report import parse_report
 from tests.unit.test_reviewer_report import HEAD, REPORT
@@ -45,6 +45,19 @@ Dropped: 7 — unreachable; 8 — duplicate; 9 — pre-dates the PR
 Reply to this message: "post 1 2 4 approve" · "text 2" · "edit 2: …" · "review again"
 https://github.com/acme-org/acme-app/pull/1712"""
 
+def test_review_message_already_posted_line():
+    report = parse_report(REPORT, HEAD)
+    def lines(**posted):
+        return review_message("acme/app", 1712, "Fix cart sync", "ACME-1234", URL, 14, report, TG,
+                              **posted).splitlines()
+    plan4 = review().splitlines()
+    got = lines(posted_at_head=3, summary_posted=True)
+    assert got[3] == "Already posted at this head: 3 comments and the Summary"
+    assert got[:3] + got[4:] == plan4   # one line more, after the Suggested: line
+    assert lines(posted_at_head=1)[3] == "Already posted at this head: 1 comment"
+    assert lines(summary_posted=True)[3] == "Already posted at this head: 0 comments and the Summary"
+    assert lines() == plan4 and plan4[3] == ""   # the defaults: the plan-4 text unchanged
+
 def test_review_message_falls_back_to_titles():
     lines = review(tg_lines={}).splitlines()
     assert "🔴 1. CartRepository.kt:88 — NPE on an empty list" in lines
@@ -74,10 +87,13 @@ def test_recheck_message():
         "1. fixed · CartRepository.kt:88 · null check added",
         "3. Agreed, renamed.",
         "",
-        'Reply to this message: "post replies 1 3"',
+        'Reply to this message: "post replies 1 3" · "text 1"',  # /code-review R3
         URL])
     one = recheck_message("acme/app", 1712, "Fix cart sync", URL, HEAD, REPLIES[:1], {})
     assert "head 26c4929c5 · 1 drafted reply" in one.splitlines()
+    # The text example names a drafted reply: the first one.
+    later = recheck_message("acme/app", 1712, "Fix cart sync", URL, HEAD, REPLIES[1:], {})
+    assert 'Reply to this message: "post replies 3" · "text 3"' in later.splitlines()
 
 def test_recheck_message_empty():
     text = recheck_message("acme/app", 1712, "Fix cart sync", URL, HEAD, [], {})
@@ -166,3 +182,9 @@ def test_job_lines():
         " check that Cleave's Prepare still matches it.")
     assert worktree_left_line("acme/app", 1712, Path("/data/clone/.worktrees/pr-1712"), "it has changes") == (
         "[acme/app] #1712: worktree /data/clone/.worktrees/pr-1712 was not removed — it has changes")
+
+
+def test_outdated_line_names_the_commands_that_still_run():
+    assert outdated_line("deferred", "usage limit") == (
+        'This job ended deferred: only "review again" and "skip" work here. Nothing was done.')
+    assert outdated_line("superseded", "new head") == "Outdated: there is a review of a newer head. Nothing was done."

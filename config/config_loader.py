@@ -48,6 +48,7 @@ from config.schemas import (
     OperatorProfile,
     ParallelismConfig,
     PipelineConfig,
+    POSTER_PLACEHOLDERS,
     PosterPartConfig,
     PREPARE_STEP_PLACEHOLDERS,
     ProcessPartConfig,
@@ -56,6 +57,7 @@ from config.schemas import (
     RepoConfig,
     ReadinessPartConfig,
     RepoInfo,
+    REPLIES_PLACEHOLDERS,
     REVIEWER_PLACEHOLDERS,
     ReviewerConfig,
     ReviewerGlobalConfig,
@@ -487,13 +489,30 @@ def _load_project_config(project_dir: Path, global_defaults: dict) -> ProjectCon
 PLACEHOLDER_PATTERN = re.compile(r"\{(\w+)\}")
 # Files a command may be given from an untrusted directory: data it reads.
 _DATA_FILES = (".md", ".json", ".txt", ".diff", ".patch", ".log")
+# Shells: each runs a script named by an argument (a launcher) and code given with -c. One list for both.
+_SHELLS = "sh|bash|zsh|dash|ksh|mksh|ash|fish"
 # Programs that run a script, a package or a directory named by an argument.
 _LAUNCHER = re.compile(
-    r"python|python3|python3\..+|node|deno|bun|sh|bash|zsh|ruby|perl|php|env|uv|uvx|npx|poetry|pipenv|pipx")
-_SHELL = re.compile(r"sh|bash|zsh|dash")
-_SHELL_CODE_OPTION = re.compile(r"-[a-z]*c[a-z]*")  # -c, -lc, -ec
+    r"python|python3|python3\..+|node|deno|bun|ruby|perl|php|env|uv|uvx|npx|poetry|pipenv|pipx"
+    rf"|\.|source|{_SHELLS}")
+_SHELL = re.compile(_SHELLS)
+_SHELL_CODE_OPTION = re.compile(r"-[A-Za-z]*c[A-Za-z]*")  # -c, -lc, -ec, -Cc
+_CHANGE_DIR = re.compile(r"cd|pushd")
+# Programs that run the rest of their words as a command, with their options that take the next word.
+_WRAPPERS = {"command": "", "exec": "a", "nohup": "", "time": "", "nice": "n", "timeout": "ks", "xargs": "adEIJLnPRSs",
+             "stdbuf": "eio", "caffeinate": "tw"}
+# Their long options that take the next word as their value (`--opt=value` is one word).
+_LONG_TAKES_VALUE = {"timeout": ("--signal", "--kill-after"), "nice": ("--adjustment",),
+                     "stdbuf": ("--input", "--output", "--error"),
+                     "xargs": ("--arg-file", "--delimiter", "--max-args", "--max-procs", "--max-chars",
+                               "--process-slot-var")}
+_DURATION = re.compile(r"[0-9]+(\.[0-9]+)?[smhd]?")  # `timeout 30`, `timeout 1.5m`
+_ENV_TAKES_VALUE = "CLPSUu"  # env's options with a value (GNU and BSD): -u NAME, -C DIR, -S STRING, -P PATH
+_ASSIGNMENT = re.compile(r"[A-Za-z_]\w*=")  # NAME=value before a program, as `sh -c` code may set one
 # An argument naming a file, such as the script a launcher runs: no option, no NAME=value.
 _FILE_ARG = re.compile(r"(?!-|[A-Za-z_]\w*=)(\S*/\S*|\S*\.\w+)")
+# A path from one of the job copy's placeholders to the end of its word.
+_JOB_COPY_PATH = re.compile(r"\{(job_dir|report|plan)\}([^\s;&|<>()'\":]*)")
 
 
 def _dir_pattern(directory: str) -> re.Pattern[str]:
@@ -531,31 +550,90 @@ def _shell_commands(code: str) -> list[list[str]]:
     return [command for command in commands if command]
 
 
-def _untrusted_use(command: list[str], patterns: dict[str, re.Pattern[str]]) -> tuple[int, str] | None:
+def _wrapped_start(command: list[str], takes_value: str) -> int:
+    """Where the command a wrapper runs starts: after the wrapper, its options (with the value a short option in
+    `takes_value`, or one of its long options in _LONG_TAKES_VALUE, takes) and its numbers or durations
+    (`timeout -s KILL 30`, `timeout --signal KILL 5s`, `nice -n 10`). A number or a duration takes no value."""
+    long_takes_value = _LONG_TAKES_VALUE.get(posixpath.basename(command[0]), ())
+    i = 1
+    while i < len(command) and (command[i].startswith("-") or _DURATION.fullmatch(command[i])):
+        option = command[i]
+        i += 1
+        if option == "--":
+            break
+        if _DURATION.fullmatch(option):
+            continue
+        if (len(option) == 2 and option[1] in takes_value) or option in long_takes_value:
+            i += 1
+    return i
+
+
+def _runs_shell_code(command: list[str]) -> bool:
+    """Whether a command runs a shell's -c code, past the transparent wrappers and `env` (its options and
+    NAME=value words): an argument appended to it becomes the code's $0, never a word of what the code runs."""
+    i = 0
+    while i < len(command):
+        program = posixpath.basename(command[i])
+        if program in _WRAPPERS:
+            i += _wrapped_start(command[i:], _WRAPPERS[program])
+        elif program == "env":
+            i += _wrapped_start(command[i:], _ENV_TAKES_VALUE)
+            while i < len(command) and _ASSIGNMENT.match(command[i]):
+                i += 1
+        else:
+            break
+    return (i < len(command) and bool(_SHELL.fullmatch(posixpath.basename(command[i])))
+            and any(_SHELL_CODE_OPTION.fullmatch(arg) for arg in command[i + 1:]))
+
+
+def _untrusted_use(command: list[str], patterns: dict[str, re.Pattern[str]],
+                   cd_counts: bool = False) -> tuple[int, str] | None:
     """Where a command would run code from one of the directories: the argument's index and the directory's
     name, or None. Its program inside one; a launcher's operand (its first argument naming a file) inside one,
     whatever its extension; any other argument inside one, unless it names a data file; the directory itself
-    given to a launcher before its operand (`python3 dir/` runs dir/__main__.py); and the same for each
-    command of `sh -c` code."""
+    given to a launcher before its operand (`python3 dir/` runs dir/__main__.py); a NAME=value before the
+    program as `env NAME=value` (`PYTHONPATH=dir python3 x.py`); a wrapper (`nohup`, `timeout 30`) as the
+    command it runs; with `cd_counts`, `cd` or `pushd` into one or to it (what follows runs from there); and
+    the same for each command of `sh -c` code."""
     if not command:
+        return None
+    assignments = next((i for i, word in enumerate(command) if not _ASSIGNMENT.match(word)), len(command))
+    for i, word in enumerate(command[:assignments]):
+        data = word.lower().endswith(_DATA_FILES)
+        for name, inside in _named_dirs(word, patterns):
+            if not (inside and data):
+                return i, name
+    if assignments:
+        if hit := _untrusted_use(command[assignments:], patterns, cd_counts):
+            return hit[0] + assignments, hit[1]
         return None
     for name, inside in _named_dirs(command[0], patterns):
         if inside:
             return 0, name
     program = posixpath.basename(command[0])
+    if program in _WRAPPERS:
+        start = _wrapped_start(command, _WRAPPERS[program])
+        for i, arg in enumerate(command[1:start], 1):   # its own options: arguments of a program
+            for name, inside in _named_dirs(arg, patterns):
+                if inside and not arg.lower().endswith(_DATA_FILES):
+                    return i, name
+        if hit := _untrusted_use(command[start:], patterns, cd_counts):
+            return hit[0] + start, hit[1]
+        return None
     if _SHELL.fullmatch(program) and any(_SHELL_CODE_OPTION.fullmatch(arg) for arg in command[1:]):
         for i, arg in enumerate(command[1:], 1):
             for inner in [] if arg.startswith("-") else _shell_commands(arg):
-                if hit := _untrusted_use(inner, patterns):
+                if hit := _untrusted_use(inner, patterns, cd_counts):
                     return i, hit[1]
         return None
     launcher, file_seen = _LAUNCHER.fullmatch(program), False
+    changes_dir = cd_counts and _CHANGE_DIR.fullmatch(program)
     for i, arg in enumerate(command[1:], 1):
         names_a_file = bool(_FILE_ARG.fullmatch(arg))
         # An interpreter ignores the extension: the file a launcher runs is never data.
         data = arg.lower().endswith(_DATA_FILES) and not (launcher and not file_seen and names_a_file)
         for name, inside in _named_dirs(arg, patterns):
-            if (inside and not data) or (not inside and launcher and not file_seen):
+            if changes_dir or (inside and not data) or (not inside and launcher and not file_seen):
                 return i, name
         file_seen = file_seen or names_a_file
     return None
@@ -656,15 +734,17 @@ def _parse_reviewer_section(
 
     texts = [(f, s) for f, cmd in commands.items() for s in cmd]
     texts += [(f"reviewer.process.{n}", getattr(process, n)) for n in ("run_dir", "replies_plan", "worktree_dir")]
-    # What the runtime fills for each field; the poster's commands take every placeholder.
+    # What the runtime fills for each field.
     filled = {
         "reviewer.readiness.status_command": STATUS_COMMAND_PLACEHOLDERS,
         "reviewer.readiness.threads_command": THREADS_COMMAND_PLACEHOLDERS,
+        "reviewer.poster.review_command": POSTER_PLACEHOLDERS,
+        "reviewer.poster.replies_command": REPLIES_PLACEHOLDERS,
         **{f"reviewer.process.{n}": JOB_PATH_PLACEHOLDERS for n in ("run_dir", "replies_plan", "worktree_dir")},
         **{f"reviewer.process.prepare_steps.{i}": PREPARE_STEP_PLACEHOLDERS for i in range(len(process.prepare_steps))},
     }
     for field_name, text in texts:
-        names = filled.get(field_name, REVIEWER_PLACEHOLDERS)
+        names = filled[field_name]
         for placeholder in PLACEHOLDER_PATTERN.findall(text):
             if placeholder not in REVIEWER_PLACEHOLDERS:
                 raise fail(f"{field_name}: unknown placeholder '{{{placeholder}}}'", field_name)
@@ -674,20 +754,73 @@ def _parse_reviewer_section(
                            field_name)
 
     # A script run from one of these directories would be the session's code or the PR author's, run on the
-    # host: prepare steps with HOME, the readiness and poster commands with the forge token.
-    untrusted = {**writable, "worktree_dir": process.worktree_dir}
-    why = {**dict.fromkeys(writable, "which the review session may write"),
-           "worktree_dir": "which holds the PR's own code"}
+    # host: prepare steps with HOME, the readiness and poster commands with the forge token. The poster is
+    # given the job's copy of the run directory, outside the clone: a sentinel path no repo names stands for it.
+    # A `cd` into one counts only for the commands with the token: a prepare step may build the PR in its
+    # worktree (the operator's choice). Limits: a directory given to a program that is not a launcher reads as
+    # data, so `make -C {job_dir}` and `npm --prefix {job_dir} run post` still load; variables and command
+    # substitutions inside `sh -c` are not followed (`D={job_dir}/x.json; python3 $D` loads).
+    job_copy = "/cleave-job-copy"
+    untrusted = {**writable, "worktree_dir": process.worktree_dir, "job_dir": job_copy}
+    where = {**{n: f"reviewer.process.{n}, which the review session may write" for n in writable},
+             "worktree_dir": "reviewer.process.worktree_dir, which holds the PR's own code",
+             "job_dir": "{job_dir}, the job's copy of what the review session wrote"}
     patterns = {name: _dir_pattern(directory) for name, directory in untrusted.items()}
-    in_untrusted = {"report": f"{process.run_dir}/report_{{head9}}.md", "plan": process.replies_plan,
-                    "worktree": process.worktree_dir}
+    in_untrusted = {"job_dir": job_copy, "report": f"{job_copy}/report_{{head9}}.md",
+                    "plan": f"{job_copy}/posting/replies_{{head9}}.json", "worktree": process.worktree_dir}
     for field_name, command in commands.items():
+        # Next to the job's copy are the other jobs' copies, and the sentinel would fold away under `..`.
+        for arg in command:
+            for m in _JOB_COPY_PATH.finditer(arg):
+                if ".." in m[2].split("/")[1:]:
+                    raise fail(f"{field_name} has '..' after {{{m[1]}}} in {arg!r}: it leaves the job's copy",
+                               field_name)
         expanded = [PLACEHOLDER_PATTERN.sub(lambda m: in_untrusted.get(m[1], m[0]), arg) for arg in command]
-        if hit := _untrusted_use(expanded, patterns):
+        with_token = field_name.startswith(("reviewer.readiness.", "reviewer.poster."))
+        if hit := _untrusted_use(expanded, patterns, cd_counts=with_token):
             i, name = hit
-            raise fail(f"{field_name} runs {command[i]!r} from inside reviewer.process.{name}, {why[name]}",
-                       field_name)
+            raise fail(f"{field_name} runs {command[i]!r} from inside {where[name]}", field_name)
+
+    # Cleave fills these on every post; the ledger is how a post never lands twice.
+    for field_name, required in (("reviewer.poster.review_command", ("report", "ledger", "event")),
+                                 ("reviewer.poster.replies_command", ("plan",))):
+        passed = {p for arg in commands[field_name] for p in PLACEHOLDER_PATTERN.findall(arg)}
+        for placeholder in required:
+            if placeholder not in passed:
+                raise fail(f"{field_name} must pass {{{placeholder}}}: Cleave fills it on every post", field_name)
+
+    # Cleave appends one of the two flags to every poster run: after shell -c code it never reaches the tool,
+    # and one flag for both, or a template passing one itself, would turn a dry run into a post.
+    for field_name in ("reviewer.poster.review_command", "reviewer.poster.replies_command"):
+        if _runs_shell_code(commands[field_name]):
+            raise fail(f"{field_name} must be a direct command, not shell -c code: the dry-run flag Cleave "
+                       "appends must reach the tool", field_name)
+    flags = {"dry_run_flag": poster.dry_run_flag, "confirm_flag": poster.confirm_flag}
+    for name, flag in flags.items():
+        if not isinstance(flag, str):
+            raise fail(f"reviewer.poster.{name} must be a non-empty string", f"reviewer.poster.{name}")
+    if poster.confirm_flag == poster.dry_run_flag:
+        raise fail("reviewer.poster.confirm_flag must differ from reviewer.poster.dry_run_flag: Cleave tells a "
+                   "dry run from a post by them", "reviewer.poster.confirm_flag")
+    for field_name in ("reviewer.poster.review_command", "reviewer.poster.replies_command"):
+        for flag in flags.values():
+            if any(word == flag or word.startswith(f"{flag}=") for word in _flag_words(commands[field_name])):
+                raise fail(f"{field_name} passes {flag!r} itself: Cleave appends reviewer.poster.dry_run_flag "
+                           "or confirm_flag to every run", field_name)
     return reviewer
+
+
+def _flag_words(command: list[str]) -> list[str]:
+    """The words a poster flag could be among: the command's arguments, and each word of the code a shell runs
+    with -c (behind any program)."""
+    words = list(command)
+    for i, arg in enumerate(command):
+        rest = command[i + 1:]
+        if _SHELL.fullmatch(posixpath.basename(arg)) and any(_SHELL_CODE_OPTION.fullmatch(a) for a in rest):
+            words += [word for code in rest if not code.startswith("-")
+                      for inner in _shell_commands(code) for word in inner]
+            break
+    return words
 
 
 def _load_repo_config(repo_path: Path, project_config: ProjectConfig, global_defaults_raw: dict) -> RepoConfig:

@@ -93,6 +93,10 @@ async def test_readiness_timeout(tmp_path):
         await r.board(tmp_path)
     assert time.monotonic() - t0 < 5
 
+async def test_run_command_timeout_carries_its_limit(tmp_path):
+    res = await run_command([script(tmp_path, "sleep 30\n")], cwd=tmp_path, env={}, timeout=0.3)
+    assert (res.timed_out, res.timeout, res.returncode) == (True, 0.3, -9)
+
 async def test_run_command_missing_executable(tmp_path):
     res = await run_command([str(tmp_path / "nope")], cwd=tmp_path, env={}, timeout=5)
     assert (res.returncode, res.stderr) == (127, f"not found: {tmp_path / 'nope'}")

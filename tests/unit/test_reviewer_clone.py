@@ -1,10 +1,10 @@
 # tests/unit/test_reviewer_clone.py
 from __future__ import annotations
-import base64, os, subprocess, time
+import asyncio, base64, os, subprocess, time
 from pathlib import Path
 import pytest
 from orchestrator.reviewer import clone as clone_module
-from orchestrator.reviewer.clone import CloneError, ReviewClone, git_env, github_clone_url
+from orchestrator.reviewer.clone import CloneError, ReviewClone, git_env, github_clone_url, guarded_git_files
 from orchestrator.reviewer.commands import CommandResult
 
 def git(*args, cwd=None):
@@ -294,7 +294,7 @@ async def test_session_phase_tells_which_guarded_git_files_changed(tmp_path):
     config.write_text("[core]\n")
     clone = ReviewClone(tmp_path / "clone", "file:///nowhere", "develop", "tok")
     saved = guarded_git_files(clone.path)
-    assert saved == {config: b"[core]\n", attributes: None}
+    assert saved == {config: b"[core]\n", attributes: None, git_dir / "commondir": None}
     async with clone.session_phase(saved):
         assert clone.changed_git_files() == []
         attributes.write_text("* filter=x\n")
@@ -304,6 +304,16 @@ async def test_session_phase_tells_which_guarded_git_files_changed(tmp_path):
         config.symlink_to(tmp_path / "elsewhere")
         assert clone.changed_git_files() == [config]
     assert clone.changed_git_files() == []   # out of the phase: nothing to compare with
+
+async def test_session_phase_sees_a_planted_commondir(tmp_path):
+    """.git/commondir sends git to another directory's config, which no saved file would show."""
+    git_dir = tmp_path / "clone" / ".git"
+    git_dir.mkdir(parents=True)
+    (git_dir / "config").write_text("[core]\n")
+    clone = ReviewClone(tmp_path / "clone", "file:///nowhere", "develop", "tok")
+    async with clone.session_phase(guarded_git_files(clone.path)):
+        (git_dir / "commondir").write_text(f"{tmp_path / 'elsewhere'}\n")
+        assert clone.changed_git_files() == [git_dir / "commondir"]
 
 async def test_pr_symlinks_check_out_as_plain_files(tmp_path, origin):
     bare, _ = origin
@@ -334,3 +344,188 @@ async def test_worktree_error_is_redacted(tmp_path, monkeypatch):
     reason = await clone.remove_worktree(wt)
     assert "***" in reason and "SECRET" not in reason
     assert clone.redact("x SECRET y") == "x *** y"
+
+BUSY = r"^the review clone is busy \(a job is preparing or cleaning it up\); try again in a minute$"
+
+def idle_clone(tmp_path):
+    return ReviewClone(tmp_path / "clone", "file:///nowhere", "develop", "tok")
+
+async def review_job(clone, saved, in_session, leave, queued=None):
+    """A review job as the reader sees it: `lock` for the whole run, a session phase that `leave` ends."""
+    if queued:
+        queued.set()   # set right before it waits on the lock, in the same step
+    async with clone.lock, clone.session_phase(saved):
+        in_session.set()
+        await leave.wait()
+
+async def test_reader_takes_free_lock(tmp_path):
+    clone = idle_clone(tmp_path)
+    async with clone.reader():
+        assert clone.lock.locked() and not clone.session_lock.locked()
+    assert not clone.lock.locked()
+
+async def test_reader_in_session(tmp_path):
+    """A post while a long review holds the clone runs in the job's session phase without waiting for the job;
+    the job's leaving the phase waits for the post."""
+    clone, in_session, leave = idle_clone(tmp_path), asyncio.Event(), asyncio.Event()
+    job = asyncio.create_task(review_job(clone, {}, in_session, leave))
+    await in_session.wait()
+    loop = asyncio.get_running_loop()
+    started = loop.time()
+    async def post():
+        async with clone.reader(step=0.05):
+            assert loop.time() - started < 0.5
+            assert clone.session_lock.locked() and clone.lock.locked()   # the job keeps its lock
+            leave.set()
+            for _ in range(5):
+                await asyncio.sleep(0)
+            assert clone.in_session and not job.done()   # its leaving waits for the reader
+    try:
+        await asyncio.wait_for(post(), 5)
+    finally:
+        leave.set()
+        await job
+    assert not clone.in_session and not clone.session_lock.locked() and not clone.lock.locked()
+
+async def test_reader_waits_on_lock_at_most_a_step(tmp_path):
+    """lock.locked() is False while a queued job is about to take the lock: the reader still waits on the lock
+    at most `step`, never through the job's run (which only `leave` ends), and reads in its session phase."""
+    clone = idle_clone(tmp_path)
+    queued, in_session, leave = asyncio.Event(), asyncio.Event(), asyncio.Event()
+    await clone.lock.acquire()   # the previous holder
+    job = asyncio.create_task(review_job(clone, {}, in_session, leave, queued))
+    await queued.wait()   # the job waits on the lock now
+    clone.lock.release()
+    assert not clone.lock.locked()   # looks free; the queued job takes it first
+    async def post():
+        async with clone.reader(step=0.05):
+            assert in_session.is_set() and clone.session_lock.locked()
+    try:
+        await asyncio.wait_for(post(), 1)
+    finally:
+        leave.set()
+        await job
+
+async def test_reader_busy_while_preparing(tmp_path):
+    clone, entered = idle_clone(tmp_path), False
+    await clone.lock.acquire()   # a job prepares: it holds the lock, no session phase
+    loop = asyncio.get_running_loop()
+    started = loop.time()
+    with pytest.raises(CloneError, match=BUSY):
+        async with clone.reader(wait=0.2, step=0.05):
+            entered = True
+    assert not entered and loop.time() - started >= 0.2
+    assert clone.lock.locked() and not clone.session_lock.locked()   # still the job's
+    clone.lock.release()
+    await asyncio.sleep(0)
+    assert not clone.lock.locked()   # no waiter of the reader's left behind to take it
+
+async def test_reader_in_use_while_session_lock_is_held(tmp_path):
+    """While a job holds the lock, `wait` bounds the wait on session_lock too: a poll's readiness may hold it,
+    and the refusal says the clone is in use, not that a job prepares it."""
+    clone, entered = idle_clone(tmp_path), False
+    await clone.lock.acquire()           # a job holds the clone
+    await clone.session_lock.acquire()   # and session_lock is held all the while
+    loop = asyncio.get_running_loop()
+    started = loop.time()
+    async def post():
+        nonlocal entered
+        async with clone.reader(wait=0.1, step=0.05):
+            entered = True
+    with pytest.raises(CloneError, match=r"^the review clone is in use; try again in a minute$"):
+        await asyncio.wait_for(post(), 5)
+    assert not entered and loop.time() - started < 0.5   # about `wait` plus one step
+    clone.session_lock.release()
+    await asyncio.sleep(0)
+    assert not clone.session_lock.locked()   # no waiter of the reader's left behind to take it
+
+async def test_reader_past_its_wait_still_takes_a_free_session_lock(tmp_path):
+    """`wait` shorter than a step: the lock attempt ends past the deadline, and the job's session phase is
+    still checked before "busy"."""
+    clone, in_session, leave = idle_clone(tmp_path), asyncio.Event(), asyncio.Event()
+    job = asyncio.create_task(review_job(clone, {}, in_session, leave))
+    await in_session.wait()
+    async def post():
+        async with clone.reader(wait=0, step=0.05):
+            assert clone.session_lock.locked()
+    try:
+        await asyncio.wait_for(post(), 5)
+    finally:
+        leave.set()
+        await job
+
+@pytest.mark.parametrize("granted", [False, True], ids=["waiting", "granted-in-the-same-step"])
+async def test_reader_cancelled_on_lock_leaves_it_free(tmp_path, granted):
+    clone, queued = idle_clone(tmp_path), asyncio.Event()
+    await clone.lock.acquire()   # a job prepares
+    async def post():
+        queued.set()
+        async with clone.reader(step=10):
+            await asyncio.Event().wait()
+    task = asyncio.create_task(post())
+    await queued.wait()
+    for _ in range(3):
+        await asyncio.sleep(0)   # the reader waits on the lock now
+    if granted:
+        clone.lock.release()     # handed to the reader's waiter...
+    task.cancel()                # ...which is cancelled before it runs
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    if not granted:
+        clone.lock.release()
+    for _ in range(3):
+        await asyncio.sleep(0)
+    assert not clone.lock.locked() and not clone.session_lock.locked()
+
+async def test_reader_cancelled_in_a_session_lets_the_job_leave(tmp_path):
+    clone, in_session, leave, inside = idle_clone(tmp_path), asyncio.Event(), asyncio.Event(), asyncio.Event()
+    job = asyncio.create_task(review_job(clone, {}, in_session, leave))
+    await in_session.wait()
+    async def post():
+        async with clone.reader(step=0.01):
+            inside.set()
+            await asyncio.Event().wait()
+    task = asyncio.create_task(post())
+    await asyncio.wait_for(inside.wait(), 5)
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    assert not clone.session_lock.locked()
+    leave.set()
+    await asyncio.wait_for(job, 5)
+    assert not clone.in_session and not clone.lock.locked()
+
+async def test_reader_refuses_changed_config_in_session(tmp_path):
+    git_dir = tmp_path / "clone" / ".git"
+    git_dir.mkdir(parents=True)
+    (git_dir / "config").write_text("[core]\n")
+    clone, in_session, leave, entered = idle_clone(tmp_path), asyncio.Event(), asyncio.Event(), False
+    job = asyncio.create_task(review_job(clone, guarded_git_files(clone.path), in_session, leave))
+    await in_session.wait()
+    (git_dir / "config").write_text('[core]\n[filter "x"]\n\tclean = planted\n')   # the session plants a filter
+    changed = r"^the review session changed the clone's git config; posting waits until the job ends$"
+    async def post():
+        nonlocal entered
+        async with clone.reader(step=0.05):
+            entered = True
+    try:
+        with pytest.raises(CloneError, match=changed):
+            await asyncio.wait_for(post(), 5)
+    finally:
+        leave.set()
+        await job
+    assert not entered and not clone.session_lock.locked()
+
+async def test_delete_branch(tmp_path, pr7):
+    bare, base, _ = pr7
+    clone = await refreshed(tmp_path, bare)
+    await clone.fetch_pr_head(7)
+    await clone.delete_branch(7)
+    with pytest.raises(subprocess.CalledProcessError):
+        git("rev-parse", "--verify", "pr-review/7", cwd=clone.path)
+    await clone.delete_branch(7)   # not there: no error
+    git("symbolic-ref", "refs/heads/pr-review/7", "refs/heads/develop", cwd=clone.path)
+    await clone.delete_branch(7)   # the link goes, never the branch it points at
+    with pytest.raises(subprocess.CalledProcessError):
+        git("symbolic-ref", "-q", "refs/heads/pr-review/7", cwd=clone.path)
+    assert git("rev-parse", "--verify", "refs/heads/develop", cwd=clone.path) == base

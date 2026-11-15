@@ -76,6 +76,25 @@ def test_existing_row_gains_a_turn():
                     first, set(), T1)
     assert u.new_turns == [TurnChange(1, "merge", ())] and u.gone_turns == []
 
+def test_thread_turns_change_moves_with_my_thread_turns_only():
+    """When the operator's own thread turns last changed (/code-review C6): another reviewer's turn, a role, the
+    head or a turn of mine without threads leave it; a thread turn of mine that goes, or comes back the same,
+    moves it."""
+    T2, T3 = "2026-11-20T10:10:00+00:00", "2026-11-20T10:15:00+00:00"
+    mine = [Turn("octo", "recheck", ("T1",))]
+    first = build_board(snap(spr(1, mine)), {1: det(1)}, {1: False}, {}, set(), T0).rows
+    assert first[1].thread_turns_change == T0
+    others = build_board(snap(spr(1, [*mine, Turn("octo-2", "review"), Turn("octo", "merge")])),
+                         {1: det(1, head="b" * 40, assignees=("octo",))}, {1: False}, first, set(), T1).rows
+    assert (others[1].last_change, others[1].thread_turns_change) == (T1, T0)
+    gone = build_board(snap(spr(1, [])), {1: det(1)}, {1: False}, others, set(), T2).rows
+    back = build_board(snap(spr(1, mine)), {1: det(1)}, {1: False}, gone, set(), T3).rows
+    assert (gone[1].thread_turns_change, back[1].thread_turns_change) == (T2, T3)
+    # A row stored before the field existed starts from its last change.
+    old = {1: replace(first[1], thread_turns_change="", last_change=T1)}
+    assert build_board(snap(spr(1, mine)), {1: det(1)}, {1: False}, old, set(), T2).rows[1].thread_turns_change == T1
+
+
 def test_my_turns_change_on_same_head_moves_last_change_only():
     first = build_board(snap(spr(1, [Turn("octo", "answer_threads", ("T1",))])), {1: det(1)}, {1: False},
                         {}, set(), T0).rows

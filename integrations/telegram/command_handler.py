@@ -22,6 +22,7 @@ from integrations.telegram.switch_commands import (
 )
 from orchestrator import tg_format
 from orchestrator.constants import REPORT_BA, REPORT_DEV, REPORT_QA, REPORT_SCOPE_GUARD
+from orchestrator.reviewer.grammar import parse_reply
 from orchestrator.switches import GLOBAL, switch_scopes
 from workspace.workspace import Stage
 
@@ -54,7 +55,9 @@ def _ensure_msg_ids(c: dict) -> list[int]:
     return c["msg_ids"]
 
 
-_REVIEW_REPLY_ANSWER = "Replies to review messages are handled from the next version on; nothing was done."
+_REVIEW_STORE_UNREAD = "Reply not handled: the reviewer's store could not be read; nothing was done."
+_REVIEWER_OFF = "Reviewer mode is off on this daemon: nothing was done."
+_REVIEWER_NOT_A_REPLY = "Reply to the reviewer's message to act on it; nothing was done."
 
 _FIX_TOKENS = ("fix it", "fix", "fxi", "fifx", "fixx", "fx", "fi", "yes")
 _WONT_FIX_TOKENS = (
@@ -97,8 +100,8 @@ def _classify_reply(text: str) -> tuple[str, str, str]:
 class CommandHandler:
     """Routes incoming Telegram messages to the appropriate handler."""
 
-    # (chat_id, message_id) -> whether the message is one of the reviewer's (a reply anchor); None: no reviewer.
-    _review_anchor: Callable[[str, int], bool] | None = None
+    # The reviewer's replies (has_repos, is_anchor, handle_reply, handle_callback); None: no reviewer on this daemon.
+    _reviewer: Any | None = None
 
     def __init__(
         self,
@@ -116,10 +119,14 @@ class CommandHandler:
         event_bus: Any | None = None,
         switches: Any | None = None,
         get_projects: Callable[[], dict[str, Any]] | None = None,
-        review_anchor: Callable[[str, int], bool] | None = None,
+        reviewer: Any | None = None,
+        reviewer_chat_ids: set[str] | None = None,
     ) -> None:
         self._switches = switches
-        self._review_anchor = review_anchor
+        self._reviewer = reviewer
+        # The chats the reviewer's replies and taps are read in. Never "every chat": unlike allowed_chat_ids, none
+        # (or an empty set) is no chat, so an empty allowlist leaves the reviewer off.
+        self._reviewer_chat_ids: set[str] = set(reviewer_chat_ids or ())
         self._get_projects = get_projects or (lambda: {})
         self._intent_parser = intent_parser
         self._notifier = notifier
@@ -165,10 +172,11 @@ class CommandHandler:
             self._get_trackers = lambda: {"_legacy": tracker}
 
     def add_allowed_chat_id(self, chat_id: str) -> None:
-        """Extend the chat allowlist with a new id.
+        """Extend the chat allowlist with a new id, and the reviewer's chats with it.
 
-        No-op if the startup allowlist was None ('admit all' semantic preserved).
+        The allowlist is unchanged if the startup allowlist was None ('admit all' semantic preserved).
         """
+        self._reviewer_chat_ids.add(chat_id)
         if self._allowed_chat_ids is None:
             return
         self._allowed_chat_ids.add(chat_id)
@@ -193,6 +201,9 @@ class CommandHandler:
         command = parse_switch_command(text) if self._switches is not None else None
         if command is not None:
             await self._handle_switch_command(command, chat_id)
+            return
+        if self._is_reviewer_command(text):
+            await self._notifier.send_message(chat_id, _REVIEWER_NOT_A_REPLY)
             return
         # Send a visible processing message so the user knows we're working
         processing_msg_id = None
@@ -235,6 +246,19 @@ class CommandHandler:
         else:
             await self._reply(chat_id, intent.reply or
                 "I didn't understand that. I can do: status, analyze, approve, reject, retry, set_mode, reviewed.", processing_msg_id)
+
+    def _is_reviewer_command(self, text: str) -> bool:
+        """Whether a message, while a repo is in reviewer mode, is a reviewer command that names a review's numbers
+        or is no bare event: sent without Telegram's Reply (or as a reply to a message that is no anchor), it would
+        reach the intent parser, which reads "post 1 2 4 approve" as an approval of a ticket. It holds in every
+        chat the ticket pipeline admits, not only the reviewer's: those forms are never ticket words. A bare
+        "approve" (an event-only post) stays the ticket pipeline's, and with no repo reviewed nothing is held."""
+        if self._reviewer is None or not self._reviewer.has_repos():
+            return False
+        cmd = parse_reply(text)
+        if cmd is None:
+            return False
+        return bool(cmd.numbers) or cmd.all_confirmed or cmd.action != "post"
 
     def _build_context(self, workspaces: list[Any]) -> dict[str, Any]:
         awaiting = [
@@ -578,26 +602,56 @@ class CommandHandler:
         ]
         return f"Already started: {', '.join(parts)}."
 
-    def _is_review_anchor(self, chat_id: str, message_id: int) -> bool:
-        """Whether the message is one of the reviewer's; a failed lookup (logged with its class only) counts
-        as no, so the reply still reaches the pipeline."""
-        if self._review_anchor is None:
-            return False
-        try:
-            return self._review_anchor(chat_id, message_id)
-        except Exception as e:
-            logger.warning("Reply anchor not looked up: %s", type(e).__name__)
-            return False
+    async def handle_reply(
+        self, reply_to_msg_id: int, text: str, chat_id: str, sent_at: datetime | None = None,
+    ) -> bool:
+        """Handle a reply to a reviewer message or an escalation message. Returns True if matched.
 
-    async def handle_reply(self, reply_to_msg_id: int, text: str, chat_id: str) -> bool:
-        """Handle a reply to an escalation message. Returns True if matched."""
+        A reply in one of the reviewer's chats to a reviewer message goes to the reviewer, with `sent_at` (the
+        reply's Telegram date) for its age limit. Such a reply never reaches the intent parser, which would read the
+        message's hint ("post 1 2 4 approve") as an approval. When the reviewer's store cannot be read, the
+        ticket-reply matching still runs; a reply it does not match is answered and kept from the intent parser
+        all the same. In any other chat the reviewer does not act: a reply there to one of its messages is dropped
+        without an answer, and so is one whose anchor lookup fails, so that it never reaches the intent parser.
+        """
         if self._allowed_chat_ids is not None and chat_id not in self._allowed_chat_ids:
             return False
-        # A reply to a reviewer message (only ever one Cleave sent to that chat) is not the ticket
-        # pipeline's: its intent parser would read the message's hint ("post 1 2 4 approve") as an approval.
-        if self._is_review_anchor(chat_id, reply_to_msg_id):
-            await self._notifier.send_message(chat_id, _REVIEW_REPLY_ANSWER)
+        if self._reviewer is None:
+            return await self._pipeline_reply(reply_to_msg_id, text, chat_id)
+        if chat_id not in self._reviewer_chat_ids:
+            if self._reviewer_anchor_or_unknown(chat_id, reply_to_msg_id):
+                logger.warning(
+                    "Reply to reviewer message %s dropped: chat %s is not one of the reviewer's",
+                    reply_to_msg_id, chat_id,
+                )
+                return True
+            return await self._pipeline_reply(reply_to_msg_id, text, chat_id)
+        try:
+            anchored = self._reviewer.is_anchor(chat_id, reply_to_msg_id)
+        except Exception as e:
+            logger.warning("Reply anchor not looked up: %s", type(e).__name__)
+            if not await self._pipeline_reply(reply_to_msg_id, text, chat_id):
+                message_id = await self._notifier.send_message(chat_id, _REVIEW_STORE_UNREAD)
+                try:  # so a reply to the answer is the reviewer's too; the store may be what failed
+                    self._reviewer.anchor_answer(chat_id, message_id)
+                except Exception as anchor_error:
+                    logger.warning("Reply-not-handled answer not anchored: %s", type(anchor_error).__name__)
             return True
+        if not anchored:
+            return await self._pipeline_reply(reply_to_msg_id, text, chat_id)
+        await self._reviewer.handle_reply(chat_id, reply_to_msg_id, text, sent_at=sent_at)
+        return True
+
+    def _reviewer_anchor_or_unknown(self, chat_id: str, message_id: int) -> bool:
+        """Whether the message is the reviewer's, or may be: a failed lookup counts as one (fails closed)."""
+        try:
+            return self._reviewer.is_anchor(chat_id, message_id)
+        except Exception as e:
+            logger.warning("Reply anchor not looked up: %s", type(e).__name__)
+            return True
+
+    async def _pipeline_reply(self, reply_to_msg_id: int, text: str, chat_id: str) -> bool:
+        """Handle a reply to a ticket's escalation message. Returns True if matched."""
         workspaces = self._active_workspaces_fn()
 
         # Check escalated PR comment replies first (pending_review_comments)
@@ -864,8 +918,18 @@ class CommandHandler:
         return True
 
     async def handle_callback(self, action: str, ticket_id: str, chat_id: str, message_id: int) -> None:
-        """Handle an inline button press. Bypasses LLM intent parsing."""
+        """Handle an inline button press. Bypasses LLM intent parsing. An `rv_` action is the reviewer's, never a
+        workspace's, and is read in the reviewer's chats only."""
         if self._allowed_chat_ids is not None and chat_id not in self._allowed_chat_ids:
+            return
+
+        if action.startswith("rv_"):
+            if chat_id not in self._reviewer_chat_ids:
+                return
+            if self._reviewer is None:
+                await self._notifier.send_message(chat_id, _REVIEWER_OFF, reply_to_message_id=message_id)
+            else:
+                await self._reviewer.handle_callback(action, ticket_id, chat_id, message_id)
             return
 
         workspaces = self._active_workspaces_fn()

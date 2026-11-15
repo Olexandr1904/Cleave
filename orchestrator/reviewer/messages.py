@@ -22,6 +22,8 @@ def review_message(
     files: int,
     report: Report,
     tg_lines: dict[int, str],
+    posted_at_head: int = 0,
+    summary_posted: bool = False,
 ) -> str:
     kinds = [item.kind for item in report.items]
     total = report.candidates_total
@@ -38,8 +40,11 @@ def review_message(
         f'[{scope}] Review of PR #{number} "{_cut(title)}"{ticket}',
         counts,
         f"Suggested: {report.event} — {_cut(report.event_reason)}",
-        "",
     ]
+    if posted_at_head or summary_posted:
+        summary = " and the Summary" if summary_posted else ""
+        lines.append(f"Already posted at this head: {_count(posted_at_head, 'comment')}{summary}")
+    lines.append("")
     lines += [_item_line(item, tg_lines) for item in report.items]
     if report.dropped:
         lines.append("Dropped: " + "; ".join(
@@ -71,7 +76,7 @@ def recheck_message(
             gist = tg_lines.get(entry["n"]) or entry["body"].strip().partition("\n")[0]
             lines.append(f"{entry['n']}. {_cut(gist)}")
         numbers = " ".join(str(entry["n"]) for entry in replies)
-        lines += ["", f'Reply to this message: "post replies {numbers}"']
+        lines += ["", f'Reply to this message: "post replies {numbers}" · "text {replies[0]["n"]}"']
     else:
         lines += ["No replies drafted.", ""]
     lines.append(url)
@@ -102,6 +107,11 @@ def split_message(text: str, limit: int = 4096) -> list[str]:
     if part:
         parts.append(part)
     return parts
+
+
+# The limit of a part the reviewer sends: split_message counts UTF-16 code units, as Telegram does (its limit is
+# 4096), and the rest is headroom.
+MESSAGE_LIMIT = 3900
 
 
 def message_parts(text: str, limit: int, max_parts: int = 10) -> list[str]:

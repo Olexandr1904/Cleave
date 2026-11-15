@@ -24,6 +24,12 @@ The bot ignores messages from chat ids that aren't on its allowlist. The allowli
 
 If the allowlist ends up empty for any reason, the bot is locked down (fail-safe) — it accepts no messages until at least one chat id is configured. New projects added through the dashboard wizard extend the allowlist live.
 
+Replies to [reviewer messages](#replying-to-reviewer-messages) and taps on its **Yes** / **No** buttons are read only in these chats too, and never in any chat when none is configured. `reviewer.telegram_chat_id` in `global.yaml` is not added to the allowlist: set it to one of the chats above. When it is none of them (or none is configured), replies to reviewer messages there are ignored: they reach neither the reviewer nor the ticket pipeline, and get no answer. The daemon says so at startup (and logs a warning), and leaves `, posting from Telegram` off its `Reviewer:` line:
+
+```
+  Reviewer: replies are ignored — reviewer.telegram_chat_id is not an allowed chat
+```
+
 ---
 
 ## Switch commands
@@ -96,12 +102,15 @@ For messages that expect discrete choices, Cleave attaches inline keyboard butto
 | **Retry Now** / **Retry** | DEFERRED notifications (quota / transient error) and FAILED notifications | `retry:<ticket>` |
 | **🧹 Clear cache & retry** | FAILED notifications whose error matches the AAPT2 corruption signature | `clear_gradle:<ticket>` — wipes `<gradle_home>/caches/*/transforms` then retries |
 | **Show N unanswered** | PR_REVIEW summary when comments are pending your decision | `unanswered:<ticket>` |
+| **Yes** / **No** | The reviewer's echo of a reply it understood through the model (see [replies the grammar does not know](#replies-the-grammar-does-not-know)) | `rv_ok:<id>` / `rv_no:<id>` |
 
 Escalation messages that need a free-text answer (BLOCKED on requirements, ambiguity, etc.) deliberately don't carry buttons — the answer text is what's needed, not a yes/no.
 
 ---
 
 ## Replies and unblock flow
+
+A reply to a reviewer message goes to the reviewer before any of the below (see [replying to reviewer messages](#replying-to-reviewer-messages)).
 
 When Cleave escalates a BLOCKED workspace, the message you receive in Telegram is a *thread anchor*: replying to it (Telegram's "Reply to" feature, not a new message) feeds your reply back to the agent.
 
@@ -176,7 +185,7 @@ The first poll of a repo records the turns that already exist without sending a 
 
 ### Review and re-check messages
 
-Reviews and re-checks run unattended, one job at a time: Cleave prepares the PR in its [review clone](dashboard.md#review-clone), runs the repo's review process in an isolated Claude Code session on the host's claude.ai login, and sends the result to the same chat as the [reviewer lines](#reviewer-lines). Nothing is posted to GitHub.
+Reviews and re-checks run unattended, one job at a time: Cleave prepares the PR in its [review clone](dashboard.md#review-clone), runs the repo's review process in an isolated Claude Code session on the host's claude.ai login, and sends the result to the same chat as the [reviewer lines](#reviewer-lines). Nothing is posted to GitHub until you reply to the message (see [replying to reviewer messages](#replying-to-reviewer-messages)).
 
 A review sends the review message:
 
@@ -213,15 +222,172 @@ head 26c4929c5 · 2 drafted replies
 1. fixed · CartRepository.kt:88 · null check added
 3. Agreed, renamed.
 
-Reply to this message: "post replies 1 3"
+Reply to this message: "post replies 1 3" · "text 1"
 https://github.com/acme-org/acme-app/pull/1712
 ```
 
-Replies to these messages are not acted on yet: Cleave answers `Replies to review messages are handled from the next version on; nothing was done.` and does nothing else (such a reply never reaches the ticket pipeline's intent parser or its approvals); a later version reads them (post, text, edit, review again, post replies). Each text taken from the report, the replies plan or the PR's title is cut at 200 characters; the full report is on the dashboard's [PR detail view](dashboard.md#pr-detail-view).
+Reply to the message to act on it: see [replying to reviewer messages](#replying-to-reviewer-messages). A later review of a head that already has posts says so under the Suggested line: `Already posted at this head: 3 comments and the Summary`. Each text taken from the report, the replies plan or the PR's title is cut at 200 characters; the full report is on the dashboard's [PR detail view](dashboard.md#pr-detail-view), and `text 2` sends a finding's full text.
 
 The message is sent once the job is done: the session wrote a report (a replies plan for a re-check) that Cleave could read, and the PR still has that head (Cleave asks GitHub once, then checks the board) and your turn — a **Review now** review needs no review turn. Otherwise the job ends `superseded` (a new head, or a newer job), `stale` (the PR is closed or gone, or the turn is gone) or `skipped` (you skipped that head while the review ran) and nothing is sent.
 
 A long message comes in parts: it is split at line ends into messages of at most 3,900 characters (an emoji such as 🔴 counts as two), sent in order, at most 10 of them: a longer message is cut, its last part ending with `… <k> more lines — the full report is on the dashboard`. A message that could not be delivered is tried again from its first part not delivered yet (a part already out is never sent again), after waits of 1, 5, 15 and then 60 minutes between attempts; a retry that is due goes out before the next job, and Cleave looks for one every 30 seconds while no job runs. Each retry first checks the job against the board, so a message that is no longer current is not sent. The fifth failed attempt is the last: the job's notes on the dashboard say the message was not delivered. With no Telegram bot or chat configured, it waits for the first start that has both.
+
+### Replying to reviewer messages
+
+Every message the reviewer sends — its lines, the review and re-check messages, and its answers — is a reply anchor. Reply to one (Telegram's **Reply**, not a new message) and Cleave acts on the reply, or answers why it does nothing. Each answer is a reply to the message you replied to and is anchored like it, so you can reply to an answer too; a long one (a posting result with many replies, say) comes in up to 3 parts, each anchored the same way. A reply to a reviewer message is handled first: it never reaches the ticket pipeline's intent parser, its approvals or the escalation replies (there, the review message's own hint `post 1 2 4 approve` would read as an approval). Replies are read in [allowlisted](#allowlist) chats only. When `reviewer.db` cannot be read, a reply that matches no ticket escalation is answered `Reply not handled: the reviewer's store could not be read; nothing was done.` Cleave records each message as an anchor right after it is sent, trying 3 times 0.2 seconds apart. When that still fails, the message is out but a reply to it is not recognised: the daemon log has an error, and the job's notes on the dashboard say `message <id> is not registered; replies to it are not recognised`.
+
+While a repo is in reviewer mode, a reviewer command sent as a new message rather than a reply (or as a reply to a message that is not the reviewer's), in any chat the ticket pipeline reads, runs nothing and never reaches the ticket pipeline either: one that names numbers (`post 1 2 4 approve`, `text 2`, `edit 2: …`), says `all confirmed`, or is any other command of the table below (`post replies 1 3`, `draft 7`, `review again`, `skip`) is answered `Reply to the reviewer's message to act on it; nothing was done.` A bare event without numbers (`approve`, `апрув`, `request changes`) and every ticket command stay the ticket pipeline's, as before. With no repo in reviewer mode, every message goes to the ticket pipeline as before.
+
+A reply runs at once only when every word in it is in the table below. Case does not matter, commas separate words, `#2` is `2`, and one final `.` or `!` is dropped. Between the words of a post you may write `comments`, `comment`, `questions`, `question` (accepted synonyms: `коментарии`, `комментарии`, `коменты`, `комменты`, `коментарі`, `коменти`, `вопросы`, `вопрос`, `питання`) and `and`, `also`, `+`, `&` (`и`, `і`, `й`, `та`). Any other reply goes to the [model fallback](#replies-the-grammar-does-not-know), which never runs anything without your **Yes**.
+
+| Reply | Accepted synonyms | Does |
+|---|---|---|
+| `post 1 2 4` | `пости`, `постни`, `запости`, `публикуй`, `опубликуй`, `публікуй`, `опублікуй` | Posts exactly those numbers in a `COMMENT` review, the report's Summary as its body |
+| `post 1 2 4 approve` | `апрув`, `аппрув`, `ставь апрув`, `поставь апрув`, `став апрув`, `постав апрув`, `ставь approve` | The same with the `APPROVE` event |
+| `post 1 2 4 request changes` | `request-changes`, `реквест ченджес`, `реквест ченджиз` | The same with the `REQUEST_CHANGES` event |
+| `post all confirmed` | `все подтверждённые`, `всі підтверджені`, `усі підтверджені` | Adds every confirmed finding (🔴 🟠 🟡) not posted at this head yet to the numbers |
+| `post … no summary` | `without summary`, `без summary`, `без саммари`, `без самари` | Leaves the Summary out of the review body |
+| `post … anyway` | `всё равно`, `все одно`, `однаково` | Posts although you submitted a review yourself since the review started, or after an approve of Cleave's that may have landed (see [posting a review](#posting-a-review)) |
+| `approve`, `request changes` | as above | That event with the Summary as the body and no inline comment. `approve no summary` approves without a body; `request changes no summary` is refused |
+| `text 2` (`text 2 3`) | `текст` | Sends each finding's full text: its place, title and body. On a re-check message, each drafted reply in full: where it goes (`#1 · reply in thread <id>, then resolve it`, `left unresolved`, or `#3 · answer to review <id>`), then its text, so you see what you post rather than the session's one-line gist |
+| `edit 2: <what to change>` | `измени`, `исправь`, `поменяй`, `зміни`, `виправ` | An [edit job](#edit-and-draft-jobs): rewrites finding 2's text as you ask. Nothing is posted |
+| `draft 7` | `черновик`, `чернетка` | A [draft job](#edit-and-draft-jobs): writes dropped candidate 7 as a question you can post. Nothing is posted |
+| `post replies 1 3` (re-check message) | `reply`, `answers`, `ответы`, `ответ`, `відповіді`, `відповідь` for `replies` | Posts those drafted replies (see [posting re-check replies](#posting-re-check-replies)) |
+| `review again` | `re-review`, `rereview`, `ревью заново`, `заново ревью`, `ревью ще раз`, `рев'ю заново` | Queues a review of the PR's current head, as **Review now** does: `Queued a review of #1712 at 26c4929c5.` |
+| `skip` | `пропусти`, `пропусть` | Skips the PR's current head, as **Skip** does: `Skipped #1712 at 26c4929c5: no automatic review of this head.` |
+
+Numbers need the post word: `approve 1 2`, or `post` with no number and no event, goes to the model fallback. An event alone takes only the joining words: `approve comments` goes to the fallback too, because a bare approve is never guessed. All of this works while reviews are paused; a review queued by `review again` starts once reviews run.
+
+A reply that cannot run is answered, and nothing from it runs:
+
+| Answer | When |
+|---|---|
+| `Unknown number: 12. Nothing was done.` | A number that is not in the report (nor among the drafted replies of a re-check) |
+| `#7 was dropped: reply "draft 7" first. Nothing was done.` | `post`, `text` or `edit` of a dropped candidate that is not drafted |
+| `#1 is already posted at this head. Nothing was done.` | A number that landed at this head (see [never twice](#never-twice)) |
+| `Nothing to post: name numbers or keep the Summary. Nothing was done.` | `request changes no summary`, or `post all confirmed` with no confirmed finding |
+| `Nothing left to post: every confirmed finding is already posted at this head. Nothing was done.` | `post all confirmed` (with no other number) once every confirmed finding landed at this head |
+| `Outdated: there is a review of a newer head. Nothing was done.` (or `there is a newer review`, or `this report no longer matches the PR (<reason>)`) | The job was superseded by a newer review or is stale (its PR or your turn is gone): nothing runs from its messages, `review again` and `skip` included. Use the newer review's message, or **Review now** |
+| `This job ended failed: only "review again" and "skip" work here. Nothing was done.` | A command about the report on a job that is not done or posted (failed, deferred, …) |
+| `#7 is not a dropped number. Nothing was done.` | `draft` of a number that is not a dropped candidate |
+| `#7 is drafted already: reply "text 7". Nothing was done.` | `draft` of a candidate drafted before |
+| `A review of #1712 at this head is already queued.` | `review again` while a review of the current head is queued, running or deferred |
+| `#1712 is not on the board any more; nothing was done.` | `review again` or `skip` after the PR left the board |
+| `This is a re-check message: reply "post replies 1 3". Nothing was done.` | `post`, `edit` or `draft` on a re-check message (and the reverse for `post replies` on a review message) |
+| `The forge token is failing (see the dashboard): nothing posted.` | A post while credential health flags the repo's forge token |
+| `This reply is from 14:05 UTC; send it again to act on it. Nothing was done.` | The reply is older than 15 minutes (`20 Nov 14:05 UTC` past a day): say, sent while the daemon was down. Telegram delivers it at the next start, where it runs nothing |
+| `Reviewer mode is off on this daemon: nothing was done.` | No repo is reviewed by this daemon (no repo with `reviewer.enabled` and a forge token, or a dry run) |
+| `This repo is no longer reviewed; nothing was done.` | The message's repo has reviews turned off now |
+| `Not understood; nothing was done. Reply like "post 1 2 4 approve", "text 2", "edit 2: …", "draft 7" or "review again".` | Neither the grammar nor the model fallback understood it (`"post replies 1 3", "text 1" or "review again"` on a re-check) |
+| `Internal error (<class>); nothing was done.` | Something failed in Cleave outside a post; details are in the daemon log (a post that stops on an error answers `Posting stopped on an internal error (<class>); …` before its confirm run, or `Posting on #1712 ran, but stopped on an internal error (<class>): …` after it, see [posting a review](#posting-a-review)) |
+
+#### Replies the grammar does not know
+
+A reply to a review or re-check message whose job is done or posted, made of other words (`post everything but 3`, a typo, a question), goes to a one-turn `claude -p` on the host's claude.ai login with no tools and no MCP server (`reviewer.jobs.command` in `global.yaml`, default `sonnet`, 60 seconds). It sees only your reply and the message's numbers with their kinds: never a title, a finding's text or the PR's. Its command is checked like a grammar reply, then echoed with two buttons:
+
+```
+Understood: post 1 2 4 + APPROVE at 26c4929c5. Correct?      [Yes] [No]
+```
+
+Nothing runs until you tap **Yes**, which runs the echoed command against the job as it is then, checked again. **No** answers `Cancelled: nothing was done.` A tap counts once (`Already handled.` after that), only in the chat of the echo, and only within 15 minutes of it (`Expired: reply again; nothing was done.`). With the claude login failing, the fallback does not run: `claude is not logged in on the host: only exact replies work now; nothing was done.`
+
+#### Posting a review
+
+`post …` answers `Checking before posting: post 1 2 4 + APPROVE at 26c4929c5.`, then posts through the repo's own poster tool (`reviewer.poster.review_command`, run from the [review clone](dashboard.md#review-clone) with the forge token), never through the model. Posts run one at a time, across all repos. Cleave checks, in this order, and the first check that fails stops the post before anything is posted:
+
+1. **The job as it is now** — still done or posted; your GitHub login known from a poll (`Waiting for the first poll: nothing posted.`); the numbers checked again, since an identical post may have landed after your reply was checked.
+2. **GitHub's head** — the PR is open (`PR #1712 is closed: nothing posted.`) and still at the reviewed head (`Head moved (26c4929c5 → 8f01a2b3c): nothing posted. Reply "review again" for a review of the new head.`). Every GitHub read before the confirm run (or the approve) that fails stops the post: `GitHub could not be read for #1712 (<error>): nothing posted.`
+3. **Your reviews on GitHub** — a second approve at the same head is refused, with `anyway` too: `Already approved #1712 at 26c4929c5. Nothing was done.` (a review of yours that approved that head, Cleave's own included, or an approve Cleave recorded there). An approve where an approving post of Cleave's ended unknown at this head (unverified, or interrupted by a restart) needs `anyway`: `An approve of #1712 at 26c4929c5 may have landed: check the PR, then add "anyway" to your reply to approve again. Nothing was done.` A review you submitted yourself after the review job started needs `anyway` too: `You already submitted a review on this PR after the report (<time>): nothing posted. Add "anyway" to your reply to post regardless.`
+4. **The named findings' text** — the [body check](#the-body-check).
+5. **The ticked copy** — `approve no summary` uses no tool: right before the approve, GitHub's head is checked again, your reviews are read again for step 3's approve rule (not for a review of your own since the job started, already checked), and the job must still be done or posted; then one approve call goes to GitHub, never retried, then step 9. Otherwise the job's copy of the report is ticked on exactly the numbers you named (with `no summary`, without its Summary). Cleave keeps its own copy of the report in the job's directory; the review session cannot change it.
+6. **The dry run** — the tool with `reviewer.poster.dry_run_flag` (default `--dry-run`), from the review clone (while a job prepares or cleans up the clone, Cleave waits for it up to 10 minutes, then refuses: `the review clone is busy …`). It must exit 0, print nothing Cleave does not understand, and plan exactly what you named: it lists your numbers, at the job's head, with your event; each inline comment is one of your numbers; each of your numbers is inline, in the review body, or skipped by the tool's ledger as already posted; no number you did not name is in a comment or the body; its `Summary:` line agrees with the payloads (the report's Summary is in a review body exactly when it says `yes`); and each comment and the review body (the Summary too) pass the body check. Else: `Not posted on #1712: <why>.` (a dry run that runs out of time: `the dry run failed: timed out after <n> s`). A dry run that plans nothing answers `Nothing left to post on #1712 at 26c4929c5: what you named is already posted.` (after a bare `approve`, it adds `Reply "approve no summary" to approve without a body.`).
+7. **Right before the confirm run** — GitHub's head again, your reviews again (the approve rule of step 3), the review clone's git config unchanged by a session, the job still done or posted, and the named findings unchanged: an edit that landed during the dry run answers `The report changed while posting (an edit landed): look at it again and reply. Nothing was done.`
+8. **The confirm run** — the dry run's command with `reviewer.poster.confirm_flag` (default `--yes`) in place of the dry-run flag, nothing else changed.
+9. **The post-condition, on GitHub only** — read up to 3 times, 2 seconds apart: exactly the planned number of new reviews by you since right before the confirm run, each with your event at the head, the planned number of comments, and the planned body in the first. GitHub is the truth whatever the tool's exit or output says: a confirm run that failed, timed out or printed something Cleave does not understand is checked the same way, and only what GitHub shows is recorded as landed.
+
+The result:
+
+| Answer | Means |
+|---|---|
+| `Posted on #1712 at 26c4929c5 — APPROVE, 1 review: <url>`, then `inline: 1 2 · moved anchor: 2 · in the review body: 5` (`already posted, skipped: …` for numbers the tool's ledger skipped; `Summary only` with no number) | GitHub shows all of it as planned. A tool that exited non-zero adds `The tool exited 1, but GitHub shows everything posted.`, one whose output Cleave did not understand `The tool's output was not understood (<error>), but GitHub shows everything posted.` |
+| `Approved #1712 at 26c4929c5 without a body: <url>` | `approve no summary` landed |
+| `Partly posted on #1712 at 26c4929c5: batch 1 of 2 landed (<url>); landed 1 2; not landed 4 — <why>.`, then `Reply "post 4" to post the rest.` | The tool posts in batches and only some are on GitHub. The last line is the exact command for the rest, with your flags, but without `approve` when batch 1 approved already: the rest goes as a `COMMENT` review, since a second approve is refused; and with `no summary` when batch 1 carried the Summary, which landed with it. What landed is refused as already posted. When the tool reports a batch that GitHub does not show, the line says so: check the PR on GitHub |
+| `Not posted on #1712: <why>.` | GitHub shows nothing new, and the tool failed without reporting a batch posted, with output Cleave understood (or GitHub refused the approve) |
+| `Posting on #1712 ran, but GitHub does not show it as planned (<why>). Check the PR on GitHub before posting again: <url>` | Unverified: the tool reports a post, says something Cleave does not understand (`the tool's output was not understood (<error>)` in `<why>`), or GitHub shows something else new, and GitHub does not show it as planned. It may have landed, so it is never called "Not posted". If it landed, its review is not known as Cleave's, so the next post at that head needs `anyway` |
+| `Posting on #1712 ran, but GitHub could not be read to check it (<error>). Check the PR before posting again: <url>` | Unverified: GitHub could not be read after the confirm run |
+| `Posting on #1712 ran, but stopped on an internal error (<class>): it may have landed. Check the PR before posting again.` | Unverified: Cleave itself failed once the confirm run (or the approve) had run (details in the daemon log). An approve at that head then needs `anyway` |
+| `Posting stopped on an internal error (<class>); check the PR before posting again.` | Cleave itself failed before the confirm run (details in the daemon log): nothing was posted |
+
+A post that landed, in full or in part, sets the job `posted`; you can still post the numbers that did not land from the same message. A job superseded since the post started keeps that state, and so does one stale for another reason than its turn going. A poll that sees your turn gone while a post runs (the post itself takes it away) leaves the job to the post.
+
+#### Never twice
+
+Cleave records in `reviewer.db` what landed at each head (each finding and whether the Summary went with it) and refuses those numbers, once when your reply is checked and again under the posting lock: the same reply delivered twice, or sent again, runs the tool once and then answers `#1 is already posted at this head. Nothing was done.` The tool's own ledger (`{ledger}`, `<reviewer data dir>/ledgers/<project>/<repo>/PR_<n>/posted_<head9>.json`) is passed on every review post as a second guard. The Summary has its own: a dry run that carries the Summary at a head where a post of Cleave's landed it is refused before the confirm run, `The Summary already landed at #1712 at 26c4929c5: add "no summary". Nothing was done.` An event-only post (`request changes`, `approve`: no number) has nothing else to post then, so it answers `Nothing left to post on #1712 at 26c4929c5: what you named is already posted.` instead (after `approve`, with the `approve no summary` hint). A later review of the same head (**Review now** or `review again` after a post) shows `Already posted at this head: <n> comments` (`and the Summary`) under its Suggested line.
+
+#### Posting re-check replies
+
+`post replies 1 3` on a re-check message runs the replies tool (`reviewer.poster.replies_command`) by the same rules, one post at a time and while reviews are paused too:
+
+1. **The job as it is now** — done or posted; your login; the numbers checked again.
+2. **GitHub's head** — the PR open and at the re-check's head.
+3. **The plan** — checked against Prepare's snapshot of the PR's threads, taken before the session (which cannot change it): each named reply must still answer an unresolved thread where it is your turn, or a review body not answered yet (`#3 cannot be posted: <why>. Nothing was done.`). Then each reply's text: the [body check](#the-body-check) (`#1: its text <problem>: nothing posted. A re-check reply cannot be edited here: answer that thread on GitHub yourself.`).
+4. **A plan file** of exactly the named replies.
+5. **The dry run** — each step must be the planned one (a reply, and a resolve when the plan resolves the thread, for a thread; a comment for a review body), with its planned text, aimed at its thread or review, passing the body check.
+6. **Right before the confirm run** — GitHub's head again; the threads command's snapshot (when it fails, nothing is posted); each step still possible on GitHub. A reply the dry run leaves out counts as already posted only when GitHub shows it. When the tool plans nothing, the answer is `Nothing left to post on #1712 at 26c4929c5: what you named is already posted.`, or, when GitHub does not show it all, `Nothing posted on #1712: the replies tool has nothing to post, but GitHub does not show everything posted (<why>). Check the PR on GitHub: <url>`.
+7. **The confirm run**, then **the post-condition** with the threads command, read up to 3 times: each reply new in its thread, by you, with its text; each resolved thread no longer listed as unresolved; each review-body answer answered. It runs whatever the tool's exit or output, after a timeout too, and records as landed only what the threads command shows; with the tool's report unknown, the answer is unverified and says to check the PR.
+
+The result is `Posted replies on #1712:` with one line per reply (`1: replied <url>`, `3: answered <url>`, `2: already posted`); `Partly posted replies on #1712 — <why>.` with what landed, what only you can finish on GitHub, and `Reply "post replies 3" to post the rest.`; `Not posted on #1712: <why>.`; or one of the unverified answers above.
+
+#### The body check
+
+Text Cleave posts — each named finding before the dry run, then every comment and the review body (the Summary too) after it, and each re-check reply — is refused when it:
+
+- has an image (`has an image`);
+- links anywhere but the repo owner's `https://github.com/<owner>/` and the project's tracker (the Jira URL's host, or `https://trello.com/`): relative links, `#anchors`, other schemes and links that leave those prefixes with `..` included (`links to <url>`);
+- holds an e-mail address, bare (`user@host.tld`) or after `mailto:` or `xmpp:`: GitHub links each (`links to <address>`);
+- refers to another owner's repo (`owner/repo#12`, `owner/repo@<sha>`);
+- mentions someone (`mentions @name`).
+
+The answer is `#2: its text <problem>: nothing posted. Fix it with "edit 2: …".` Code is skipped only where GitHub surely shows it as code: a fenced block that opens at column 0 (not a math block) and inline code spans; and when the text holds a `<` that may open an HTML tag anywhere outside those blocks, no code is skipped at all. The check fails closed, so it has known false refusals: a Kotlin or Java finding that mentions generics (`List<String>`) and has an annotation (`@Composable`) in its code block, indented code with an `@`, relative links into the repo, footnotes, an SSH remote (`git@github.com:…`) outside code. Fix each with `edit N: …`, asking to drop the link, the address, the annotation or the `<…>`.
+
+#### Edit and draft jobs
+
+`edit 2: …` answers `Editing 2: the new text comes in a few minutes; nothing is posted.` and `draft 7` answers `Drafting 7: the comment comes in a few minutes; nothing is posted.` Each runs a small Claude Code session on the host's claude.ai login (`reviewer.jobs.edit` and `reviewer.jobs.draft`, default `sonnet`, 5 minutes) that can only read the review job's copy, with no tool but Read, Grep and Glob; Cleave, not the model, writes the answer into its copy of the report and reads the report again. They run one at a time, next to the review jobs, while reviews are paused too, and wait until the review message is delivered. The result comes as a new message that belongs to the review: a reply to it works as a reply to the review message. An edit's:
+
+```
+[acme/app] #1712: new text (nothing posted)
+
+#2 · app/src/main/SyncWorker.kt:41 (moves to 43)
+**Retry without backoff**
+
+<the new text>
+
+Reply "post 2" to post it, or "edit 2: …" again.
+```
+
+A draft becomes finding 7 under Questions, keeping its number (the Dropped line stays): `[acme/app] #1712: drafted as a question (nothing posted)`, its text, then `Reply "post 7" to post it.` On the dashboard, the findings and the raw report show the report as edited. A job that fails answers `[acme/app] #1712: edit of 2 failed — <reason>` (`draft of 7`), for instance `usage limit reached`, `claude login failing`, `the review is outdated`, `draft unreadable` or `interrupted (daemon restarted)`; ask again. With the claude login failing, nothing starts: `claude is not logged in on the host: nothing was started.`
+
+#### Replies to the other lines
+
+- The large-PR line (`… is large (57 files) — no automatic review …`) takes `review again` and `skip`; anything else answers `Only "review again" and "skip" work on this line; nothing was done.`
+- A line about a job (`review failed`, `review deferred`, `worktree … was not removed`, an edit, draft or posting answer) is that job's: a reply to it works as a reply to the job's message. On a failed or deferred job, only `review again` and `skip` run.
+- Every other line (a turn, replies in threads, a failed poll or readiness command, the missing process document, the changed Prepare section, the login line) answers `This line takes no replies; nothing was done.`
+
+#### After a restart
+
+A post cut short by a shutdown cannot be known to have landed or not. At the next start, before any reply is read, Cleave marks it interrupted and sends, as a reply anchor to its job:
+
+```
+[acme/app] #1712: a post was interrupted by a restart. Check the PR, then reply "post …" again with "anyway": what landed is skipped.
+```
+
+An approve in it may have landed, so a new approve at that head needs `anyway`. An interrupted post of re-check replies takes no `anyway`: name again only the replies GitHub does not show.
+
+```
+[acme/app] #1712: a post of replies 1 3 was interrupted by a restart. Check the PR, then reply "post replies …" with the ones GitHub does not show.
+```
+
+Replies sent while the daemon was down reach it at the start; one older than 15 minutes by then runs nothing (`This reply is from …`): send it again.
 
 ---
 

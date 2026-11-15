@@ -20,11 +20,11 @@ from orchestrator.reviewer.forge_github import ForgeError
 from orchestrator.reviewer.lines import drift_line, login_line
 from orchestrator.reviewer.messages import recheck_message, review_message, split_message
 from orchestrator.reviewer.models import (
-    BoardRow, BoardSnapshot, Job, JobRun, PRDetails, PRFull, RepoState, SnapshotPR, Turn,
+    Anchor, BoardRow, BoardSnapshot, Job, JobRun, Post, PRDetails, PRFull, RepoState, SnapshotPR, Turn,
 )
 from orchestrator.reviewer.prepare import Prepared, PrepareError
 from orchestrator.reviewer.report import parse_report
-from orchestrator.reviewer.runner import JobRunner, RunnerConfig, settle
+from orchestrator.reviewer.runner import JobRunner, RunnerConfig, may_still_save, settle
 from orchestrator.reviewer.service import RepoContext, ReviewerService
 from orchestrator.reviewer.session import SessionOutcome, recheck_prompt, review_prompt
 from orchestrator.reviewer.store import ReviewerStore
@@ -82,21 +82,26 @@ class FakeForge:
         return self.pr
 
 class FakeChat:
+    """Message ids from 100; each message sent is anchored in the store, as ReviewerChat does."""
     chat_id = CHAT_ID
-    def __init__(self): self.texts, self.next_id, self.fail, self.tries = [], 100, 0, 0
-    async def send(self, text):
+    def __init__(self, store, now):
+        self.texts, self.next_id, self.fail, self.tries = [], 100, 0, 0
+        self.store, self.now = store, now
+    async def send(self, text, *, job_id="", scope="", number=0, reply_to=None, buttons=None):
         self.tries += 1
         if self.fail:
             self.fail -= 1
             raise RuntimeError("telegram down")
         self.texts.append(text)
         self.next_id += 1
+        self.store.add_anchor(CHAT_ID, self.next_id - 1, job_id, self.now().isoformat(), scope=scope, number=number)
         return self.next_id - 1
 
 class Rig:
     """A runner on a real store and switches, a fixed clock, a fake clone, chat and event bus; prepare and
     run_session patched on the runner module (the fake session writes what `write` writes)."""
-    def __init__(self, tmp_path, monkeypatch, repos=("app",), idle_seconds=0.01, chat=True, clone=FakeClone):
+    def __init__(self, tmp_path, monkeypatch, repos=("app",), idle_seconds=0.01, chat=True, clone=FakeClone,
+                 ledgers_dir=None):
         conn = connect(tmp_path / "rv" / "reviewer.db")
         self.store, self.switches = ReviewerStore(conn), Switches(conn)
         self.t, self.tmp, self.forge = T0, tmp_path, FakeForge()
@@ -105,14 +110,15 @@ class Rig:
         self.clone = self.contexts[0].clone
         self.store.replace_board(SCOPE, {1712: board_row()})
         self.store.save_repo_state(RepoState(SCOPE, me="octo"))
-        self.chat, self.failing, self.auth, self.events = FakeChat() if chat else None, set(), [], []
+        self.chat = FakeChat(self.store, lambda: self.t) if chat else None
+        self.failing, self.auth, self.events = set(), [], []
         self.outcome = SessionOutcome("ok", cost_usd=1.25, turns=42)
         self.drift, self.prepare_error, self.prepares = False, None, 0
         self.write, self.during, self.session_kw, self.paths = write_review, None, None, None
         self.runner = JobRunner(
             self.contexts, self.store, self.switches, self.failing.__contains__,
             lambda key, status: self.auth.append((key, status)), self.chat, object(), {"acme": "tracker"},
-            RunnerConfig(tmp_path / "rv" / "jobs", [tmp_path / ".env"], JOBS),
+            RunnerConfig(tmp_path / "rv" / "jobs", [tmp_path / ".env"], JOBS, ledgers_dir),
             event_bus=self, now=lambda: self.t, environ=ENV, idle_seconds=idle_seconds)
         monkeypatch.setattr(runner_module, "prepare", self._prepare)
         monkeypatch.setattr(runner_module, "run_session", self._session)
@@ -152,7 +158,7 @@ async def test_review_job_done_and_message_sent(tmp_path, monkeypatch):
     assert run.report["event"] == "REQUEST_CHANGES"
     assert rig.chat.texts == [task4_review()]
     assert rig.chat.texts[0].startswith('[acme/app] Review of PR #1712 "Fix cart sync" · ACME-1234\n')
-    assert rig.store.anchor_job(CHAT_ID, 100) == job.id
+    assert rig.store.anchor(CHAT_ID, 100).job_id == job.id
     assert run.message_sent and run.message_ids == [100]
     job_dir = rig.job_dir(job)
     assert run.job_dir == str(job_dir) and stat.S_IMODE(job_dir.stat().st_mode) == 0o700
@@ -248,6 +254,7 @@ async def test_quota_defers_then_resumes(tmp_path, monkeypatch):
     got = rig.store.job(job.id)
     assert (got.state, got.retry_at) == ("deferred", (T0 + timedelta(hours=1)).isoformat())
     assert rig.chat.texts == ["[acme/app] #1712: review deferred — usage limit reached; next try at 11:00 UTC"]
+    assert rig.store.anchor(CHAT_ID, 100) == Anchor(job.id, "", 0)
     rig.t = T0 + timedelta(minutes=59)
     assert rig.runner.next_job() is None
     rig.t = T0 + timedelta(hours=1)
@@ -276,6 +283,7 @@ async def test_login_failure_defers_and_reports(tmp_path, monkeypatch):
         "deferred", "claude login failing", (T0 + timedelta(minutes=15)).isoformat())
     assert rig.auth == [("claude_login", 401)]
     assert rig.chat.texts == [login_line()]
+    assert rig.store.anchor(CHAT_ID, 100) == Anchor("", "", 0)   # neither a job's nor a repo's
     rig.t = T0 + timedelta(minutes=14, seconds=59)
     assert rig.runner.next_job() is None  # the second job waits too
     rig.t = T0 + timedelta(minutes=15)
@@ -564,7 +572,9 @@ async def test_worktree_left_is_reported(tmp_path, monkeypatch):
     job = rig.add_job()
     await rig.runner.run_job(job)
     assert rig.state(job) == ("done", "")
-    assert f"[acme/app] #1712: worktree {rig.paths.worktree} was not removed — has changes" in rig.chat.texts
+    line = f"[acme/app] #1712: worktree {rig.paths.worktree} was not removed — has changes"
+    assert line in rig.chat.texts
+    assert rig.store.anchor(CHAT_ID, 100 + rig.chat.texts.index(line)) == Anchor(job.id, "", 0)   # ids from 100
     assert rig.store.run(job.id).notes == ["has changes"]
 
 async def test_unsent_message_is_resent(tmp_path, monkeypatch):
@@ -575,13 +585,13 @@ async def test_unsent_message_is_resent(tmp_path, monkeypatch):
     assert rig.state(job) == ("done", "")
     run = rig.store.run(job.id)
     assert (run.message_sent, run.send_attempts, run.last_attempt_at) == (False, 1, T0.isoformat())
-    assert rig.chat.texts == [] and rig.store.anchor_job(CHAT_ID, 100) is None
+    assert rig.chat.texts == [] and rig.store.anchor(CHAT_ID, 100) is None
     rig.t = T0 + timedelta(minutes=1)
     await rig.runner.resend_unsent()
     assert rig.chat.texts == [task4_review()]
     run = rig.store.run(job.id)
     assert run.message_sent and run.message_ids == [100] and run.send_attempts == 1
-    assert rig.store.anchor_job(CHAT_ID, 100) == job.id
+    assert rig.store.anchor(CHAT_ID, 100).job_id == job.id
     assert rig.store.done_unsent() == []
     await rig.runner.resend_unsent()
     assert len(rig.chat.texts) == 1
@@ -674,19 +684,38 @@ async def test_long_message_is_split_and_anchored(tmp_path, monkeypatch):
     assert len(parts) >= 3 and rig.chat.texts == parts
     assert max(len(p) for p in parts) == 3900
     ids = list(range(100, 100 + len(parts)))
-    assert [rig.store.anchor_job(CHAT_ID, i) for i in ids] == [job.id] * len(parts)
+    assert [rig.store.anchor(CHAT_ID, i).job_id for i in ids] == [job.id] * len(parts)
     run = rig.store.run(job.id)
     assert run.message_sent and run.message_ids == ids
+
+async def test_a_note_the_chat_adds_while_the_message_goes_out_is_kept(tmp_path, monkeypatch):
+    """ReviewerChat notes a message it could not anchor in the job's run (/code-review C5): the runner, which holds
+    the run across its sends, keeps that note."""
+    rig = Rig(tmp_path, monkeypatch)
+    sends = rig.chat.send
+
+    async def unanchored(text, **anchor):  # as ReviewerChat does once its anchor write failed 3 times
+        message_id = await sends(text, **anchor)
+        run = rig.store.run(anchor["job_id"])
+        run.notes.append(f"message {message_id} is not registered; replies to it are not recognised")
+        rig.store.save_run(run)
+        return message_id
+
+    rig.chat.send = unanchored
+    job = rig.add_job()
+    await rig.runner.run_job(job)
+    run = rig.store.run(job.id)
+    assert run.message_sent and run.notes == ["message 100 is not registered; replies to it are not recognised"]
 
 async def test_resend_resumes_at_the_first_unsent_part(tmp_path, monkeypatch):
     rig = Rig(tmp_path, monkeypatch)
     rig.write = lambda paths: write_review(paths, report=LONG_REPORT, tg={})
     sends, calls = rig.chat.send, []
-    async def second_part_fails(text):
+    async def second_part_fails(text, **anchor):
         calls.append(text)
         if len(calls) == 2:
             raise RuntimeError("telegram down")
-        return await sends(text)
+        return await sends(text, **anchor)
     rig.chat.send = second_part_fails
     job = rig.add_job()
     await rig.runner.run_job(job)
@@ -698,7 +727,7 @@ async def test_resend_resumes_at_the_first_unsent_part(tmp_path, monkeypatch):
     assert len(parts) >= 3 and rig.chat.texts == parts  # no part is sent twice
     run = rig.store.run(job.id)
     assert run.message_sent and run.message_ids == list(range(100, 100 + len(parts)))
-    assert [rig.store.anchor_job(CHAT_ID, i) for i in run.message_ids] == [job.id] * len(parts)
+    assert [rig.store.anchor(CHAT_ID, i).job_id for i in run.message_ids] == [job.id] * len(parts)
 
 async def test_fifth_failed_delivery_stops_the_resend(tmp_path, monkeypatch):
     rig = Rig(tmp_path, monkeypatch)
@@ -763,7 +792,7 @@ async def test_recheck_job(tmp_path, monkeypatch):
     run = rig.store.run(job.id)
     assert run.replies == REPLIES and run.report == {} and run.tg_lines == {"1": tg[1]}
     assert rig.chat.texts == [recheck_message(SCOPE, 1712, "Fix cart sync", URL, HEAD, REPLIES, tg)]
-    assert rig.store.anchor_job(CHAT_ID, 100) == job.id and run.message_sent
+    assert rig.store.anchor(CHAT_ID, 100).job_id == job.id and run.message_sent
     assert json.loads((rig.job_dir(job) / "replies_plan.json").read_text()) == REPLIES
     assert rig.session_kw["kind"] == "recheck" and rig.session_kw["job_cfg"] == JOBS["recheck"]
     assert rig.session_kw["prompt"] == recheck_prompt(DOC, "Re-check", 1712, rig.paths, HEAD, "octo")
@@ -1015,7 +1044,7 @@ async def test_message_capped_at_ten_parts(tmp_path, monkeypatch):
 async def test_reviewer_chat_sends_to_its_chat():
     class Notifier:
         def __init__(self): self.sent = []
-        async def send_message(self, chat_id, text):
+        async def send_message(self, chat_id, text, buttons=None, reply_to_message_id=None):
             self.sent.append((chat_id, text))
             return 77
     notifier = Notifier()
@@ -1193,6 +1222,19 @@ async def test_git_attributes_the_session_created_are_removed(tmp_path, monkeypa
     assert rig.state(job) == ("failed", "the session changed the review clone's git config")
     assert not attributes.exists() and not attributes.is_symlink()
 
+async def test_git_commondir_the_session_created_is_removed(tmp_path, monkeypatch):
+    """.git/commondir sends git to another directory's config: one the session plants goes."""
+    rig = Rig(tmp_path, monkeypatch)
+    commondir = rig.clone.path / ".git" / "commondir"
+    def plant(paths):
+        write_review(paths)
+        commondir.write_text(f"{tmp_path / 'elsewhere'}\n")
+    rig.write = plant
+    job = rig.add_job()
+    await rig.runner.run_job(job)
+    assert rig.state(job) == ("failed", "the session changed the review clone's git config")
+    assert not commondir.exists() and not commondir.is_symlink()
+
 async def test_git_attributes_the_session_changed_are_written_back(tmp_path, monkeypatch):
     rig = Rig(tmp_path, monkeypatch)
     attributes = rig.clone.path / ".git" / "info" / "attributes"
@@ -1308,3 +1350,161 @@ async def test_a_rerun_keeps_the_earlier_runs_notes_cost_and_turns(tmp_path, mon
     assert rig.state(job) == ("done", "") and run.message_sent
     assert (run.notes, run.cost_usd, run.turns, run.deferrals) == (["has changes"], 3.5, 40, 1)
     assert (run.started_at, run.finished_at) == ((T0 + timedelta(hours=1)).isoformat(),) * 2
+
+# --- Plan 5: posted reports and small jobs ---
+
+def test_settle_newer_posted_supersedes():
+    stamp, later = T0.isoformat(), (T0 + timedelta(seconds=1)).isoformat()
+    job = Job("j1", SCOPE, 1712, "review", HEAD, HEAD, "running", "", stamp, stamp)
+    newer = dataclasses.replace(job, id="j2", state="posted", created_at=later)
+    assert settle(job, board_row(), [newer, job]) == ("superseded", "newer job")
+
+@pytest.mark.parametrize("kind", ["edit", "draft"])
+async def test_recover_leaves_small_jobs(tmp_path, monkeypatch, kind):
+    rig = Rig(tmp_path, monkeypatch)
+    review = rig.add_job()
+    small = rig.add_job(kind=kind, key=f"{review.id}:2")
+    for job in (review, small):
+        rig.store.set_job_state(job.id, "running", "", T0.isoformat())
+    rig.runner.recover()
+    assert rig.state(review) == ("failed", "interrupted (daemon restarted)")
+    assert rig.state(small) == ("running", "")
+
+async def test_archive_keeps_posting_out(tmp_path, monkeypatch):
+    rig = Rig(tmp_path, monkeypatch)
+    def write(paths):
+        write_review(paths)
+        (paths.run_dir / "posting").mkdir()
+        (paths.run_dir / "posting" / "report.base.md").write_text("a planted base")
+    rig.write = write
+    job = rig.add_job()
+    await rig.runner.run_job(job)
+    assert rig.state(job) == ("done", "")
+    assert not (rig.job_dir(job) / "posting").exists()
+    assert rig.store.run(job.id).notes == [reserved_note("posting")]
+
+THREADS = {"number": 1712, "author": "octo-author", "head_sha": HEAD,
+           "threads": [{"id": "T2", "turn": "octo-author"}], "review_bodies": []}
+
+async def test_prepared_threads_kept_before_the_session(tmp_path, monkeypatch):
+    rig = Rig(tmp_path, monkeypatch)
+    prepared = json.dumps(THREADS).encode()
+    rewritten = prepared.replace(b'"turn": "octo-author"', b'"turn": "octo"')
+    async def prepare_writing_threads(ctx, job, paths, **kw):
+        result = await rig._prepare(ctx, job, paths, **kw)
+        (paths.run_dir / "threads.json").write_bytes(prepared)
+        return result
+    monkeypatch.setattr(runner_module, "prepare", prepare_writing_threads)
+    def write(paths):
+        write_review(paths)
+        (paths.run_dir / "threads.json").write_bytes(rewritten)
+        (paths.run_dir / "threads.prepared.json").write_bytes(rewritten)
+    rig.write = write
+    job = rig.add_job()
+    await rig.runner.run_job(job)
+    assert rig.state(job) == ("done", "")
+    job_dir = rig.job_dir(job)
+    assert (job_dir / "threads.prepared.json").read_bytes() == prepared
+    assert (job_dir / "threads.json").read_bytes() == rewritten
+    assert rig.store.run(job.id).notes == [reserved_note("threads.prepared.json")]
+
+TWO_PART_REPORT = (_HEAD_PART + "## Dropped (never posted)\n"
+                   + "".join(f"- {n}. Candidate {n} - {'too speculative to keep ' * 6}(xhigh)\n"
+                             for n in range(7, 31))
+                   + _REST[_REST.index("\n## ✅"):])
+
+async def test_posted_job_gets_the_rest_of_its_message(tmp_path, monkeypatch):
+    rig = Rig(tmp_path, monkeypatch)
+    rig.store.replace_board(SCOPE, {1712: board_row(actions=())})   # posted: its review turn is gone
+    job = rig.add_job()
+    rig.store.set_job_state(job.id, "posted", "", T0.isoformat())
+    report = parse_report(TWO_PART_REPORT, HEAD)
+    rig.store.save_run(JobRun(job.id, title="Fix cart sync", url=URL, ticket_key="ACME-1234", files=14,
+                              report=report.to_dict(), message_ids=[501], send_attempts=1,
+                              last_attempt_at=T0.isoformat()))
+    parts = split_message(review_message(SCOPE, 1712, "Fix cart sync", "ACME-1234", URL, 14, report, {}),
+                          limit=3900)
+    assert len(parts) == 2
+    rig.t = T0 + timedelta(minutes=1)
+    await rig.runner.resend_unsent()
+    assert rig.chat.texts == [parts[1]]
+    assert rig.store.anchor(CHAT_ID, 100).job_id == job.id
+    run = rig.store.run(job.id)
+    assert run.message_sent and run.message_ids == [501, 100]
+    assert rig.state(job) == ("posted", "")
+    assert rig.store.done_unsent() == []
+
+async def test_failure_line_anchored_to_job(tmp_path, monkeypatch):
+    rig = Rig(tmp_path, monkeypatch)
+    rig.prepare_error = PrepareError("failed", "boom", drift=True)
+    job = rig.add_job()
+    await rig.runner.run_job(job)
+    assert rig.chat.texts == [FAILED + "boom", DRIFT]
+    assert rig.store.anchor(CHAT_ID, 100) == Anchor(job.id, "", 0)
+    assert rig.store.anchor(CHAT_ID, 101) == Anchor("", SCOPE, 0)   # the drift line: the repo's
+
+async def test_posted_at_head_counted(tmp_path, monkeypatch):
+    rig = Rig(tmp_path, monkeypatch)
+    stamp = T0.isoformat()
+    rig.store.save_post(Post("p1", "j0", SCOPE, 1712, HEAD, "review", "posted", stamp, comments=3))
+    rig.store.save_post(Post("p2", "j9", SCOPE, 1712, HEAD, "replies", "posted", stamp, comments=2))   # not counted
+    job = rig.add_job()
+    await rig.runner.run_job(job)
+    assert rig.state(job) == ("done", "")
+    [message] = rig.chat.texts
+    assert message.splitlines()[3] == "Already posted at this head: 3 comments"
+    assert rig.store.run(job.id).posted_at_head == 3
+
+# --- Plan 5: retention sweep ---
+
+@pytest.mark.parametrize("ledgers", [True, False])
+async def test_runner_sweeps_when_idle_once_a_day(tmp_path, monkeypatch, caplog, ledgers):
+    ledgers_dir = tmp_path / "rv" / "ledgers" if ledgers else None
+    rig = Rig(tmp_path, monkeypatch, repos=("app", "web"), ledgers_dir=ledgers_dir)
+    swept, dirs, memory = [], set(), {}
+    async def sweep(ctx, store, *, jobs_dir, ledgers_dir, now, last_read):   # an assert here would be logged
+        swept.append((ctx.repo_id, now))
+        dirs.add((store is rig.store, jobs_dir, ledgers_dir))
+        memory.setdefault(ctx.repo_id, []).append(last_read)
+        last_read[len(swept)] = now   # as sweep records a read
+        if ctx.repo_id == "app":
+            raise RuntimeError("boom")   # logged; the next context goes on
+        return [7, 8]
+    monkeypatch.setattr(runner_module, "sweep", sweep)
+    stop, times = asyncio.Event(), [T0, T0 + timedelta(hours=1), T0 + timedelta(hours=25)]
+    def next_job():   # one idle cycle at each time, then stop
+        if times:
+            rig.t = times.pop(0)
+        else:
+            stop.set()
+    monkeypatch.setattr(rig.runner, "next_job", next_job)
+    with caplog.at_level(logging.INFO, logger="orchestrator.reviewer.runner"):
+        await asyncio.wait_for(rig.runner.run(stop), 5)
+    if not ledgers:
+        assert swept == []
+        return
+    later = T0 + timedelta(hours=25)
+    assert swept == [("app", T0), ("web", T0), ("app", later), ("web", later)]
+    assert dirs == {(True, tmp_path / "rv" / "jobs", ledgers_dir)}
+    # One memory of the PRs read per repo, kept from one sweep to the next.
+    [app_first, app_later], [web_first, web_later] = memory["app"], memory["web"]
+    assert app_first is app_later and web_first is web_later and app_first is not web_first
+    assert app_first == {1: T0, 3: later} and web_first == {2: T0, 4: later}
+    assert "RuntimeError at " in caplog.text and "boom" not in caplog.text
+    assert caplog.text.count("Reviewer retention sweep of acme/web: swept #7, #8") == 2
+    assert "acme/app: swept" not in caplog.text and str(tmp_path) not in caplog.text
+
+
+@pytest.mark.parametrize("state, sent, attempts, expected", [
+    ("done", False, 0, True),
+    ("posted", False, 4, True),
+    ("done", False, 5, False),  # the fifth failed delivery: no more resends
+    ("posted", True, 0, False),
+    ("superseded", False, 1, False),
+    ("stale", False, 0, False),
+])
+def test_may_still_save(state, sent, attempts, expected):
+    """The rule the resend follows: the runner saves a run again only while it holds a done or posted job's
+    message that is not all out and that it has not given up on."""
+    job = Job("j1", SCOPE, 1712, "review", HEAD, HEAD, state, "", T0.isoformat(), T0.isoformat())
+    assert may_still_save(job, JobRun("j1", message_sent=sent, send_attempts=attempts)) is expected

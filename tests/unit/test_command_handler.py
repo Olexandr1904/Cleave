@@ -3,11 +3,15 @@
 from __future__ import annotations
 
 import json
-from unittest.mock import AsyncMock, MagicMock, PropertyMock, patch
+import logging
+import sqlite3
+from datetime import datetime, timedelta, timezone
+from unittest.mock import AsyncMock, MagicMock, PropertyMock, call, patch
 
 import pytest
 
 from integrations.telegram.command_handler import CommandHandler
+from integrations.telegram.handlers.approval import ApprovalHandler
 from integrations.telegram.intent_parser import ParsedIntent
 from workspace.workspace import Stage
 
@@ -595,51 +599,115 @@ class TestSwitchCommands:
         assert sw.get("tickets", "acme/App") == "running"
 
 
+NOW = datetime(2026, 11, 20, 10, 0, tzinfo=timezone.utc)  # about when the operator replies
+
+
+def _reviewer(anchors=(("1", 100),), repos=True):
+    """Task 14's ReviewerReplies as the command handler sees it: (chat id, message id) anchors, whether a repo is in
+    reviewer mode; calls recorded."""
+    reviewer = MagicMock()
+    reviewer.has_repos.return_value = repos
+    reviewer.is_anchor.side_effect = lambda chat_id, message_id: (chat_id, message_id) in anchors
+    reviewer.handle_reply = AsyncMock()
+    reviewer.handle_callback = AsyncMock()
+    reviewer.anchor_answer = MagicMock()
+    return reviewer
+
+
+def _reply_update(text, reply_to=100, chat=1, sent_at=NOW - timedelta(minutes=1)):
+    update = MagicMock()
+    update.message.reply_to_message.message_id = reply_to
+    update.message.text = text
+    update.message.chat.id = chat
+    update.message.date = sent_at
+    return update
+
+
+def _tap_update(data, message_id=55, chat=1, sent_at=NOW - timedelta(minutes=1)):
+    update = MagicMock()
+    update.callback_query.data = data
+    update.callback_query.message.chat.id = chat
+    update.callback_query.message.message_id = message_id
+    update.callback_query.message.date = sent_at  # the button's message's (the echo's), not the tap's
+    update.callback_query.answer = AsyncMock()
+    return update
+
+
 class TestReviewerReplies:
-    """A reply to a reviewer message (a reply anchor) never reaches the ticket pipeline: its intent parser
-    would read the message's own hint ("post 1 2 4 approve") as an approval."""
+    """A reply to a reviewer message (a reply anchor), and a tap on an rv_ button, go to the reviewer before anything
+    else, and never to the ticket pipeline: its intent parser would read a review message's own hint
+    ("post 1 2 4 approve") as an approval."""
 
-    ANSWER = "Replies to review messages are handled from the next version on; nothing was done."
+    NOT_HANDLED = "Reply not handled: the reviewer's store could not be read; nothing was done."
+    OFF = "Reviewer mode is off on this daemon: nothing was done."
 
-    def _handler(self, parser, notifier, mode_handler, workspaces=()):
+    def _handler(self, parser, notifier, mode_handler, workspaces=(), reviewer=None, allowed=frozenset({"1"}),
+                 reviewer_chats=frozenset({"1"})):
         handler = CommandHandler(
             intent_parser=parser, notifier=notifier, mode_handler=mode_handler,
-            active_workspaces_fn=lambda: list(workspaces), allowed_chat_ids={"1"},
-            review_anchor=lambda chat_id, message_id: (chat_id, message_id) == ("1", 100),
+            active_workspaces_fn=MagicMock(return_value=list(workspaces)),
+            allowed_chat_ids=None if allowed is None else set(allowed), reviewer_chat_ids=set(reviewer_chats),
+            reviewer=reviewer,
         )
         handler._approval_handler = MagicMock()
         handler._wake_fn = MagicMock()
         return handler
 
-    async def test_reply_to_a_review_message_is_answered_and_does_nothing(
-        self, mock_intent_parser, mock_notifier, mock_mode_handler,
-    ):
-        blocked = _make_workspace("ACME-1", Stage.BLOCKED, previous_state=Stage.DEV)
-        blocked.state.escalation_msg_id = 100   # even a ticket anchor at the same id is not reached
-        handler = self._handler(mock_intent_parser, mock_notifier, mock_mode_handler, [blocked])
-        assert await handler.handle_reply(100, "post 1 2 4 approve", "1") is True
-        mock_notifier.send_message.assert_awaited_once_with("1", self.ANSWER)
-        mock_intent_parser.parse.assert_not_awaited()
-        assert handler._approval_handler.mock_calls == [] and handler._wake_fn.mock_calls == []
-        blocked.transition.assert_not_called()
-        blocked.save_state.assert_not_called()
-
-    async def test_reply_to_a_review_message_never_reaches_the_intent_parser(
-        self, mock_intent_parser, mock_notifier, mock_mode_handler,
-    ):
+    def _adapter(self, handler):
         from integrations.telegram.telegram_adapter import TelegramAdapter
-        handler = self._handler(mock_intent_parser, mock_notifier, mock_mode_handler)
         with patch("integrations.telegram.telegram_adapter.Bot"):
             adapter = TelegramAdapter(bot_token="fake-token")
         adapter.set_command_handler(handler)
-        update = MagicMock()
-        update.message.reply_to_message.message_id = 100
-        update.message.text = "post 1 2 4 approve"
-        update.message.chat.id = 1
-        await adapter._handle_incoming(update, None)
+        return adapter
+
+    async def test_review_reply_never_reaches_intent_parser(
+        self, mock_intent_parser, mock_notifier, mock_mode_handler,
+    ):
+        reviewer = _reviewer()
+        handler = self._handler(mock_intent_parser, mock_notifier, mock_mode_handler, reviewer=reviewer)
+        await self._adapter(handler)._handle_incoming(_reply_update("approve"), None)
+        # with the reply's Telegram date: the reviewer applies the age limit
+        reviewer.handle_reply.assert_awaited_once_with("1", 100, "approve", sent_at=NOW - timedelta(minutes=1))
         mock_intent_parser.parse.assert_not_awaited()
-        assert handler._approval_handler.mock_calls == []
-        mock_notifier.send_message.assert_awaited_once_with("1", self.ANSWER)
+        assert handler._approval_handler.mock_calls == [] and handler._wake_fn.mock_calls == []
+        handler._active_workspaces_fn.assert_not_called()
+        mock_notifier.send_message.assert_not_awaited()   # the reviewer answers, through its own chat
+
+    async def test_lookup_error_with_ticket_match_goes_to_pipeline(
+        self, mock_intent_parser, mock_notifier, mock_mode_handler, caplog,
+    ):
+        blocked = _make_workspace("ACME-1", Stage.BLOCKED, previous_state=Stage.DEV)
+        blocked.state.escalation_msg_id = 100
+        blocked.meta_dir = "/nonexistent"
+        reviewer = _reviewer()
+        reviewer.is_anchor.side_effect = sqlite3.OperationalError("database is locked")
+        handler = self._handler(mock_intent_parser, mock_notifier, mock_mode_handler, [blocked], reviewer)
+        with caplog.at_level(logging.WARNING, logger="integrations.telegram.command_handler"):
+            assert await handler.handle_reply(100, "retry", "1") is True
+        blocked.transition.assert_called_once_with(Stage.DEV)
+        assert "Retrying" in mock_notifier.send_message.await_args.args[1]
+        reviewer.handle_reply.assert_not_awaited()
+        assert "Reply anchor not looked up: OperationalError" in caplog.text
+        assert "database is locked" not in caplog.text
+
+    async def test_lookup_error_without_ticket_match_is_swallowed(
+        self, mock_intent_parser, mock_notifier, mock_mode_handler, caplog,
+    ):
+        reviewer = _reviewer()
+        reviewer.is_anchor.side_effect = sqlite3.OperationalError("database is locked")
+        # the answer is anchored best effort: the store may be what failed
+        reviewer.anchor_answer.side_effect = [None, sqlite3.OperationalError("database is locked")]
+        handler = self._handler(mock_intent_parser, mock_notifier, mock_mode_handler, reviewer=reviewer)
+        await self._adapter(handler)._handle_incoming(_reply_update("post 1 2 4 approve"), None)
+        with caplog.at_level(logging.WARNING, logger="integrations.telegram.command_handler"):
+            assert await handler.handle_reply(100, "post 1 2 4 approve", "1") is True
+        assert mock_notifier.send_message.await_args_list == [call("1", self.NOT_HANDLED)] * 2
+        assert reviewer.anchor_answer.call_args_list == [call("1", 1)] * 2   # the id send_message returned
+        assert "Reply-not-handled answer not anchored: OperationalError" in caplog.text
+        assert "database is locked" not in caplog.text
+        mock_intent_parser.parse.assert_not_awaited()
+        reviewer.handle_reply.assert_not_awaited()
+        assert handler._approval_handler.mock_calls == [] and handler._wake_fn.mock_calls == []
 
     async def test_reply_to_another_message_behaves_as_before(
         self, mock_intent_parser, mock_notifier, mock_mode_handler,
@@ -647,13 +715,15 @@ class TestReviewerReplies:
         blocked = _make_workspace("ACME-1", Stage.BLOCKED, previous_state=Stage.DEV)
         blocked.state.escalation_msg_id = 200
         blocked.meta_dir = "/nonexistent"
-        handler = self._handler(mock_intent_parser, mock_notifier, mock_mode_handler, [blocked])
+        reviewer = _reviewer()
+        handler = self._handler(mock_intent_parser, mock_notifier, mock_mode_handler, [blocked], reviewer)
         assert await handler.handle_reply(200, "retry", "1") is True
         blocked.transition.assert_called_once_with(Stage.DEV)
         assert "Retrying" in mock_notifier.send_message.await_args.args[1]
         assert await handler.handle_reply(300, "approve", "1") is False   # left to handle_message
-        assert await handler.handle_reply(100, "approve", "2") is False   # not the reviewer's chat
+        assert await handler.handle_reply(100, "approve", "2") is False   # not an allowlisted chat
         mock_intent_parser.parse.assert_not_awaited()
+        reviewer.handle_reply.assert_not_awaited()
 
     async def test_without_a_reviewer_replies_are_as_before(
         self, mock_intent_parser, mock_notifier, mock_mode_handler,
@@ -663,28 +733,229 @@ class TestReviewerReplies:
         assert await handler.handle_reply(100, "approve", "1") is False
         mock_notifier.send_message.assert_not_awaited()
 
-    async def test_a_disallowed_chats_reply_to_an_anchor_gets_no_answer(
+    async def test_a_disallowed_chats_reply_is_ignored(
         self, mock_intent_parser, mock_notifier, mock_mode_handler,
     ):
-        handler = self._handler(mock_intent_parser, mock_notifier, mock_mode_handler)
-        handler._review_anchor = lambda chat_id, message_id: True   # an anchor in any chat
+        reviewer = _reviewer()
+        reviewer.is_anchor.side_effect = lambda chat_id, message_id: True   # an anchor in any chat
+        handler = self._handler(mock_intent_parser, mock_notifier, mock_mode_handler, reviewer=reviewer)
         assert await handler.handle_reply(100, "post 1 2 4 approve", "2") is False
         mock_notifier.send_message.assert_not_awaited()
+        reviewer.is_anchor.assert_not_called()
+        reviewer.handle_reply.assert_not_awaited()
 
-    async def test_an_anchor_lookup_error_leaves_the_reply_to_the_pipeline(
+    async def test_rv_callbacks_routed(self, mock_intent_parser, mock_notifier, mock_mode_handler):
+        reviewer = _reviewer()
+        handler = self._handler(mock_intent_parser, mock_notifier, mock_mode_handler, reviewer=reviewer)
+        await handler.handle_callback("rv_ok", "abc123", "1", 55)
+        await handler.handle_callback("rv_no", "abc123", "1", 55)
+        assert reviewer.handle_callback.await_args_list == [call("rv_ok", "abc123", "1", 55),
+                                                            call("rv_no", "abc123", "1", 55)]
+        handler._active_workspaces_fn.assert_not_called()
+        mock_notifier.send_message.assert_not_awaited()
+
+        await handler.handle_callback("rv_ok", "abc123", "2", 55)   # a disallowed chat: nothing
+        assert reviewer.handle_callback.await_count == 2
+        mock_notifier.send_message.assert_not_awaited()
+
+        off = self._handler(mock_intent_parser, mock_notifier, mock_mode_handler, reviewer=None)
+        await off.handle_callback("rv_ok", "abc123", "1", 55)
+        mock_notifier.send_message.assert_awaited_once_with("1", self.OFF, reply_to_message_id=55)
+        off._active_workspaces_fn.assert_not_called()
+        await off.handle_callback("rv_ok", "abc123", "2", 55)
+        assert mock_notifier.send_message.await_count == 1
+
+    async def test_reviewer_path_only_in_reviewer_chats(
+        self, mock_intent_parser, mock_notifier, mock_mode_handler,
+    ):
+        """An empty allowlist leaves the ticket pipeline open to every chat (None), but never the reviewer: its
+        replies and taps are read only in the configured chats, and with none configured, in none. A reply to one
+        of its messages elsewhere is dropped; any other reply takes the ticket path, as before."""
+        reviewer = _reviewer(anchors=(("42", 100),))
+        handler = self._handler(mock_intent_parser, mock_notifier, mock_mode_handler, reviewer=reviewer,
+                                allowed=None, reviewer_chats=())
+        assert await handler.handle_reply(100, "post 1", "42") is True   # the reviewer's message: dropped
+        assert await handler.handle_reply(300, "approve", "42") is False   # left to the ticket pipeline
+        await handler.handle_callback("rv_ok", "abc123", "42", 55)
+        assert reviewer.is_anchor.call_args_list == [call("42", 100), call("42", 300)]
+        reviewer.handle_reply.assert_not_awaited()
+        reviewer.handle_callback.assert_not_awaited()
+        reviewer.anchor_answer.assert_not_called()
+        mock_notifier.send_message.assert_not_awaited()
+
+        off = self._handler(mock_intent_parser, mock_notifier, mock_mode_handler, reviewer=None,
+                            allowed=None, reviewer_chats=())
+        await off.handle_callback("rv_ok", "abc123", "42", 55)   # not even the "off" answer
+        mock_notifier.send_message.assert_not_awaited()
+
+    async def test_a_reply_to_a_reviewer_message_in_another_chat_is_dropped(
         self, mock_intent_parser, mock_notifier, mock_mode_handler, caplog,
     ):
-        import logging
-        import sqlite3
-        blocked = _make_workspace("ACME-1", Stage.BLOCKED, previous_state=Stage.DEV)
-        blocked.state.escalation_msg_id = 100
-        blocked.meta_dir = "/nonexistent"
-        handler = self._handler(mock_intent_parser, mock_notifier, mock_mode_handler, [blocked])
-        def broken(chat_id, message_id):
-            raise sqlite3.OperationalError("database is locked")
-        handler._review_anchor = broken
+        """In a chat the reviewer does not read (an empty allowlist admits it for tickets), a reply to a reviewer
+        message reaches neither the reviewer nor the ticket pipeline's handle_message: its intent parser would read
+        "post 1 2 4 approve" as an approval. A failed anchor lookup drops the reply too (fails closed)."""
+        reviewer = _reviewer(anchors=(("42", 100),))
+        handler = self._handler(mock_intent_parser, mock_notifier, mock_mode_handler, reviewer=reviewer,
+                                allowed=None, reviewer_chats=())
+        handler.handle_message = AsyncMock()
+        adapter = self._adapter(handler)
         with caplog.at_level(logging.WARNING, logger="integrations.telegram.command_handler"):
-            assert await handler.handle_reply(100, "retry", "1") is True
+            await adapter._handle_incoming(_reply_update("post 1 2 4 approve", chat=42), None)
+            reviewer.is_anchor.side_effect = sqlite3.OperationalError("database is locked")
+            await adapter._handle_incoming(_reply_update("post 1 2 4 approve", chat=42), None)
+        handler.handle_message.assert_not_awaited()
+        mock_intent_parser.parse.assert_not_awaited()
+        reviewer.handle_reply.assert_not_awaited()
+        reviewer.anchor_answer.assert_not_called()
+        handler._active_workspaces_fn.assert_not_called()
+        mock_notifier.send_message.assert_not_awaited()   # no answer either
+        assert caplog.text.count("Reply to reviewer message 100 dropped") == 2
+        assert "post 1 2 4" not in caplog.text and "database is locked" not in caplog.text   # never the text
+
+        reviewer.is_anchor.side_effect = lambda chat_id, message_id: False   # not the reviewer's message
+        await adapter._handle_incoming(_reply_update("approve", reply_to=300, chat=42), None)
+        handler.handle_message.assert_awaited_once_with("approve", "42")   # the ticket path, as before
+
+    async def test_a_chat_added_live_takes_reviewer_replies(
+        self, mock_intent_parser, mock_notifier, mock_mode_handler,
+    ):
+        """A project added by hot reload extends the reviewer's chats like the allowlist, which an empty startup
+        allowlist (None: every chat) does not need."""
+        for allowed in ({"1"}, None):
+            reviewer = _reviewer(anchors=(("7", 100),))
+            handler = self._handler(mock_intent_parser, mock_notifier, mock_mode_handler, reviewer=reviewer,
+                                    allowed=allowed, reviewer_chats=() if allowed is None else allowed)
+            handler.add_allowed_chat_id("7")
+            assert await handler.handle_reply(100, "post 1", "7") is True
+            reviewer.handle_reply.assert_awaited_once_with("7", 100, "post 1", sent_at=None)
+
+    async def test_a_reply_to_the_age_line_is_the_reviewers(
+        self, tmp_path, mock_intent_parser, mock_notifier, mock_mode_handler,
+    ):
+        """The age line is anchored like every reviewer answer: a reply to it ("send it again") is the reviewer's
+        too, never the intent parser's."""
+        from tests.unit.test_reviewer_replies import T1, Rig
+        rig = Rig(tmp_path)   # the real ReviewerReplies; its review message anchored at ("1", 100)
+        handler = self._handler(mock_intent_parser, mock_notifier, mock_mode_handler, reviewer=rig.replies)
+        adapter = self._adapter(handler)
+        await adapter._handle_incoming(_reply_update("post 1 2", sent_at=T1 - timedelta(minutes=16)), None)
+        await rig.replies.wait_idle()
+        assert rig.texts() == ["This reply is from 11:44 UTC; send it again to act on it. Nothing was done."]
+        assert rig.posting.calls == []
+
+        update = _reply_update("post 1 2 4 approve", reply_to=rig.last_id(), sent_at=T1 - timedelta(minutes=1))
+        await adapter._handle_incoming(update, None)
+        await rig.replies.wait_idle()
+        assert [(name, job_id) for name, _, job_id, _ in rig.posting.calls] == [("post_review", rig.job.id)]
+        mock_intent_parser.parse.assert_not_awaited()
+        mock_notifier.send_message.assert_not_awaited()
+
+    async def test_the_age_limit_is_for_reviewer_replies_only(
+        self, mock_intent_parser, mock_notifier, mock_mode_handler,
+    ):
+        """Ticket replies and buttons have none; an rv_ tap has none here either: its message is the echo, whose
+        confirmation expires on its own."""
+        blocked = _make_workspace("ACME-1", Stage.BLOCKED, previous_state=Stage.DEV)
+        blocked.state.escalation_msg_id = 200
+        blocked.meta_dir = "/nonexistent"
+        awaiting = _make_workspace("ACME-2", "AWAITING_APPROVAL", previous_state="PLAN_REVIEW")
+        reviewer = _reviewer()
+        handler = self._handler(mock_intent_parser, mock_notifier, mock_mode_handler, [blocked, awaiting], reviewer)
+        adapter = self._adapter(handler)
+        old = NOW - timedelta(hours=1)
+        await adapter._handle_incoming(_reply_update("retry", reply_to=200, sent_at=old), None)
         blocked.transition.assert_called_once_with(Stage.DEV)
-        assert "Reply anchor not looked up: OperationalError" in caplog.text
-        assert "database is locked" not in caplog.text
+        await adapter._handle_callback(_tap_update("approve:ACME-2", sent_at=old), None)
+        awaiting.transition.assert_called_once()
+        await adapter._handle_callback(_tap_update("rv_ok:abc123", sent_at=old), None)
+        reviewer.handle_callback.assert_awaited_once_with("rv_ok", "abc123", "1", 55)
+        reviewer.handle_reply.assert_not_awaited()
+
+    UNANCHORED = "Reply to the reviewer's message to act on it; nothing was done."
+
+    def _awaiting(self, parser, notifier, mode_handler, reviewer, **chats):
+        """One ticket waiting for approval, the real ApprovalHandler, and an intent parser that reads anything as
+        an approval of it."""
+        awaiting = _make_workspace("ACME-2", "AWAITING_APPROVAL", previous_state="PLAN_REVIEW")
+        handler = self._handler(parser, notifier, mode_handler, [awaiting], reviewer, **chats)
+        handler._approval_handler = ApprovalHandler()
+        parser.parse.return_value = ParsedIntent(intent="approve", params={})
+        return awaiting, handler
+
+    async def test_a_reviewer_command_that_is_not_a_reply_approves_no_ticket(
+        self, mock_intent_parser, mock_notifier, mock_mode_handler,
+    ):
+        """A reviewer command sent without Telegram's Reply, or as a reply to a message that is no anchor (its
+        anchor write failed, say), falls through to handle_message, whose intent parser would read "post 1 2 4
+        approve" as an approval of the only ticket waiting. In the reviewer's chats it is answered instead."""
+        awaiting, handler = self._awaiting(mock_intent_parser, mock_notifier, mock_mode_handler, _reviewer())
+        adapter = self._adapter(handler)
+        plain = _reply_update("post 1 2 4 approve")
+        plain.message.reply_to_message = None   # a new message, not a reply
+        await adapter._handle_incoming(plain, None)
+        await adapter._handle_incoming(_reply_update("post 1 2 4 approve", reply_to=300), None)   # no anchor
+        for text in ("post all confirmed approve", "text 2", "edit 2: shorter", "draft 7", "post replies 1 3",
+                     "review again", "skip"):
+            await handler.handle_message(text, "1")
+        mock_intent_parser.parse.assert_not_awaited()
+        awaiting.transition.assert_not_called()
+        assert mock_notifier.send_message.await_args_list == [call("1", self.UNANCHORED)] * 9
+        mock_notifier.edit_message.assert_not_awaited()
+
+    async def test_a_bare_approve_stays_the_ticket_pipelines(
+        self, mock_intent_parser, mock_notifier, mock_mode_handler,
+    ):
+        """An event-only post names no number of a review: "approve" (or "апрув") as a new message is the ticket
+        pipeline's, as before; and outside the reviewer's chats nothing changes."""
+        for text in ("approve", "апрув"):
+            awaiting, handler = self._awaiting(mock_intent_parser, mock_notifier, mock_mode_handler, _reviewer())
+            plain = _reply_update(text)
+            plain.message.reply_to_message = None
+            await self._adapter(handler)._handle_incoming(plain, None)
+            mock_intent_parser.parse.assert_awaited_once()
+            assert mock_intent_parser.parse.await_args.args[0] == text
+            awaiting.transition.assert_called_once_with("DEV")
+            mock_intent_parser.parse.reset_mock()
+
+        # No reviewer, or no repo in reviewer mode: nothing changes (/code-review C8).
+        for reviewer in (None, _reviewer(repos=False)):
+            awaiting, handler = self._awaiting(mock_intent_parser, mock_notifier, mock_mode_handler, reviewer)
+            await handler.handle_message("post 1 2 4 approve", "1")
+            mock_intent_parser.parse.assert_awaited_once()
+            awaiting.transition.assert_called_once_with("DEV")
+            mock_intent_parser.parse.reset_mock()
+        assert call("1", self.UNANCHORED) not in mock_notifier.send_message.await_args_list
+
+    async def test_the_reviewer_guard_needs_a_reviewed_repo(
+        self, mock_intent_parser, mock_notifier, mock_mode_handler,
+    ):
+        """The guard is the reviewer's only while a repo is in reviewer mode (/code-review C8). With none, every
+        message reaches the ticket flow as before: a bare approve, the ticket words, the reviewer's own forms. With
+        one, it applies in every chat the ticket pipeline admits, an empty allowlist's included: the numbered forms
+        are never ticket words, and a bare approve and the ticket words still pass."""
+        ticket_words = ("approve", "апрув", "approve ACME-2", "status", "retry ACME-1", "reject ACME-2: wrong",
+                        "fix it")
+        reviewer_forms = ("review again", "skip", "post 1 2 4 approve", "text 2", "post replies 1 3")
+        for text in (*ticket_words, *reviewer_forms):
+            awaiting, handler = self._awaiting(mock_intent_parser, mock_notifier, mock_mode_handler,
+                                               _reviewer(repos=False))
+            await handler.handle_message(text, "1")
+            assert mock_intent_parser.parse.await_args.args[0] == text
+            mock_intent_parser.parse.reset_mock()
+        assert call("1", self.UNANCHORED) not in mock_notifier.send_message.await_args_list
+
+        # A repo reviewed, the allowlist empty: every chat is admitted for tickets, and the reviewer reads none.
+        for text in ticket_words:
+            awaiting, handler = self._awaiting(mock_intent_parser, mock_notifier, mock_mode_handler, _reviewer(),
+                                               allowed=None, reviewer_chats=())
+            await handler.handle_message(text, "42")
+            assert mock_intent_parser.parse.await_args.args[0] == text
+            mock_intent_parser.parse.reset_mock()
+        for text in reviewer_forms:
+            awaiting, handler = self._awaiting(mock_intent_parser, mock_notifier, mock_mode_handler, _reviewer(),
+                                               allowed=None, reviewer_chats=())
+            await handler.handle_message(text, "42")
+            mock_intent_parser.parse.assert_not_awaited()
+            awaiting.transition.assert_not_called()
+        assert mock_notifier.send_message.await_args_list[-len(reviewer_forms):] == [
+            call("42", self.UNANCHORED)] * len(reviewer_forms)

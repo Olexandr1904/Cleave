@@ -1,16 +1,18 @@
 # tests/unit/test_reviewer_forge_github.py
 from __future__ import annotations
 import dataclasses
+import json
 from unittest.mock import AsyncMock
 import httpx, pytest, respx
 from integrations.github.github_adapter import GitHubAdapter
 from orchestrator.reviewer.forge_github import ForgeError, GitHubForgeReader
+from orchestrator.reviewer.models import ForgeReview
 
 BASE = "https://api.github.com/repos/acme-org/acme-app"
 PR = {"number": 1712, "title": "Fix cart sync", "html_url": "https://github.com/acme-org/acme-app/pull/1712",
       "user": {"login": "octo-author"}, "state": "open", "head": {"sha": "a" * 40}, "draft": False,
       "assignees": [{"login": "octo"}], "requested_reviewers": [{"login": "octo2"}], "changed_files": 14,
-      "updated_at": "2026-11-20T10:00:00Z"}
+      "updated_at": "2026-11-20T10:00:00Z", "closed_at": None}
 
 def reader():
     return GitHubForgeReader(GitHubAdapter("tok", "acme-org", "acme-app"))
@@ -134,7 +136,7 @@ async def test_pr_full():
     assert dataclasses.asdict(full) == {
         "number": 1712, "title": "Fix cart sync", "body": "", "url": "https://github.com/acme-org/acme-app/pull/1712",
         "state": "open", "head_sha": "a" * 40, "base": "develop", "additions": 120, "deletions": 30,
-        "changed_files": 14}
+        "changed_files": 14, "closed_at": ""}
     await r.pr_full(1712)
     assert route.call_count == 2   # uncached
 
@@ -186,3 +188,99 @@ async def test_forge_error_tells_whether_github_is_unavailable(monkeypatch, resp
     with pytest.raises(ForgeError, match=f"^{text}$") as e:
         await reader().pr_full(9)
     assert e.value.unavailable is unavailable
+
+
+# --- Posting: reviews, review comments, approve, closed_at ---
+
+HEAD = "a" * 40
+
+
+def review_json(i, state="COMMENTED", **fields):
+    return {"id": i, "user": {"login": "octo"}, "state": state, "commit_id": HEAD,
+            "submitted_at": "2026-11-20T10:00:00Z", "body": f"r{i}",
+            "html_url": f"https://github.com/acme-org/acme-app/pull/1712#pullrequestreview-{i}", **fields}
+
+
+@respx.mock
+async def test_reviews_all_pages_and_shapes():
+    def page(request):
+        if request.url.params["page"] == "1":
+            return httpx.Response(200, json=[review_json(i) for i in range(100)])
+        return httpx.Response(200, json=[review_json(100, "PENDING", user=None, commit_id=None, submitted_at=None,
+                                                     body=None)])
+
+    route = respx.get(f"{BASE}/pulls/1712/reviews").mock(side_effect=page)
+    r = reader()
+    reviews = await r.reviews(1712)
+    assert [c.request.url.params["page"] for c in route.calls] == ["1", "2"]
+    assert len(reviews) == 101
+    assert reviews[0] == ForgeReview(
+        id=0, login="octo", state="COMMENTED", commit_id=HEAD, submitted_at="2026-11-20T10:00:00Z", body="r0",
+        url="https://github.com/acme-org/acme-app/pull/1712#pullrequestreview-0")
+    assert reviews[100] == ForgeReview(
+        id=100, login="ghost", state="PENDING", commit_id="", submitted_at="", body="",
+        url="https://github.com/acme-org/acme-app/pull/1712#pullrequestreview-100")
+    with pytest.raises(dataclasses.FrozenInstanceError):
+        reviews[0].state = "APPROVED"
+    await r.reviews(1712)
+    assert route.call_count == 4   # uncached
+
+
+@respx.mock
+async def test_review_comments():
+    def page(request):
+        if request.url.params["page"] == "1":
+            return httpx.Response(200, json=[{"id": i, "user": {"login": "octo"}, "path": "app/Cart.kt",
+                                              "line": i + 1, "original_line": 1, "body": f"c{i}",
+                                              "diff_hunk": "@@"} for i in range(100)])
+        return httpx.Response(200, json=[{"id": 100, "user": None, "path": "app/Sync.kt", "line": None,
+                                          "original_line": 7, "body": "outdated", "diff_hunk": "@@"}])
+
+    route = respx.get(f"{BASE}/pulls/1712/reviews/55/comments").mock(side_effect=page)
+    comments = await reader().review_comments(1712, 55)
+    assert [c.request.url.params["page"] for c in route.calls] == ["1", "2"]
+    assert len(comments) == 101
+    assert comments[0] == {"path": "app/Cart.kt", "line": 1, "body": "c0"}
+    assert comments[100] == {"path": "app/Sync.kt", "line": 7, "body": "outdated"}
+
+
+@respx.mock
+async def test_approve_posts_once():
+    route = respx.post(f"{BASE}/pulls/1712/reviews").respond(200, json=review_json(77, "APPROVED", body=""))
+    review = await reader().approve(1712, HEAD)
+    assert review == ForgeReview(
+        id=77, login="octo", state="APPROVED", commit_id=HEAD, submitted_at="2026-11-20T10:00:00Z", body="",
+        url="https://github.com/acme-org/acme-app/pull/1712#pullrequestreview-77")
+    assert json.loads(route.calls[0].request.content) == {"commit_id": HEAD, "event": "APPROVE"}
+    assert route.call_count == 1
+
+
+@pytest.mark.parametrize("respond, text, unavailable", [
+    (lambda route: route.mock(side_effect=httpx.ReadTimeout("timed out tok")), "ReadTimeout", True),
+    (lambda route: route.mock(side_effect=httpx.ConnectError("refused tok")), "ConnectError", True),
+    (lambda route: route.respond(502, text="upstream tok"), "GitHub 502", True),
+    # A 2xx that cannot be read: the approve may have landed.
+    (lambda route: route.respond(200, text="<html>not json tok</html>"), "JSONDecodeError", True),
+    (lambda route: route.respond(200, json={}), "KeyError", True),
+    # Refused: definitely not posted. A redirect is not followed.
+    (lambda route: route.respond(301, headers={"Location": "https://api.github.com/x"}), "GitHub 301", False),
+    (lambda route: route.respond(422, json={"message": "Unprocessable tok"}), "GitHub 422", False),
+])
+@respx.mock
+async def test_approve_never_retries(monkeypatch, respond, text, unavailable):
+    monkeypatch.setattr("integrations.github.github_adapter.asyncio.sleep", AsyncMock())
+    route = respx.post(f"{BASE}/pulls/1712/reviews")
+    respond(route)
+    with pytest.raises(ForgeError, match=f"^{text}$") as e:
+        await reader().approve(1712, HEAD)
+    assert e.value.unavailable is unavailable
+    assert route.call_count == 1
+
+
+@pytest.mark.parametrize("closed_at, expected", [("2026-11-01T10:00:00Z", "2026-11-01T10:00:00Z"), (None, "")])
+@respx.mock
+async def test_pr_full_closed_at(closed_at, expected):
+    respx.get(f"{BASE}/pulls/1712").respond(200, json={
+        **PR, "body": "", "base": {"ref": "develop", "sha": "b" * 40}, "additions": 1,
+        "deletions": 1, "closed_at": closed_at})
+    assert (await reader().pr_full(1712)).closed_at == expected

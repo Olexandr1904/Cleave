@@ -26,8 +26,13 @@ from orchestrator.reviewer.lines import (
     login_line,
     worktree_left_line,
 )
-from orchestrator.reviewer.messages import message_parts, recheck_message, review_message
-from orchestrator.reviewer.models import BoardRow, Job, JobRun
+from orchestrator.reviewer.messages import (
+    MESSAGE_LIMIT,
+    message_parts,
+    recheck_message,
+    review_message,
+)
+from orchestrator.reviewer.models import POSTABLE_STATES, BoardRow, Job, JobRun
 from orchestrator.reviewer.prepare import JobPaths, Prepared, PrepareError, job_paths, prepare
 from orchestrator.reviewer.report import (
     Report,
@@ -36,6 +41,7 @@ from orchestrator.reviewer.report import (
     parse_report,
     parse_tg_lines,
 )
+from orchestrator.reviewer.retention import sweep
 from orchestrator.reviewer.service import RepoContext, _where, utcnow
 from orchestrator.reviewer.session import SessionOutcome, recheck_prompt, review_prompt, run_session
 from orchestrator.reviewer.store import ReviewerStore
@@ -44,9 +50,7 @@ logger = logging.getLogger(__name__)
 
 LOGIN_BACKOFF = timedelta(minutes=15)
 _QUOTA_RETRY = timedelta(hours=1)  # when the CLI gives no reset time, or one already past at the session's end
-# split_message counts UTF-16 code units, as Telegram does (its limit is 4096): the rest is headroom.
-_MESSAGE_LIMIT = 3900
-_NEWER_STATES = ("queued", "running", "deferred", "done")
+_NEWER_STATES = ("queued", "running", "deferred", "done", "posted")
 _PENDING_STATES = ("queued", "deferred", "running")
 _PREPARE_STATES = {"failed": "failed", "superseded": "superseded", "cancelled": "cancelled", "requeue": "queued"}
 _CONFIG_CHANGED = "the session changed the review clone's git config"
@@ -55,9 +59,10 @@ _MAX_DEFERRALS = 3
 _DEFERRED_TOO_OFTEN = f"deferred {_MAX_DEFERRALS} times (usage limit or login)"
 _NO_ME = "waiting for the first poll"
 _PLAN_COPY = "replies_plan.json"
+_PREPARED_THREADS = "threads.prepared.json"  # Prepare's threads.json in the job copy (see _run)
 # Names in job_dir that are Cleave's, never copied from run_dir; matched after NFC and casefold, as a
-# case-insensitive filesystem (the host's APFS) would match them.
-_RESERVED = ("session", _PLAN_COPY)
+# case-insensitive filesystem (the host's APFS) would match them. "posting" holds Cleave's posting files.
+_RESERVED = ("session", _PLAN_COPY, "posting", _PREPARED_THREADS)
 # The wait before the next delivery attempt, by the failed attempts so far; the fifth failure ends them.
 _RESEND_WAITS = (timedelta(0), timedelta(minutes=1), timedelta(minutes=5), timedelta(minutes=15),
                  timedelta(minutes=60))
@@ -66,6 +71,7 @@ _MAX_SEND_ATTEMPTS = len(_RESEND_WAITS)
 # that); the sixth in a row fails it.
 _UNAVAILABLE_WAITS = (timedelta(minutes=1), timedelta(minutes=5), timedelta(minutes=15), timedelta(minutes=60))
 _MAX_UNAVAILABLE = 6
+_SWEEP_EVERY = timedelta(hours=24)
 
 
 @dataclass
@@ -73,6 +79,7 @@ class RunnerConfig:
     jobs_dir: Path
     secret_paths: list[Path]
     jobs: dict[str, ReviewerJobConfig]
+    ledgers_dir: Path | None = None  # None: no retention sweep
 
 
 def settle(job: Job, row: BoardRow | None, jobs: list[Job], skipped: bool = False) -> tuple[str, str]:
@@ -113,7 +120,8 @@ class _ArchiveRefused(Exception):
 def _archive(run_dir: Path, job_dir: Path) -> list[str]:
     """Copy every regular file under run_dir into job_dir, keeping the layout, and return the names it kept
     out. The session wrote run_dir: a symlink there is neither copied nor followed, and the names the job copy
-    keeps for Cleave's own files (the session directory, the replies plan) are not taken from it."""
+    keeps for Cleave's own files (the session directory, the replies plan, the posting files, Prepare's
+    threads) are not taken from it."""
     if run_dir.resolve() != run_dir:  # job_paths resolved it: a symlink appeared at it or on the way
         raise _ArchiveRefused("run directory is a symlink")
     kept_out: list[str] = []
@@ -136,11 +144,16 @@ def _reserved(name: str) -> bool:
     return unicodedata.normalize("NFC", name).casefold() in _RESERVED
 
 
+def may_still_save(job: Job, run: JobRun) -> bool:
+    """Whether the runner may still save the job's run: while the job is done or posted, its message not all out,
+    and the attempts not used up, the runner sends the message's unsent parts as it splits the run's report, and
+    holds the run across its sends. Past that, it never saves the run again. The resend follows this rule, and an
+    edit or a draft waits for it to end."""
+    return job.state in POSTABLE_STATES and not run.message_sent and run.send_attempts < _MAX_SEND_ATTEMPTS
+
+
 def _resend_due(run: JobRun, now: datetime) -> bool:
-    """Whether a run's message may be tried again: its wait since the last attempt has passed and the
-    attempts are not used up."""
-    if run.send_attempts >= _MAX_SEND_ATTEMPTS:
-        return False
+    """Whether the wait since the last attempt of a run's message has passed (may_still_save holds)."""
     if not run.last_attempt_at:
         return True
     return now >= datetime.fromisoformat(run.last_attempt_at) + _RESEND_WAITS[run.send_attempts]
@@ -170,7 +183,8 @@ def _message(job: Job, run: JobRun) -> str:
     tg_lines = {int(n): line for n, line in run.tg_lines.items()}
     if job.kind == "review":
         return review_message(job.scope, job.number, run.title, run.ticket_key, run.url, run.files,
-                              Report.from_dict(run.report), tg_lines)
+                              Report.from_dict(run.report), tg_lines, posted_at_head=run.posted_at_head,
+                              summary_posted=run.summary_posted)
     return recheck_message(job.scope, job.number, run.title, run.url, job.head_sha, run.replies, tg_lines)
 
 
@@ -215,6 +229,8 @@ class JobRunner:
         # line is out; both reset once a session has ended otherwise.
         self._quota_until: datetime | None = None
         self._quota_line_sent = False
+        self._swept_at: datetime | None = None  # the last retention sweep; None: due
+        self._last_read: dict[str, dict[int, datetime]] = {}  # per repo: when the sweep last read each PR
 
     async def run(self, stop: asyncio.Event) -> None:
         """recover() once, then one job at a time until `stop`. Never raises (cancellation aside)."""
@@ -226,7 +242,9 @@ class JobRunner:
             try:
                 await self.resend_unsent()
                 job = self.next_job()
-                if job is not None:
+                if job is None:
+                    await self._sweep()
+                else:
                     await self.run_job(job)
                     # A requeued job (forge token failing) waits a cycle: the forge gate may not have
                     # caught up yet, and preparing it again at once would loop on the forge.
@@ -240,9 +258,28 @@ class JobRunner:
                 pass
 
     def recover(self) -> None:
-        """A job still running at start-up was interrupted: it fails, so plan 3's rules retry it once."""
-        for job in self._store.jobs_in_state("running"):
+        """A review or re-check still running at start-up was interrupted: it fails, so plan 3's rules retry it
+        once. Edit and draft jobs are not this runner's."""
+        for job in self._store.jobs_in_state("running", kinds=("review", "recheck")):
             self._change(job, "failed", "interrupted (daemon restarted)")
+
+    async def _sweep(self) -> None:
+        """The retention sweep of every repo, when a ledgers directory is set and 24 hours have passed since the
+        last one (due at start); one line per repo with the PRs it swept. A repo whose sweep fails is logged; the
+        next one is swept all the same."""
+        ledgers_dir = self._config.ledgers_dir
+        if ledgers_dir is None or (self._swept_at is not None and self._now() - self._swept_at < _SWEEP_EVERY):
+            return
+        self._swept_at = self._now()
+        for ctx in self._contexts.values():
+            try:
+                swept = await sweep(ctx, self._store, jobs_dir=self._config.jobs_dir, ledgers_dir=ledgers_dir,
+                                    now=self._now(), last_read=self._last_read.setdefault(ctx.scope, {}))
+            except Exception as e:
+                logger.warning("Reviewer retention sweep of %s failed: %s", ctx.scope, _where(e))
+            else:
+                logger.info("Reviewer retention sweep of %s: swept %s", ctx.scope,
+                            ", ".join(f"#{n}" for n in swept) or "none")
 
     def next_job(self) -> Job | None:
         """The first runnable job whose repo is configured and passes the gates: reviews running there, its
@@ -306,20 +343,22 @@ class JobRunner:
         self._change(job, "queued", reason, (self._now() + wait).isoformat())
 
     async def resend_unsent(self) -> None:
-        """Send the rest of the message of every done job whose message is not out and whose wait since its
-        last attempt has passed, after settling the job against the board as it is now. The pass ends at
-        the first failed send: the others wait for the next one."""
+        """Send the rest of the message of every done or posted job whose message is not out and whose wait
+        since its last attempt has passed; a done job after settling it against the board as it is now. A
+        posted job is not settled: after a post its turn is normally gone, and it would turn stale. The pass
+        ends at the first failed send: the others wait for the next one."""
         if self._chat is None:
             return
         now = self._now()
         for job, run in self._store.done_unsent():
             try:
-                if not _resend_due(run, now):
+                if not (may_still_save(job, run) and _resend_due(run, now)):
                     continue
-                state, reason = await self._settle(job)
-                if state != "done":
-                    self._change(job, state, reason)
-                    continue
+                if job.state != "posted":
+                    state, reason = await self._settle(job)
+                    if state != "done":
+                        self._change(job, state, reason)
+                        continue
                 if not await self._deliver(job, run):
                     return
             except Exception as e:  # one bad saved run must not hold back the others, nor the jobs
@@ -341,6 +380,9 @@ class JobRunner:
             try:
                 prepared = await prepare(ctx, job, paths, store=self._store,
                                          tracker=self._trackers.get(ctx.project_id), now=self._stamp())
+                # Prepare's snapshot, kept before the session: the session may rewrite the run directory's.
+                if _regular(threads := paths.run_dir / "threads.json"):
+                    shutil.copyfile(threads, paths.job_dir / _PREPARED_THREADS)
                 if run.requeues:  # GitHub answered: the next "unavailable" starts a new count
                     run.requeues = 0
                     self._store.save_run(run)
@@ -352,7 +394,8 @@ class JobRunner:
                 if left:
                     run.notes.append(left)
                     self._store.save_run(run)
-                    await self._send(worktree_left_line(ctx.scope, job.number, paths.worktree, left))
+                    await self._send(worktree_left_line(ctx.scope, job.number, paths.worktree, left),
+                                     job_id=job.id)
         run.finished_at = self._stamp()
         run.cost_usd += outcome.cost_usd
         run.turns += outcome.turns
@@ -375,7 +418,8 @@ class JobRunner:
                 self._change(job, "deferred", "usage limit reached", retry_at.isoformat())
                 if not self._quota_line_sent:  # one line per streak
                     self._quota_line_sent = True
-                    await self._send(job_deferred_line(job.scope, job.number, job.kind, retry_at))
+                    await self._send(job_deferred_line(job.scope, job.number, job.kind, retry_at),
+                                     job_id=job.id)
         elif outcome.kind == "login":
             end = self._now()
             first = self._login_failed_at is None
@@ -400,8 +444,8 @@ class JobRunner:
         return True
 
     async def _session(self, ctx: RepoContext, job: Job, paths: JobPaths) -> tuple[SessionOutcome, bool]:
-        """The session's outcome, and whether it changed the clone's .git/config or .git/info/attributes (then
-        written back: the daemon's next git call in the clone carries the token)."""
+        """The session's outcome, and whether it changed the clone's .git/config, .git/info/attributes or
+        .git/commondir (then written back: the daemon's next git call in the clone carries the token)."""
         process = ctx.cfg.process
         if job.kind == "review":
             prompt = review_prompt(process.doc, process.prepare_section, job.number, paths)
@@ -462,6 +506,8 @@ class JobRunner:
             pr = prepared.pr
             key = m.group(0) if (m := TICKET_KEY.search(pr.title)) else ""
             run.title, run.url, run.ticket_key, run.files = pr.title, pr.url, key, pr.changed_files
+        # Saved with the run: the message's parts come from it alone, the same on every attempt.
+        run.posted_at_head, run.summary_posted = self._store.posted_count(job.scope, job.number, job.head_sha)
         self._store.save_run(run)
         state, reason = await self._settle(job)
         self._change(job, state, reason)
@@ -488,20 +534,20 @@ class JobRunner:
                       self._store.jobs(job.scope, job.number), skipped=skipped)
 
     async def _deliver(self, job: Job, run: JobRun) -> bool:
-        """Whether the job's whole message is out. Sent part by part, each part a reply anchor, starting at
-        the first part not delivered yet: the parts come from the saved run alone, so they are the same on
-        every attempt, and run.message_ids holds those already out. A failed part ends the attempt."""
+        """Whether the job's whole message is out. Sent part by part, each part a reply anchor to the job,
+        starting at the first part not delivered yet: the parts come from the saved run alone, so they are the
+        same on every attempt, and run.message_ids holds those already out. A failed part ends the attempt."""
         if self._chat is None:
             return False
         run.last_attempt_at = self._stamp()
-        parts = message_parts(_message(job, run), limit=_MESSAGE_LIMIT)
+        parts = message_parts(_message(job, run), limit=MESSAGE_LIMIT)
         for part in parts[len(run.message_ids):]:
-            message_id = await self._send(part)
+            message_id = await self._send(part, job_id=job.id)
             if message_id is None:
                 self._attempt_failed(run)
                 return False
-            self._store.add_anchor(self._chat.chat_id, message_id, job.id, self._stamp())
             run.message_ids.append(message_id)
+            run.notes = self._store.run(job.id).notes  # with a note the chat made on a failed anchor write
             self._store.save_run(run)  # a part out is never sent again, even after a restart
         run.message_sent = True
         self._store.save_run(run)
@@ -516,19 +562,19 @@ class JobRunner:
 
     async def _fail(self, job: Job, reason: str) -> None:
         self._change(job, "failed", reason)
-        await self._send(job_failed_line(job.scope, job.number, job.kind, reason))
+        await self._send(job_failed_line(job.scope, job.number, job.kind, reason), job_id=job.id)
 
     async def _send_drift(self, ctx: RepoContext) -> None:
         process = ctx.cfg.process
-        await self._send(drift_line(ctx.scope, process.doc, process.prepare_section))
+        await self._send(drift_line(ctx.scope, process.doc, process.prepare_section), scope=ctx.scope)
 
-    async def _send(self, text: str) -> int | None:
-        """The Telegram message id; None without a chat, or when the send failed (logged with the
-        exception class only)."""
+    async def _send(self, text: str, job_id: str = "", scope: str = "") -> int | None:
+        """The Telegram message id, the message a reply anchor to the job or the repo; None without a chat,
+        or when the send failed (logged with the exception class only)."""
         if self._chat is None:
             return None
         try:
-            return await self._chat.send(text)
+            return await self._chat.send(text, job_id=job_id, scope=scope)
         except Exception as e:
             logger.warning("Reviewer line not sent: %s", type(e).__name__)
             return None

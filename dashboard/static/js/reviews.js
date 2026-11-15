@@ -1,5 +1,5 @@
 // reviews.js — Reviews tab: per repo, the PRs where it is my turn and the ones waiting on others, in two
-// tables with filter chips and a search; a row opens the PR in a side panel (report, jobs, replies).
+// tables with filter chips and a search; a row opens the PR in a side panel (report, replies, posts, jobs).
 // Read-only plus Review now, Skip and the reviews switches: nothing is posted from the dashboard.
 
 import { loadReviewDetail, loadReviews, reviewNow, skipReview } from './api.js';
@@ -22,6 +22,11 @@ const FINDING_GROUPS = [
   ['Confirmed', ['red', 'orange', 'yellow']], ['Questions', ['question']], ['Pre-existing', ['preexisting']],
 ];
 const EVENT_CLASS = { REQUEST_CHANGES: 'event-changes', APPROVE: 'event-approve' };
+// A finding's or a reply's state (service.py's detail): its badge shows the word, its tooltip what it means.
+const NUMBER_STATE = {
+  posted: 'Landed on GitHub', ticked: 'Named in a post that did not land: see Posts', open: 'Not posted',
+};
+const GITHUB = 'https://github.com/';  // a post's link gets an href only to GitHub
 const TABLES = [['mine', 'My turn', 'my_turn'], ['waiting', 'Waiting on others', 'waiting']];
 
 const VIEW_HTML = `<div class="reviews-view">
@@ -147,7 +152,7 @@ function jobSubHtml(pr) {
   }
   if (job.state === 'deferred') return job.retry_at ? sub(`next try ${esc(localTime(job.retry_at))}`) : '';
   if (job.state === 'failed') return job.reason ? sub(esc(job.reason)) : '';
-  if (job.state !== 'done') return '';
+  if (job.state !== 'done' && job.state !== 'posted') return '';
   const sent = job.message_sent ? 'sent to Telegram' : 'not delivered yet';
   const f = job.findings;
   if (!f) return sub(sent);
@@ -297,15 +302,22 @@ function itemBody(body) {
   return lines.join('\n').trim();
 }
 
-function findingHtml(jobId, item) {
+// posted / ticked / open as a word, never by its color alone; a number with no state is open.
+function numberBadge(states, n) {
+  const state = states && Object.hasOwn(NUMBER_STATE, states[n]) ? states[n] : 'open';
+  return `<span class="review-badge is-${state}" title="${NUMBER_STATE[state]}"><span class="reviews-sr">Post state: </span>${
+    state}</span>`;
+}
+
+function findingHtml(detail, item) {
   const kind = KIND_OF[item.kind];
   const where = item.path ? `${item.path}${item.line == null ? '' : `:${item.line}`}` : '';
   const meta = [where, item.note].filter(Boolean).map(esc).join(' · ');
   const body = itemBody(item.body);
-  return details(`${jobId}:${item.number}`, item.kind === 'red',
+  return details(`${detail.report_job}:${item.number}`, item.kind === 'red',
     `<span class="review-sq kind-${kind}" title="${KIND_NAME[kind]}"></span>
       <span class="review-n">${esc(item.number)}.</span><span class="review-t">${esc(item.title)}</span>
-      <span class="review-badge">open</span>${meta ? `<span class="review-where">${meta}</span>` : ''}`,
+      ${numberBadge(detail.number_states, item.number)}${meta ? `<span class="review-where">${meta}</span>` : ''}`,
     body ? `<div class="review-body">${esc(body)}</div>` : '', 'review-finding');
 }
 
@@ -315,7 +327,7 @@ function telegramText(job) {
     const parts = job.message_ids.length;
     return `sent in ${parts} part${parts === 1 ? '' : 's'}`;
   }
-  if (job.state !== 'done') return `not sent: the job ended ${job.state}`;  // its PR moved on
+  if (job.state !== 'done' && job.state !== 'posted') return `not sent: the job ended ${job.state}`;  // its PR moved on
   const note = job.notes.find(n => n.startsWith('message not delivered'));
   return note ? `not delivered yet · ${note}` : 'not delivered yet';
 }
@@ -342,7 +354,7 @@ function reportHtml(detail) {
     ${job ? `<div class="reviews-sub">Telegram: ${esc(telegramText(job))}</div>` : ''}`;
   const groups = FINDING_GROUPS.map(([title, group]) => {
     const items = report.items.filter(item => group.includes(item.kind));
-    return items.length ? section(title, items.length, items.map(i => findingHtml(detail.report_job, i)).join('')) : '';
+    return items.length ? section(title, items.length, items.map(i => findingHtml(detail, i)).join('')) : '';
   }).join('');
   const dropped = report.dropped.length ? section('Dropped (never posted)', report.dropped.length,
     `<ul class="review-dropped">${report.dropped.map(d =>
@@ -361,10 +373,49 @@ function repliesHtml(detail) {
   const title = `Replies <span>${detail.replies.length}</span> · job ${esc(detail.replies_job)}`;
   if (!detail.replies.length) return section(title, null, '<div class="reviews-empty">No replies drafted.</div>');
   const rows = detail.replies.map(entry => `<tr>
-    <td>${esc(entry.n)}</td><td>${esc(replyTarget(entry))}</td><td class="review-body">${esc(entry.body)}</td>
+    <td>${esc(entry.n)}</td><td>${numberBadge(detail.reply_states, entry.n)}</td><td>${esc(replyTarget(entry))}</td>
+    <td class="review-body">${esc(entry.body)}</td>
   </tr>`).join('');
   return section(title, null, `<div class="reviews-table-wrap"><table class="review-jobs">
-    <thead><tr><th>N</th><th>Target</th><th>Body</th></tr></thead><tbody>${rows}</tbody></table></div>`);
+    <thead><tr><th>N</th><th>State</th><th>Target</th><th>Body</th></tr></thead><tbody>${rows}</tbody></table></div>`);
+}
+
+// A link the post stored: an href only to GitHub, anything else as text; named by its anchor
+// (pullrequestreview-…, discussion_r…).
+function postLinkHtml(post, url, i) {
+  const text = String(url);
+  if (!text.startsWith(GITHUB)) return `<code class="review-url">${esc(text)}</code>`;
+  const name = text.split('#')[1] || text.split('/').filter(Boolean).pop();
+  return `<a class="reviews-num" href="${esc(text)}" target="_blank" rel="noopener noreferrer"
+    data-fk="post:${esc(post.id)}:${i}" aria-label="Open ${esc(name)} on GitHub">${esc(name)} ↗</a>`;
+}
+
+// One post: its state, then kind · event · numbers · comments · head · time, its links and its error.
+function postHtml(post) {
+  const n = post.numbers.length;
+  // fmtIso escapes a stamp it cannot parse.
+  const meta = [
+    esc(post.kind), esc(post.event),
+    n ? `${n === 1 ? 'number' : 'numbers'} ${esc(post.numbers.join(', '))}` : '',
+    `${esc(post.comments)} comment${post.comments === 1 ? '' : 's'}`,
+    `at <code>${esc(post.head)}</code>`,
+    `<time datetime="${esc(post.created_at)}" title="${fmtIso(post.created_at)}">${esc(timeAgo(post.created_at))}</time>`,
+  ].filter(Boolean).join(' · ');
+  const links = post.urls.map((url, i) => postLinkHtml(post, url, i)).join('');
+  return `<li class="review-post">
+    <div class="review-post-line">${stateDot(post.state, post.state)}<span class="reviews-sub">${meta}</span></div>
+    ${links ? `<div class="review-post-links">${links}</div>` : ''}
+    ${post.error ? `<div class="review-body">${esc(post.error)}</div>` : ''}
+  </li>`;
+}
+
+// What Cleave posted from Telegram, newest first: the dashboard only shows it.
+function postsHtml(posts) {
+  if (!posts.length) {
+    return section('Posts', null,
+      '<div class="reviews-empty">Nothing posted yet. Posting is done by replying to the review in Telegram.</div>');
+  }
+  return section('Posts', posts.length, `<ul class="review-posts">${posts.map(postHtml).join('')}</ul>`);
 }
 
 // Why a PR has no report yet, from its newest job.
@@ -425,7 +476,7 @@ function panelBodyHtml(pr, detail) {
   const raw = detail.report_text == null ? '' : section('', null, details('raw', false,
     `Raw report · job ${esc(detail.report_job)}`, `<pre class="report-content">${esc(detail.report_text)}</pre>`,
     'review-raw'));
-  return main + jobsHtml(detail.jobs) + raw;
+  return main + postsHtml(detail.posts) + jobsHtml(detail.jobs) + raw;
 }
 
 // A side panel beside the list; a modal dialog where it covers the screen.

@@ -1,5 +1,5 @@
-"""ReviewerStore: board rows, repo state, jobs, job runs, skips, notices, anchors and
-preparation hashes in reviewer.db."""
+"""ReviewerStore: board rows, repo state, jobs, job runs, skips, notices, anchors, preparation
+hashes, posts and confirmations in reviewer.db."""
 from __future__ import annotations
 
 import dataclasses
@@ -8,11 +8,26 @@ import sqlite3
 import threading
 from uuid import uuid4
 
-from orchestrator.reviewer.models import JOB_STATES, BoardRow, Job, JobRun, RepoState
+from orchestrator.reviewer.models import (
+    JOB_STATES,
+    Anchor,
+    BoardRow,
+    Confirmation,
+    Job,
+    JobRun,
+    Post,
+    RepoState,
+)
+from orchestrator.reviewer.report import Report
 
 _JOB_COLUMNS = (
     "id, scope, number, kind, head_sha, key, state, reason, created_at, updated_at, retry_at"
 )
+_CONFIRMATION_COLUMNS = "id, job_id, chat_id, state, created_at, data"
+_LANDED_STATES = ("posted", "partial")  # a post that landed, in full or in part
+# A replies Post records only the steps GitHub showed, so its landed items count in these final states too;
+# an interrupted one records none.
+_REPLY_LANDED_STATES = ("posted", "partial", "failed", "unverified")
 
 
 class ReviewerStore:
@@ -79,9 +94,21 @@ class ReviewerStore:
         ).fetchone()
         return None if found is None else Job(*found)
 
-    def jobs_in_state(self, state: str) -> list[Job]:
-        sql = f"SELECT {_JOB_COLUMNS} FROM jobs WHERE state = ? ORDER BY created_at, rowid"
-        return [Job(*r) for r in self._conn.execute(sql, (state,))]
+    def jobs_in_state(self, state: str, kinds: tuple[str, ...] | None = None) -> list[Job]:
+        sql = f"SELECT {_JOB_COLUMNS} FROM jobs WHERE state = ?"
+        args: tuple = (state,)
+        if kinds is not None:
+            sql += f" AND kind IN ({', '.join('?' * len(kinds))})"
+            args += kinds
+        sql += " ORDER BY created_at, rowid"
+        return [Job(*r) for r in self._conn.execute(sql, args)]
+
+    def small_jobs(self) -> list[Job]:
+        sql = (
+            f"SELECT {_JOB_COLUMNS} FROM jobs WHERE kind IN ('edit', 'draft') AND state = 'queued' "
+            "ORDER BY created_at, rowid"
+        )
+        return [Job(*r) for r in self._conn.execute(sql)]
 
     def runnable_jobs(self, now: str) -> list[Job]:
         # A queued job has no retry_at ("" sorts first) unless it waits for GitHub to be available again.
@@ -117,11 +144,13 @@ class ReviewerStore:
         return None if found is None else JobRun.from_json(found[0])
 
     def done_unsent(self) -> list[tuple[Job, JobRun]]:
-        # No column of job_runs (job_id, data) shares a name with one of jobs.
+        # No column of job_runs (job_id, data) shares a name with one of jobs. A job posted from the
+        # first part of its message is still unsent: the other parts go out too.
         sql = (
             f"SELECT {_JOB_COLUMNS}, data FROM jobs "
             "JOIN job_runs ON job_runs.job_id = jobs.id "
-            "WHERE state = 'done' AND json_extract(data, '$.message_sent') = 0 "
+            "WHERE kind IN ('review', 'recheck') AND state IN ('done', 'posted') "
+            "AND json_extract(data, '$.message_sent') = 0 "
             "ORDER BY created_at, jobs.rowid"
         )
         return [(Job(*r[:-1]), JobRun.from_json(r[-1])) for r in self._conn.execute(sql)]
@@ -169,19 +198,22 @@ class ReviewerStore:
                 (scope, number, kind),
             )
 
-    def add_anchor(self, chat_id: str, message_id: int, job_id: str, now: str) -> None:
+    def add_anchor(
+        self, chat_id: str, message_id: int, job_id: str, now: str, scope: str = "", number: int = 0
+    ) -> None:
         with self._lock:
             self._conn.execute(
-                "INSERT OR REPLACE INTO anchors (chat_id, message_id, job_id, created_at) "
-                "VALUES (?, ?, ?, ?)",
-                (chat_id, message_id, job_id, now),
+                "INSERT OR REPLACE INTO anchors (chat_id, message_id, job_id, created_at, scope, number) "
+                "VALUES (?, ?, ?, ?, ?, ?)",
+                (chat_id, message_id, job_id, now, scope, number),
             )
 
-    def anchor_job(self, chat_id: str, message_id: int) -> str | None:
+    def anchor(self, chat_id: str, message_id: int) -> Anchor | None:
         found = self._conn.execute(
-            "SELECT job_id FROM anchors WHERE chat_id = ? AND message_id = ?", (chat_id, message_id)
+            "SELECT job_id, scope, number FROM anchors WHERE chat_id = ? AND message_id = ?",
+            (chat_id, message_id),
         ).fetchone()
-        return None if found is None else found[0]
+        return None if found is None else Anchor(*found)
 
     def prepare_hash(self, scope: str) -> str:
         found = self._conn.execute(
@@ -195,3 +227,103 @@ class ReviewerStore:
                 "INSERT OR REPLACE INTO prepare_hashes (scope, hash, updated_at) VALUES (?, ?, ?)",
                 (scope, value, now),
             )
+
+    def save_post(self, post: Post) -> None:
+        # An upsert rather than INSERT OR REPLACE: the row keeps its rowid, which breaks created_at ties.
+        with self._lock:
+            self._conn.execute(
+                "INSERT INTO posts (id, scope, number, head_sha, state, data) VALUES (?, ?, ?, ?, ?, ?) "
+                "ON CONFLICT (id) DO UPDATE SET scope = excluded.scope, number = excluded.number, "
+                "head_sha = excluded.head_sha, state = excluded.state, data = excluded.data",
+                (post.id, post.scope, post.number, post.head_sha, post.state, post.to_json()),
+            )
+
+    def post(self, post_id: str) -> Post | None:
+        found = self._conn.execute("SELECT data FROM posts WHERE id = ?", (post_id,)).fetchone()
+        return None if found is None else Post.from_json(found[0])
+
+    def posts(self, scope: str, number: int) -> list[Post]:
+        # Newest first; created_at is only in the JSON, rowid breaks ties.
+        sql = (
+            "SELECT data FROM posts WHERE scope = ? AND number = ? "
+            "ORDER BY json_extract(data, '$.created_at') DESC, rowid DESC"
+        )
+        return [Post.from_json(data) for (data,) in self._conn.execute(sql, (scope, number))]
+
+    def posts_in_state(self, state: str) -> list[Post]:
+        sql = "SELECT data FROM posts WHERE state = ? ORDER BY json_extract(data, '$.created_at'), rowid"
+        return [Post.from_json(data) for (data,) in self._conn.execute(sql, (state,))]
+
+    def _landed_at(self, scope: str, number: int, head: str, posts: list[Post] | None = None) -> list[Post]:
+        posts = self.posts(scope, number) if posts is None else posts
+        return [p for p in posts if p.head_sha == head and p.state in _LANDED_STATES]
+
+    def posted_keys(self, scope: str, number: int, head: str,
+                    posts: list[Post] | None = None) -> set[tuple[str, int | None, str]]:
+        """(path, line, title) of the report items that landed at the head, in a review. `posts`: the PR's posts,
+        when the caller has read them (posts(scope, number))."""
+        return {
+            (item["path"], item["line"], item["title"])
+            for p in self._landed_at(scope, number, head, posts)
+            for item in p.landed
+            if item["where"] in ("inline", "moved", "body")
+        }
+
+    def posted_count(self, scope: str, number: int, head: str) -> tuple[int, bool]:
+        """The review comments that landed at the head, and whether a summary did: a re-check's replies are
+        not counted."""
+        landed = [p for p in self._landed_at(scope, number, head) if p.kind == "review"]
+        return sum(p.comments for p in landed), any(p.summary_posted for p in landed)
+
+    def cleave_review_ids(self, scope: str, number: int) -> set[int]:
+        return {review_id for p in self.posts(scope, number) for review_id in p.review_ids}
+
+    def posted_replies(self, job: Job, posts: list[Post] | None = None) -> set[int]:
+        """The numbers of the job's replies and comments that landed, as GitHub showed them: from its PR's posts
+        (`posts`, when the caller has read them)."""
+        posts = self.posts(job.scope, job.number) if posts is None else posts
+        return {
+            item["n"]
+            for p in posts
+            if p.job_id == job.id and p.kind == "replies" and p.state in _REPLY_LANDED_STATES
+            for item in p.landed
+            if item["where"] in ("reply", "comment")
+        }
+
+    def posted_numbers(self, job: Job, report: Report | None, posts: list[Post] | None = None) -> set[int]:
+        """The numbers of the job that landed: a re-check's replies, or the items of a review's `report` that
+        landed at its head (by path, line and title). The one test of "already posted". `posts`: the job's PR's
+        posts, when the caller has read them."""
+        if job.kind == "recheck":
+            return self.posted_replies(job, posts)
+        keys = self.posted_keys(job.scope, job.number, job.head_sha, posts)
+        items = report.items if report else ()
+        return {item.number for item in items if (item.path, item.line, item.title) in keys}
+
+    def add_confirmation(self, job_id: str, chat_id: str, command: dict, now: str) -> Confirmation:
+        conf = Confirmation(uuid4().hex[:12], job_id, chat_id, "pending", now, command)
+        with self._lock:
+            self._conn.execute(
+                f"INSERT INTO confirmations ({_CONFIRMATION_COLUMNS}) VALUES (?, ?, ?, ?, ?, ?)",
+                (conf.id, job_id, chat_id, conf.state, now, json.dumps(command)),
+            )
+        return conf
+
+    def confirmation(self, conf_id: str) -> Confirmation | None:
+        found = self._conn.execute(
+            f"SELECT {_CONFIRMATION_COLUMNS} FROM confirmations WHERE id = ?", (conf_id,)
+        ).fetchone()
+        return None if found is None else Confirmation(*found[:-1], json.loads(found[-1]))
+
+    def claim_confirmation(self, conf_id: str, state: str) -> Confirmation | None:
+        """Move a pending confirmation to `state`: only the first claim gets it, later ones get None."""
+        with self._lock:
+            claimed = self._conn.execute(
+                "UPDATE confirmations SET state = ? WHERE id = ? AND state = 'pending'", (state, conf_id)
+            ).rowcount
+            if not claimed:
+                return None
+            found = self._conn.execute(
+                f"SELECT {_CONFIRMATION_COLUMNS} FROM confirmations WHERE id = ?", (conf_id,)
+            ).fetchone()
+        return Confirmation(*found[:-1], json.loads(found[-1]))

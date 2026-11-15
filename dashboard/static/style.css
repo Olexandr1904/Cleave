@@ -1195,6 +1195,11 @@
 .reviews-state.is-done .reviews-dot, .reviews-state.is-posted .reviews-dot { background: #56d364; }
 .reviews-state.is-failed { color: #f85149; } .reviews-state.is-failed .reviews-dot { background: #f85149; }
 .reviews-state.is-deferred { color: #e3b341; } .reviews-state.is-deferred .reviews-dot { background: #e3b341; }
+/* A post's states besides posted and failed */
+.reviews-state.is-posting { color: #79c0ff; } .reviews-state.is-posting .reviews-dot { background: #79c0ff; }
+.reviews-state.is-partial, .reviews-state.is-unverified, .reviews-state.is-interrupted { color: #e3b341; }
+.reviews-state.is-partial .reviews-dot, .reviews-state.is-unverified .reviews-dot,
+.reviews-state.is-interrupted .reviews-dot { background: #e3b341; }
 .reviews-dot.status-ok { background: #56d364; }
 .reviews-dot.status-error, .reviews-dot.status-readiness_failed, .reviews-dot.status-token_failing { background: #f85149; }
 .reviews-dot.status-doc_missing { background: #e3b341; }
@@ -1261,7 +1266,11 @@
 .review-sq { width: 10px; height: 10px; border-radius: 2px; align-self: center; }
 .review-n { color: #8b949e; font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace; }
 .review-t { color: #e6edf3; font-weight: 600; }
-.review-badge { color: #8b949e; font-size: 11px; border: 1px solid #30363d; border-radius: 4px; padding: 0 6px; }
+.review-badge { color: #8b949e; font-size: 11px; border: 1px solid #30363d; border-radius: 4px; padding: 0 6px; white-space: nowrap; }
+/* A number's state: landed on GitHub, named in a post that did not land, not posted */
+.review-badge.is-posted { background: #1a3d1a; color: #56d364; border-color: #2ea043; }
+.review-badge.is-ticked { background: #3d3318; color: #e3b341; border-color: #9e6a03; }
+.review-badge.is-open { color: #8b949e; border-color: #30363d; }
 .review-where {
   grid-column: 3 / -1; color: #8b949e; word-break: break-all;
   font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace; font-size: 11px;
@@ -1273,6 +1282,13 @@
 .review-jobs { width: 100%; border-collapse: collapse; }
 .review-jobs th, .review-jobs td { padding: 6px 8px; border-bottom: 1px solid #30363d; text-align: left; vertical-align: top; }
 .review-jobs th { color: #8b949e; font-size: 11px; font-weight: 600; white-space: nowrap; }
+.review-posts { list-style: none; display: flex; flex-direction: column; gap: 6px; }
+.review-post {
+  display: flex; flex-direction: column; gap: 4px; padding: 8px 10px;
+  background: #0d1117; border: 1px solid #30363d; border-radius: 6px;
+}
+.review-post-line, .review-post-links { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 10px; }
+.review-url { word-break: break-all; }
 .review-raw { color: #8b949e; }
 .review-raw summary { cursor: pointer; margin-bottom: 6px; }
 

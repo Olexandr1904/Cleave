@@ -23,8 +23,8 @@ def part_env(token: str) -> dict[str, str]:
     """base_env() plus the forge token for `gh`, with every interactive prompt off. The command's own git
     reads no host system or global config and runs no hook or fsmonitor (environment config outranks
     .git/config). Nothing else of .git/config (a filter, a helper, http.*) is overridden here: a job writes the
-    clone's .git/config and .git/info/attributes back after its session, and a poll runs no readiness during a
-    session that changed them."""
+    clone's .git/config, .git/info/attributes and .git/commondir back after its session, and neither a poll's
+    readiness nor a post runs during a session that changed them."""
     return {
         **base_env(),
         "GH_TOKEN": token,
@@ -66,6 +66,7 @@ class CommandResult:
     stdout: str
     stderr: str
     timed_out: bool
+    timeout: float = 0.0  # when timed_out: the seconds the command was given
 
 
 def _kill_group(proc: asyncio.subprocess.Process) -> None:
@@ -97,7 +98,7 @@ async def run_command(argv: list[str], *, cwd: Path, env: dict[str, str], timeou
     except asyncio.TimeoutError:
         _kill_group(proc)
         await proc.wait()
-        return CommandResult(returncode=-9, stdout="", stderr="", timed_out=True)
+        return CommandResult(returncode=-9, stdout="", stderr="", timed_out=True, timeout=timeout)
     except BaseException:
         _kill_group(proc)
         await proc.wait()

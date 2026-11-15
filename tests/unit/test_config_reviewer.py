@@ -159,8 +159,8 @@ def test_reviewer_command_running_a_script_the_session_may_write_raises(field, c
     assert e.value.field == where and str(e.value).startswith(f"{where} runs ")
 
 def test_reviewer_command_may_name_the_run_directory_as_data():
-    data = _with(("poster.replies_command", ["python3", "tools/threads/threads.py", "post", "{pr}",
-                                             "--plan", "tools/threads/runs/PR_{pr}/replies.json"]))
+    data = _with(("poster.replies_command", ["python3", "tools/threads/threads.py", "post", "{pr}", "--plan", "{plan}",
+                                             "--log", "tools/threads/runs/PR_{pr}/replies.json"]))
     data["reviewer"]["process"]["prepare_steps"] = [["python3", "tools/review/anchors.py",
                                                      "--out", "tools/review/runs/PR_{pr}/anchors.json"]]
     assert _parse_reviewer_section(data, _vcs(), "r.yaml").enabled
@@ -263,7 +263,8 @@ def test_reviewer_replies_plan_in_a_subdirectory_loads():
     data = _with(("process.replies_plan", "tools/review/replies_{pr}.json"))
     # A re-check session may write tools/review/ then: FULL's scripts there move out of it.
     data["reviewer"]["process"]["prepare_steps"] = [["python3", "tools/anchors.py", "{pr}"]]
-    data["reviewer"]["poster"]["review_command"] = ["python3", "tools/post.py", "{pr}", "--report", "{report}"]
+    data["reviewer"]["poster"]["review_command"] = ["python3", "tools/post.py", "{pr}", "--report", "{report}",
+                                                    "--ledger", "{ledger}", "--event", "{event}"]
     assert _parse_reviewer_section(data, _vcs(), "r.yaml").process.replies_plan == "tools/review/replies_{pr}.json"
 
 @pytest.mark.parametrize("field, command", [
@@ -299,6 +300,7 @@ def test_reviewer_worktree_dir_at_the_repo_root_raises():
     ("process.prepare_steps", [["python3", "{worktree}"]]),
     ("process.prepare_steps", [["uv", "run", "--directory", "{worktree}", "pytest"]]),
     ("process.prepare_steps", [["sh", "-c", "cd tools && python3 {worktree}"]]),
+    ("process.prepare_steps", [["timeout", "-s", "KILL", "30", "python3", "{worktree}"]]),   # a wrapper is transparent
 ])
 def test_reviewer_command_running_untrusted_code_through_a_launcher_raises(field, command):
     """Any argument may be what a launcher runs, not only the first one that is no option."""
@@ -308,10 +310,14 @@ def test_reviewer_command_running_untrusted_code_through_a_launcher_raises(field
     assert e.value.field == where and str(e.value).startswith(f"{where} runs ")
 
 @pytest.mark.parametrize("field, command", [
-    ("poster.review_command", ["python3", "tools/post.py", "tools/review/runs/PR_{pr}/report_{head9}.md"]),
+    ("poster.review_command", ["python3", "tools/post.py", "{pr}", "--report", "{report}", "--ledger", "{ledger}",
+                               "--event", "{event}", "--anchors", "tools/review/runs/PR_{pr}/anchors.json"]),
     ("readiness.threads_command", ["sh", "-c", "./tools/threads/run.sh {pr}"]),
     ("process.prepare_steps", [["python3", "-W", "ignore", "tools/review/anchors.py", "--worktree", "{worktree}"]]),
     ("process.prepare_steps", [["sh", "-c", "detekt --input {worktree} > tools/review/runs/PR_{pr}/detekt.txt"]]),
+    ("process.prepare_steps", [["sh", "-c", "OUT=tools/review/runs/PR_{pr}/a.json python3 tools/review/anchors.py"]]),
+    ("poster.review_command", ["timeout", "30", "python3", "tools/post.py", "{report}",
+                               "--ledger", "{ledger}", "--event", "{event}"]),
 ])
 def test_reviewer_command_reading_untrusted_data_loads(field, command):
     """A data file from an untrusted directory, or the worktree given to a script the base branch holds."""
@@ -350,3 +356,241 @@ def test_reviewer_launcher_running_a_session_file_raises_whatever_its_extension(
         _parse_reviewer_section(_with((field, command)), _vcs(), "r.yaml")
     where = f"reviewer.{field}"
     assert e.value.field == where and str(e.value).startswith(f"{where} runs ")
+
+
+# --- Plan 5: poster placeholders and the {job_dir} guard ---
+
+_POSTER = _section(FULL)["reviewer"]["poster"]
+
+def _drop(command, *args):
+    return [arg for arg in command if arg not in args]
+
+@pytest.mark.parametrize("command", [
+    ["python3", "{job_dir}/post.py"],
+    ["{job_dir}/post"],
+    ["python3", "{report}"],
+    ["sh", "-c", "python3 {job_dir}/x.py"],
+    ["node", "{plan}"],
+    ["sh", "-c", "cd {job_dir} && python3 x.py"],
+    ["sh", "-c", "PYTHONPATH={job_dir} python3 tools/review/post.py"],
+    ["sh", "-c", ". {job_dir}/vars.txt && python3 tools/review/post.py"],
+    ["command", "python3", "{report}"],
+    ["timeout", "30", "python3", "{job_dir}/x.py"],
+    ["sh", "-c", "nice -n 10 python3 {report}"],
+])
+def test_poster_guard_job_dir(command):
+    """The job copy holds what the review session wrote: a poster command running a file from it would run the
+    session's code with the forge token."""
+    with pytest.raises(ConfigError) as e:
+        _parse_reviewer_section(_with(("poster.review_command", command)), _vcs(), "r.yaml")
+    where = "reviewer.poster.review_command"
+    assert e.value.field == where and str(e.value).startswith(f"{where} runs ")
+    assert "from inside {job_dir}, the job's copy of what the review session wrote" in str(e.value)
+
+@pytest.mark.parametrize("field, command, where", [
+    ("readiness.threads_command", ["sh", "-c", "cd tools/review/runs/PR_{pr} && python3 x.py"],
+     "reviewer.process.run_dir"),
+    ("poster.replies_command", ["sh", "-c", "cd {job_dir}; ./post --plan {plan}"], "{job_dir}"),
+    ("poster.review_command", ["sh", "-c", "pushd ../review-wt/PR_{pr} && ./gradlew x"],
+     "reviewer.process.worktree_dir"),
+])
+def test_token_command_changing_into_an_untrusted_directory_raises(field, command, where):
+    """What a readiness or poster command runs after `cd` runs from there, with the forge token."""
+    with pytest.raises(ConfigError) as e:
+        _parse_reviewer_section(_with((field, command)), _vcs(), "r.yaml")
+    assert e.value.field == f"reviewer.{field}"
+    assert str(e.value).startswith(f"reviewer.{field} runs {command[-1]!r} from inside {where}, ")
+
+def test_prepare_step_may_change_into_the_worktree():
+    """Building the PR in a prepare step is the operator's choice (the example config says so)."""
+    step = ["sh", "-c", "cd {worktree} && ./gradlew x"]
+    r = _parse_reviewer_section(_with(("process.prepare_steps", [step])), _vcs(), "r.yaml")
+    assert r.process.prepare_steps == [step]
+
+@pytest.mark.parametrize("field, command", [
+    ("readiness.threads_command",
+     ["sh", "-c", ". tools/review/runs/PR_{pr}/vars.txt && python3 tools/threads/threads.py {pr}"]),
+    ("readiness.threads_command",
+     ["sh", "-c", "PYTHONPATH=tools/review/runs/PR_{pr} python3 tools/threads/threads.py {pr}"]),
+    ("process.prepare_steps", [["sh", "-c", "source {worktree}/env.txt; python3 tools/review/anchors.py {pr}"]]),
+    ("process.prepare_steps", [["sh", "-c", "PYTHONPATH={worktree} python3 tools/review/anchors.py {pr}"]]),
+])
+def test_reviewer_command_sourcing_or_importing_untrusted_code_raises(field, command):
+    """`.` and `source` run their file whatever its extension; a NAME=value before the program is checked as
+    `env NAME=value` is."""
+    with pytest.raises(ConfigError) as e:
+        _parse_reviewer_section(_with((field, command)), _vcs(), "r.yaml")
+    where = f"reviewer.{field}" + (".0" if field == "process.prepare_steps" else "")
+    assert e.value.field == where and str(e.value).startswith(f"{where} runs ")
+
+@pytest.mark.parametrize("field, command, placeholder", [
+    ("poster.review_command", ["python3", "{job_dir}/../other/post.py"], "job_dir"),
+    ("poster.review_command", ["python3", "tools/review/post.py", "--anchors", "{job_dir}/../other/anchors.json"],
+     "job_dir"),
+    ("poster.review_command", ["sh", "-c", "python3 tools/review/post.py --report {report}/../../x.md"], "report"),
+    ("poster.replies_command", ["python3", "tools/threads/threads.py", "--plan", "{plan}/../../x.json"], "plan"),
+])
+def test_poster_path_climbing_out_of_the_job_copy_raises(field, command, placeholder):
+    """Next to the job's copy are the other jobs' copies: `..` after it would leave what the guard checks."""
+    with pytest.raises(ConfigError) as e:
+        _parse_reviewer_section(_with((field, command)), _vcs(), "r.yaml")
+    where = f"reviewer.{field}"
+    assert e.value.field == where
+    assert str(e.value).startswith(f"{where} has '..' after {{{placeholder}}} in {command[-1]!r}: ")
+
+def test_poster_guard_allows_data_in_job_dir():
+    command = ["python3", "tools/review/post.py", "{pr}", "--report", "{report}", "--anchors", "{job_dir}/anchors.json",
+               "--ledger", "{ledger}", "--event", "{event}"]
+    r = _parse_reviewer_section(_with(("poster.review_command", command)), _vcs(), "r.yaml")
+    assert r.poster.review_command == command
+
+def test_poster_placeholders():
+    """The worktree is gone by posting time; the replies ledger is the threads tool's own, next to the plan."""
+    takes = {"review_command": "{event}, {head9}, {job_dir}, {ledger}, {plan}, {pr}, {repo}, {report}",
+             "replies_command": "{head9}, {job_dir}, {plan}, {pr}, {repo}"}
+    for name, placeholder in [("review_command", "worktree"), ("review_command", "merge_base"),
+                              ("replies_command", "ledger"), ("replies_command", "report"),
+                              ("replies_command", "event")]:
+        command = _POSTER[name] + ["--extra", f"{{{placeholder}}}"]
+        with pytest.raises(ConfigError) as e:
+            _parse_reviewer_section(_with((f"poster.{name}", command)), _vcs(), "r.yaml")
+        where = f"reviewer.poster.{name}"
+        assert e.value.field == where
+        assert str(e.value).startswith(
+            f"{where}: placeholder '{{{placeholder}}}' is never filled there; it takes {takes[name]} ")
+    command = _POSTER["replies_command"] + ["--head", "{head9}", "--log", "{job_dir}/x.json"]
+    r = _parse_reviewer_section(_with(("poster.replies_command", command)), _vcs(), "r.yaml")
+    assert r.poster.replies_command == command
+
+@pytest.mark.parametrize("name, command, text", [
+    ("review_command", _drop(_POSTER["review_command"], "--ledger", "{ledger}"),
+     "reviewer.poster.review_command must pass {ledger}: Cleave fills it on every post"),
+    ("review_command", _drop(_POSTER["review_command"], "--report", "{report}"),
+     "reviewer.poster.review_command must pass {report}: Cleave fills it on every post"),
+    ("review_command", _drop(_POSTER["review_command"], "--event", "{event}"),
+     "reviewer.poster.review_command must pass {event}: Cleave fills it on every post"),
+    ("replies_command", _drop(_POSTER["replies_command"], "--plan", "{plan}"),
+     "reviewer.poster.replies_command must pass {plan}: Cleave fills it on every post"),
+    # The first one missing, in the order report, ledger, event.
+    ("review_command", _drop(_POSTER["review_command"], "--report", "{report}", "--ledger", "{ledger}"),
+     "reviewer.poster.review_command must pass {report}: Cleave fills it on every post"),
+    ("review_command", _drop(_POSTER["review_command"], "--ledger", "{ledger}", "--event", "{event}"),
+     "reviewer.poster.review_command must pass {ledger}: Cleave fills it on every post"),
+    # The untrusted-directory guard comes first.
+    ("review_command", ["python3", "{report}"], "reviewer.poster.review_command runs '{report}' "),
+], ids=["ledger", "report", "event", "plan", "report-first", "ledger-before-event", "guard-first"])
+def test_poster_required_placeholders(name, command, text):
+    """Cleave fills these on every post: without {ledger} a post could land twice."""
+    with pytest.raises(ConfigError) as e:
+        _parse_reviewer_section(_with((f"poster.{name}", command)), _vcs(), "r.yaml")
+    assert e.value.field == f"reviewer.poster.{name}" and str(e.value).startswith(text)
+
+@pytest.mark.parametrize("name, value, field, text", [
+    ("confirm_flag", True, "confirm_flag", "reviewer.poster.confirm_flag must be a non-empty string"),
+    ("dry_run_flag", ["--dry-run"], "dry_run_flag", "reviewer.poster.dry_run_flag must be a non-empty string"),
+    ("confirm_flag", "--dry-run", "confirm_flag",
+     "reviewer.poster.confirm_flag must differ from reviewer.poster.dry_run_flag: "),
+    ("review_command", _POSTER["review_command"] + ["--yes"], "review_command",
+     "reviewer.poster.review_command passes '--yes' itself: "),
+    ("replies_command", ["python3", "tools/threads/threads.py", "post", "{pr}", "--plan", "{plan}", "--dry-run"],
+     "replies_command", "reviewer.poster.replies_command passes '--dry-run' itself: "),
+], ids=["confirm-not-a-string", "dry-run-not-a-string", "same-flag", "confirm-in-review", "dry-run-in-replies"])
+def test_poster_flags(name, value, field, text):
+    """Cleave appends one of the two flags to every run: a template passing one itself, or one flag for both,
+    would turn a dry run into a post."""
+    with pytest.raises(ConfigError) as e:
+        _parse_reviewer_section(_with((f"poster.{name}", value)), _vcs(), "r.yaml")
+    assert e.value.field == f"reviewer.poster.{field}" and str(e.value).startswith(text)
+
+_POST = "python3 tools/review/post.py {pr} --report {report} --ledger {ledger} --event {event}"
+_REPLY = "python3 tools/threads/threads.py post {pr} --plan {plan}"
+
+@pytest.mark.parametrize("name, command", [
+    ("review_command", ["sh", "-c", _POST]),
+    ("replies_command", ["env", "bash", "-ec", _REPLY]),
+    ("replies_command", ["env", "-i", "PATH=/usr/bin:/bin", "/bin/dash", "-c", _REPLY]),
+    ("review_command", ["nice", "-n", "5", "timeout", "600", "zsh", "-f", "-c", _POST]),
+    ("replies_command", ["command", "ksh", "-Cc", _REPLY]),
+], ids=["sh-c", "env-bash-ec", "env-options-dash", "wrappers-zsh", "command-ksh-Cc"])
+def test_poster_shell_code_raises(name, command):
+    """The flag Cleave appends after `sh -c` code becomes the code's $0 and never reaches the tool: a tool that
+    posts by default would post on the dry run."""
+    with pytest.raises(ConfigError) as e:
+        _parse_reviewer_section(_with((f"poster.{name}", command)), _vcs(), "r.yaml")
+    where = f"reviewer.poster.{name}"
+    assert e.value.field == where
+    assert str(e.value) == (f"{where} must be a direct command, not shell -c code: the dry-run flag Cleave "
+                            f"appends must reach the tool (file: r.yaml) (field: {where})")
+
+@pytest.mark.parametrize("shell", ["sh", "bash", "zsh", "dash", "ksh", "mksh", "ash", "fish", "/bin/dash"])
+def test_poster_shell_running_a_session_file_raises(shell):
+    """Every shell runs its first operand as a script, whatever its extension: from the job's copy that is the
+    session's code, run with the forge token."""
+    command = [shell, "{job_dir}/notes.md", "--report", "{report}", "--ledger", "{ledger}", "--event", "{event}"]
+    with pytest.raises(ConfigError) as e:
+        _parse_reviewer_section(_with(("poster.review_command", command)), _vcs(), "r.yaml")
+    where = "reviewer.poster.review_command"
+    assert e.value.field == where
+    assert str(e.value).startswith(f"{where} runs '{{job_dir}}/notes.md' from inside {{job_dir}}, the job's copy of "
+                                   "what the review session wrote")
+
+def test_poster_script_run_by_a_shell_loads():
+    """A shell running the base branch's script passes the flag on: it is the script's argument."""
+    command = ["sh", "tools/review/post.sh", "{pr}", "--report", "{report}", "--ledger", "{ledger}", "--event", "{event}"]
+    r = _parse_reviewer_section(_with(("poster.review_command", command)), _vcs(), "r.yaml")
+    assert r.poster.review_command == command
+
+
+# --- /code-review fix wave C1: a wrapper's durations and long options ---
+
+# sh -c code that never passes on the flag Cleave appends: it becomes the code's $4.
+_SHELL_CODE = ["sh", "-c", 'python3 tools/review/post.py "$1" "$2" "$3"', "sh", "--report={report}",
+               "--ledger={ledger}", "--event={event}"]
+_DIRECT = "must be a direct command, not shell -c code"
+_IN_JOB_DIR = "runs '{job_dir}' from inside {job_dir}"
+
+@pytest.mark.parametrize("command, text", [
+    (["timeout", "5s", *_SHELL_CODE], _DIRECT),   # "5s" is a duration, not -s with its value
+    (["timeout", "9s", "python3", "{job_dir}", "--report", "{report}", "--ledger", "{ledger}", "--event", "{event}"],
+     _IN_JOB_DIR),
+    (["timeout", "--signal", "KILL", "30", *_SHELL_CODE], _DIRECT),
+    (["timeout", "--signal=KILL", "--kill-after", "5", "1.5m", *_SHELL_CODE], _DIRECT),
+    (["nice", "--adjustment", "5", *_SHELL_CODE], _DIRECT),
+    (["stdbuf", "--output", "L", *_SHELL_CODE], _DIRECT),
+    (["xargs", "--delimiter", ",", *_SHELL_CODE], _DIRECT),
+], ids=["timeout-5s-sh", "timeout-9s-job-dir", "signal-kill", "long-forms", "nice-adjustment", "stdbuf-output",
+        "xargs-delimiter"])
+def test_wrapper_durations_and_long_options_are_skipped(command, text):
+    """A number or a duration takes no value, and a long option that takes one is skipped with it: the guard and
+    the shell -c check look at the command the wrapper runs."""
+    with pytest.raises(ConfigError) as e:
+        _parse_reviewer_section(_with(("poster.review_command", command)), _vcs(), "r.yaml")
+    assert e.value.field == "reviewer.poster.review_command" and text in str(e.value)
+
+def test_a_wrapped_direct_poster_still_loads():
+    command = ["timeout", "30", "python3", "tools/post.py", "{report}", "--ledger", "{ledger}", "--event", "{event}"]
+    assert _parse_reviewer_section(_with(("poster.review_command", command)), _vcs(), "r.yaml").enabled
+
+
+# --- /code-review fix wave C11: the flag check compares whole arguments ---
+
+def _with_flag(command, confirm_flag="-y"):
+    data = _with(("poster.review_command", command))
+    data["reviewer"]["poster"]["confirm_flag"] = confirm_flag
+    return data
+
+def test_an_argument_that_only_contains_the_flag_loads():
+    command = _POSTER["review_command"] + ["--style=my-yaml"]
+    assert _parse_reviewer_section(_with_flag(command), _vcs(), "r.yaml").poster.review_command == command
+
+@pytest.mark.parametrize("command, flag", [
+    (_POSTER["review_command"] + ["-y"], "-y"),
+    (_POSTER["review_command"] + ["--yes=true"], "--yes"),
+    # A shell behind a program the guard does not know: its code's words count one by one.
+    (["busybox", "sh", "-c", "python3 tools/review/post.py -y", "sh", "{report}", "{ledger}", "{event}"], "-y"),
+], ids=["equal", "with-a-value", "a-word-of-shell-code"])
+def test_an_argument_that_is_the_flag_raises(command, flag):
+    with pytest.raises(ConfigError) as e:
+        _parse_reviewer_section(_with_flag(command, flag), _vcs(), "r.yaml")
+    assert e.value.field == "reviewer.poster.review_command"
+    assert str(e.value).startswith(f"reviewer.poster.review_command passes {flag!r} itself: ")

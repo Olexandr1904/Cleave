@@ -1,4 +1,5 @@
-"""Reviewer-mode data: readiness snapshot, PR details and comments, board rows, repo state, jobs, job runs."""
+"""Reviewer-mode data: readiness snapshot, PR details and comments, board rows, repo state, jobs, job runs,
+reply anchors, posts and confirmations."""
 from __future__ import annotations
 
 import dataclasses
@@ -9,6 +10,9 @@ JOB_STATES = (
     "queued", "running", "done", "posted", "failed",
     "deferred", "superseded", "skipped", "cancelled", "stale",
 )
+# The states of a review or a re-check whose report (or replies plan) is current: a post, a command about it (text,
+# edit, draft) and the runner's saves of its run need one of them.
+POSTABLE_STATES = ("done", "posted")
 
 
 @dataclass(frozen=True)
@@ -64,6 +68,18 @@ class PRFull:
     additions: int
     deletions: int
     changed_files: int
+    closed_at: str = ""  # "" while open
+
+
+@dataclass(frozen=True)
+class ForgeReview:
+    id: int
+    login: str  # "ghost" when the account was deleted
+    state: str
+    commit_id: str
+    submitted_at: str  # "" while pending
+    body: str
+    url: str
 
 
 @dataclass(frozen=True)
@@ -92,6 +108,7 @@ class BoardRow:
     ticket_key: str
     updated_at: str
     last_change: str
+    thread_turns_change: str = ""  # when my own turns that name threads last changed ("" in rows stored before)
 
     @property
     def my_actions(self) -> list[str]:
@@ -159,6 +176,10 @@ class JobRun:
     last_attempt_at: str = ""  # the last delivery attempt
     deferrals: int = 0  # the job's usage-limit and login deferrals so far
     requeues: int = 0  # the job's "GitHub unavailable" requeues since its last Prepare that got through
+    request: dict = field(default_factory=dict)  # a small job: {"job": <review job id>, "number", "instruction"}
+    drafted: list[int] = field(default_factory=list)
+    posted_at_head: int = 0
+    summary_posted: bool = False
 
     def to_json(self) -> str:
         return json.dumps(dataclasses.asdict(self))
@@ -167,3 +188,54 @@ class JobRun:
     def from_json(cls, text: str) -> JobRun:
         known = {f.name for f in dataclasses.fields(cls)}
         return cls(**{k: v for k, v in json.loads(text).items() if k in known})
+
+
+@dataclass(frozen=True)
+class Anchor:
+    """What a reviewer message points at: a job, or a PR (scope and number)."""
+    job_id: str
+    scope: str
+    number: int
+
+
+@dataclass
+class Post:
+    # Fields added later must have defaults: posts already stored lack them.
+    id: str
+    job_id: str
+    scope: str
+    number: int
+    head_sha: str
+    kind: str  # review, approve, replies
+    state: str  # posting, posted, partial, failed, unverified, interrupted
+    created_at: str
+    updated_at: str = ""
+    numbers: list[int] = field(default_factory=list)
+    event: str = ""
+    # {"n", "path", "line", "title", "where"}: path, line and title are the report item's, never the payload
+    # comment's (a moved anchor keeps its report line); where is inline, moved or body (review), or reply,
+    # comment or resolve (replies: path "", line None, title "").
+    landed: list[dict] = field(default_factory=list)
+    summary_posted: bool = False
+    comments: int = 0
+    review_ids: list[int] = field(default_factory=list)
+    urls: list[str] = field(default_factory=list)
+    error: str = ""
+
+    def to_json(self) -> str:
+        return json.dumps(dataclasses.asdict(self))
+
+    @classmethod
+    def from_json(cls, text: str) -> Post:
+        known = {f.name for f in dataclasses.fields(cls)}
+        return cls(**{k: v for k, v in json.loads(text).items() if k in known})
+
+
+@dataclass
+class Confirmation:
+    id: str
+    job_id: str
+    chat_id: str
+    state: str  # pending, confirmed, declined
+    created_at: str
+    command: dict

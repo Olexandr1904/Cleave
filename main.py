@@ -13,10 +13,11 @@ import logging
 import sys
 from collections.abc import Coroutine
 from typing import Callable
+from urllib.parse import urlsplit
 
 logger = logging.getLogger(__name__)
 
-from config.schemas import GlobalConfig, LoadedProject, RepoConfig
+from config.schemas import GlobalConfig, LoadedProject, ProjectConfig, RepoConfig
 from integrations.base.vcs import VCSInterface
 from orchestrator.reviewer.chat import ReviewerChat
 from orchestrator.reviewer.service import RepoContext, _where
@@ -95,6 +96,20 @@ def _build_vcs_adapter(
     return None
 
 
+def _allowed_links(repo_cfg: RepoConfig, project_cfg: ProjectConfig) -> tuple[str, ...]:
+    """The link prefixes a posted review body may use, lowercased as body_problems expects: the
+    repo owner's on GitHub, plus the tracker's host (the Jira URL's scheme and host, or Trello's).
+    A Jira URL without both adds none: links to it are refused."""
+    links = [f"https://github.com/{repo_cfg.vcs.github.owner}/"]
+    tracker = project_cfg.tracker
+    jira = urlsplit(tracker.jira.url)
+    if tracker.provider == "jira" and jira.scheme and jira.hostname:
+        links.append(f"{jira.scheme}://{jira.hostname}/")
+    elif tracker.provider == "trello":
+        links.append("https://trello.com/")
+    return tuple(link.lower() for link in links)
+
+
 def _reviewer_contexts(
     global_config: GlobalConfig,
     projects: dict[str, LoadedProject],
@@ -105,8 +120,9 @@ def _reviewer_contexts(
     """One reviewer context per loaded repo with reviews enabled (GitHub only, checked at load).
 
     Each builds its own GitHub adapter, reporting a 401/403 through `on_auth_failure(key)` on the
-    repo's `forge:<project>/<repo>` credential. A repo without a forge token is skipped with a
-    warning. A dry run gets none: the reviewer would clone, send lines and write reviewer.db.
+    repo's `forge:<project>/<repo>` credential, and its poster with the forge token. A repo without
+    a forge token is skipped with a warning. A dry run gets none: the reviewer would clone, send
+    lines and write reviewer.db.
     """
     if dry_run:
         if any(r.reviewer.enabled for p in projects.values() for r in p.repos.values()):
@@ -116,6 +132,7 @@ def _reviewer_contexts(
     from orchestrator.reviewer.clone import ReviewClone, github_clone_url
     from orchestrator.reviewer.db import reviewer_db_path
     from orchestrator.reviewer.forge_github import GitHubForgeReader
+    from orchestrator.reviewer.poster import CommandPoster
     from orchestrator.reviewer.readiness import CommandReadiness
 
     clones_dir = reviewer_db_path(global_config.reviewer).parent / "repos"
@@ -145,14 +162,19 @@ def _reviewer_contexts(
                     cfg.readiness, repo=f"{github.owner}/{github.repo}", token=github.token,
                 ),
                 forge=GitHubForgeReader(adapter),
+                poster=CommandPoster(
+                    cfg.poster, repo=f"{github.owner}/{github.repo}", token=github.token,
+                ),
+                allowed_links=_allowed_links(repo_cfg, project.config),
             ))
     return contexts
 
 
 def _reviewer_chat(
-    notifier, global_config: GlobalConfig, projects: dict[str, LoadedProject],
+    notifier, global_config: GlobalConfig, projects: dict[str, LoadedProject], store=None,
 ) -> ReviewerChat | None:
-    """The reviewer chat, else the operator chat; a failed send raises.
+    """The reviewer chat, else the operator chat; a failed send raises. With `store`, every message it
+    sends is a reply anchor in it.
 
     None when there is no target (no Telegram, or no chat id): then no line counts as delivered.
     """
@@ -161,15 +183,28 @@ def _reviewer_chat(
     chat_id = global_config.reviewer.telegram_chat_id or operator_chat_id(global_config, projects)
     if notifier is None or not chat_id:
         return None
-    return ReviewerChat(notifier, chat_id)
+    return ReviewerChat(notifier, chat_id, store=store)
 
 
-def _review_anchor(store) -> Callable[[str, int], bool] | None:
-    """For the command handler: whether a Telegram message is one of the reviewer's (a reply anchor in
-    reviewer.db). None without a reviewer: replies then go where they always went."""
-    if store is None:
-        return None
-    return lambda chat_id, message_id: store.anchor_job(chat_id, message_id) is not None
+def _allowed_chat_ids(global_config: GlobalConfig, projects: dict[str, LoadedProject]) -> set[str]:
+    """The chats the command handler takes messages from: telegram.default_chat_id in global.yaml
+    and each project's. The reviewer reads replies and taps in these chats only, and in none when
+    there is none (the ticket pipeline then takes every chat). The reviewer chat is not added: when
+    it is none of these, replies there are ignored, and the startup says so."""
+    allowed_chat_ids: set[str] = set()
+    if global_config.telegram.default_chat_id:
+        allowed_chat_ids.add(global_config.telegram.default_chat_id)
+    for proj in projects.values():
+        pcid = proj.config.telegram.default_chat_id
+        if pcid:
+            allowed_chat_ids.add(pcid)
+    reviewer_chat_id = global_config.reviewer.telegram_chat_id
+    if reviewer_chat_id and reviewer_chat_id not in allowed_chat_ids:
+        print("  Reviewer: replies are ignored — reviewer.telegram_chat_id is not an allowed chat")
+        logger.warning(
+            "Reviewer replies are ignored: reviewer.telegram_chat_id is not an allowed chat",
+        )
+    return allowed_chat_ids
 
 
 def _start_background(name: str, coro: Coroutine) -> asyncio.Task:
@@ -187,13 +222,14 @@ def _start_background(name: str, coro: Coroutine) -> asyncio.Task:
     return task
 
 
-def _start_reviewer(reviewer, runner) -> dict[str, tuple[asyncio.Task, asyncio.Event]]:
-    """Start the reviewer's poll and its job runner, each with its own stop event, for _stop_background.
+def _start_reviewer(reviewer, runner, small) -> dict[str, tuple[asyncio.Task, asyncio.Event]]:
+    """Start the reviewer's poll, its job runner and its edit and draft runner, each with its own
+    stop event, for _stop_background.
 
-    Nothing without a repo to review: then neither is built and both are None.
+    Nothing without a repo to review: then none is built and all are None.
     """
     background = {}
-    for name, part in (("Reviewer", reviewer), ("Review jobs", runner)):
+    for name, part in (("Reviewer", reviewer), ("Review jobs", runner), ("Review edits", small)):
         if part is not None:
             stop = asyncio.Event()
             background[name] = (_start_background(name, part.run(stop)), stop)
@@ -647,20 +683,34 @@ def main(argv: list[str] | None = None) -> int:
     switches.add_listener(_on_switch_changed)
     print(f"  Switches: tickets={switches.get('tickets')}, reviews={switches.get('reviews')}")
 
-    # Reviewer: polls each repo with reviewer.enabled and runs its review jobs, one at a time.
-    # Repos added by hot reload wait for a restart.
+    # Reviewer: polls each repo with reviewer.enabled, runs its review jobs one at a time and its
+    # edit and draft jobs one at a time; the replies to its messages are wired with the command
+    # handler. Repos added by hot reload wait for a restart.
     from orchestrator.reviewer.service import ReviewerService
     from orchestrator.reviewer.store import ReviewerStore
 
+    reviewer_data = reviewer_db_path(global_config.reviewer).parent
+    # The switches' database: with Telegram on, a reply to a reviewer message is answered from it
+    # even with no repo to review.
+    reviewer_store = ReviewerStore(connect(reviewer_db_path(global_config.reviewer)))
+    reviewer_chat = _reviewer_chat(notifier, global_config, projects, store=reviewer_store)
+    # Build the chat-id allowlist from global + per-project configs so
+    # the bot ignores commands from other chats. An empty set disables
+    # the bot (fail-safe); None would disable the check entirely. The
+    # reviewer reads replies in these chats only.
+    allowed_chat_ids = _allowed_chat_ids(global_config, projects) if notifier is not None else set()
     reviewer = None
     review_jobs = None
-    reviewer_store = None
+    review_edits = None
+    reply_parser = None
     reviewer_contexts = _reviewer_contexts(
         global_config, projects, _auth_reporter, dry_run=args.dry_run,
     )
     if reviewer_contexts:
         from integrations.llm.claude_code_adapter import ClaudeCodeAdapter
+        from orchestrator.reviewer.reply_llm import ReplyParser
         from orchestrator.reviewer.runner import JobRunner, RunnerConfig
+        from orchestrator.reviewer.small_jobs import SmallJobRunner, SmallRunnerConfig
 
         def _pipeline_prs(project_id: str, repo_id: str) -> set[int]:
             """The PRs the ticket pipeline has open for this repo."""
@@ -670,38 +720,58 @@ def main(argv: list[str] | None = None) -> int:
                 and ws.state.pr_number is not None
             }
 
-        reviewer_store = ReviewerStore(connect(reviewer_db_path(global_config.reviewer)))
-        reviewer_chat = _reviewer_chat(notifier, global_config, projects)
         reviewer = ReviewerService(
             reviewer_contexts, reviewer_store, switches, credential_health.failing,
             reviewer_chat.send if reviewer_chat is not None else None, _pipeline_prs,
             event_bus=event_bus,
         )
-        # The model session runs on the claude.ai login (the CLI), never the API key; it may read
+        # The model sessions run on the claude.ai login (the CLI), never the API key; they may read
         # neither the repo's .env nor the config directory.
+        secret_paths = [Path(__file__).parent / ".env", Path(args.config).absolute()]
+        jobs = global_config.reviewer.jobs
         review_jobs = JobRunner(
             reviewer_contexts, reviewer_store, switches,
             credential_health.failing, credential_health.report_auth_failure,
             reviewer_chat, ClaudeCodeAdapter(), trackers,
             RunnerConfig(
-                reviewer_db_path(global_config.reviewer).parent / "jobs",
-                [Path(__file__).parent / ".env", Path(args.config).absolute()],
-                global_config.reviewer.jobs,
+                reviewer_data / "jobs", secret_paths, jobs, ledgers_dir=reviewer_data / "ledgers",
             ),
             event_bus=event_bus,
         )
-        print(f"  Reviewer: {len(reviewer_contexts)} repo(s), jobs on")
+        # Edit and draft sessions read the review job's copy only; nothing is posted.
+        review_edits = SmallJobRunner(
+            reviewer_store, reviewer_chat, ClaudeCodeAdapter(),
+            SmallRunnerConfig(reviewer_data / "jobs", secret_paths, jobs), event_bus=event_bus,
+        )
+        # A reply the grammar does not know: the model's command runs only after a Yes.
+        reply_parser = ReplyParser(
+            ClaudeCodeAdapter(), jobs["command"], work_dir=reviewer_data / "command",
+        )
+        # Posting needs a reply read in the chat the reviewer's messages go to.
+        replies_read = reviewer_chat is not None and reviewer_chat.chat_id in allowed_chat_ids
+        from_telegram = ", posting from Telegram" if replies_read else ""
+        print(f"  Reviewer: {len(reviewer_contexts)} repo(s), jobs on{from_telegram}")
 
     # Initialize command handler for Telegram free-text control
     command_handler = None
+    reviewer_replies = None
     if notifier is not None:
         from datetime import datetime, timezone
 
         from integrations.telegram.command_handler import CommandHandler
         from integrations.telegram.intent_parser import IntentParser
         from integrations.telegram.telegram_adapter import TelegramAdapter
+        from orchestrator.reviewer.posting import Posting
+        from orchestrator.reviewer.replies import ReviewerReplies
 
         if isinstance(notifier, TelegramAdapter):
+            # The replies to reviewer messages: the only way anything is posted. With no repo to
+            # review they answer that reviewer mode is off.
+            reviewer_replies = ReviewerReplies(
+                reviewer_contexts, reviewer_store, reviewer, reviewer_chat,
+                Posting(reviewer_store, ledgers_dir=reviewer_data / "ledgers"),
+                review_edits, reply_parser, credential_failing=credential_health.failing,
+            )
             intent_parser = IntentParser(
                 llm_adapter=llm,
                 intent_parser_config=global_config.intent_parser,
@@ -715,17 +785,6 @@ def main(argv: list[str] | None = None) -> int:
                     break
             # Trello: card-specific shortUrl; no daemon-level base needed.
 
-            # Build the chat-id allowlist from global + per-project configs so
-            # the bot ignores commands from other chats. An empty set disables
-            # the bot (fail-safe); None would disable the check entirely.
-            allowed_chat_ids: set[str] = set()
-            if global_config.telegram.default_chat_id:
-                allowed_chat_ids.add(global_config.telegram.default_chat_id)
-            for proj in projects.values():
-                pcid = proj.config.telegram.default_chat_id
-                if pcid:
-                    allowed_chat_ids.add(pcid)
-
             command_handler = CommandHandler(
                 intent_parser=intent_parser,
                 notifier=notifier,
@@ -736,11 +795,14 @@ def main(argv: list[str] | None = None) -> int:
                 get_trackers=lambda: dict(orchestrator._trackers),
                 analyze_callback=orchestrator.analyze_ticket_ids,
                 recent_completions_fn=orchestrator.get_recent_completions,
-                allowed_chat_ids=allowed_chat_ids or None,
+                # An empty allowlist locks the bot: no chat is admitted (docs/telegram.md, Allowlist).
+                allowed_chat_ids=allowed_chat_ids,
                 event_bus=event_bus,
                 switches=switches,
                 get_projects=lambda: projects,
-                review_anchor=_review_anchor(reviewer_store),
+                reviewer=reviewer_replies,
+                # Never None: with an empty allowlist the reviewer reads no chat at all.
+                reviewer_chat_ids=allowed_chat_ids,
             )
             command_handler._wake_fn = lambda: orchestrator._wake_event.set()
             notifier.set_command_handler(command_handler)
@@ -765,7 +827,7 @@ def main(argv: list[str] | None = None) -> int:
         credential_task = _start_background(
             "Credential health", credential_health.run(credential_stop),
         )
-        reviewer_tasks = _start_reviewer(reviewer, review_jobs)
+        reviewer_tasks = _start_reviewer(reviewer, review_jobs, review_edits)
 
         # Init runtime settings table (model picker).
         import aiosqlite as _aiosqlite
@@ -893,6 +955,11 @@ def main(argv: list[str] | None = None) -> int:
 
         tg_active = isinstance(notifier, TelegramAdapter)
         if tg_active:
+            # Before any reply can arrive: the posts a restart cut short are marked interrupted and
+            # announced (the replies are built with the command handler, whenever Telegram is on).
+            # Not in a dry run, which writes nothing and sends no line.
+            if not args.dry_run:
+                await reviewer_replies.start()
             await notifier.start_polling()
             print("  Telegram polling started")
         try:
@@ -905,6 +972,8 @@ def main(argv: list[str] | None = None) -> int:
                 **reviewer_tasks,
             }, timeout=5.0)
             if tg_active:
+                # A post cut short here stays `posting`: the next start announces it.
+                await reviewer_replies.aclose()
                 try:
                     await notifier.stop_polling()
                 except Exception as e:

@@ -1,6 +1,6 @@
 """Tests for main's reviewer wiring: one reviewer context per loaded repo with reviews on, the
-reviewer chat, and the background tasks (credential health, reviewer, review jobs) started and
-stopped around the daemon."""
+reviewer chat, the replies to reviewer messages, and the background tasks (credential health,
+reviewer, review jobs, review edits) started and stopped around the daemon."""
 from __future__ import annotations
 
 import asyncio
@@ -12,22 +12,29 @@ import pytest
 import respx
 
 import main
+import orchestrator.reviewer.replies as replies_module
 import orchestrator.reviewer.runner as runner_module
 import orchestrator.reviewer.service as service_module
+import orchestrator.reviewer.small_jobs as small_jobs_module
 from config.schemas import (
     GitHubConfig,
     GlobalConfig,
+    JiraConfig,
     LoadedProject,
     ProjectConfig,
     RepoConfig,
     ReviewerConfig,
     ReviewerGlobalConfig,
+    ReviewerJobConfig,
     TelegramConfig,
+    TrackerConfig,
     VCSConfig,
 )
 from health.credentials import CredentialHealth
+from integrations.telegram.telegram_adapter import TelegramAdapter
 from main import (
-    _review_anchor,
+    _allowed_chat_ids,
+    _allowed_links,
     _reviewer_chat,
     _reviewer_contexts,
     _start_background,
@@ -36,6 +43,9 @@ from main import (
 )
 from orchestrator.orchestrator import Orchestrator
 from orchestrator.reviewer.forge_github import ForgeError
+from orchestrator.reviewer.posting import Posting
+from orchestrator.reviewer.reply_llm import ReplyParser
+from orchestrator.reviewer.small_jobs import SmallRunnerConfig
 from tests.unit.test_main_startup import _MINIMAL_GLOBAL_YAML
 
 
@@ -73,6 +83,35 @@ def test_reviewer_contexts(tmp_path):
     assert ctx.readiness.repo == "acme-org/acme-app"
     assert ctx.forge._adapter._repo_path == "/repos/acme-org/acme-app"
     assert "tok" not in repr(ctx)
+
+
+def _jira(url: str) -> ProjectConfig:
+    return ProjectConfig(tracker=TrackerConfig(provider="jira", jira=JiraConfig(url=url)))
+
+
+def test_allowed_links():
+    app = _repo("acme-app", reviews=True)
+    assert _allowed_links(app, _jira("https://acme.atlassian.net")) == (
+        "https://github.com/acme-org/", "https://acme.atlassian.net/")
+    assert _allowed_links(app, ProjectConfig(tracker=TrackerConfig(provider="trello"))) == (
+        "https://github.com/acme-org/", "https://trello.com/")
+    upper = _repo("acme-app", reviews=True, owner="Acme-Org")
+    assert _allowed_links(upper, _jira("https://Acme.Atlassian.net")) == (   # lowercased, as body_problems expects
+        "https://github.com/acme-org/", "https://acme.atlassian.net/")
+    assert _allowed_links(app, _jira("")) == ("https://github.com/acme-org/",)   # a Jira tracker with no URL
+
+
+def test_contexts_have_poster(tmp_path):
+    app = _repo("acme-app", reviews=True)
+    projects = {"acme": LoadedProject(config=_jira("https://acme.atlassian.net"), repos={"app": app})}
+    on_auth_failure, _ = _reporters()
+
+    [ctx] = _reviewer_contexts(_global(tmp_path), projects, on_auth_failure)
+
+    assert ctx.poster.repo == "acme-org/acme-app"
+    assert ctx.poster._cfg is app.reviewer.poster
+    assert "tok" not in repr(ctx.poster)
+    assert ctx.allowed_links == ("https://github.com/acme-org/", "https://acme.atlassian.net/")
 
 
 def test_reviewer_contexts_skip_a_repo_without_a_forge_token(tmp_path, caplog):
@@ -126,7 +165,7 @@ class _Notifier:
         self.sent: list[tuple[str, str]] = []
         self._fail = fail
 
-    async def send_message(self, chat_id, text):
+    async def send_message(self, chat_id, text, buttons=None, reply_to_message_id=None):
         if self._fail:
             raise self._fail
         self.sent.append((chat_id, text))
@@ -153,19 +192,31 @@ async def test_reviewer_chat_target():
         await broken.send("line")
 
 
-def test_review_anchor_reads_the_reviewer_store(tmp_path):
-    from orchestrator.reviewer.db import connect
-    from orchestrator.reviewer.store import ReviewerStore
-    store = ReviewerStore(connect(tmp_path / "rv" / "reviewer.db"))
-    store.add_anchor("-1001", 100, "job1", "2026-11-20T10:00:00+00:00")
-    anchor = _review_anchor(store)
-    assert anchor("-1001", 100) is True
-    assert anchor("-1001", 101) is False and anchor("-1002", 100) is False
-    assert _review_anchor(None) is None   # no reviewer: replies go where they always went
+IGNORED = "  Reviewer: replies are ignored — reviewer.telegram_chat_id is not an allowed chat\n"
+
+
+def test_reviewer_chat_not_added_to_allowlist(capsys, caplog):
+    project = {"acme": LoadedProject(config=ProjectConfig(telegram=TelegramConfig(default_chat_id="7")))}
+
+    def config(default: str, reviewer: str) -> GlobalConfig:
+        return GlobalConfig(telegram=TelegramConfig(default_chat_id=default),
+                            reviewer=ReviewerGlobalConfig(telegram_chat_id=reviewer))
+
+    with caplog.at_level(logging.WARNING, logger="main"):
+        assert _allowed_chat_ids(config("1", "42"), project) == {"1", "7"}   # not widened
+    assert capsys.readouterr().out == IGNORED
+    assert "reviewer.telegram_chat_id is not an allowed chat" in caplog.text
+
+    caplog.clear()
+    assert _allowed_chat_ids(config("42", "42"), project) == {"42", "7"}   # the default chat
+    assert _allowed_chat_ids(config("1", "7"), project) == {"1", "7"}   # a project's chat
+    assert _allowed_chat_ids(config("1", ""), project) == {"1", "7"}   # no reviewer chat: the operator chat
+    assert capsys.readouterr().out == ""
+    assert caplog.text == ""
 
 
 class _Part:
-    """The reviewer service or the job runner: run(stop) returns once stop is set."""
+    """The reviewer service, the job runner or the small runner: run(stop) returns once stop is set."""
 
     def __init__(self):
         self.stops: list[asyncio.Event] = []
@@ -175,13 +226,14 @@ class _Part:
         await stop.wait()
 
 
-async def test_runner_wired_next_to_reviewer():
-    reviewer, runner = _Part(), _Part()
-    background = _start_reviewer(reviewer, runner)   # repos to review: both are built
-    assert list(background) == ["Reviewer", "Review jobs"]
+async def test_reviewer_parts_started():
+    reviewer, runner, small = _Part(), _Part(), _Part()
+    background = _start_reviewer(reviewer, runner, small)   # repos to review: all three are built
+    assert list(background) == ["Reviewer", "Review jobs", "Review edits"]
     await asyncio.sleep(0)
     assert reviewer.stops == [background["Reviewer"][1]]
     assert runner.stops == [background["Review jobs"][1]]
+    assert small.stops == [background["Review edits"][1]]
 
     credential_stop = asyncio.Event()
     credential = _start_background("Credential health", credential_stop.wait())
@@ -189,7 +241,7 @@ async def test_runner_wired_next_to_reviewer():
     for task, _ in background.values():
         assert task.done() and not task.cancelled()   # stopped by its event, not cancelled
 
-    assert _start_reviewer(None, None) == {}   # no repo to review: neither is built
+    assert _start_reviewer(None, None, None) == {}   # no repo to review: none is built
 
 
 class _Built(_Part):
@@ -200,22 +252,64 @@ class _Built(_Part):
         self.args, self.kwargs = args, kwargs
 
 
-def _run_main(tmp_path, monkeypatch, contexts):
+def _run_main(tmp_path, monkeypatch, contexts, telegram_events=None, *, default_chat="42", reviewer_chat="",
+              dry_run=False):
     """main() from start to shutdown, over a config with no project and the dashboard off, with
     `contexts` as the reviewer's. Returns the config directory, what main built as the reviewer
-    service and the job runner, and the names it gave _stop_background."""
+    service, the job runner and the small runner (and the replies, and the command handler as
+    "handler", with Telegram), and the names it gave _stop_background.
+
+    With `telegram_events`, Telegram is on (a bot token, `default_chat` as telegram.default_chat_id and
+    `reviewer_chat` as reviewer.telegram_chat_id; no request is made): the list gets the replies' start
+    and aclose and the polling's start and stop, in order. The replies record the calls the command
+    handler makes on them (`calls`), every message an anchor."""
     cfg = tmp_path / "config-live"
     (cfg / "projects").mkdir(parents=True)
-    (cfg / "global.yaml").write_text(_MINIMAL_GLOBAL_YAML.format(
+    global_yaml = _MINIMAL_GLOBAL_YAML.format(
         ws=tmp_path / "ws", log=tmp_path / "log", db=tmp_path / "events.db", rv=tmp_path / "rv" / "reviewer.db",
-    ) + f"dashboard:\n  enabled: false\n  db_path: {tmp_path / 'events.db'}\n", encoding="utf-8")
+    ) + f"dashboard:\n  enabled: false\n  db_path: {tmp_path / 'events.db'}\n"
+    if telegram_events is not None:
+        global_yaml = global_yaml.replace("bot_token: ''", "bot_token: '123:not-a-real-bot-token'", 1)
+        global_yaml = global_yaml.replace("default_chat_id: ''", f"default_chat_id: '{default_chat}'", 1)
+        global_yaml = global_yaml.replace("reviewer:\n", f"reviewer:\n  telegram_chat_id: '{reviewer_chat}'\n", 1)
+    (cfg / "global.yaml").write_text(global_yaml, encoding="utf-8")
     built: dict[str, _Built] = {}
 
-    def recorder(name):
+    def recorder(name, cls=None):
         def build(*args, **kwargs):
-            built[name] = _Built(*args, **kwargs)
+            built[name] = (cls or _Built)(*args, **kwargs)
             return built[name]
         return build
+
+    class Replies(_Built):
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+            self.calls: list[tuple] = []
+
+        async def start(self):
+            telegram_events.append("replies.start")
+
+        async def aclose(self):
+            telegram_events.append("replies.aclose")
+
+        def is_anchor(self, chat_id, message_id):
+            self.calls.append(("is_anchor", chat_id, message_id))
+            return True
+
+        async def handle_reply(self, chat_id, message_id, text, sent_at=None):
+            self.calls.append(("handle_reply", chat_id, message_id, text))
+
+    def event(name):
+        async def record(self):
+            telegram_events.append(name)
+        return record
+
+    async def no_send(self, chat_id, text, buttons=None, reply_to_message_id=None):
+        telegram_events.append(f"send {text}")
+        return 1
+
+    def keep_handler(self, handler):
+        built["handler"] = handler
 
     stopped: list[str] = []
 
@@ -234,13 +328,19 @@ def _run_main(tmp_path, monkeypatch, contexts):
     monkeypatch.setattr(main, "_stop_background", stop_background)
     monkeypatch.setattr(service_module, "ReviewerService", recorder("service"))
     monkeypatch.setattr(runner_module, "JobRunner", recorder("runner"))
+    monkeypatch.setattr(small_jobs_module, "SmallJobRunner", recorder("small"))
+    monkeypatch.setattr(replies_module, "ReviewerReplies", recorder("replies", Replies))
+    monkeypatch.setattr(TelegramAdapter, "start_polling", event("start_polling"))
+    monkeypatch.setattr(TelegramAdapter, "stop_polling", event("stop_polling"))
+    monkeypatch.setattr(TelegramAdapter, "send_message", no_send)
+    monkeypatch.setattr(TelegramAdapter, "set_command_handler", keep_handler)
     monkeypatch.setattr(CredentialHealth, "run", idle)
     monkeypatch.setattr(Orchestrator, "run", no_tickets)   # the daemon shuts down at once
     root = logging.getLogger()
     before = list(root.handlers)
     monkeypatch.setattr(root, "handlers", list(before))   # main adds its log file's handler
     try:
-        assert main.main(["--config", str(cfg)]) == 0
+        assert main.main(["--config", str(cfg), *(["--dry-run"] if dry_run else [])]) == 0
     finally:
         for handler in root.handlers:
             if handler not in before:
@@ -252,8 +352,8 @@ def test_main_builds_the_runner_with_reviewer_contexts(tmp_path, monkeypatch, ca
     ctx = object()
     cfg, built, stopped = _run_main(tmp_path, monkeypatch, [ctx])
 
-    assert "  Reviewer: 1 repo(s), jobs on\n" in capsys.readouterr().out
-    service, runner = built["service"], built["runner"]
+    assert "  Reviewer: 1 repo(s), jobs on\n" in capsys.readouterr().out   # no Telegram: no posting from it
+    service, runner, small = built["service"], built["runner"], built["small"]
     contexts, store, switches, failing, report_auth_failure, chat, llm, trackers, config = runner.args
     assert contexts == [ctx]
     assert store is service.args[1] and switches is service.args[2]   # the service's own
@@ -264,14 +364,130 @@ def test_main_builds_the_runner_with_reviewer_contexts(tmp_path, monkeypatch, ca
     assert type(llm).__name__ == "ClaudeCodeAdapter" and trackers == {}
     assert config.jobs_dir == tmp_path / "rv" / "jobs"
     assert config.secret_paths == [Path(main.__file__).parent / ".env", cfg.absolute()]
+    assert config.ledgers_dir == tmp_path / "rv" / "ledgers"   # the retention sweep runs
     assert runner.kwargs["event_bus"] is service.kwargs["event_bus"] is not None
-    # The "Review jobs" task ran next to the reviewer's and was stopped with it, by its event.
-    assert stopped == ["Credential health", "Reviewer", "Review jobs"]
-    assert [s.is_set() for s in (*service.stops, *runner.stops)] == [True, True]
+    # The edit and draft jobs: the same store and chat, the review jobs' directory and secret paths.
+    small_store, small_chat, small_llm, small_config = small.args
+    assert small_store is store and small_chat is chat
+    assert type(small_llm).__name__ == "ClaudeCodeAdapter"
+    assert small_config == SmallRunnerConfig(config.jobs_dir, config.secret_paths, config.jobs)
+    assert small.kwargs["event_bus"] is runner.kwargs["event_bus"]
+    assert "replies" not in built   # no Telegram: nothing to reply to
+    # The "Review jobs" and "Review edits" tasks ran next to the reviewer's, stopped with it by their events.
+    assert stopped == ["Credential health", "Reviewer", "Review jobs", "Review edits"]
+    assert [s.is_set() for s in (*service.stops, *runner.stops, *small.stops)] == [True, True, True]
+
+
+def test_main_wires_replies_with_telegram(tmp_path, monkeypatch, capsys):
+    ctx = object()
+    events: list[str] = []
+    _, built, stopped = _run_main(tmp_path, monkeypatch, [ctx], telegram_events=events)
+
+    out = capsys.readouterr().out
+    assert "  Reviewer: 1 repo(s), jobs on, posting from Telegram\n" in out
+    assert "replies are ignored" not in out   # no reviewer chat: the operator chat, which is allowed
+    service, runner, small, replies = built["service"], built["runner"], built["small"], built["replies"]
+    contexts, store, reviewer, chat, posting, small_runner, parser = replies.args
+    assert contexts == [ctx] and reviewer is service and small_runner is small
+    assert store is service.args[1] is runner.args[1] is small.args[0]
+    # One reviewer chat, in the operator chat, anchoring every message in the store.
+    assert chat is runner.args[5] is small.args[1] and service.args[4] == chat.send
+    assert (chat.chat_id, chat.store) == ("42", store)
+    assert isinstance(posting, Posting) and posting._store is store
+    assert posting._ledgers_dir == runner.args[8].ledgers_dir == tmp_path / "rv" / "ledgers"
+    assert isinstance(parser, ReplyParser) and type(parser._llm).__name__ == "ClaudeCodeAdapter"
+    assert parser._job_cfg == ReviewerJobConfig("sonnet", "", 60)   # reviewer.jobs.command
+    assert parser._work_dir == tmp_path / "rv" / "command"
+    assert replies.kwargs == {"credential_failing": runner.args[3]}
+    # A reply to a reviewer message goes to the replies, never to the ticket pipeline's intent parser; the
+    # reviewer reads the allowlist's chats only.
+    assert built["handler"]._reviewer is replies
+    assert built["handler"]._allowed_chat_ids == built["handler"]._reviewer_chat_ids == {"42"}
+    # Interrupted posts are announced before any reply arrives; the tasks are cancelled while Telegram runs.
+    assert events == ["replies.start", "start_polling", "replies.aclose", "stop_polling"]
+    assert stopped == ["Credential health", "Reviewer", "Review jobs", "Review edits"]
+
+
+def test_main_replies_off_without_reviewer_contexts(tmp_path, monkeypatch):
+    events: list[str] = []
+    _, built, stopped = _run_main(tmp_path, monkeypatch, [], telegram_events=events)
+
+    replies = built["replies"]
+    contexts, store, reviewer, chat, posting, small, parser = replies.args
+    assert contexts == [] and (reviewer, small, parser) == (None, None, None)   # it answers "off"
+    assert chat.store is store and isinstance(posting, Posting)
+    assert built["handler"]._reviewer is replies
+    assert events == ["replies.start", "start_polling", "replies.aclose", "stop_polling"]
+    assert stopped == ["Credential health"]
+
+
+REPLIES_RUN = [("is_anchor", "42", 100), ("handle_reply", "42", 100, "post 1")]
+
+
+@pytest.mark.parametrize(("default_chat", "posting", "handled", "calls"), [
+    # No default or project chat: the allowlist is empty and the bot is locked down, so the reply is turned away
+    # before anything reads it.
+    ("", False, False, []),
+    ("1", False, False, []),   # another chat is allowed, not this one: the allowlist turns the reply away
+    ("42", True, True, REPLIES_RUN),   # the reviewer chat is the default chat: the reply runs
+])
+def test_reviewer_path_needs_an_allowed_chat(tmp_path, monkeypatch, capsys, default_chat, posting, handled, calls):
+    events: list[str] = []
+    _, built, _ = _run_main(tmp_path, monkeypatch, [object()], telegram_events=events, default_chat=default_chat,
+                            reviewer_chat="42")
+
+    out = capsys.readouterr().out
+    assert (IGNORED in out) is not posting
+    # ", posting from Telegram" only when the reviewer reads replies in its own chat
+    line = "  Reviewer: 1 repo(s), jobs on, posting from Telegram\n" if posting else "  Reviewer: 1 repo(s), jobs on\n"
+    assert line in out
+    replies, handler = built["replies"], built["handler"]
+    assert asyncio.run(handler.handle_reply(100, "post 1", "42")) is handled
+    assert replies.calls == calls
+
+
+def test_empty_allowlist_locks_the_bot(tmp_path, monkeypatch):
+    """No default or project chat: the bot accepts no message from any chat (docs/telegram.md, Allowlist)."""
+    events: list[str] = []
+    _, built, _ = _run_main(tmp_path, monkeypatch, [object()], telegram_events=events, default_chat="",
+                            reviewer_chat="42")
+    handler = built["handler"]
+    assert handler._allowed_chat_ids == set()
+
+    parsed: list[str] = []
+
+    async def parse(text, *args, **kwargs):
+        parsed.append(text)
+
+    handler._intent_parser.parse = parse
+    asyncio.run(handler.handle_message("approve", "999"))
+    assert parsed == []
+
+
+def test_dry_run_starts_no_replies(tmp_path, monkeypatch):
+    """A dry run writes nothing and sends no line at start: no post is recovered or announced."""
+    events: list[str] = []
+    _, built, _ = _run_main(tmp_path, monkeypatch, [], telegram_events=events, dry_run=True)
+
+    assert built["handler"]._reviewer is built["replies"]   # a reply is still kept from the intent parser
+    assert events == ["start_polling", "replies.aclose", "stop_polling"]
+
+
+def test_main_gives_the_reviewer_chat_the_store(tmp_path, monkeypatch):
+    """Every message the reviewer sends is a reply anchor: the daemon's chat writes it to the reviewer store."""
+    real = main._reviewer_chat
+    with_telegram = GlobalConfig(reviewer=ReviewerGlobalConfig(telegram_chat_id="42"))
+    monkeypatch.setattr(main, "_reviewer_chat", lambda notifier, global_config, projects, **kwargs:
+                        real(_Notifier(), with_telegram, projects, **kwargs))   # no Telegram configured
+    _, built, _ = _run_main(tmp_path, monkeypatch, [object()])
+    service, runner = built["service"], built["runner"]
+    chat = runner.args[5]
+    assert chat.store is service.args[1] is runner.args[1]
+    assert service.args[4] == chat.send
 
 
 def test_main_builds_no_runner_without_reviewer_contexts(tmp_path, monkeypatch, capsys):
-    _, built, stopped = _run_main(tmp_path, monkeypatch, [])
+    _, built, stopped = _run_main(tmp_path, monkeypatch, [])   # no Telegram either: no replies
 
     assert built == {}
     assert stopped == ["Credential health"]

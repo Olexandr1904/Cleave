@@ -7,6 +7,7 @@ import time
 
 import pytest
 
+from orchestrator.reviewer.markdown import fenced, split_lines
 from orchestrator.reviewer.report import (
     Report,
     ReportError,
@@ -284,3 +285,63 @@ def test_fenced_lines_outside_the_findings_are_text():
     r = parse_report(text, HEAD)
     assert [d.number for d in r.dropped] == [7, 8, 9]
     assert r.summary.endswith("~~~\n### [ ] 11. quoted\n~~~")
+
+
+# --- Plan 5: a drafted number ---
+
+DRAFT_7 = "### [ ] 7. Null check in the adapter\n**File:** `app/src/main/Adapter.kt:12`\nIs this reachable?\n\n"
+DRAFTED = REPORT.replace("## 🟣 Pre-existing", DRAFT_7 + "## 🟣 Pre-existing")
+
+def test_drafted_number_is_a_question_item_and_a_dropped_bullet():
+    r = parse_report(DRAFTED, HEAD, frozenset({7}))
+    assert [(i.number, i.kind) for i in r.items] == [*ITEMS[:5], (7, "question"), ITEMS[5]]
+    assert [d.number for d in r.dropped] == [7, 8, 9]
+
+@pytest.mark.parametrize("text, drafted", [
+    (DRAFTED, frozenset()),
+    (DRAFTED, frozenset({8})),
+    (DRAFTED.replace("- 8. Same as 1", "- 7. Same as 1"), frozenset({7})),
+    (DRAFTED.replace("## 🟣 Pre-existing", DRAFT_7 + "## 🟣 Pre-existing"), frozenset({7})),
+    (REPORT.replace("## 🟡 Minor\n", "## 🟡 Minor\n\n" + DRAFT_7), frozenset({7})),
+], ids=["not-drafted", "another-drafted", "dropped-twice", "two-items", "not-a-question-item"])
+def test_drafted_number_repeats_only_as_one_question_and_one_dropped(text, drafted):
+    with pytest.raises(ReportError, match="^number 7 is used twice$"):
+        parse_report(text, HEAD, drafted)
+
+
+# --- Plan 5, fix round 1: a backtick fence's info string holds no backtick (CommonMark 4.5) ---
+
+NPE_BODY = "The list is read before the null check.\n"
+
+def test_a_backtick_info_string_with_a_backtick_opens_no_fence():
+    assert fenced(["```x`", "@octo", "~~~ x`", "a", "~~~"]) == [False, False, True, True, True]
+    r = parse_report(REPORT.replace(NPE_BODY, NPE_BODY + "```x`\n"), HEAD)
+    assert [(i.number, i.kind) for i in r.items] == ITEMS
+    assert r.items[0].body.endswith("```x`")
+
+def test_items_behind_a_backtick_info_line_fail_closed():
+    # It used to open a fence that a later ``` closed, hiding items 2 and 3 (a ticked [x] 2 among them).
+    text = (REPORT.replace(NPE_BODY, NPE_BODY + "```x`\n").replace("### [ ] 2. Retry", "### [x] 2. Retry")
+                  .replace("CartMapper.kt:17`\n", "CartMapper.kt:17`\n```\n"))
+    with pytest.raises(ReportError, match="^no ## Summary$"):
+        parse_report(text, HEAD)
+
+
+# --- Plan 5, fix round 2: fences and lines as cmark reads them ---
+
+NBSP, LS, PS = chr(0xA0), chr(0x2028), chr(0x2029)  # no-break space, line and paragraph separators
+
+def test_a_closer_takes_only_spaces_and_tabs_after_it():
+    assert fenced(["```", "x", "```" + NBSP, "y", "``` \t", "z"]) == [True, True, True, True, True, False]
+
+def test_lines_split_as_commonmark_splits_them():
+    text =f"a\r\nb\rc\nd{LS}e\x0cf\x85g\x0bh{PS}i\n\n"
+    assert split_lines(text) == ["a", "b", "c", f"d{LS}e\x0cf\x85g\x0bh{PS}i", ""]
+    assert split_lines(text, keepends=True) == ["a\r\n", "b\r", "c\n", f"d{LS}e\x0cf\x85g\x0bh{PS}i\n", "\n"]
+    assert split_lines("") == [] and split_lines("x") == ["x"]
+    r = parse_report(REPORT, HEAD)
+    assert parse_report(REPORT.replace("\n", "\r\n"), HEAD) == r == parse_report(REPORT.replace("\n", "\r"), HEAD)
+    # A U+2028 or a form feed breaks no line: what follows it on the line is the body's text, not a section.
+    odd = parse_report(REPORT.replace(NPE_BODY, f"Read{LS}## Summary\x0cfirst.\n"), HEAD)
+    assert odd.items[0].body.endswith(f"\nRead{LS}## Summary\x0cfirst.")
+    assert odd.summary == r.summary and [i.number for i in odd.items] == [1, 2, 3, 4, 5, 6]

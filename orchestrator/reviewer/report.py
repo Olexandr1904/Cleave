@@ -9,7 +9,7 @@ import json
 import re
 from dataclasses import dataclass
 
-from orchestrator.reviewer.markdown import fenced
+from orchestrator.reviewer.markdown import fenced, split_lines
 
 KIND_EMOJI = {"red": "🔴", "orange": "🟠", "yellow": "🟡", "question": "❓", "preexisting": "🟣"}
 CONFIRMED = ("red", "orange", "yellow")
@@ -77,10 +77,12 @@ class Report:
         })
 
 
-def parse_report(text: str, head_sha: str) -> Report:
+def parse_report(text: str, head_sha: str, drafted: frozenset[int] = frozenset()) -> Report:
+    """A number in `drafted` is a dropped one the operator had drafted: it may appear once as a ❓ item and once
+    as a dropped bullet. Every other repeat of a number raises."""
     if len(text) > _MAX_REPORT:
         raise ReportError("report too large")
-    sections = _sections(text.splitlines())
+    sections = _sections(split_lines(text))
     header = sections[0][1]
     title = next((line[2:].strip() for line in header if line.startswith("# ")), "")
     sha = _field(header, "**Head SHA:**").replace("`", "").strip()
@@ -92,13 +94,15 @@ def parse_report(text: str, head_sha: str) -> Report:
     if not event or event[1] not in _EVENTS:
         raise ReportError("no suggested event")
 
-    numbers: set[int] = set()
+    claimed: dict[int, str] = {}  # each number's first claim: its item's kind or "dropped"; "both" after a draft's
 
-    def claim(digits: str) -> int:
+    def claim(digits: str, by: str) -> int:
         n = _number(digits)
-        if n in numbers:
-            raise ReportError(f"number {n} is used twice")
-        numbers.add(n)
+        if n in claimed:
+            if n not in drafted or {claimed[n], by} != {"question", "dropped"}:
+                raise ReportError(f"number {n} is used twice")
+            by = "both"
+        claimed[n] = by
         return n
 
     items: list[ReportItem] = []
@@ -117,7 +121,7 @@ def parse_report(text: str, head_sha: str) -> Report:
         if name.startswith("Dropped"):
             for line in outside_fences:
                 if m := _DROPPED.match(line):
-                    dropped.append(DroppedItem(claim(m[1]), m[2], _strip_lens(m[3])))
+                    dropped.append(DroppedItem(claim(m[1], "dropped"), m[2], _strip_lens(m[3])))
                 elif _DROPPED_START.match(line):
                     raise ReportError(f"dropped line not understood: {line[:60]}")
         elif name.startswith("✅"):
@@ -204,7 +208,7 @@ def _items(kind: str, lines: list[str], claim) -> list[ReportItem]:
         if m or line.startswith("### ") or line.strip() == "---":
             if current:
                 items.append(_item(kind, *current))
-            current = (claim(m[2]), m[3].strip(), []) if m else None
+            current = (claim(m[2], kind), m[3].strip(), []) if m else None
         elif current:
             current[2].append(line)
     if current:

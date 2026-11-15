@@ -16,8 +16,9 @@ from orchestrator.reviewer.clone import CloneError
 from orchestrator.reviewer.forge_github import ForgeError
 from orchestrator.reviewer.jobs import REVIEW_NOW_SUFFIX, Notice, plan_jobs
 from orchestrator.reviewer.lines import doc_missing_line, poll_failed_line, readiness_failed_line
-from orchestrator.reviewer.models import BoardRow, BoardSnapshot, Job, JobRun, RepoState
+from orchestrator.reviewer.models import BoardRow, BoardSnapshot, Job, JobRun, Post, RepoState
 from orchestrator.reviewer.readiness import ReadinessError
+from orchestrator.reviewer.report import Report
 from orchestrator.reviewer.store import ReviewerStore
 from orchestrator.switches import Switches, scope_of
 
@@ -26,6 +27,9 @@ logger = logging.getLogger(__name__)
 _MAX_WAIT_SECONDS = 60
 _MIN_INTERVAL_SECONDS = 60
 _CLONE_BUSY_RETRY_SECONDS = 5  # a repo whose clone a job prepares or cleans up is polled again this soon
+# How long a poll waits for the clone's lock or session lock: a job or a post may hold either for many minutes,
+# and the repos are polled in turn.
+_CLONE_WAIT_SECONDS = 5
 _MAX_REPORT_TEXT = 200_000  # characters of a report the detail view returns
 
 
@@ -43,15 +47,26 @@ def _interval(cfg: ReviewerConfig) -> int:
     return max(cfg.poll_interval_seconds, _MIN_INTERVAL_SECONDS)
 
 
+async def _acquire(lock: asyncio.Lock) -> bool:
+    """Whether lock was had within _CLONE_WAIT_SECONDS (then the caller releases it). locked() reading False
+    does not mean free: a queued waiter takes it first."""
+    try:
+        await asyncio.wait_for(lock.acquire(), _CLONE_WAIT_SECONDS)
+    except asyncio.TimeoutError:
+        return False
+    return True
+
+
 def _report_file(job: Job, run: JobRun | None) -> Path | None:
-    """The report in a job's copy, whether it parsed or not: the one named by the job's head, else
-    the first other regular `report_*.md` (a report written under another name stays visible)."""
+    """The report in a job's copy, whether it parsed or not: Cleave's posting base once it made one (the edits
+    and drafts applied, no ticks), else the one named by the job's head, else the first other regular
+    `report_*.md` (a report written under another name stays visible)."""
     if run is None or not run.job_dir:
         return None
     job_dir = Path(run.job_dir)
-    named = job_dir / f"report_{job.head_sha[:9]}.md"
-    if named.is_file():
-        return named
+    for path in (job_dir / "posting" / "report.base.md", job_dir / f"report_{job.head_sha[:9]}.md"):
+        if path.is_file():
+            return path
     return next((p for p in sorted(job_dir.glob("report_*.md")) if p.is_file()), None)
 
 
@@ -99,6 +114,27 @@ def _findings(job: Job, run: JobRun) -> dict | None:
     return {**counts, "dropped": len(run.report["dropped"])}
 
 
+# A post in one of these states did not land in full: the numbers it named that did not land are "ticked".
+_UNLANDED_STATES = ("posting", "failed", "partial", "unverified", "interrupted")
+
+
+def _ticked(posts: list[Post], job_id: str) -> set[int]:
+    """The numbers named in the job's posts that did not land in full."""
+    return {n for p in posts if p.job_id == job_id and p.state in _UNLANDED_STATES for n in p.numbers}
+
+
+def _number_state(posted: bool, ticked: bool) -> str:
+    return "posted" if posted else "ticked" if ticked else "open"
+
+
+def _post_detail(post: Post) -> dict:
+    return {
+        "id": post.id, "kind": post.kind, "state": post.state, "job_id": post.job_id,
+        "head": post.head_sha[:9], "created_at": post.created_at, "numbers": post.numbers,
+        "event": post.event, "urls": post.urls, "comments": post.comments, "error": post.error,
+    }
+
+
 def _job_info(job: Job, run: JobRun | None) -> dict:
     """What the board shows of a PR's latest job besides its id, kind, state and head."""
     run = run or JobRun(job.id)
@@ -116,6 +152,8 @@ class RepoContext:
     clone: Any  # refresh() -> sha, has_file(rel), path, lock, session_lock, in_session (see ReviewClone)
     readiness: Any  # board(clone_dir) -> BoardSnapshot
     forge: Any  # open_prs(), details(number, updated_at), reviewed_by(number, login, updated_at)
+    poster: Any = None  # review(clone_dir, values, confirm=), replies(...) (see CommandPoster)
+    allowed_links: tuple[str, ...] = ()  # lowercase link prefixes a posted body may use
 
     @property
     def scope(self) -> str:
@@ -140,7 +178,7 @@ class ReviewerService:
         store: ReviewerStore,
         switches: Switches,
         credential_failing: Callable[[str], bool],
-        send_line: Callable[[str], Awaitable[Any]] | None,
+        send_line: Callable[..., Awaitable[Any]] | None,  # (line, scope=, number=), as ReviewerChat.send
         pipeline_prs: Callable[[str, str], set[int]],
         *,
         event_bus=None,
@@ -195,7 +233,8 @@ class ReviewerService:
 
     async def poll(self, ctx: RepoContext) -> None:
         """One poll of one repo. Never raises (cancellation aside): failures become its status. A repo whose
-        clone a job prepares or cleans up is left alone, nothing recorded: it stays due, tried again shortly."""
+        clone a job prepares or cleans up, or a post holds, is left alone, nothing recorded: it stays due, tried
+        again shortly."""
         now = self._now()
         try:
             outcome = await self._record(ctx, now)
@@ -204,7 +243,7 @@ class ReviewerService:
             self._next_due[ctx.scope] = now + timedelta(seconds=self._max_backoff)
             return
         if outcome is None:
-            logger.debug("Reviewer poll of %s: a job prepares or cleans up the clone, polled shortly", ctx.scope)
+            logger.debug("Reviewer poll of %s: the clone is busy (a job or a post), polled shortly", ctx.scope)
             self._next_due[ctx.scope] = now + timedelta(seconds=_CLONE_BUSY_RETRY_SECONDS)
             return
         self._next_due[ctx.scope] = outcome.next_poll_at
@@ -242,11 +281,17 @@ class ReviewerService:
 
         clone = ctx.clone
         if not clone.lock.locked():
-            async with clone.lock:  # no job runs: refresh, then read the clone
+            if not await _acquire(clone.lock):  # a job or a post queued first took it
+                return None
+            try:  # no job runs: refresh, then read the clone
                 await clone.refresh()
                 doc_ok, notices, snapshot = await self._read_clone(ctx)
+            finally:
+                clone.lock.release()
         else:
-            async with clone.session_lock:
+            if not await _acquire(clone.session_lock):  # a post runs in the job's session phase
+                return None
+            try:
                 if not clone.in_session:  # a job prepares or cleans up the clone
                     return None
                 if changed := clone.changed_git_files():  # the job's restore and failure deal with it
@@ -255,6 +300,8 @@ class ReviewerService:
                     return _Outcome(next_at)
                 # A job's session: the clone stays at the base the job prepared from, read as it is.
                 doc_ok, notices, snapshot = await self._read_clone(ctx)
+            finally:
+                clone.session_lock.release()
         doc, base = cfg.process.doc, cfg.base_branch
         open_prs = await ctx.forge.open_prs()
         details, reviewed = {}, {}
@@ -271,9 +318,11 @@ class ReviewerService:
         for job in jobs:
             jobs_by_pr.setdefault(job.number, []).append(job)
         running = doc_ok and self._switches.is_running("reviews", ctx.project_id, ctx.repo_id)
+        # Read with no await before the state writes below: a post that starts later finds the states they wrote.
+        posting = frozenset(post.job_id for post in self._store.posts_in_state("posting"))
         plan = plan_jobs(scope, update, jobs_by_pr,
                          lambda number, head: self._store.is_skipped(scope, number, head),
-                         cfg, running, now, not state.first_poll_done)
+                         cfg, running, now, not state.first_poll_done, posting=posting)
 
         # Store changes first, sends after: a failed or slow send never loses a store change.
         by_id = {job.id: job for job in jobs}
@@ -343,20 +392,22 @@ class ReviewerService:
         for event_type, message, data in outcome.events:
             self._emit(ctx, event_type, message, data)
         for line in outcome.lines:
-            await self._send(line)
+            await self._send(line, scope=ctx.scope)
         for notice in outcome.notices:
             if self._store.notice_sent(ctx.scope, notice.number, notice.kind, notice.key):
                 continue
-            if await self._send(notice.text):  # unsent: tried again on the next poll
+            # unsent: tried again on the next poll
+            if await self._send(notice.text, scope=ctx.scope, number=notice.number):
                 self._store.mark_notice(ctx.scope, notice.number, notice.kind, notice.key, stamp)
 
-    async def _send(self, line: str) -> bool:
-        """Whether the line was delivered. False with no target to send to (nothing logged: that
-        is every poll), or when the send failed (logged with the exception class only)."""
+    async def _send(self, line: str, scope: str = "", number: int = 0) -> bool:
+        """Whether the line was delivered, a reply anchor to the repo (scope) or to its PR (number, when
+        not 0). False with no target to send to (nothing logged: that is every poll), or when the send
+        failed (logged with the exception class only)."""
         if self._send_line is None:
             return False
         try:
-            await self._send_line(line)
+            await self._send_line(line, scope=scope, number=number)
         except Exception as e:
             logger.warning("Reviewer line not sent: %s", type(e).__name__)
             return False
@@ -375,7 +426,7 @@ class ReviewerService:
         if any(j.state in ("queued", "running", "deferred") for j in at_head):
             raise ValueError("already queued")
         for job in at_head:
-            if job.state in ("done", "stale"):
+            if job.state in ("done", "stale", "posted"):
                 self._store.set_job_state(job.id, "superseded", "new review", stamp)
         # Its key marks it, so the runner settles it without a review turn; at its head it is a review all
         # the same.
@@ -399,15 +450,16 @@ class ReviewerService:
         return row
 
     def overview(self) -> list[dict]:
-        """Per repo: its state, its board rows, the latest job of each PR with what the board shows of it
-        (job_info, for the PRs on the board only), the PRs whose current head is skipped and the PRs too large
-        to review automatically."""
+        """Per repo: its state, its board rows, the latest review or re-check of each PR (an edit or a draft is
+        never the row's job) with what the board shows of it (job_info, for the PRs on the board only), the PRs
+        whose current head is skipped and the PRs too large to review automatically."""
         repos = []
         for ctx in self._repos:
             state = self._store.repo_state(ctx.scope)
             latest: dict[int, Job] = {}
             for job in self._store.jobs(ctx.scope):  # newest first
-                latest.setdefault(job.number, job)
+                if job.kind in ("review", "recheck"):
+                    latest.setdefault(job.number, job)
             rows = list(self._store.board(ctx.scope).values())
             repos.append({
                 "scope": ctx.scope, "status": state.status, "reason": state.reason,
@@ -423,7 +475,8 @@ class ReviewerService:
 
     def detail(self, scope: str, number: int) -> dict:
         """One PR: its board row, its jobs (newest first), the newest review report and the replies
-        of the newest re-check that drafted a plan. Read-only."""
+        of the newest re-check that drafted a plan, each number's state (posted, ticked or open) and the
+        PR's posts (newest first). Read-only."""
         row = self._store.board(scope).get(number)
         jobs = self._store.jobs(scope, number)
         if row is None and not jobs:
@@ -434,7 +487,7 @@ class ReviewerService:
         for job in jobs:
             path = _report_file(job, runs[job.id]) if job.kind == "review" else None
             if path is not None:
-                report_job, report_run = job.id, runs[job.id]
+                report_job, report_run = job, runs[job.id]
                 try:
                     with path.open(encoding="utf-8", errors="replace") as f:
                         report_text = f.read(_MAX_REPORT_TEXT)
@@ -444,13 +497,29 @@ class ReviewerService:
         recheck = next(
             (j for j in jobs if j.kind == "recheck" and _has_plan(j, runs[j.id])), None
         )
+        posts = self._store.posts(scope, number)
+        number_states, reply_states = {}, {}
+        if report_job is not None and report_run.report:
+            landed = self._store.posted_numbers(report_job, Report.from_dict(report_run.report), posts)
+            ticked = _ticked(posts, report_job.id)
+            number_states = {
+                str(item["number"]): _number_state(item["number"] in landed, item["number"] in ticked)
+                for item in report_run.report["items"]
+            }
+        if recheck is not None:
+            replied, ticked = self._store.posted_numbers(recheck, None, posts), _ticked(posts, recheck.id)
+            reply_states = {str(entry["n"]): _number_state(entry["n"] in replied, entry["n"] in ticked)
+                            for entry in runs[recheck.id].replies}
         return {
             "row": None if row is None else asdict(row),
             "jobs": [_job_detail(job, runs[job.id]) for job in jobs],
-            "report_job": report_job,
+            "report_job": report_job.id if report_job else None,
             "report": report_run.report or None,  # {} when the report did not parse
             "replies_job": recheck.id if recheck else None,
             "replies": runs[recheck.id].replies if recheck else [],
             "tg_lines": report_run.tg_lines,
             "report_text": report_text,
+            "number_states": number_states,
+            "reply_states": reply_states,
+            "posts": [_post_detail(p) for p in posts],
         }

@@ -28,6 +28,13 @@ MIGRATIONS: list[str] = [
     "job_id TEXT NOT NULL, created_at TEXT NOT NULL, PRIMARY KEY (chat_id, message_id)); "
     "CREATE TABLE prepare_hashes (scope TEXT PRIMARY KEY, hash TEXT NOT NULL, "
     "updated_at TEXT NOT NULL)",
+    "ALTER TABLE anchors ADD COLUMN scope TEXT NOT NULL DEFAULT ''; "
+    "ALTER TABLE anchors ADD COLUMN number INTEGER NOT NULL DEFAULT 0; "
+    "CREATE TABLE posts (id TEXT PRIMARY KEY, scope TEXT NOT NULL, number INTEGER NOT NULL, "
+    "head_sha TEXT NOT NULL, state TEXT NOT NULL, data TEXT NOT NULL); "
+    "CREATE INDEX posts_pr ON posts (scope, number); "
+    "CREATE TABLE confirmations (id TEXT PRIMARY KEY, job_id TEXT NOT NULL, chat_id TEXT NOT NULL, "
+    "state TEXT NOT NULL, created_at TEXT NOT NULL, data TEXT NOT NULL)",
 ]
 
 

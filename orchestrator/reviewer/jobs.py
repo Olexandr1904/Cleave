@@ -11,6 +11,9 @@ from orchestrator.reviewer.lines import large_line, turn_line
 from orchestrator.reviewer.models import Job
 
 _GONE_STATES = {"queued": "cancelled", "deferred": "cancelled", "done": "stale"}
+# A new re-check supersedes the PR's older re-checks in these states: a reply plan read from older threads
+# must not stay postable.
+_RECHECK_SUPERSEDED = ("queued", "deferred", "done", "posted")
 _MAX_FAILURES = 2  # spec, Failure handling: two failures at one head stop auto-retries
 # The key of a review the operator asked for ("Review now") ends with it; an automatic review's key is its head.
 REVIEW_NOW_SUFFIX = ":now"
@@ -57,11 +60,14 @@ def plan_jobs(
     reviews_running: bool,
     now: datetime,
     first_poll: bool,
+    posting: frozenset[str] = frozenset(),
 ) -> Plan:
     """Rules in order: review (new head, turn back), re-check (turn back, new threads), gone turns,
     turn lines.
 
-    A job matched by more than one rule gets one state change: the first rule in that order wins.
+    A job matched by more than one rule gets one state change: the first rule in that order wins. A job in
+    `posting` (the ids of the jobs with a Post `posting`) is left to its post by the gone-turn rule: the post
+    itself takes the turn away.
     """
     plan = Plan([], [], [], [])
     states: dict[str, tuple[str, str]] = {}  # job id -> (state, reason)
@@ -91,7 +97,7 @@ def plan_jobs(
                     plan.queue.append((number, "review", head, head))
                     pending = True
                     for j in reviews:
-                        if j.state == "done" and j.head_sha != head:
+                        if j.state in ("done", "posted") and j.head_sha != head:
                             states.setdefault(j.id, ("superseded", "new head"))
             review_settled = not pending and (skipped or large or blocked)
         if "recheck" in row.my_actions:
@@ -100,16 +106,20 @@ def plan_jobs(
             key = f"{head}:{','.join(sorted(threads))}"
             same_key = [j for j in rechecks if j.key == key]
             _turn_back(same_key, states)
-            if review_settled and reviews_running and not _blocked(same_key):
+            # A posted re-check blocks its key until the board saw my own thread turns change after the post:
+            # another reviewer's turn, a role or the draft flag does not unblock it.
+            changed = datetime.fromisoformat(row.thread_turns_change or row.last_change)
+            blocking = [j for j in same_key if j.state != "posted" or changed <= datetime.fromisoformat(j.updated_at)]
+            if review_settled and reviews_running and not _blocked(blocking):
                 for j in rechecks:
-                    if j.state in ("queued", "deferred") and j.key != key:
+                    if j.state in _RECHECK_SUPERSEDED:
                         states.setdefault(j.id, ("superseded", "new threads"))
                 plan.queue.append((number, "recheck", head, key))
     for change in update.gone_turns:
         if change.action not in JOB_ACTIONS:
             continue
         for j in jobs_by_pr.get(change.number, []):
-            if j.kind != change.action or j.state not in _GONE_STATES:
+            if j.kind != change.action or j.state not in _GONE_STATES or j.id in posting:
                 continue
             state = _GONE_STATES[j.state]
             if state == "cancelled" and j.key.endswith(REVIEW_NOW_SUFFIX):

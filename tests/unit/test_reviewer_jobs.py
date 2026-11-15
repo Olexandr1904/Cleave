@@ -1,5 +1,6 @@
 # tests/unit/test_reviewer_jobs.py
 from __future__ import annotations
+import dataclasses
 from datetime import datetime, timezone
 from config.schemas import ReviewerConfig
 from orchestrator.reviewer.board import BoardUpdate, TurnChange
@@ -20,9 +21,9 @@ def row(n=1, actions=(("review", ()),), head=A, seen=OLD, files=14, pipeline=Fal
 def job(kind="review", head=A, state="queued", key=None, jid="j1"):
     return Job(jid, "acme/app", 1, kind, head, key or head, state, "", OLD, OLD)
 
-def plan(rows, jobs=None, new=(), gone=(), running=True, first=False, skipped=lambda n, h: False):
+def plan(rows, jobs=None, new=(), gone=(), running=True, first=False, skipped=lambda n, h: False, posting=frozenset()):
     return plan_jobs("acme/app", BoardUpdate({r.number: r for r in rows}, list(new), list(gone)), jobs or {},
-                     skipped, CFG, running, NOW, first)
+                     skipped, CFG, running, NOW, first, posting=posting)
 
 def test_review_queued_after_quiet_window():
     assert plan([row()]).queue == [(1, "review", A, A)]
@@ -185,3 +186,48 @@ def test_gone_turn_never_cancels_a_review_now():
     review_now = [job(state="queued", key=f"{A}:now", jid="q"), job(state="deferred", key=f"{A}:now", jid="d")]
     assert plan([row(actions=())], {1: review_now}, gone=[TurnChange(1, "review", ())]).states == []
     assert plan([], {1: review_now}, gone=[TurnChange(1, "review", ())]).states == []
+
+
+# --- Plan 5: posted reports ---
+
+def test_new_head_supersedes_posted_review():
+    p = plan([row(head=B)], {1: [job(head=A, state="posted")]})
+    assert p.queue == [(1, "review", B, B)]
+    assert p.states == [("j1", "superseded", "new head")]
+
+
+def test_new_recheck_supersedes_older_done_and_posted():
+    r = row(actions=(("recheck", ("T3",)),))
+    older = [job("recheck", key=f"{A}:T1", state="done", jid="d"),
+             job("recheck", key=f"{A}:T1,T2", state="posted", jid="p")]
+    p = plan([r], {1: older})
+    assert p.queue == [(1, "recheck", A, f"{A}:T3")]
+    assert sorted(p.states) == [("d", "superseded", "new threads"), ("p", "superseded", "new threads")]
+
+
+def test_posted_recheck_blocks_until_my_thread_turns_change():
+    """A posted re-check blocks its key until the operator's own thread turns change after the post: another
+    reviewer's turn, a role or the draft flag moving the row's last_change does not unblock it (/code-review C6)."""
+    r = dataclasses.replace(row(actions=(("recheck", ("T1",)),)), thread_turns_change=OLD)
+    key = f"{A}:T1"
+    posted = {1: [job("recheck", key=key, state="posted")]}  # its updated_at is OLD, the post's time
+    assert plan([r], posted).queue == [] and plan([r], posted).states == []
+    later = "2026-11-20T11:01:00+00:00"  # a minute after the post
+    approved = dataclasses.replace(r, last_change=later, other_turns=[{"login": "octo-2", "action": "review"}])
+    assert plan([approved], posted).queue == [] and plan([approved], posted).states == []
+    mine = dataclasses.replace(r, last_change=later, thread_turns_change=later)
+    p = plan([mine], posted)
+    assert p.queue == [(1, "recheck", A, key)]
+    assert p.states == [("j1", "superseded", "new threads")]
+
+
+def test_a_post_under_way_keeps_its_job_from_going_stale():
+    """The gone-turn rule leaves a job with a Post `posting` alone: the post itself takes the turn away
+    (/code-review C3). Other jobs, and other rules, are as before."""
+    gone = [TurnChange(1, "review", ()), TurnChange(1, "recheck", ())]
+    jobs = {1: [job(state="done", jid="d"), job("recheck", state="done", jid="r"), job(state="queued", jid="q")]}
+    assert sorted(plan([], jobs, gone=gone, posting=frozenset({"d", "r"})).states) == [("q", "cancelled", "turn gone")]
+    assert sorted(plan([], jobs, gone=gone).states) == [
+        ("d", "stale", "turn gone"), ("q", "cancelled", "turn gone"), ("r", "stale", "turn gone")]
+    assert plan([row(head=B)], {1: [job(state="queued", jid="d")]}, posting=frozenset({"d"})).states == [
+        ("d", "superseded", "new head")]

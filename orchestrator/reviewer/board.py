@@ -47,6 +47,11 @@ def _changes(number: int, turns: list[dict], against: set[str]) -> list[TurnChan
     return list(changes.values())
 
 
+def _thread_turns(turns: list[dict]) -> list[dict]:
+    """My turns that name threads: a re-check of a posted reply waits for a change among these."""
+    return [t for t in turns if t["threads"]]
+
+
 def build_board(
     snapshot: BoardSnapshot,
     details: dict[int, PRDetails],
@@ -76,6 +81,7 @@ def build_board(
         )
         ticket = TICKET_KEY.search(d.title)
         same_head = prev is not None and prev.head_sha == d.head_sha
+        threads_changed = prev is None or _thread_turns(prev.my_turns) != _thread_turns(my_turns)
         rows[pr.number] = BoardRow(
             number=pr.number,
             title=d.title,
@@ -93,6 +99,8 @@ def build_board(
             ticket_key=ticket.group(0) if ticket else "",
             updated_at=d.updated_at,
             last_change=now if changed else prev.last_change,
+            # A row stored before this field starts from its last change.
+            thread_turns_change=now if threads_changed else (prev.thread_turns_change or prev.last_change),
         )
         new_turns += _changes(pr.number, my_turns, set(prev.my_actions) if prev else set())
     gone_turns: list[TurnChange] = []

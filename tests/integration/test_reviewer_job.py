@@ -25,6 +25,7 @@ from orchestrator.reviewer.chat import ReviewerChat
 from orchestrator.reviewer.clone import ReviewClone
 from orchestrator.reviewer.db import connect
 from orchestrator.reviewer.forge_github import GitHubForgeReader
+from orchestrator.reviewer.models import Anchor
 from orchestrator.reviewer.prepare import job_paths
 from orchestrator.reviewer.readiness import CommandReadiness
 from orchestrator.reviewer.runner import JobRunner, RunnerConfig
@@ -125,7 +126,7 @@ def mock_github(head):
     pr = {"number": 7, "title": TITLE, "body": "Keeps the cart in sync.", "html_url": URL,
           "user": {"login": "octo-author"}, "state": "open", "head": {"sha": head}, "base": {"ref": "develop"},
           "draft": False, "assignees": [], "requested_reviewers": [{"login": "octo"}], "changed_files": 1,
-          "additions": 1, "deletions": 0, "updated_at": UPDATED}
+          "additions": 1, "deletions": 0, "updated_at": UPDATED, "closed_at": None}
     respx.get(f"{API}/pulls").respond(200, json=[{"number": 7, "updated_at": UPDATED}])
     respx.get(f"{API}/pulls/7").respond(200, json=pr)
     for path in ("pulls/7/reviews", "pulls/7/comments", "issues/7/comments"):
@@ -136,7 +137,7 @@ class Notifier:
     def __init__(self):
         self.sent: list[tuple[str, str]] = []
 
-    async def send_message(self, chat_id, text):
+    async def send_message(self, chat_id, text, buttons=None, reply_to_message_id=None):
         self.sent.append((chat_id, text))
         return 100 + len(self.sent)
 
@@ -174,7 +175,7 @@ async def test_review_job_end_to_end(tmp_path, monkeypatch):
     conn = connect(rv / "reviewer.db")
     store, switches = ReviewerStore(conn), Switches(conn)
     notifier = Notifier()
-    chat = ReviewerChat(notifier, "-1001")
+    chat = ReviewerChat(notifier, "-1001", store=store)
     service = ReviewerService([ctx], store, switches, lambda key: False, chat.send,
                               lambda project_id, repo_id: set())
     runner = JobRunner([ctx], store, switches, lambda key: False, lambda key, status: None, chat, llm, {},
@@ -212,6 +213,8 @@ async def test_review_job_end_to_end(tmp_path, monkeypatch):
     assert chat_id == "-1001"
     assert message.startswith(f'[acme/app] Review of PR #7 "{TITLE}"')
     assert TG_LINE in message
+    message_ids = store.run(job.id).message_ids
+    assert [store.anchor("-1001", i) for i in message_ids] == [Anchor(job.id, "", 0)]   # every part a reply anchor
 
     paths = job_paths(clone.path, cfg.process, 7, head, rv / "jobs", job.id)
     rules = argv[argv.index("--allowedTools") + 1].split(",")
@@ -271,7 +274,7 @@ async def run_one_job(tmp_path, monkeypatch, events, rc):
     conn = connect(rv / "reviewer.db")
     store, switches = ReviewerStore(conn), Switches(conn)
     notifier = Notifier()
-    chat = ReviewerChat(notifier, "-1001")
+    chat = ReviewerChat(notifier, "-1001", store=store)
     service = ReviewerService([ctx], store, switches, lambda key: False, chat.send,
                               lambda project_id, repo_id: set())
     now = datetime.now(timezone.utc)

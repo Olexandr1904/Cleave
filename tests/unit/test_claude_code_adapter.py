@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import time
 from datetime import datetime, timezone
 from unittest.mock import AsyncMock, patch, MagicMock
@@ -92,6 +93,16 @@ def _make_hanging_proc():
     return proc
 
 
+API_KEY_NAMES = ("ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "CLAUDE_CODE_USE_BEDROCK", "CLAUDE_CODE_USE_VERTEX")
+
+
+def _child_env(exec_mock) -> dict[str, str]:
+    """The environment the child gets: the env passed to create_subprocess_exec, or, when none is passed,
+    the inherited one."""
+    env = exec_mock.call_args.kwargs.get("env")
+    return dict(os.environ) if env is None else env
+
+
 class TestQuickQuery:
     @pytest.fixture
     def adapter(self):
@@ -167,6 +178,24 @@ class TestQuickQuery:
         with patch("asyncio.create_subprocess_exec", return_value=mock_proc):
             with pytest.raises(RuntimeError, match="timed out"):
                 await adapter.quick_query(prompt="test", system="sys")
+
+    async def test_inherited_env_has_no_api_key(self, adapter, monkeypatch):
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-not-real")
+        monkeypatch.setenv("ANTHROPIC_AUTH_TOKEN", "t-not-real")
+        monkeypatch.setenv("CLAUDE_CODE_USE_BEDROCK", "1")  # either bills a cloud account, not the claude.ai login
+        monkeypatch.setenv("CLAUDE_CODE_USE_VERTEX", "1")
+        monkeypatch.setenv("CLAUDE_CODE_OAUTH_TOKEN", "o-not-real")
+        mock_proc = AsyncMock()
+        mock_proc.communicate = AsyncMock(return_value=(json.dumps({"result": "r"}).encode(), b""))
+        mock_proc.returncode = 0
+
+        with patch("asyncio.create_subprocess_exec", return_value=mock_proc) as mock_exec:
+            await adapter.quick_query(prompt="test", system="sys")
+        env = _child_env(mock_exec)
+        keys = set(env)
+        assert not set(API_KEY_NAMES) & keys
+        assert env["CLAUDE_CODE_OAUTH_TOKEN"] == "o-not-real"
+        assert "PATH" in keys
 
 
 class TestRunCliQuotaRaises:
@@ -520,12 +549,30 @@ class TestIsolatedSession:
             )
         assert m.call_args.kwargs["env"] == env
 
-    async def test_no_env_keeps_inherited(self, adapter):
+    async def test_explicit_env_has_no_api_key(self, adapter):
+        with patch("asyncio.create_subprocess_exec", return_value=self._ok_proc()) as m:
+            await adapter.execute_in_workspace(
+                prompt="p", cwd="/tmp", allowed_tools=["read_file"],
+                env={"PATH": "/bin", "ANTHROPIC_API_KEY": "sk-not-real", "CLAUDE_CODE_USE_BEDROCK": "1",
+                     "CLAUDE_CODE_USE_VERTEX": "1"},
+            )
+        env = _child_env(m)
+        keys = set(env)
+        assert keys == {"PATH"}
+        assert env["PATH"] == "/bin"
+
+    async def test_no_env_inherits_without_api_key(self, adapter, monkeypatch):
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-not-real")
+        monkeypatch.setenv("CLAUDE_CODE_USE_VERTEX", "1")
         with patch("asyncio.create_subprocess_exec", return_value=self._ok_proc()) as m:
             await adapter.execute_in_workspace(
                 prompt="p", cwd="/tmp", allowed_tools=["read_file"],
             )
-        assert m.call_args.kwargs.get("env") is None
+        env = _child_env(m)
+        keys = set(env)
+        expected_keys = set(os.environ) - set(API_KEY_NAMES)
+        assert keys == expected_keys
+        assert all(env[k] == os.environ[k] for k in env), "an inherited value changed"
 
     async def test_raw_allowed_tools_passthrough(self, adapter):
         with patch("asyncio.create_subprocess_exec", return_value=self._ok_proc()) as m:

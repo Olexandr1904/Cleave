@@ -18,6 +18,7 @@ import re
 import shutil
 import time
 from collections import deque
+from collections.abc import Mapping
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable
@@ -150,6 +151,15 @@ DEFAULT_MAX_TURNS = 100
 # through execute_in_workspace(timeout=...) per call. The adapter no longer
 # carries a hardcoded default — see config/schemas.py:AgentBudget.
 
+# With one of these set, `claude -p` bills the key (or a Bedrock or Vertex account) instead of the claude.ai login.
+API_KEY_VARS = ("ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "CLAUDE_CODE_USE_BEDROCK", "CLAUDE_CODE_USE_VERTEX")
+
+
+def claude_env(env: Mapping[str, str] | None) -> dict[str, str]:
+    """The environment for a `claude` run: `env`, or the daemon's when None, as a copy without the API_KEY_VARS."""
+    source = os.environ if env is None else env
+    return {k: v for k, v in source.items() if k not in API_KEY_VARS}
+
 
 class ClaudeCodeAdapter(LLMInterface):
     """Claude Code CLI adapter using `claude -p` subprocess."""
@@ -246,7 +256,7 @@ class ClaudeCodeAdapter(LLMInterface):
                 expose meta/ (ticket attachments, comments), a sibling of
                 the source/ cwd.
             env: The subprocess's whole environment. None = inherit the
-                daemon's environment.
+                daemon's environment. Either way without the API_KEY_VARS.
             raw_allowed_tools: Claude Code permission rules passed verbatim
                 (e.g. "Bash(git diff:*)"), appended after the mapped
                 allowed_tools in the one --allowedTools value.
@@ -332,6 +342,7 @@ class ClaudeCodeAdapter(LLMInterface):
                 stdin=asyncio.subprocess.PIPE,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
+                env=claude_env(None),
             )
             stdout, stderr = await asyncio.wait_for(
                 proc.communicate(input=full_prompt.encode("utf-8")),
@@ -453,7 +464,7 @@ class ClaudeCodeAdapter(LLMInterface):
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
             cwd=cwd,
-            env=env,
+            env=claude_env(env),
             start_new_session=True,
         )
         if pid_callback is not None and proc.pid:

@@ -1,56 +1,47 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
-  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<!--
-  launchd service for Cleave (macOS equivalent of cleave.service).
-
-  Install:
-    cp deploy/com.cleave.daemon.plist ~/Library/LaunchAgents/
-    # Edit WorkingDirectory, UserName, and log paths below to match your setup.
-    launchctl load ~/Library/LaunchAgents/com.cleave.daemon.plist
-
-  Uninstall:
-    launchctl unload ~/Library/LaunchAgents/com.cleave.daemon.plist
-
-  Logs (default paths below):
-    ~/Library/Logs/cleave/cleave.log
-    ~/Library/Logs/cleave/cleave-error.log
-
-  NOTE: create the log directory first:
-    mkdir -p ~/Library/Logs/cleave
--->
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- Template: render it with scripts/render_launchd_plist.py as deploy/README.md ("Running on macOS (launchd)") shows. -->
 <plist version="1.0">
 <dict>
-    <key>Label</key>
-    <string>com.cleave.daemon</string>
-
-    <key>ProgramArguments</key>
-    <array>
-        <!-- Absolute path to run.sh in your clone. Adjust as needed. -->
-        <string>/Users/YOUR_USER/cleave/run.sh</string>
-    </array>
-
-    <key>WorkingDirectory</key>
-    <!-- Absolute path to the Cleave repo root. Adjust as needed. -->
-    <string>/Users/YOUR_USER/cleave</string>
-
-    <key>EnvironmentVariables</key>
-    <dict>
-        <!-- Point at your .env file so run.sh's `source .env` is redundant
-             but the daemon inherits all required tokens directly. -->
-        <key>HOME</key>
-        <string>/Users/YOUR_USER</string>
-    </dict>
-
-    <!-- Start automatically at login and keep alive if it exits. -->
-    <key>RunAtLoad</key>
-    <true/>
-    <key>KeepAlive</key>
-    <true/>
-
-    <key>StandardOutPath</key>
-    <string>/Users/YOUR_USER/Library/Logs/cleave/cleave.log</string>
-    <key>StandardErrorPath</key>
-    <string>/Users/YOUR_USER/Library/Logs/cleave/cleave-error.log</string>
+	<key>Label</key>
+	<string>com.cleave.daemon</string>
+	<key>ProgramArguments</key>
+	<array>
+		<string>/bin/bash</string>
+		<string>{{CLEAVE_DIR}}/run.sh</string>
+	</array>
+	<key>WorkingDirectory</key>
+	<string>{{CLEAVE_DIR}}</string>
+	<key>EnvironmentVariables</key>
+	<dict>
+		<key>HOME</key>
+		<string>{{HOME}}</string>
+		<key>USER</key>
+		<string>{{USER}}</string>
+		<key>PATH</key>
+		<string>{{PATH}}</string>
+		<key>LANG</key>
+		<string>{{LANG}}</string>
+		<key>TMPDIR</key>
+		<string>{{TMPDIR}}</string>
+		<key>PYTHONUNBUFFERED</key>
+		<string>1</string>
+		<key>CLEAVE_STDERR_LEVEL</key>
+		<string>WARNING</string>
+	</dict>
+	<key>RunAtLoad</key>
+	<true/>
+	<key>KeepAlive</key>
+	<true/>
+	<key>ThrottleInterval</key>
+	<integer>60</integer>
+	<key>ProcessType</key>
+	<string>Interactive</string>
+	<key>ExitTimeOut</key>
+	<integer>60</integer>
+	<key>StandardOutPath</key>
+	<string>{{HOME}}/Library/Logs/cleave/cleave.log</string>
+	<key>StandardErrorPath</key>
+	<string>{{HOME}}/Library/Logs/cleave/cleave-error.log</string>
 </dict>
 </plist>

@@ -219,9 +219,12 @@ class SmallJobRunner:
         return jobs
 
     async def run(self, stop: asyncio.Event) -> None:
-        """recover() once, with a line for each job it failed, then the queued jobs one at a time, oldest first
-        (one waiting for its review's message is passed over); with none to run, it waits for wake(), idle_seconds
-        or `stop`. Never raises (cancellation aside)."""
+        """start(), then loop(stop). Never raises (cancellation aside)."""
+        await self.start()
+        await self.loop(stop)
+
+    async def start(self) -> None:
+        """recover() once, at start-up, with a line for each job it failed. Never raises (cancellation aside)."""
         try:
             for job in self.recover():
                 if request := self._request(job):
@@ -229,6 +232,10 @@ class SmallJobRunner:
                                                        _INTERRUPTED), request["job"])
         except Exception as e:
             logger.warning("Reviewer edit and draft jobs not recovered: %s", _where(e))
+
+    async def loop(self, stop: asyncio.Event) -> None:
+        """The queued jobs one at a time, oldest first (one waiting for its review's message is passed over); with
+        none to run, it waits for wake(), idle_seconds or `stop`. Never raises (cancellation aside)."""
         while not stop.is_set():
             self._woken.clear()  # before the read: a job queued from here on wakes the wait below
             try:

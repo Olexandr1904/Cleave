@@ -233,11 +233,19 @@ class JobRunner:
         self._last_read: dict[str, dict[int, datetime]] = {}  # per repo: when the sweep last read each PR
 
     async def run(self, stop: asyncio.Event) -> None:
-        """recover() once, then one job at a time until `stop`. Never raises (cancellation aside)."""
+        """start(), then loop(stop). Never raises (cancellation aside)."""
+        await self.start()
+        await self.loop(stop)
+
+    async def start(self) -> None:
+        """recover() once, at start-up. Never raises."""
         try:
             self.recover()
         except Exception as e:
             logger.warning("Reviewer jobs not recovered: %s", _where(e))
+
+    async def loop(self, stop: asyncio.Event) -> None:
+        """One job at a time until `stop`. Never raises (cancellation aside)."""
         while not stop.is_set():
             try:
                 await self.resend_unsent()

@@ -10,8 +10,9 @@ from __future__ import annotations
 import argparse
 import asyncio
 import logging
+import os
 import sys
-from collections.abc import Coroutine
+from collections.abc import Awaitable, Coroutine, Mapping
 from typing import Callable
 from urllib.parse import urlsplit
 
@@ -222,9 +223,41 @@ def _start_background(name: str, coro: Coroutine) -> asyncio.Task:
     return task
 
 
-def _start_reviewer(reviewer, runner, small) -> dict[str, tuple[asyncio.Task, asyncio.Event]]:
+FIRST_ROUND_WAIT_SECONDS = 120.0
+
+
+async def _when_ready(
+    ready: asyncio.Event, stop: asyncio.Event,
+    run: Callable[[asyncio.Event], Awaitable[None]], wait: float, *, name: str = "",
+    start: Callable[[], Awaitable[None]] | None = None,
+) -> None:
+    """Await start() at once, when given; then run(stop) once `ready` is set or `wait` s have
+    passed (a warning naming the part, `name`, says so); no run(stop) if `stop` is set first."""
+    if start is not None:
+        await start()
+    waiters = {asyncio.create_task(ready.wait()), asyncio.create_task(stop.wait())}
+    try:
+        await asyncio.wait(waiters, timeout=wait, return_when=asyncio.FIRST_COMPLETED)
+    finally:
+        for waiter in waiters:
+            waiter.cancel()
+    if stop.is_set():
+        return
+    if not ready.is_set():
+        logger.warning(
+            "Credential health: first round not done after %.0f s; starting %s anyway",
+            wait, name or "the reviewer",
+        )
+    await run(stop)
+
+
+def _start_reviewer(
+    reviewer, runner, small, ready: asyncio.Event | None = None, wait: float = FIRST_ROUND_WAIT_SECONDS,
+) -> dict[str, tuple[asyncio.Task, asyncio.Event]]:
     """Start the reviewer's poll, its job runner and its edit and draft runner, each with its own
-    stop event, for _stop_background.
+    stop event, for _stop_background. With `ready`, the poll and the two runners' loops start once
+    it is set, `wait` s at most; the runners' start() (the jobs a dead process left running, failed)
+    runs at once.
 
     Nothing without a repo to review: then none is built and all are None.
     """
@@ -232,7 +265,13 @@ def _start_reviewer(reviewer, runner, small) -> dict[str, tuple[asyncio.Task, as
     for name, part in (("Reviewer", reviewer), ("Review jobs", runner), ("Review edits", small)):
         if part is not None:
             stop = asyncio.Event()
-            background[name] = (_start_background(name, part.run(stop)), stop)
+            if ready is None:
+                coro = part.run(stop)
+            elif part is reviewer:   # the poll has nothing to recover: all of it waits
+                coro = _when_ready(ready, stop, part.run, wait, name=name)
+            else:
+                coro = _when_ready(ready, stop, part.loop, wait, name=name, start=part.start)
+            background[name] = (_start_background(name, coro), stop)
     return background
 
 
@@ -253,6 +292,15 @@ async def _stop_background(
         task.cancel()
     if pending:
         await asyncio.wait(pending)
+
+
+def _stderr_level(handler: logging.Handler, environ: Mapping[str, str]) -> None:
+    """CLEAVE_STDERR_LEVEL, a level name, as the stderr handler's level: under launchd stderr is a
+    file nothing rotates, and the rotating log file has every line. Unset or not a level name:
+    unchanged."""
+    level = logging.getLevelName(environ.get("CLEAVE_STDERR_LEVEL", "").upper())
+    if isinstance(level, int):
+        handler.setLevel(level)
 
 
 def _quiet_http_loggers() -> None:
@@ -389,7 +437,9 @@ def main(argv: list[str] | None = None) -> int:
     # for post-mortem analysis of agent/CLI failures.
     log_level = getattr(logging, global_config.logging.level.upper(), logging.INFO)
     log_format = "%(asctime)s [%(levelname)s] %(name)s: %(message)s"
-    logging.basicConfig(level=log_level, format=log_format)
+    stderr_handler = logging.StreamHandler()
+    _stderr_level(stderr_handler, os.environ)
+    logging.basicConfig(level=log_level, format=log_format, handlers=[stderr_handler])
     _quiet_http_loggers()
 
     from logging.handlers import RotatingFileHandler
@@ -473,7 +523,6 @@ def main(argv: list[str] | None = None) -> int:
     # Cap the JVM heap the build toolchain may request, so concurrent/oversized
     # Android builds don't OOM the host (Kotlin daemon getting killed mid-compile).
     if global_config.defaults.cap_build_memory:
-        import os
         from orchestrator.build_env import apply_build_memory_limits
         gradle_user_home = Path(
             os.environ.get("GRADLE_USER_HOME") or (Path.home() / ".gradle")
@@ -827,7 +876,11 @@ def main(argv: list[str] | None = None) -> int:
         credential_task = _start_background(
             "Credential health", credential_health.run(credential_stop),
         )
-        reviewer_tasks = _start_reviewer(reviewer, review_jobs, review_edits)
+        # No poll and no job before the first credential round: until then the forge and login
+        # states are unknown.
+        reviewer_tasks = _start_reviewer(
+            reviewer, review_jobs, review_edits, ready=credential_health.first_round,
+        )
 
         # Init runtime settings table (model picker).
         import aiosqlite as _aiosqlite

@@ -246,6 +246,17 @@ async def test_recover_marks_running_failed(tmp_path, monkeypatch):
     assert rig.events == [("reviewer_job", "acme", {"scope": SCOPE, "number": 1712, "kind": "review",
                                                     "state": "failed"})]
 
+async def test_start_recovers_and_loop_does_not(tmp_path, monkeypatch):
+    rig = Rig(tmp_path, monkeypatch)
+    job = rig.add_job()
+    rig.store.set_job_state(job.id, "running", "", T0.isoformat())
+    stop = asyncio.Event()
+    stop.set()
+    await asyncio.wait_for(rig.runner.loop(stop), 5)
+    assert rig.state(job) == ("running", "")   # main runs start() at once, loop() after the first round
+    await rig.runner.start()
+    assert rig.state(job) == ("failed", "interrupted (daemon restarted)")
+
 async def test_quota_defers_then_resumes(tmp_path, monkeypatch):
     rig = Rig(tmp_path, monkeypatch)
     rig.outcome = SessionOutcome("quota", retry_at=T0 + timedelta(hours=1))

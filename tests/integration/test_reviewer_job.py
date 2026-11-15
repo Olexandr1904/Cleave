@@ -224,6 +224,7 @@ async def test_review_job_end_to_end(tmp_path, monkeypatch):
     assert argv == [
         str(fake), "-p",
         "--restricted", "--settings", str(paths.job_dir / "session" / "settings.json"), "--tools", SESSION_TOOLS,
+        "--strict-mcp-config",
         "--effort", "xhigh", "--model", "opus", "--output-format", "stream-json", "--verbose",
         "--max-turns", "400", "--allowedTools", ",".join(rules), "--add-dir", str(paths.worktree),
     ]

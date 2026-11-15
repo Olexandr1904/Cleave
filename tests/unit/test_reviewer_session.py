@@ -287,7 +287,8 @@ async def test_run_session_arguments(tmp_path, clone, paths):
     assert kw["prompt"] == "the prompt"
     assert kw["cwd"] == str(clone)
     assert kw["add_dirs"] == [str(paths.worktree)]
-    assert kw["extra_args"][:5] == ["--restricted", "--settings", str(settings), "--tools", SESSION_TOOLS]
+    assert kw["extra_args"] == ["--restricted", "--settings", str(settings), "--tools", SESSION_TOOLS,
+                                "--strict-mcp-config"]
     assert SESSION_TOOLS == "Read,Grep,Glob,Write,Edit,Bash,Agent,Skill"
     assert (kw["model"], kw["effort"], kw["timeout"], kw["max_turns"]) == ("opus", "xhigh", 5400, 400)
     assert HEAVY_MAX_TURNS == 400

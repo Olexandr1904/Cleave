@@ -210,7 +210,8 @@ async def run_session(
     llm, *, kind: str, clone_dir: Path, paths: JobPaths, prompt: str, job_cfg: ReviewerJobConfig,
     helper_scripts: list[str], secret_paths: list[Path], environ: Mapping[str, str],
 ) -> SessionOutcome:
-    """Run the review or re-check session and classify how it ended; never raises for a failed run."""
+    """Run the review or re-check session and classify how it ended; never raises for a failed run.
+    --strict-mcp-config without --mcp-config: no MCP server configured on the host loads."""
     for directory in (clone_dir, clone_dir.resolve(), paths.worktree):
         if any(c in str(directory) for c in _GLOB_CHARS):
             return SessionOutcome("failed", error=(
@@ -232,7 +233,8 @@ async def run_session(
             add_dirs=[str(paths.worktree)],
             env=session_env(environ),
             raw_allowed_tools=allowed_tools(kind, clone_dir, paths, helper_scripts),
-            extra_args=["--restricted", "--settings", str(settings), "--tools", SESSION_TOOLS],
+            extra_args=["--restricted", "--settings", str(settings), "--tools", SESSION_TOOLS,
+                        "--strict-mcp-config"],
             progress_log_path=session_dir / "progress.log",
             raw_stream_path=session_dir / "stream.jsonl",
         )

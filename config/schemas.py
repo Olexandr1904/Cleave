@@ -376,8 +376,7 @@ class ProjectConfig:
 
 # --- Reviewer config (repo-level) ---
 
-# Every placeholder a reviewer command may use: the poster's commands take them all (a later plan expands
-# exactly these).
+# Every placeholder a reviewer command may use; each field takes only its set below.
 REVIEWER_PLACEHOLDERS = frozenset(
     {"repo", "pr", "head9", "worktree", "merge_base", "report", "plan", "job_dir", "ledger", "event"}
 )
@@ -387,6 +386,9 @@ JOB_PATH_PLACEHOLDERS = frozenset({"pr", "head9"})  # process.run_dir, replies_p
 PREPARE_STEP_PLACEHOLDERS = frozenset({"pr", "worktree", "merge_base", "head9", "repo"})
 STATUS_COMMAND_PLACEHOLDERS = frozenset({"repo"})
 THREADS_COMMAND_PLACEHOLDERS = frozenset({"repo", "pr"})
+# The worktree is gone by posting time; the replies ledger is the threads tool's own, next to the plan.
+POSTER_PLACEHOLDERS = frozenset({"repo", "pr", "head9", "report", "plan", "job_dir", "ledger", "event"})
+REPLIES_PLACEHOLDERS = frozenset({"repo", "pr", "head9", "plan", "job_dir"})
 
 
 @dataclass

@@ -10,8 +10,10 @@ from pathlib import Path
 from orchestrator.reviewer.commands import NO_HOST_GIT_ENV, base_env, redact, run_command, stderr_tail
 
 # Where a setting planted in the clone makes git run a program: .git/config (helpers, filter, diff and merge
-# drivers) and .git/info/attributes (the files a driver applies to). A job saves them before its session.
-_GUARDED_GIT_FILES = ("config", "info/attributes")
+# drivers), .git/info/attributes (the files a driver applies to) and .git/commondir (which sends git to another
+# directory's config). A job saves them before its session.
+_GUARDED_GIT_FILES = ("config", "info/attributes", "commondir")
+_FREE_LOCK_WAIT = 0.01  # seconds: enough to take a lock nobody holds
 
 
 def git_env(token: str) -> dict[str, str]:
@@ -78,7 +80,8 @@ class ReviewClone:
     for its refresh and readiness while no job does. In a job's session phase (session_phase()) the job runs no
     git in the clone and its checkout stays at the base the job prepared from: a poll then runs readiness, with
     no refresh, under `session_lock`, which the job also takes to enter and to leave that phase. While a job
-    prepares or cleans up, a poll leaves the clone alone.
+    prepares or cleans up, a poll leaves the clone alone. A post runs its poster under reader(), by the same
+    rules.
     """
 
     def __init__(self, path: Path, url: str, base_branch: str, token: str, timeout: float = 300.0):
@@ -116,6 +119,46 @@ class ReviewClone:
         """In a job's session phase: the guarded git files that no longer hold what the job saved."""
         return [path for path, saved in self._saved.items() if git_file_changed(path, saved)]
 
+    @asynccontextmanager
+    async def reader(self, *, wait: float = 600.0, step: float = 2.0) -> AsyncIterator[None]:
+        """A lease to run a part command from the clone while nothing moves its checkout: `lock` when it can
+        be had within `step`, else a job's session phase under `session_lock` (the job's leaving then waits
+        for the block), checked as a poll checks it before readiness. While a job prepares or cleans up, it
+        tries again every `step` until `wait` has passed. It never waits on `lock` longer than `step`: a job
+        holds it for its whole run, and locked() reads False while a queued job is about to take it. Nor on
+        `session_lock` past `wait`: a poll's readiness holds it."""
+        busy = "the review clone is busy (a job is preparing or cleaning it up); try again in a minute"
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + wait
+        while True:
+            try:
+                await asyncio.wait_for(self.lock.acquire(), step)
+            except asyncio.TimeoutError:
+                pass
+            else:
+                try:
+                    yield
+                finally:
+                    self.lock.release()
+                return
+            left = max(deadline - loop.time(), _FREE_LOCK_WAIT)  # past the deadline: a free one is still taken
+            try:
+                await asyncio.wait_for(self.session_lock.acquire(), left)
+            except asyncio.TimeoutError:  # held all along: a poll's readiness, say
+                raise CloneError("the review clone is in use; try again in a minute") from None
+            try:
+                if self.in_session:
+                    if self.changed_git_files():
+                        raise CloneError("the review session changed the clone's git config; "
+                                         "posting waits until the job ends")
+                    yield
+                    return
+            finally:
+                self.session_lock.release()
+            if loop.time() >= deadline:
+                raise CloneError(busy)
+            await asyncio.sleep(step)
+
     async def refresh(self) -> str:
         """Clone or fetch the base branch, check it out detached, and return the HEAD sha."""
         base = self._base
@@ -145,6 +188,12 @@ class ReviewClone:
         ref = f"refs/heads/pr-review/{number}"
         await self._git("fetch", ["-C", str(self.path), "fetch", "origin", f"+refs/pull/{number}/head:{ref}"])
         return (await self._git("rev-parse", ["-C", str(self.path), "rev-parse", ref])).strip()
+
+    async def delete_branch(self, number: int) -> None:
+        """Remove the local branch pr-review/<number>; one that is not there is no error. A symref there is
+        removed itself, never the ref it points at."""
+        ref = f"refs/heads/pr-review/{number}"
+        await self._git("update-ref", ["-C", str(self.path), "update-ref", "-d", "--no-deref", ref])
 
     async def merge_base(self, head: str) -> str:
         args = ["-C", str(self.path), "merge-base", f"refs/remotes/origin/{self._base}", head]

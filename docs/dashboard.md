@@ -100,7 +100,7 @@ Credentials are re-checked in the background every 15 minutes, and immediately a
 
 **Reviews** in the sidebar (`#/reviews`) shows the reviews board of every repo with `reviewer.enabled: true` in its repo YAML: the open PRs that involve you, and whose turn it is on each. With no such repo the view says `No repo has reviews enabled.` It refreshes with the toolbar's **Refresh** and **Auto** like the Board; the Board's **Hide done** and **+ New Project** are not shown on it.
 
-Nothing is posted from the dashboard: Telegram is the only posting path. Queued reviews and re-checks run unattended, one job at a time, and their result comes to Telegram (see [review and re-check messages](telegram.md#review-and-re-check-messages)); nothing is posted to GitHub in this version.
+Nothing is posted from the dashboard: Telegram is the only posting path. Queued reviews and re-checks run unattended, one job at a time, and their result comes to Telegram (see [review and re-check messages](telegram.md#review-and-re-check-messages)); you post it by replying there (see [replying to reviewer messages](telegram.md#replying-to-reviewer-messages)). The dashboard shows what was posted.
 
 ### Reviews switch panel
 
@@ -134,7 +134,7 @@ Under each repo's status line there are two tables (a table with no PR to show i
 |---|---|
 | **Pull request** | `#<number>` (links to GitHub), the title and the flags `pipeline`, `large` (at least `reviewer.max_files_auto` changed files) and `draft`; under it the ticket key, your roles and the number of changed files |
 | **Turn** | Your turns as chips (review blue, recheck purple, merge green, others grey); in Waiting on others, the other side's `login: action` |
-| **Job** | The state of the PR's latest job: `Report ready` (`Replies ready` for a re-check), `Queued`, `Running`, `Deferred`, `Failed`, `Skipped`, `Superseded`, `Stale`, `Cancelled` or `Posted`; `Skipped` also when the PR has no job and you skipped its current head. A second line adds: for a finished review, one square per finding colored by kind (critical red, major orange, minor yellow, question blue, pre-existing purple), `<n> confirmed · <n> questions` and `sent to Telegram` or `not delivered yet`; for a running job, the minutes since it started; for a deferred one, its next try (local time); for a failed one, the reason; for a large PR with no job, `<n> files · no automatic review` |
+| **Job** | The state of the PR's latest review or re-check (an edit or a draft job is never the row's job): `Report ready` (`Replies ready` for a re-check), `Queued`, `Running`, `Deferred`, `Failed`, `Skipped`, `Superseded`, `Stale`, `Cancelled` or `Posted`; `Skipped` also when the PR has no job and you skipped its current head. A second line adds: for a finished review, one square per finding colored by kind (critical red, major orange, minor yellow, question blue, pre-existing purple), `<n> confirmed · <n> questions` and `sent to Telegram` or `not delivered yet`; for a running job, the minutes since it started; for a deferred one, its next try (local time); for a failed one, the reason; for a large PR with no job, `<n> files · no automatic review` |
 | **Last change** | When the PR last changed (hidden while the side panel is open on a screen narrower than 1280 px) |
 | (buttons) | The row buttons below, shown while the pointer is on the row, the row has the keyboard focus or is open, and always on touch screens |
 
@@ -150,6 +150,7 @@ The job runner takes the queued jobs one at a time and writes these states:
 | `done` | The session ended well, its report (a replies plan for a re-check) was read and the PR still has that head and your turn (a **Review now** review needs no turn); its message goes to Telegram |
 | `failed` | Prepare or the session failed; the reason is in the detail view and Telegram gets a `failed` line (none for a job interrupted by a daemon restart). Queued again on the next poll, until two jobs have failed at that head |
 | `deferred` | The session hit the Claude usage limit, or the `claude` CLI is not logged in. The detail view shows its next try; the job runs again then. Its third deferral fails it |
+| `posted` | A post from a Telegram reply landed on GitHub, in full or in part. The numbers that did not land can still be posted from the same message. A newer review supersedes it like a `done` one. A posted re-check holds back a new re-check of the same threads until your own thread turns change after the post: another reviewer's turn, a role or the draft flag does not count |
 
 A job whose PR moved on meanwhile ends `superseded` (a new head, or a newer job), `stale` (the PR or your turn is gone) or `skipped` (you skipped that head while it ran), and nothing is sent for it.
 
@@ -171,14 +172,15 @@ A PR opens in a side panel beside the list, which stays visible (at a width of 7
 
 - **Header** — the repo, the PR number (links to GitHub), ticket key, current head, number of changed files, title, your turns, the state of the latest job and the row buttons; `not on the board` once the PR has left it
 - **Verdict** — for a PR with a review report: the suggested event (`REQUEST_CHANGES` red, `APPROVE` green, `COMMENT` plain) and its reason, then the report's summary; a bar with one segment per finding colored by kind, the count of each kind and of the dropped candidates; and the Telegram line of that review's message: `sent in <n> parts`, `not delivered yet` (followed by `message not delivered after 5 attempts` once Cleave has stopped trying), or `not sent: the job ended <state>` for a review whose PR moved on before its message went out. The run's other notes are in the Jobs table
-- **Findings** — grouped Confirmed (critical, major, minor), Questions and Pre-existing. Each shows its kind, number, title, status (`open`), file and line and any note; click it for its text. Critical findings start expanded
+- **Findings** — grouped Confirmed (critical, major, minor), Questions and Pre-existing. Each shows its kind, number, title, post state, file and line and any note; click it for its text. Critical findings start expanded. The post state is a badge with its word: `posted` (landed on GitHub at the report's head), `ticked` (named in a post that did not land in full: one still under way, failed, partly posted, unverified or interrupted; see **Posts**) or `open` (not posted). After an edit or a draft, the findings show the edited report
 - **Dropped (never posted)** — the candidates the review dropped, and why
-- **Replies** — when the newest re-check that wrote a plan is newer than the report: its drafted replies (number, target thread or review, text), in place of the verdict and the findings
+- **Replies** — when the newest re-check that wrote a plan is newer than the report: its drafted replies (number, post state as for findings, target thread or review, text), in place of the verdict and the findings
 - With neither: one line saying why there is no report — the job is queued or running, deferred until its next try, failed (with the reason), or the PR is too large for an automatic review
-- **Jobs** — every job of the PR, newest first: kind, state (a `deferred` job also shows its next try), the reason and the job's notes (a worktree left behind, a message not delivered after 5 attempts), the head, when it started, how long it ran, its cost and the Telegram message ids of its message. The cost is the API-equivalent estimate the Claude Code CLI reports; the sessions run on the claude.ai login, so it is not what you pay
-- **Raw report** — the newest review report as the session wrote it, collapsed; a report Cleave could not read shows only this
+- **Posts** — every post Cleave made from a Telegram reply, newest first: its state (`posting`, `posted`, `partial`, `failed`, `unverified` or `interrupted`), its kind (`review`, `approve` for an approve without a body, `replies`), its event, the numbers it named, the comments it landed, the head and when; the links to what landed on GitHub (links to anything but `https://github.com/` show as text); and its error. With none: `Nothing posted yet. Posting is done by replying to the review in Telegram.`
+- **Jobs** — every job of the PR, newest first, the edit and draft jobs too: kind (`review`, `recheck`, `edit`, `draft`), state (a `deferred` job also shows its next try), the reason and the job's notes (a worktree left behind, a message not delivered after 5 attempts), the head, when it started, how long it ran, its cost and the Telegram message ids of its message. The cost is the API-equivalent estimate the Claude Code CLI reports; the sessions run on the claude.ai login, so it is not what you pay
+- **Raw report** — the newest review report as the session wrote it (as edited, after an edit or a draft), collapsed; a report Cleave could not read shows only this
 
-Each job's files are kept in `<reviewer data dir>/jobs/<job id>/`: what the session's run directory held (`meta.env`, the report, `tg_lines.json`, …) and the session's settings and transcript.
+Each job's files are kept in `<reviewer data dir>/jobs/<job id>/`: what the session's run directory held (`meta.env`, the report, `tg_lines.json`, …), the session's settings and transcript, and `posting/`, Cleave's own copy of the report that edits, drafts and posts work on. The poster tool's ledgers are in `<reviewer data dir>/ledgers/<project_id>/<repo_id>/PR_<number>/`. Once a day, a PR closed 14 days ago or more loses its job directories, its ledgers and its `pr-review/<number>` branch in the review clone; its rows in `reviewer.db` stay.
 
 ### Review clone
 
@@ -284,7 +286,7 @@ Read endpoints (`GET`):
 - `/api/health/credentials` — credential states (`?refresh=1` re-checks now)
 - `/api/switches` — running/paused switches (also `PUT` with `{"mode": "tickets"|"reviews", "state": "running"|"paused", "scope": "*"|"<project>/<repo>"}`)
 - `/api/reviews` — per repo with reviews enabled: status, reason, poll times and the `my_turn` / `waiting` PRs (the `/api/reviews` routes exist only when at least one repo has reviews enabled)
-- `/api/reviews/pr?scope=<project>/<repo>&number=<PR number>` — one PR for the detail view: its board row, its jobs (newest first), the newest review report (parsed and raw) and the newest re-check's drafted replies; 400 without a scope or with a number that is not an integer, 404 for a PR with neither a board row nor a job
+- `/api/reviews/pr?scope=<project>/<repo>&number=<PR number>` — one PR for the detail view: its board row, its jobs (newest first), the newest review report (parsed and raw), the newest re-check's drafted replies, each number's post state (`number_states`, `reply_states`) and the PR's posts; 400 without a scope or with a number that is not an integer, 404 for a PR with neither a board row nor a job
 - `/api/workspaces` — every workspace from disk, with state.json + report/meta listings
 - `/api/workspaces/{ticket_id}/report/{filename}?folder=reports|meta|logs` — fetch one file
 - `/api/settings/model` — global default model (also `PUT` to change)
@@ -299,7 +301,7 @@ Write endpoints (`POST`):
 - `/api/workspaces/{id}/rerun` — DONE-only: re-clone source, refresh ticket data from tracker, restart pipeline from ANALYSIS; body `{ "reason": "<non-empty string>" }`
 - `/api/workspaces/{id}/clear-gradle-and-retry` — server-side validates the workspace is FAILED and the error matches the AAPT2 signature before wiping caches
 - `/api/projects/create` and `/api/projects/validate-step` — the wizard's two endpoints (validate one step against live APIs, then commit)
-- `/api/reviews/review-now` and `/api/reviews/skip` — body `{"scope": "<project>/<repo>", "number": <PR number>}`; 404 for a PR not on the board, 409 from review-now when a review at that head is already queued, running or deferred; 403 `cross-site request refused` unless the body is sent as `Content-Type: application/json` and any `Origin` / `Sec-Fetch-Site` header says the request comes from the dashboard itself (so another site open in the browser cannot queue a review; curl, which sends neither header, works)
+- `/api/reviews/review-now` and `/api/reviews/skip` (there is no posting route: posting is done from Telegram only) — body `{"scope": "<project>/<repo>", "number": <PR number>}`; 404 for a PR not on the board, 409 from review-now when a review at that head is already queued, running or deferred; 403 `cross-site request refused` unless the body is sent as `Content-Type: application/json` and any `Origin` / `Sec-Fetch-Site` header says the request comes from the dashboard itself (so another site open in the browser cannot queue a review; curl, which sends neither header, works)
 
 ---
 

@@ -130,7 +130,7 @@ class TelegramAdapter(NotifierInterface):
             if self._command_handler and hasattr(self._command_handler, "handle_reply"):
                 chat_id = str(message.chat.id)
                 handled = await self._command_handler.handle_reply(
-                    original_id, message.text, chat_id,
+                    original_id, message.text, chat_id, sent_at=message.date,
                 )
                 if handled:
                     return

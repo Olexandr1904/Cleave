@@ -10,8 +10,9 @@ from __future__ import annotations
 import argparse
 import asyncio
 import logging
+import os
 import sys
-from collections.abc import Coroutine
+from collections.abc import Awaitable, Coroutine, Mapping
 from typing import Callable
 from urllib.parse import urlsplit
 
@@ -293,6 +294,15 @@ async def _stop_background(
         await asyncio.wait(pending)
 
 
+def _stderr_level(handler: logging.Handler, environ: Mapping[str, str]) -> None:
+    """CLEAVE_STDERR_LEVEL, a level name, as the stderr handler's level: under launchd stderr is a
+    file nothing rotates, and the rotating log file has every line. Unset or not a level name:
+    unchanged."""
+    level = logging.getLevelName(environ.get("CLEAVE_STDERR_LEVEL", "").upper())
+    if isinstance(level, int):
+        handler.setLevel(level)
+
+
 def _quiet_http_loggers() -> None:
     """httpx logs full request URLs at INFO; the Telegram Bot API URL carries the token."""
     for name in ("httpx", "httpcore"):
@@ -427,7 +437,9 @@ def main(argv: list[str] | None = None) -> int:
     # for post-mortem analysis of agent/CLI failures.
     log_level = getattr(logging, global_config.logging.level.upper(), logging.INFO)
     log_format = "%(asctime)s [%(levelname)s] %(name)s: %(message)s"
-    logging.basicConfig(level=log_level, format=log_format)
+    stderr_handler = logging.StreamHandler()
+    _stderr_level(stderr_handler, os.environ)
+    logging.basicConfig(level=log_level, format=log_format, handlers=[stderr_handler])
     _quiet_http_loggers()
 
     from logging.handlers import RotatingFileHandler
@@ -511,7 +523,6 @@ def main(argv: list[str] | None = None) -> int:
     # Cap the JVM heap the build toolchain may request, so concurrent/oversized
     # Android builds don't OOM the host (Kotlin daemon getting killed mid-compile).
     if global_config.defaults.cap_build_memory:
-        import os
         from orchestrator.build_env import apply_build_memory_limits
         gradle_user_home = Path(
             os.environ.get("GRADLE_USER_HOME") or (Path.home() / ".gradle")

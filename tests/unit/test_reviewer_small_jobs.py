@@ -490,6 +490,20 @@ async def test_restart_announces_the_interrupted_job(tmp_path):
     assert rig.chat.sent[0][0] == "[acme/app] #1712: edit of 2 failed — interrupted (daemon restarted)"
 
 
+async def test_start_recovers_and_announces_and_loop_does_not(tmp_path):
+    rig = Rig(tmp_path)
+    stale = rig.small.queue(rig.review, "edit", 2, "x")
+    rig.store.set_job_state(stale.id, "running", "", T0.isoformat())
+    stop = asyncio.Event()
+    stop.set()
+    await asyncio.wait_for(rig.small.loop(stop), 5)
+    assert rig.store.job(stale.id).state == "running" and rig.chat.sent == []   # recovery is start()'s
+    await rig.small.start()
+    assert rig.store.job(stale.id).state == "failed"
+    assert rig.chat.sent == [
+        (small_failed_line(SCOPE, 1712, "edit", 2, "interrupted (daemon restarted)"), rig.review.id)]
+
+
 @pytest.mark.parametrize("state", ["superseded", "stale"])
 async def test_review_outdated_during_the_session_is_not_edited(tmp_path, state):
     rig = Rig(tmp_path, content="Use exponential backoff.")

@@ -313,3 +313,26 @@ async def test_github_rate_limit_403_is_unreachable(headers, body, state):
     result = await check_github("t", "acme-org", "acme-app")
     assert result.extra["status"] == (429 if state == "unreachable" else 403)
     assert classify(cred(), result, NOW)[0] == state
+
+
+# --- The first round: the reviewer's parts wait for it ---
+
+async def test_first_round_set_after_the_first_check():
+    gate, calls = asyncio.Event(), []
+    h = service([cred(check=gated(gate, calls, ok()))], [], interval_seconds=3600)
+    stop = asyncio.Event()
+    runner = asyncio.create_task(h.run(stop))
+    await asyncio.sleep(0.01)
+    assert not h.first_round.is_set()
+    gate.set(); await asyncio.sleep(0.01)
+    assert h.first_round.is_set()
+    stop.set(); await asyncio.wait_for(runner, 1)
+
+async def test_first_round_set_when_the_round_raises():
+    def creds():
+        raise RuntimeError("config reloading")
+    h = CredentialHealth(creds, None, now=lambda: NOW, interval_seconds=3600)
+    stop = asyncio.Event(); runner = asyncio.create_task(h.run(stop))
+    await asyncio.sleep(0.01)
+    assert h.first_round.is_set()
+    stop.set(); await asyncio.wait_for(runner, 1)

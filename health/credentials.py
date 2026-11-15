@@ -246,6 +246,8 @@ class CredentialHealth:
         self._tz = tz
         self._memory: dict[str, _Memory] = {}
         self._inflight: dict[str, asyncio.Task[CredentialStatus]] = {}
+        # Set once run()'s first round has returned or raised: the reviewer's parts wait for it.
+        self.first_round = asyncio.Event()
 
     async def check_all(self) -> list[CredentialStatus]:
         creds = self._credentials_fn()
@@ -294,6 +296,7 @@ class CredentialHealth:
                 await self.check_all()
             except Exception:
                 logger.exception("Credential health round failed")
+            self.first_round.set()
             try:
                 await asyncio.wait_for(stop.wait(), timeout=self._interval)
             except asyncio.TimeoutError:

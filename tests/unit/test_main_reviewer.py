@@ -216,14 +216,22 @@ def test_reviewer_chat_not_added_to_allowlist(capsys, caplog):
 
 
 class _Part:
-    """The reviewer service, the job runner or the small runner: run(stop) returns once stop is set."""
+    """The reviewer service, the job runner or the small runner: run(stop) returns once stop is set.
+    start() and loop(stop) stand in for a runner's recovery and its loop (run without the recovery);
+    `starts` counts the start() calls."""
 
     def __init__(self):
         self.stops: list[asyncio.Event] = []
+        self.starts = 0
 
     async def run(self, stop):
         self.stops.append(stop)
         await stop.wait()
+
+    async def start(self):
+        self.starts += 1
+
+    loop = run
 
 
 async def test_reviewer_parts_started():
@@ -242,6 +250,74 @@ async def test_reviewer_parts_started():
         assert task.done() and not task.cancelled()   # stopped by its event, not cancelled
 
     assert _start_reviewer(None, None, None) == {}   # no repo to review: none is built
+
+
+NAMES = ("Reviewer", "Review jobs", "Review edits")
+
+
+async def test_reviewer_parts_wait_for_the_first_credential_round():
+    ready, parts = asyncio.Event(), (_Part(), _Part(), _Part())
+    background = _start_reviewer(*parts, ready=ready, wait=5.0)
+    await asyncio.sleep(0.05)
+    assert all(p.stops == [] for p in parts)        # no poll, no job before the first round
+    ready.set(); await asyncio.sleep(0.01)
+    assert [p.stops for p in parts] == [[background[n][1]] for n in NAMES]
+    await _stop_background(background, timeout=1.0)
+
+
+async def test_runners_recover_before_the_first_credential_round():
+    ready, parts = asyncio.Event(), (_Part(), _Part(), _Part())
+    background = _start_reviewer(*parts, ready=ready, wait=5.0)
+    await asyncio.sleep(0.05)
+    assert [p.starts for p in parts] == [0, 1, 1]   # the jobs a dead process left running: failed at once
+    assert all(p.stops == [] for p in parts)        # the loops wait; the poll has nothing to recover
+    ready.set(); await asyncio.sleep(0.01)
+    assert [p.stops for p in parts] == [[background[n][1]] for n in NAMES]
+    assert [p.starts for p in parts] == [0, 1, 1]   # once
+    await _stop_background(background, timeout=1.0)
+
+
+async def test_reviewer_parts_start_when_the_wait_runs_out():
+    parts = (_Part(), _Part(), _Part())
+    background = _start_reviewer(*parts, ready=asyncio.Event(), wait=0.05)
+    await asyncio.sleep(0.2)
+    assert all(len(p.stops) == 1 for p in parts)
+    await _stop_background(background, timeout=1.0)
+
+
+def _wait_ran_out(caplog) -> list[str]:
+    return [r.getMessage() for r in caplog.records
+            if r.levelno == logging.WARNING and "first round not done" in r.getMessage()]
+
+
+async def test_wait_running_out_is_logged(caplog):
+    caplog.set_level(logging.WARNING, logger="main")
+    background = _start_reviewer(_Part(), _Part(), _Part(), ready=asyncio.Event(), wait=0.05)
+    await asyncio.sleep(0.2)
+    assert sorted(_wait_ran_out(caplog)) == sorted(
+        f"Credential health: first round not done after 0 s; starting {n} anyway" for n in NAMES)
+    await _stop_background(background, timeout=1.0)
+
+    caplog.clear()
+    ready = asyncio.Event()
+    background = _start_reviewer(_Part(), _Part(), _Part(), ready=ready, wait=0.05)
+    ready.set(); await asyncio.sleep(0.2)
+    assert _wait_ran_out(caplog) == []                  # the round came first: nothing to say
+    await _stop_background(background, timeout=1.0)
+
+    stop = asyncio.Event()
+    task = asyncio.create_task(main._when_ready(asyncio.Event(), stop, _Part().run, 0.05))
+    await asyncio.sleep(0.2); stop.set(); await task
+    assert _wait_ran_out(caplog) == [
+        "Credential health: first round not done after 0 s; starting the reviewer anyway"]
+
+
+async def test_stop_while_waiting_starts_nothing():
+    parts = (_Part(), _Part(), _Part())
+    background = _start_reviewer(*parts, ready=asyncio.Event(), wait=5.0)
+    await _stop_background(background, timeout=1.0)
+    assert all(t.done() and not t.cancelled() for t, _ in background.values())
+    assert all(p.stops == [] for p in parts)
 
 
 class _Built(_Part):
@@ -318,6 +394,7 @@ def _run_main(tmp_path, monkeypatch, contexts, telegram_events=None, *, default_
         await _stop_background(background, timeout)
 
     async def idle(self, stop):
+        self.first_round.set()   # the first round is done at once: the reviewer's parts start
         await stop.wait()
 
     async def no_tickets(self):

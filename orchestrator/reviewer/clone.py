@@ -189,6 +189,25 @@ class ReviewClone:
         await self._git("fetch", ["-C", str(self.path), "fetch", "origin", f"+refs/pull/{number}/head:{ref}"])
         return (await self._git("rev-parse", ["-C", str(self.path), "rev-parse", ref])).strip()
 
+    async def make_job_clone(self, dest: Path, number: int) -> ReviewClone:
+        """A clone of this clone at dest for one job: checked out detached at the base this clone was refreshed
+        to, with the local branches <base> and pr-review/<number>, its origin this clone's path (no token).
+        The caller holds `lock` and has run refresh() and fetch_pr_head(number). `--local` hard-links the
+        objects, never `--shared`: the session reads only its own directories, so objects borrowed from this
+        clone would be unreadable to its git. Nothing at dest is touched: a path that exists raises."""
+        dest = Path(dest).absolute()
+        if dest.exists() or dest.is_symlink():
+            raise CloneError(f"job clone path exists: {dest}")
+        dest.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+        await self._git("clone", ["clone", "--local", "--no-checkout", str(self.path), str(dest)])
+        job = ReviewClone(dest, str(self.path), self._base, "", self._timeout)
+        base, pr = f"refs/remotes/origin/{self._base}", f"refs/remotes/origin/pr-review/{number}"
+        await job._git("checkout", ["-C", str(dest), "-c", "advice.detachedHead=false",
+                                    "checkout", "--force", "--detach", base])
+        await job._git("update-ref", ["-C", str(dest), "update-ref", f"refs/heads/{self._base}", base])
+        await job._git("update-ref", ["-C", str(dest), "update-ref", f"refs/heads/pr-review/{number}", pr])
+        return job
+
     async def delete_branch(self, number: int) -> None:
         """Remove the local branch pr-review/<number>; one that is not there is no error. A symref there is
         removed itself, never the ref it points at."""

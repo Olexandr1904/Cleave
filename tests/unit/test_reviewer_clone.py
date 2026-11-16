@@ -529,3 +529,57 @@ async def test_delete_branch(tmp_path, pr7):
     with pytest.raises(subprocess.CalledProcessError):
         git("symbolic-ref", "-q", "refs/heads/pr-review/7", cwd=clone.path)
     assert git("rev-parse", "--verify", "refs/heads/develop", cwd=clone.path) == base
+
+
+async def job_clone(tmp_path, bare, number=7):
+    """The review clone refreshed with PR `number` fetched, and a job clone made from it."""
+    clone = await refreshed(tmp_path, bare)
+    await clone.fetch_pr_head(number)
+    async with clone.lock:
+        job = await clone.make_job_clone(tmp_path / "work" / "acme" / "app" / "job1" / "clone", number)
+    return clone, job
+
+
+async def test_job_clone_is_at_base_with_the_pr_branch(tmp_path, pr7):
+    bare, base, head = pr7
+    _, job = await job_clone(tmp_path, bare)
+    assert git("rev-parse", "HEAD", cwd=job.path) == base
+    assert git("rev-parse", "refs/heads/pr-review/7", cwd=job.path) == head
+    assert git("rev-parse", "refs/heads/develop", cwd=job.path) == base
+    assert git("rev-parse", "refs/remotes/origin/develop", cwd=job.path) == base
+    assert await job.merge_base(head) == base
+    assert (job.path / "docs" / "process.md").is_file()
+
+
+async def test_job_clone_needs_nothing_from_the_review_clone(tmp_path, pr7):
+    bare, _, head = pr7
+    clone, job = await job_clone(tmp_path, bare)
+    assert not (job.path / ".git" / "objects" / "info" / "alternates").exists()
+    await clone.delete_branch(7)
+    git("-c", "gc.reflogExpire=now", "-c", "gc.reflogExpireUnreachable=now", "gc", "--prune=now", cwd=clone.path)
+    git("cat-file", "-e", head, cwd=job.path)  # the PR head's objects are the job clone's own
+
+
+async def test_job_clone_carries_no_token(tmp_path, pr7):
+    bare, _, _ = pr7
+    clone = ReviewClone(tmp_path / "clone", f"file://{bare}", "develop", "ghp_job_clone_secret")
+    await clone.refresh()
+    await clone.fetch_pr_head(7)
+    async with clone.lock:
+        job = await clone.make_job_clone(tmp_path / "work" / "job1" / "clone", 7)
+    config = (job.path / ".git" / "config").read_text()
+    assert "extraheader" not in config and "credential" not in config and "ghp_job_clone_secret" not in config
+    assert git("config", "--get", "remote.origin.url", cwd=job.path) == str(clone.path)
+
+
+async def test_job_clone_refuses_an_existing_path(tmp_path, pr7):
+    bare, _, _ = pr7
+    clone = await refreshed(tmp_path, bare)
+    await clone.fetch_pr_head(7)
+    dest = tmp_path / "taken"
+    dest.mkdir()
+    (dest / "keep.txt").write_text("mine")
+    with pytest.raises(CloneError, match="job clone path exists"):
+        async with clone.lock:
+            await clone.make_job_clone(dest, 7)
+    assert (dest / "keep.txt").read_text() == "mine"

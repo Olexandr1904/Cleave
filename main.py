@@ -785,6 +785,8 @@ def main(argv: list[str] | None = None) -> int:
             reviewer_chat, ClaudeCodeAdapter(), trackers,
             RunnerConfig(
                 reviewer_data / "jobs", secret_paths, jobs, ledgers_dir=reviewer_data / "ledgers",
+                work_dir=reviewer_data / "work", max_parallel=global_config.reviewer.max_parallel_jobs,
+                min_free_bytes=global_config.workspaces.min_free_disk_gb * 1024**3,
             ),
             event_bus=event_bus,
         )

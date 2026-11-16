@@ -80,6 +80,13 @@ class RunnerConfig:
     secret_paths: list[Path]
     jobs: dict[str, ReviewerJobConfig]
     ledgers_dir: Path | None = None  # None: no retention sweep
+    work_dir: Path | None = None  # the job clones' root; None: `work` beside jobs_dir
+    max_parallel: int = 6  # heavy jobs running at once
+    min_free_bytes: int = 0  # no job starts while the work dir's volume has less free
+
+    def job_root(self, project_id: str, repo_id: str, job_id: str) -> Path:
+        """The directory a job owns while it runs: its job clone and the clone's worktree."""
+        return (self.work_dir or self.jobs_dir.parent / "work") / project_id / repo_id / job_id
 
 
 def settle(job: Job, row: BoardRow | None, jobs: list[Job], skipped: bool = False) -> tuple[str, str]:

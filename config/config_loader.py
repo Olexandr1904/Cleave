@@ -173,6 +173,12 @@ def _parse_reviewer_global(data: dict, file_path: str) -> ReviewerGlobalConfig:
         raise ConfigError(
             f"Invalid fields in 'reviewer': {e}", file_path=file_path, field="reviewer",
         ) from e
+    cap = reviewer.max_parallel_jobs
+    if isinstance(cap, bool) or not isinstance(cap, int) or cap < 1:
+        raise ConfigError(
+            f"'reviewer.max_parallel_jobs' must be a whole number of at least 1, not {cap!r}",
+            file_path=file_path, field="reviewer.max_parallel_jobs",
+        )
     for kind, job_raw in jobs_raw.items():
         where = f"reviewer.jobs.{kind}"
         if kind not in reviewer.jobs:

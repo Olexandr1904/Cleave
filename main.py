@@ -172,10 +172,11 @@ def _reviewer_contexts(
 
 
 def _reviewer_chat(
-    notifier, global_config: GlobalConfig, projects: dict[str, LoadedProject], store=None,
+    notifier, global_config: GlobalConfig, projects: dict[str, LoadedProject], store=None, translator=None,
 ) -> ReviewerChat | None:
     """The reviewer chat, else the operator chat; a failed send raises. With `store`, every message it
-    sends is a reply anchor in it.
+    sends is a reply anchor in it; with `translator`, the model-written text of its messages is
+    translated into the Telegram language.
 
     None when there is no target (no Telegram, or no chat id): then no line counts as delivered.
     """
@@ -184,7 +185,7 @@ def _reviewer_chat(
     chat_id = global_config.reviewer.telegram_chat_id or operator_chat_id(global_config, projects)
     if notifier is None or not chat_id:
         return None
-    return ReviewerChat(notifier, chat_id, store=store)
+    return ReviewerChat(notifier, chat_id, store=store, translator=translator)
 
 
 def _allowed_chat_ids(global_config: GlobalConfig, projects: dict[str, LoadedProject]) -> set[str]:
@@ -587,9 +588,17 @@ def main(argv: list[str] | None = None) -> int:
         if chat_id:
             await notifier.send_message(chat_id, text)
 
+    from orchestrator.tg_i18n import chat_language, project_language
+
+    def _language_of(project_id: str) -> str:
+        """The Telegram language of a project ("": global.yaml's), read from the live config: the
+        dashboard's Settings change it without a restart."""
+        return project_language(global_config, projects, project_id)
+
     credential_health = CredentialHealth(
         lambda: build_credentials(global_config, projects, claude_bin),
         send_line=_credential_line,
+        language=lambda: _language_of(""),
     )
 
     def _auth_reporter(key: str) -> Callable[[int], None]:
@@ -630,10 +639,20 @@ def main(argv: list[str] | None = None) -> int:
     # notifier stays None and every escalation dead-ends at FAILED with
     # "No notifier configured for escalation".
     tg_token, _ = daemon_bot_token(global_config, projects)
+    translator = None
     if tg_token:
+        from integrations.llm.claude_code_adapter import ClaudeCodeAdapter
         from integrations.telegram.telegram_adapter import TelegramAdapter
+        from orchestrator.reviewer.db import reviewer_db_path
+        from orchestrator.tg_translate import Translator
 
         notifier = TelegramAdapter(bot_token=tg_token, event_bus=event_bus)
+        # Model-written text in a message for a project whose telegram.language is not English: one
+        # light, tool-less `claude -p` turn per message, on the claude.ai login like the reviewer's.
+        translator = Translator(
+            ClaudeCodeAdapter(), work_dir=reviewer_db_path(global_config.reviewer).parent / "translate",
+        )
+        notifier.set_translator(translator)
         print("  Telegram adapter initialized")
 
     def _build_repo_adapters(project_id, project, logger_):
@@ -743,7 +762,9 @@ def main(argv: list[str] | None = None) -> int:
     # The switches' database: with Telegram on, a reply to a reviewer message is answered from it
     # even with no repo to review.
     reviewer_store = ReviewerStore(connect(reviewer_db_path(global_config.reviewer)))
-    reviewer_chat = _reviewer_chat(notifier, global_config, projects, store=reviewer_store)
+    reviewer_chat = _reviewer_chat(
+        notifier, global_config, projects, store=reviewer_store, translator=translator,
+    )
     # Build the chat-id allowlist from global + per-project configs so
     # the bot ignores commands from other chats. An empty set disables
     # the bot (fail-safe); None would disable the check entirely. The
@@ -773,7 +794,7 @@ def main(argv: list[str] | None = None) -> int:
         reviewer = ReviewerService(
             reviewer_contexts, reviewer_store, switches, credential_health.failing,
             reviewer_chat.send if reviewer_chat is not None else None, _pipeline_prs,
-            event_bus=event_bus,
+            event_bus=event_bus, language_of=_language_of,
         )
         # The model sessions run on the claude.ai login (the CLI), never the API key; they may read
         # neither the repo's .env nor the config directory.
@@ -786,12 +807,13 @@ def main(argv: list[str] | None = None) -> int:
             RunnerConfig(
                 reviewer_data / "jobs", secret_paths, jobs, ledgers_dir=reviewer_data / "ledgers",
             ),
-            event_bus=event_bus,
+            event_bus=event_bus, language_of=_language_of,
         )
         # Edit and draft sessions read the review job's copy only; nothing is posted.
         review_edits = SmallJobRunner(
             reviewer_store, reviewer_chat, ClaudeCodeAdapter(),
             SmallRunnerConfig(reviewer_data / "jobs", secret_paths, jobs), event_bus=event_bus,
+            language_of=_language_of,
         )
         # A reply the grammar does not know: the model's command runs only after a Yes.
         reply_parser = ReplyParser(
@@ -821,6 +843,7 @@ def main(argv: list[str] | None = None) -> int:
                 reviewer_contexts, reviewer_store, reviewer, reviewer_chat,
                 Posting(reviewer_store, ledgers_dir=reviewer_data / "ledgers"),
                 review_edits, reply_parser, credential_failing=credential_health.failing,
+                language_of=_language_of,
             )
             intent_parser = IntentParser(
                 llm_adapter=llm,
@@ -850,6 +873,8 @@ def main(argv: list[str] | None = None) -> int:
                 event_bus=event_bus,
                 switches=switches,
                 get_projects=lambda: projects,
+                language_of=_language_of,
+                chat_language=lambda chat_id: chat_language(global_config, projects, chat_id),
                 reviewer=reviewer_replies,
                 # Never None: with an empty allowlist the reviewer reads no chat at all.
                 reviewer_chat_ids=allowed_chat_ids,

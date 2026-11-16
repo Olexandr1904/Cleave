@@ -299,7 +299,7 @@ Write endpoints (`POST`):
 - `/api/workspaces/{id}/take-control|release-control` — hand a workspace to a human and back
 - `/api/workspaces/{id}/pause|unpause|resume|archive|delete|clean` — workspace lifecycle
 - `/api/workspaces/{id}/rerun` — DONE-only: re-clone source, refresh ticket data from tracker, restart pipeline from ANALYSIS; body `{ "reason": "<non-empty string>" }`
-- `/api/workspaces/{id}/clear-gradle-and-retry` — server-side validates the workspace is FAILED and the error matches the AAPT2 signature before wiping caches
+- `/api/workspaces/{id}/clear-gradle-and-retry` — server-side validates the workspace is FAILED and the error matches the AAPT2 signature before wiping caches; it clears only an explicitly set `GRADLE_USER_HOME` (never the shared `~/.gradle`) and stops only that home's Gradle daemons
 - `/api/projects/create` and `/api/projects/validate-step` — the wizard's two endpoints (validate one step against live APIs, then commit)
 - `/api/reviews/review-now` and `/api/reviews/skip` (there is no posting route: posting is done from Telegram only) — body `{"scope": "<project>/<repo>", "number": <PR number>}`; 404 for a PR not on the board, 409 from review-now when a review at that head is already queued, running or deferred; 403 `cross-site request refused` unless the body is sent as `Content-Type: application/json` and any `Origin` / `Sec-Fetch-Site` header says the request comes from the dashboard itself (so another site open in the browser cannot queue a review; curl, which sends neither header, works)
 

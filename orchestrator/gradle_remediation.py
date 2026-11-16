@@ -27,8 +27,11 @@ import logging
 import os
 import re
 import shutil
+import signal
 import subprocess
 from pathlib import Path
+
+from orchestrator.build_env import explicit_gradle_user_home
 
 logger = logging.getLogger(__name__)
 
@@ -170,29 +173,54 @@ ARCH_MISMATCH_HELP = (
 _GRADLE_DAEMON_MAIN_CLASS = "org.gradle.launcher.daemon.bootstrap.GradleDaemon"
 
 
-def _stop_gradle_daemons() -> bool:
-    """Kill any running Gradle daemon processes owned by the current user.
+class SharedGradleHomeError(RuntimeError):
+    """No gradle user home of Cleave's own to clear: ~/.gradle is shared with the host's other builds."""
+
+
+def _terminate(pid: int) -> None:
+    os.kill(pid, signal.SIGTERM)
+
+
+def _logged_daemon_pids(gradle_home: Path) -> list[int]:
+    """The pids of the daemons started from this gradle home: each writes `daemon/<version>/daemon-<pid>.out.log`
+    there. A log outlives its daemon, so a pid here may since belong to another process."""
+    pids = {int(m.group(1)) for log in gradle_home.glob("daemon/*/daemon-*.out.log")
+            if (m := re.fullmatch(r"daemon-(\d+)\.out\.log", log.name))}
+    return sorted(pids)
+
+
+def _runs_from(pid: int, gradle_home: Path) -> bool:
+    """Whether the process is a Gradle daemon run from this gradle home's wrapper distribution."""
+    try:
+        result = subprocess.run(["ps", "-ww", "-o", "command=", "-p", str(pid)],
+                                check=False, timeout=5, capture_output=True)
+    except (subprocess.SubprocessError, OSError) as e:
+        logger.warning("Could not read process %d: %s", pid, e)
+        return False
+    if result.returncode != 0:  # no such process
+        return False
+    command = result.stdout.decode(errors="replace")
+    return _GRADLE_DAEMON_MAIN_CLASS in command and f"{gradle_home}/" in command
+
+
+def _stop_gradle_daemons(gradle_home: Path) -> bool:
+    """SIGTERM the running Gradle daemons of this gradle home only, never another home's (a CI runner's
+    daemons in ~/.gradle, say).
 
     Returns True if at least one daemon was signalled, False otherwise. Errors
     are logged but never raised — daemons are best-effort to stop, and Gradle
     will respawn them as needed on the next build.
     """
-    try:
-        result = subprocess.run(
-            ["pkill", "-TERM", "-f", _GRADLE_DAEMON_MAIN_CLASS],
-            check=False, timeout=5, capture_output=True,
-        )
-    except (subprocess.SubprocessError, FileNotFoundError) as e:
-        logger.warning("Could not stop Gradle daemons (pkill failed): %s", e)
-        return False
-    # pkill exit codes: 0 = at least one matched, 1 = none matched, 2/3 = error
-    if result.returncode == 0:
-        return True
-    if result.returncode == 1:
-        return False
-    logger.warning("pkill returned %d for GradleDaemon: %s",
-                   result.returncode, result.stderr.decode(errors="replace"))
-    return False
+    signalled = False
+    for pid in _logged_daemon_pids(gradle_home):
+        if not _runs_from(pid, gradle_home):
+            continue
+        try:
+            _terminate(pid)
+            signalled = True
+        except OSError as e:
+            logger.warning("Could not stop Gradle daemon %d: %s", pid, e)
+    return signalled
 
 
 def _wipe_daemon_registry(gradle_home: Path) -> None:
@@ -221,13 +249,22 @@ def clear_gradle_transforms(gradle_home: Path | None = None) -> int:
     by the transforms wipe. Daemon kill / registry wipe failures do NOT raise:
     they are logged and the function continues with the cache wipe (which is
     the most-impactful part).
-    """
-    home = gradle_home or _default_gradle_home()
 
-    # 1. Stop any running daemons. They cache in-memory references to the
-    #    transforms tree we are about to delete; if we leave them alive,
+    Without `gradle_home` it clears the GRADLE_USER_HOME set explicitly, and
+    raises SharedGradleHomeError when there is none: gradle would then use
+    ~/.gradle, shared with the host's other builds, which Cleave leaves alone.
+    """
+    home = gradle_home or explicit_gradle_user_home(os.environ)
+    if home is None:
+        raise SharedGradleHomeError(
+            "GRADLE_USER_HOME is not set: ~/.gradle is shared with the host's other gradle builds, "
+            "so Cleave does not clear it"
+        )
+
+    # 1. Stop this home's running daemons. They cache in-memory references to
+    #    the transforms tree we are about to delete; if we leave them alive,
     #    builds reuse them and fail with stale-reference errors.
-    _stop_gradle_daemons()
+    _stop_gradle_daemons(home)
 
     # 2. Wipe daemon registry so the next build can't try to reattach to a
     #    process we just killed.
@@ -247,13 +284,6 @@ def clear_gradle_transforms(gradle_home: Path | None = None) -> int:
             freed += _dir_size(transforms)
             shutil.rmtree(transforms)
     return freed
-
-
-def _default_gradle_home() -> Path:
-    env = os.environ.get("GRADLE_USER_HOME")
-    if env:
-        return Path(env)
-    return Path.home() / ".gradle"
 
 
 def _dir_size(path: Path) -> int:

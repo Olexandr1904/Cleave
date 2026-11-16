@@ -22,7 +22,7 @@ def git_env(token: str) -> dict[str, str]:
     global config are not read at all, so no askPass, helper or insteadOf from the host can apply.
     Auto maintenance stays on but runs in the foreground, so nothing touches .git after a call returns.
     Hooks and fsmonitor are off (environment config outranks .git/config); the rest of .git/config is the
-    clone's own, which a job writes back after its session.
+    clone's own, which no session ever touches (sessions run in job clones, removed after their job).
     """
     header = base64.b64encode(f"x-access-token:{token}".encode()).decode()
     return {

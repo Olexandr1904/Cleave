@@ -52,7 +52,7 @@ _QUOTA_RETRY = timedelta(hours=1)  # when the CLI gives no reset time, or one al
 _NEWER_STATES = ("queued", "running", "deferred", "done", "posted")
 _PENDING_STATES = ("queued", "deferred", "running")
 _PREPARE_STATES = {"failed": "failed", "superseded": "superseded", "cancelled": "cancelled", "requeue": "queued"}
-_CONFIG_CHANGED = "the session changed the review clone's git config"
+_CONFIG_CHANGED = "the session changed its job clone's git config"
 # The third usage-limit or login deferral of a job fails it: session output that fakes either cannot loop.
 _MAX_DEFERRALS = 3
 _DEFERRED_TOO_OFTEN = f"deferred {_MAX_DEFERRALS} times (usage limit or login)"
@@ -280,6 +280,9 @@ class JobRunner:
             await self.run_job(job)
             if self._store.job(job.id).state == "queued":
                 self._wait_a_cycle.add(job.id)
+        except Exception as e:  # run_job's own handling failed: logged here, the job held for a cycle
+            logger.warning("Reviewer job %s (%s #%s) failed: %s", job.id, job.scope, job.number, _where(e))
+            self._wait_a_cycle.add(job.id)
         finally:
             self._in_flight.pop(job.id, None)
 
@@ -465,7 +468,8 @@ class JobRunner:
             outcome, changed_config = await self._session(ctx, job, paths, prepared.clone)
             await self._settle_outcome(ctx, job, paths, run, prepared, outcome, changed_config, started)
         finally:  # the job clone and its worktree, whatever happened: the job's copy keeps what is kept
-            await self._remove_root(root, job, run)
+            # The run as stored now: _fail and the chat may have written its error and notes since.
+            await self._remove_root(root, job, self._store.run(job.id) or run)
 
     async def _settle_outcome(
         self, ctx: RepoContext, job: Job, paths: JobPaths, run: JobRun, prepared: Prepared,

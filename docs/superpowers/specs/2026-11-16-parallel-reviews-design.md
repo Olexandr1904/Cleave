@@ -55,7 +55,7 @@ Telegram as soon as it is ready.
 - Two jobs sharing a checkout, a run directory, a worktree or git config.
 - Job clones or worktrees piling up after crashes, kills or restarts.
 - A session's change to its job clone's `.git/config`, `.git/info/attributes` or `.git/commondir` going
-  unnoticed: it still fails the job (`the session changed the review clone's git config`).
+  unnoticed: it still fails the job (`the session changed its job clone's git config`).
 
 ## Constraints
 

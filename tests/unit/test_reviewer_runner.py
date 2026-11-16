@@ -431,7 +431,7 @@ async def test_session_changing_its_job_clones_git_files_fails_job(tmp_path, mon
     rig.write = tamper
     job = rig.add_job()
     await rig.runner.run_job(job)
-    reason = "the session changed the review clone's git config"
+    reason = "the session changed its job clone's git config"
     assert rig.state(job) == ("failed", reason)
     assert (rig.clone.path / ".git" / "config").read_text() == CONFIG_TEXT   # the review clone untouched
     assert not rig.root(job).exists()   # the tampered job clone is gone, never used again
@@ -1672,3 +1672,34 @@ async def test_a_wait_extended_by_a_later_hit_is_not_lifted_by_a_job_started_bef
     await asyncio.wait_for(e_task, 5)   # E started before that hit: it lifts nothing
     assert rig.state(e)[0] == "done"
     assert rig.runner.next_job() is None
+
+
+# --- Final review fixes ---
+
+async def test_a_failed_job_keeps_its_error_when_its_dir_is_not_removed(tmp_path, monkeypatch):
+    rig = Rig(tmp_path, monkeypatch)
+    rig.outcome = SessionOutcome("failed", error="exit 1: boom")
+    def failing_rmtree(path, *args, **kwargs):
+        raise OSError("busy")
+    monkeypatch.setattr(runner_module.shutil, "rmtree", failing_rmtree)
+    job = rig.add_job()
+    await rig.runner.run_job(job)
+    run = rig.store.run(job.id)
+    assert rig.state(job) == ("failed", "exit 1: boom")
+    assert (run.error, run.notes) == ("exit 1: boom", ["job directory not removed: OSError"])
+
+async def test_an_error_escaping_a_job_is_logged_and_the_job_waits_a_cycle(tmp_path, monkeypatch, caplog):
+    rig = Rig(tmp_path, monkeypatch, idle_seconds=3600)
+    job = rig.add_job()
+    calls = []
+    async def broken(j):
+        calls.append(j.id)
+        raise RuntimeError("store gone")
+    monkeypatch.setattr(rig.runner, "run_job", broken)
+    stop = asyncio.Event()
+    asyncio.get_running_loop().call_later(0.2, stop.set)
+    with caplog.at_level(logging.WARNING, logger="orchestrator.reviewer.runner"):
+        await asyncio.wait_for(rig.runner.run(stop), 5)
+    assert calls == [job.id]   # not started again at once: no idle wait has passed
+    assert f"Reviewer job {job.id} (acme/app #1712) failed: RuntimeError at " in caplog.text
+    assert "store gone" not in caplog.text

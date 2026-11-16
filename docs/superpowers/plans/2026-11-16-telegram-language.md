@@ -21,7 +21,8 @@
 - **`text N`, edit and draft results** in Ukrainian end with one line saying GitHub gets the English text.
 - **Reply commands are unchanged.** Ukrainian hints quote the English commands verbatim (`"post 1 2 4 approve"`); the grammar's Ukrainian synonyms keep working. Button callback data is unchanged; labels are translated.
 - **The intent parser** is asked to write its `reply` in the language (no extra call).
-- **Dashboard:** the Settings view gets a "Telegram language" section (global and one row per loaded project). Saving rewrites only the `language:` line of the YAML's `telegram:` block (inserted when missing), checked by re-parsing, and applies to the running daemon at once. The **+ New Project** wizard's Notifications step gets a language select; the create route writes it into `project.yaml` once the setup agent has written the file. The dashboard's own UI stays English.
+- **Dashboard:** the Settings view gets a "Telegram language" section (global and one row per loaded project). Saving rewrites only the `language:` line of the YAML's `telegram:` block (inserted when missing), checked by re-parsing, and applies to the running daemon at once. The **+ New Project** wizard's Notifications step gets a language select, preselected with the global language; only another choice is written (by the create route, into `project.yaml` once the setup agent has written the file), so a new project otherwise follows the global language. The dashboard's own UI stays English. (Revised after the code review: the first version always wrote the choice, pinning new projects to English.)
+- **Answers that need a model turn** (a Ukrainian `text N`) are sent from a tracked task: python-telegram-bot handles one update at a time, and the reviewer's replies never hold its handler. The command layer's answers translate inline, as its intent parser already calls a model inline.
 
 ## Global Constraints
 

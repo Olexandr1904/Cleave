@@ -23,3 +23,9 @@ GITHUB_TOKEN=
 TELEGRAM_BOT_TOKEN=
 # Chat ID for escalation messages
 TELEGRAM_CHAT_ID=
+
+# --- Agent Bash timeouts (optional) ---
+# Cleave gives the agents' Bash commands 15 minutes by default and 25 at most, so a Gradle build can finish.
+# Set these to override; keep the maximum under 30 minutes, where the stall watchdog kills a silent run.
+# BASH_DEFAULT_TIMEOUT_MS=900000
+# BASH_MAX_TIMEOUT_MS=1500000

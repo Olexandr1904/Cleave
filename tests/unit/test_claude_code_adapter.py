@@ -12,6 +12,8 @@ from unittest.mock import AsyncMock, patch, MagicMock
 import pytest
 
 from integrations.llm.claude_code_adapter import (
+    BASH_TIMEOUT_DEFAULTS,
+    IDLE_STALL_SECONDS,
     ClaudeCodeAdapter,
     QuotaExhaustedError,
     _post_result_watchdog,
@@ -570,9 +572,32 @@ class TestIsolatedSession:
             )
         env = _child_env(m)
         keys = set(env)
-        expected_keys = set(os.environ) - set(API_KEY_NAMES)
+        expected_keys = (set(os.environ) | set(BASH_TIMEOUT_DEFAULTS)) - set(API_KEY_NAMES)
         assert keys == expected_keys
-        assert all(env[k] == os.environ[k] for k in env), "an inherited value changed"
+        assert all(env[k] == os.environ[k] for k in env if k in os.environ), "an inherited value changed"
+
+    async def test_no_env_gets_the_bash_timeouts(self, adapter, monkeypatch):
+        monkeypatch.delenv("BASH_DEFAULT_TIMEOUT_MS", raising=False)
+        monkeypatch.delenv("BASH_MAX_TIMEOUT_MS", raising=False)
+        with patch("asyncio.create_subprocess_exec", return_value=self._ok_proc()) as m:
+            await adapter.execute_in_workspace(prompt="p", cwd="/tmp", allowed_tools=["read_file"])
+        env = _child_env(m)
+        assert env["BASH_DEFAULT_TIMEOUT_MS"] == "900000"     # 15 min: a Gradle build outlasts the CLI's 2 min
+        assert env["BASH_MAX_TIMEOUT_MS"] == "1500000"        # 25 min
+
+    async def test_the_daemons_own_bash_timeout_wins(self, adapter, monkeypatch):
+        monkeypatch.setenv("BASH_MAX_TIMEOUT_MS", "60000")
+        monkeypatch.delenv("BASH_DEFAULT_TIMEOUT_MS", raising=False)
+        with patch("asyncio.create_subprocess_exec", return_value=self._ok_proc()) as m:
+            await adapter.execute_in_workspace(prompt="p", cwd="/tmp", allowed_tools=["read_file"])
+        env = _child_env(m)
+        assert env["BASH_MAX_TIMEOUT_MS"] == "60000"
+        assert env["BASH_DEFAULT_TIMEOUT_MS"] == "900000"
+
+    def test_bash_ceiling_stays_under_the_stall_watchdog(self):
+        # A foreground command prints nothing to the stream while it runs: a longer one would be killed as a stall.
+        default, ceiling = (int(BASH_TIMEOUT_DEFAULTS[k]) for k in ("BASH_DEFAULT_TIMEOUT_MS", "BASH_MAX_TIMEOUT_MS"))
+        assert default <= ceiling < IDLE_STALL_SECONDS * 1000
 
     async def test_raw_allowed_tools_passthrough(self, adapter):
         with patch("asyncio.create_subprocess_exec", return_value=self._ok_proc()) as m:

@@ -47,13 +47,13 @@ class TestPutModel:
     async def test_persists_valid_model(self, client):
         r = client.put(
             "/api/settings/model",
-            json={"model": "claude-opus-4-7"},
+            json={"model": "claude-opus-5-5"},
         )
         assert r.status_code == 200
-        assert r.json()["model"] == "claude-opus-4-7"
+        assert r.json()["model"] == "claude-opus-5-5"
 
         r2 = client.get("/api/settings/model")
-        assert r2.json()["model"] == "claude-opus-4-7"
+        assert r2.json()["model"] == "claude-opus-5-5"
 
     async def test_rejects_unknown_model(self, client):
         r = client.put(

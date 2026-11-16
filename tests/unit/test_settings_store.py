@@ -38,9 +38,9 @@ class TestInitSettings:
 
     async def test_idempotent_does_not_overwrite_existing_value(self, db):
         await init_settings(db)
-        await set_model(db, "claude-opus-4-7")
+        await set_model(db, "claude-opus-5-5")
         await init_settings(db)  # Second call should not seed
-        assert await get_model(db) == "claude-opus-4-7"
+        assert await get_model(db) == "claude-opus-5-5"
 
 
 class TestGetSetModel:
@@ -58,3 +58,33 @@ class TestGetSetModel:
 
 def test_default_model_is_in_allowed_list():
     assert DEFAULT_MODEL in ALLOWED_MODELS
+
+
+def test_allowed_models_are_the_current_generation():
+    assert ALLOWED_MODELS == ("claude-fable-5-2", "claude-opus-5-5", "claude-sonnet-5-5", "claude-haiku-5-5")
+    assert DEFAULT_MODEL == "claude-sonnet-5-5"
+
+
+class TestRetiredModel:
+    """A model saved before the list changed is no longer offered, so the stored value moves on at startup."""
+
+    async def _stored(self, db, model):
+        await db.execute("CREATE TABLE settings (key TEXT PRIMARY KEY, value TEXT NOT NULL)")
+        await db.execute("INSERT INTO settings (key, value) VALUES ('model', ?)", (model,))
+        await db.commit()
+        await init_settings(db)
+        return await get_model(db)
+
+    @pytest.mark.parametrize("old, new", [
+        ("claude-opus-4-7", "claude-opus-5-5"),
+        ("claude-sonnet-4-6", "claude-sonnet-5-5"),
+        ("claude-haiku-4-5-20251001", "claude-haiku-5-5"),
+    ])
+    async def test_init_moves_a_retired_model_to_its_successor(self, db, old, new):
+        assert await self._stored(db, old) == new
+
+    async def test_init_moves_an_unknown_model_to_the_default(self, db):
+        assert await self._stored(db, "claude-sonnet-3.5") == DEFAULT_MODEL
+
+    async def test_init_keeps_an_allowed_model(self, db):
+        assert await self._stored(db, "claude-fable-5-2") == "claude-fable-5-2"

@@ -49,6 +49,7 @@ Override the Claude model for a single ticket.
 | `model-haiku` | Claude Haiku |
 | `model-sonnet` | Claude Sonnet |
 | `model-opus` | Claude Opus |
+| `model-fable` | Claude Fable |
 
 - **Where:** add the label on the Jira ticket itself, **before** the pipeline picks it up.
 - **Snapshot timing:** the model is resolved once at workspace creation and frozen on `WorkspaceState.model`. Re-labeling later does not affect a running workspace; delete the workspace and let the pipeline recreate it if you need to switch.
@@ -85,7 +86,7 @@ jira_repo_label: repo-frontend
 |---|---|---|---|
 | Custom (e.g. `ai-pipeline`) | Jira ticket | `project.yaml: jira.trigger_labels` | Ticket eligible for pipeline (AND across list) |
 | Custom (e.g. `human-only`) | Jira ticket | `project.yaml: jira.ignore_labels` | Skip ticket (OR across list) |
-| `model-haiku` / `model-sonnet` / `model-opus` | Jira ticket | Hard-coded in `orchestrator/model_resolver.py` | Override Claude model for this ticket |
+| `model-haiku` / `model-sonnet` / `model-opus` / `model-fable` | Jira ticket | Hard-coded in `orchestrator/model_resolver.py` | Override Claude model for this ticket |
 | Custom (e.g. `repo-frontend`) | Jira ticket | `repos/<repo-id>.yaml: jira_repo_label` | Route ticket to a specific repo |
 
 ## Anti-patterns to avoid

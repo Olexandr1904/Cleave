@@ -12,6 +12,7 @@ Every ticket workspace stores the Claude model it should use on `WorkspaceState.
 ## How to use
 
 1. Add one of these labels to the Jira ticket **before** the pipeline picks it up:
+   - `model-fable`
    - `model-haiku`
    - `model-opus`
    - `model-sonnet`
@@ -49,7 +50,7 @@ The label prefix is lowercase; the short name is matched case-insensitively (`mo
 
 ## Acceptance Criteria
 
-- AC1: Ticket with `model-opus` → `state.model == "claude-opus-4-7"` and every agent on that ticket dispatches with that model.
+- AC1: Ticket with `model-opus` → `state.model == "claude-opus-5-5"` and every agent on that ticket dispatches with that model.
 - AC2: Ticket with `model-opus` + `model-haiku` → `state.model` is the global default; one Jira comment posted listing both labels.
 - AC3: Ticket with `model-llama` → `state.model` is the global default; one Jira comment posted listing the supported labels.
 - AC4: Ticket with no `model-*` label → `state.model` is the global default snapshot at creation time.

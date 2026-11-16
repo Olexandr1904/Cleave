@@ -176,7 +176,7 @@ Secrets via `${ENV_VAR}` references resolved at load time.
 - Dashboard with structured event log, per-project ticket history, real-time refresh, project-creation wizard
 - Per-project health validators wired for Jira and VCS provider (git_identity / git_remote validators exist but not yet wired into `check_project`)
 - Agent permissions via `.claude/settings.json` and per-agent tool allowlists
-- Per-ticket model selection via Jira label (`model-haiku` / `model-sonnet` / `model-opus`)
+- Per-ticket model selection via Jira label (`model-haiku` / `model-sonnet` / `model-opus` / `model-fable`)
 
 ### Not Yet Implemented
 - GitLab adapter (`integrations/gitlab/`)

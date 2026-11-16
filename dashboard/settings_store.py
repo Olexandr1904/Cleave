@@ -9,17 +9,26 @@ from __future__ import annotations
 import aiosqlite
 
 ALLOWED_MODELS: tuple[str, ...] = (
-    "claude-opus-4-7",
-    "claude-sonnet-4-6",
-    "claude-haiku-4-5-20251001",
+    "claude-fable-5-2",
+    "claude-opus-5-5",
+    "claude-sonnet-5-5",
+    "claude-haiku-5-5",
 )
-DEFAULT_MODEL = "claude-sonnet-4-6"
+DEFAULT_MODEL = "claude-sonnet-5-5"
+
+# Models the list offered before, each with the model that took its place. A stored value moves on at startup.
+_SUCCESSORS = {
+    "claude-opus-4-7": "claude-opus-5-5",
+    "claude-sonnet-4-6": "claude-sonnet-5-5",
+    "claude-haiku-4-5-20251001": "claude-haiku-5-5",
+}
 
 _MODEL_KEY = "model"
 
 
 async def init_settings(db: aiosqlite.Connection) -> None:
-    """Create the settings table if missing and seed the model row if empty."""
+    """Create the settings table if missing, seed the model row if empty, and move a stored model that is
+    no longer offered to its successor (or the default)."""
     await db.execute(
         """
         CREATE TABLE IF NOT EXISTS settings (
@@ -33,6 +42,9 @@ async def init_settings(db: aiosqlite.Connection) -> None:
         (_MODEL_KEY, DEFAULT_MODEL),
     )
     await db.commit()
+    stored = await get_model(db)
+    if stored not in ALLOWED_MODELS:
+        await set_model(db, _SUCCESSORS.get(stored, DEFAULT_MODEL))
 
 
 async def get_model(db: aiosqlite.Connection) -> str:

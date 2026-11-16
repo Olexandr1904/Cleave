@@ -82,7 +82,10 @@ class DefaultsConfig:
     # Cap the JVM heap the build toolchain may request, written to
     # GRADLE_USER_HOME/gradle.properties at startup so it overrides each repo's
     # own (often oversized) org.gradle.jvmargs / kotlin.daemon.jvmargs.
-    cap_build_memory: bool = True
+    # Off by default, and written only to a GRADLE_USER_HOME set explicitly
+    # (one of Cleave's own, in .env): ~/.gradle is shared with other builds on
+    # the host, and capping it there made a CI runner's builds run out of memory.
+    cap_build_memory: bool = False
     build_gradle_heap_mb: int = 2048
     build_kotlin_heap_mb: int = 1536
     pr_comment_fetch_delay_minutes: int = 30

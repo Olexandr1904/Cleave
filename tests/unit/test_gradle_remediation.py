@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import subprocess
+import sys
 from pathlib import Path
 from unittest.mock import patch
 
@@ -188,6 +189,31 @@ class TestLooksLikeAapt2ArchMismatch:
         assert "Retry" in ARCH_MISMATCH_HELP
 
 
+def _log(home: Path, pid: int) -> None:
+    """The log a Gradle daemon started from `home` writes there."""
+    d = home / "daemon" / "8.14.1"
+    d.mkdir(parents=True, exist_ok=True)
+    (d / f"daemon-{pid}.out.log").write_text("log")
+
+
+@pytest.fixture
+def fake_daemon():
+    """Start a sleeping process whose command line is a Gradle daemon run from `home`'s wrapper distribution."""
+    procs: list[subprocess.Popen] = []
+
+    def start(home: Path) -> int:
+        jar = f"{home}/wrapper/dists/gradle-8.14.1-bin/x/gradle-8.14.1/lib/gradle-daemon-main-8.14.1.jar"
+        proc = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)", "-cp", jar,
+                                 _GRADLE_DAEMON_MAIN_CLASS, "8.14.1"])
+        procs.append(proc)
+        return proc.pid
+
+    yield start
+    for proc in procs:
+        proc.kill()
+        proc.wait()
+
+
 class TestClearGradleTransforms:
     def test_removes_transforms_under_each_version(self, tmp_path):
         gradle_home = tmp_path / ".gradle"
@@ -245,46 +271,57 @@ class TestClearGradleTransforms:
         assert freed >= 100
         assert not (explicit_home / "caches" / "8.14.1" / "transforms").exists()
 
-    def test_invokes_pkill_for_gradle_daemons(self, tmp_path):
-        """A stale Gradle daemon would otherwise reuse in-memory references to
-        the deleted transforms cache and reproduce the corruption symptom on
-        the next build. clear_gradle_transforms must signal pkill before
-        wiping anything."""
-        gradle_home = tmp_path / ".gradle"
-        gradle_home.mkdir()
+    def test_stops_the_daemons_of_this_home(self, tmp_path, fake_daemon, gradle_signals):
+        # A daemon left running keeps references to the deleted transforms and reproduces the corruption.
+        home = tmp_path / "cleave-gradle"
+        pid = fake_daemon(home)
+        _log(home, pid)
 
-        with patch("orchestrator.gradle_remediation.subprocess.run") as mock_run:
-            mock_run.return_value = subprocess.CompletedProcess(
-                args=[], returncode=1, stdout=b"", stderr=b"",
-            )
-            clear_gradle_transforms(gradle_home)
+        clear_gradle_transforms(home)
 
-        assert mock_run.called
-        cmd = mock_run.call_args.args[0]
-        assert cmd[0] == "pkill"
-        # -TERM signal, -f match against full command line so we hit the JVM
-        # daemon (the matched class is on the cp arg, not argv[0])
-        assert "-TERM" in cmd
-        assert "-f" in cmd
-        assert _GRADLE_DAEMON_MAIN_CLASS in cmd
+        assert gradle_signals == [pid]
 
-    def test_pkill_failure_does_not_raise(self, tmp_path):
-        """If pkill is missing or errors out, we still proceed with cache wipe
-        — the kill is best-effort, the wipe is the must-have."""
+    def test_leaves_a_daemon_of_another_home_alone(self, tmp_path, fake_daemon, gradle_signals):
+        # The pid in an old log of this home now belongs to another home's daemon (a CI runner's, say).
+        home, other = tmp_path / "cleave-gradle", tmp_path / "shared-gradle"
+        pid = fake_daemon(other)
+        _log(home, pid)
+
+        clear_gradle_transforms(home)
+
+        assert gradle_signals == []
+
+    def test_no_explicit_home_leaves_the_shared_home_alone(self, tmp_path, monkeypatch, gradle_signals):
+        # Without GRADLE_USER_HOME gradle uses ~/.gradle, which other builds on the host share.
+        monkeypatch.delenv("GRADLE_USER_HOME", raising=False)
+        monkeypatch.setenv("HOME", str(tmp_path))
+        transforms = tmp_path / ".gradle" / "caches" / "8.14.1" / "transforms"
+        transforms.mkdir(parents=True)
+        (transforms / "f").write_text("x")
+
+        with pytest.raises(Exception, match="GRADLE_USER_HOME"):
+            clear_gradle_transforms()
+
+        assert (transforms / "f").exists()
+        assert gradle_signals == []
+
+    def test_process_listing_failure_does_not_stop_the_wipe(self, tmp_path, gradle_signals):
+        """Stopping daemons is best-effort; the wipe is the must-have."""
         gradle_home = tmp_path / ".gradle"
         transforms = gradle_home / "caches" / "8.14.1" / "transforms"
         transforms.mkdir(parents=True)
         (transforms / "f").write_text("a" * 200)
+        _log(gradle_home, 4242)
 
         with patch(
             "orchestrator.gradle_remediation.subprocess.run",
-            side_effect=FileNotFoundError("no pkill"),
+            side_effect=FileNotFoundError("no ps"),
         ):
             freed = clear_gradle_transforms(gradle_home)
 
-        # Wipe still happened
         assert freed >= 200
         assert not transforms.exists()
+        assert gradle_signals == []
 
     def test_wipes_daemon_registry(self, tmp_path):
         """Stale registry entries cause Gradle to wait on dead daemons.

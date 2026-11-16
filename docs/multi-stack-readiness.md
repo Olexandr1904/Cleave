@@ -51,7 +51,7 @@ All agents in [`agents/`](agents/) are language-agnostic. They consume `linting.
 - `AarResourcesCompilerTransform` failures with `transforms/` cache paths ([lines 55-66](orchestrator/gradle_remediation.py#L55-L66))
 - aarch64 vs x86-64 aapt2 architecture mismatch ([line 76-79](orchestrator/gradle_remediation.py#L76-L79))
 
-It also acts: `clear_gradle_transforms()` wipes `~/.gradle/caches/*/transforms/` and kills running Gradle daemons. None of this generalizes to npm/yarn/cargo/swift/pip.
+It also acts: `clear_gradle_transforms()` wipes `<GRADLE_USER_HOME>/caches/*/transforms/` and stops that home's running Gradle daemons (since 2026-11-16 never the shared `~/.gradle`, nor another home's daemons). None of this generalizes to npm/yarn/cargo/swift/pip.
 
 The module **itself** is fine — it's a quality piece of stack-specific code. The problem is **how it's wired in**.
 

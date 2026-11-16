@@ -523,23 +523,24 @@ def main(argv: list[str] | None = None) -> int:
     # Cap the JVM heap the build toolchain may request, so concurrent/oversized
     # Android builds don't OOM the host (Kotlin daemon getting killed mid-compile).
     if global_config.defaults.cap_build_memory:
-        from orchestrator.build_env import apply_build_memory_limits
-        gradle_user_home = Path(
-            os.environ.get("GRADLE_USER_HOME") or (Path.home() / ".gradle")
-        )
-        try:
-            props = apply_build_memory_limits(
-                gradle_user_home,
-                gradle_heap_mb=global_config.defaults.build_gradle_heap_mb,
-                kotlin_heap_mb=global_config.defaults.build_kotlin_heap_mb,
-            )
-            print(
-                f"  Build memory caps applied: {props} "
-                f"(gradle={global_config.defaults.build_gradle_heap_mb}MB, "
-                f"kotlin={global_config.defaults.build_kotlin_heap_mb}MB)"
-            )
-        except OSError as e:
-            print(f"  WARNING: could not write build memory caps: {e}")
+        from orchestrator.build_env import apply_build_memory_limits, explicit_gradle_user_home
+        gradle_user_home = explicit_gradle_user_home(os.environ)
+        if gradle_user_home is None:
+            print("  Build memory caps: skipped (GRADLE_USER_HOME not set; ~/.gradle is shared, left alone)")
+        else:
+            try:
+                props = apply_build_memory_limits(
+                    gradle_user_home,
+                    gradle_heap_mb=global_config.defaults.build_gradle_heap_mb,
+                    kotlin_heap_mb=global_config.defaults.build_kotlin_heap_mb,
+                )
+                print(
+                    f"  Build memory caps applied: {props} "
+                    f"(gradle={global_config.defaults.build_gradle_heap_mb}MB, "
+                    f"kotlin={global_config.defaults.build_kotlin_heap_mb}MB)"
+                )
+            except OSError as e:
+                print(f"  WARNING: could not write build memory caps: {e}")
 
     # Initialize workspace manager
     workspace_manager = WorkspaceManager(base_dir=global_config.workspaces.base_dir)

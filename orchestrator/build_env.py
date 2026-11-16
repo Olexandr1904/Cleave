@@ -11,6 +11,7 @@ checked-out source.
 from __future__ import annotations
 
 import logging
+from collections.abc import Mapping
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
@@ -19,6 +20,13 @@ logger = logging.getLogger(__name__)
 # higher; the GRADLE_USER_HOME copy wins, so these caps take effect everywhere.
 _GRADLE_KEY = "org.gradle.jvmargs"
 _KOTLIN_KEY = "kotlin.daemon.jvmargs"
+
+
+def explicit_gradle_user_home(environ: Mapping[str, str]) -> Path | None:
+    """The gradle user home the caps may be written to: only a GRADLE_USER_HOME set on purpose. Without one
+    gradle uses ~/.gradle, which other builds on the host share (a CI runner, say), so there is none."""
+    value = environ.get("GRADLE_USER_HOME", "")
+    return Path(value) if value else None
 
 
 def apply_build_memory_limits(

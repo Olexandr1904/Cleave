@@ -591,11 +591,13 @@ def build_action_routes(
         # Telegram notification
         try:
             from orchestrator.notify import notify_rerun
+            from orchestrator.tg_i18n import telegram_language
             notifier = orchestrator._notifier
             chat_id = (
                 orchestrator._get_chat_id(ws) if notifier is not None else ""
             )
-            await notify_rerun(notifier, chat_id, ws, branch, reason)
+            with telegram_language(orchestrator.telegram_language_of(ws)):
+                await notify_rerun(notifier, chat_id, ws, branch, reason)
         except Exception as e:
             logger.warning(
                 "Failed to send rerun notification for %s: %s", ticket_id, e

@@ -19,6 +19,7 @@ from orchestrator import tg_format
 from orchestrator.git_ops import git_diff_files, git_head_sha
 from orchestrator.pr_creation import create_pr
 from orchestrator.stage_verifier import ActionResult
+from orchestrator.tg_i18n import tr
 from workspace.workspace import Stage, Workspace
 
 logger = logging.getLogger(__name__)
@@ -259,11 +260,12 @@ async def action_push_and_open_pr(
                         await notifier.send_message(
                             chat_id,
                             f"{hdr}\n"
-                            f"Dev-agent failed to apply the fix for comment #{cid} twice.\n\n"
-                            f"File: {entry.get('file', '?')}:{entry.get('line', '?')}\n\n"
-                            f"Options:\n"
-                            f"- Reply \"fix\" to retry once more\n"
-                            f"- Reply \"won't fix: <reason>\" to close the comment without fixing",
+                            + tr("Dev-agent failed to apply the fix for comment #{cid} twice.\n\n"
+                                 "File: {file}:{line}\n\n"
+                                 "Options:\n"
+                                 "- Reply \"fix\" to retry once more\n"
+                                 "- Reply \"won't fix: <reason>\" to close the comment without fixing",
+                                 cid=cid, file=entry.get('file', '?'), line=entry.get('line', '?')),
                         )
 
         return ActionResult(

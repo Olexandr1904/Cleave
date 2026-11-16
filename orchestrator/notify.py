@@ -18,6 +18,7 @@ from orchestrator.gradle_remediation import (
     looks_like_aapt2_arch_mismatch,
     looks_like_gradle_cache_corruption,
 )
+from orchestrator.tg_i18n import detail, model_text, tr
 from workspace.workspace import Workspace
 
 logger = logging.getLogger(__name__)
@@ -75,28 +76,31 @@ async def notify_deferred(
 
     # Pick a headline that names the actual cause.
     if is_real_quota:
-        headline = (
-            f"Quota exhausted at {state.previous_state or '?'}, deferred "
-            f"until {retry_at.strftime('%Y-%m-%d %H:%M')} UTC. "
-            f"Other tickets hitting the same quota will defer silently."
+        headline = tr(
+            "Quota exhausted at {stage}, deferred "
+            "until {when} UTC. "
+            "Other tickets hitting the same quota will defer silently.",
+            stage=state.previous_state or "?", when=retry_at.strftime("%Y-%m-%d %H:%M"),
         )
     elif reason and "error_max_turns" in reason:
-        headline = (
-            f"Agent hit max-turns limit at {state.previous_state or '?'}, "
-            f"deferred until {retry_at.strftime('%H:%M')} UTC for retry. "
-            f"If this recurs the agent task may be too complex — consider "
-            f"raising `max_turns` or splitting the work."
+        headline = tr(
+            "Agent hit max-turns limit at {stage}, "
+            "deferred until {when} UTC for retry. "
+            "If this recurs the agent task may be too complex — consider "
+            "raising `max_turns` or splitting the work.",
+            stage=state.previous_state or "?", when=retry_at.strftime("%H:%M"),
         )
     else:
-        short = (reason or "").splitlines()[0][:200] if reason else "no detail captured"
-        headline = (
-            f"Transient agent failure at {state.previous_state or '?'}, "
-            f"deferred until {retry_at.strftime('%H:%M')} UTC. "
-            f"Reason: {short}"
+        short = detail(reason.splitlines()[0][:200]) if reason else tr("no detail captured")
+        headline = tr(
+            "Transient agent failure at {stage}, "
+            "deferred until {when} UTC. "
+            "Reason: {reason}",
+            stage=state.previous_state or "?", when=retry_at.strftime("%H:%M"), reason=short,
         )
 
     msg = f"{hdr}\n{headline}"
-    buttons = [Button(label="Retry Now", action=f"retry:{state.ticket_id}")]
+    buttons = [Button(label=tr("Retry Now"), action=f"retry:{state.ticket_id}")]
     try:
         await notifier.send_message(chat_id, msg, buttons=buttons)
         if is_real_quota:
@@ -121,7 +125,7 @@ async def notify_failed(
     hdr = tg_format.tg_header("❌", state.company_id, state.ticket_id, title)
     first_line = (error or "").splitlines()[0] if error else ""
     stage = state.previous_state or "?"
-    buttons = [Button(label="Retry", action=f"retry:{state.ticket_id}")]
+    buttons = [Button(label=tr("Retry"), action=f"retry:{state.ticket_id}")]
     # Architecture mismatch (x86-64 aapt2 on non-x86 host) is a host-setup
     # issue — the pipeline cannot apt-install or rewrite gradle.properties.
     # Surface a distinct message with concrete fix options and NO clear-
@@ -130,29 +134,31 @@ async def notify_failed(
         sep_inner = "─" * 30
         msg = (
             f"{hdr}\n"
-            f"FAILED at {stage}.\n"
-            f"⚠️ Architecture mismatch (x86-64 aapt2 on non-x86 host).\n"
-            f"{sep_inner}\n"
-            f"{ARCH_MISMATCH_HELP}"
+            + tr("FAILED at {stage}.\n"
+                 "⚠️ Architecture mismatch (x86-64 aapt2 on non-x86 host).", stage=stage)
+            + f"\n{sep_inner}\n"
+            f"{tr(ARCH_MISMATCH_HELP)}"
         )
     elif looks_like_gradle_cache_corruption(error):
         msg = (
             f"{hdr}\n"
-            f"FAILED at {stage}. Error: {first_line}.\n"
-            f"Detected Gradle cache corruption — tap below to clear it."
+            + tr("FAILED at {stage}. Error: {error}.\n"
+                 "Detected Gradle cache corruption — tap below to clear it.",
+                 stage=stage, error=detail(first_line))
         )
         buttons.insert(
             0,
-            Button(label="🧹 Clear cache & retry", action=f"clear_gradle:{state.ticket_id}"),
+            Button(label=tr("🧹 Clear cache & retry"), action=f"clear_gradle:{state.ticket_id}"),
         )
     else:
         msg = (
             f"{hdr}\n"
-            f"FAILED at {stage}.\n\n"
-            f"Reason: {first_line}\n\n"
-            f"Options:\n"
-            f"- Tap Retry to re-run from {stage}\n"
-            f"- Send \"retry {state.ticket_id} from dev\" to restart from an earlier stage"
+            + tr("FAILED at {stage}.\n\n"
+                 "Reason: {reason}\n\n"
+                 "Options:\n"
+                 "- Tap Retry to re-run from {stage}\n"
+                 "- Send \"retry {ticket_id} from dev\" to restart from an earlier stage",
+                 stage=stage, reason=detail(first_line), ticket_id=state.ticket_id)
         )
     try:
         await notifier.send_message(chat_id, msg, buttons=buttons)
@@ -176,9 +182,9 @@ async def notify_rerun(
     first_line = reason.splitlines()[0][:80] if reason else ""
     msg = (
         f"{hdr}\n"
-        f"Rerun started from dashboard.\n"
-        f"Branch: {branch}\n"
-        f"Reason: {first_line}"
+        + tr("Rerun started from dashboard.\n"
+             "Branch: {branch}\n"
+             "Reason: {reason}", branch=branch, reason=first_line)
     )
     try:
         await notifier.send_message(chat_id, msg)
@@ -209,17 +215,19 @@ async def notify_verification_blocked(
     sep = "─" * 30
     title = tg_format.read_ticket_title(workspace)
     hdr = tg_format.tg_header("⚠️", workspace.state.company_id, workspace.state.ticket_id, title)
-    header = f"{hdr}\nStage: {stage_id} — verification failed\n"
+    header = f"{hdr}\n" + tr("Stage: {stage} — verification failed", stage=stage_id) + "\n"
 
     agent_reason = tg_format.strip_markdown(await build_blocked_reason_fn(workspace, stage_id))
+    # Stored for the agent and the status view in English; Telegram gets its own copy.
     combined = f"Verification failed: {verify_reason}\n\n{agent_reason}"
+    shown = tr("Verification failed: {reason}", reason=detail(verify_reason)) + f"\n\n{model_text(agent_reason)}"
     hint = (
         f"\n{sep}\n"
-        f"↩️ Reply with your answer or additional context, or:\n"
-        f"  Reply \"skip\" — advance past this stage to the next one\n"
-        f"  Reply \"retry\" — re-run this stage"
+        + tr("↩️ Reply with your answer or additional context, or:\n"
+             "  Reply \"skip\" — advance past this stage to the next one\n"
+             "  Reply \"retry\" — re-run this stage")
     )
-    message = f"{header}\n{combined}{hint}"
+    message = f"{header}\n{shown}{hint}"
 
     try:
         msg_id = await notifier.send_message(chat_id, message)

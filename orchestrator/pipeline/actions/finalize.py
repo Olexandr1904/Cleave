@@ -7,6 +7,7 @@ from integrations.base.notifier import NotifierInterface
 from integrations.base.tracker import TrackerInterface
 from orchestrator import tg_format
 from orchestrator.stage_verifier import ActionResult
+from orchestrator.tg_i18n import tr
 from workspace.workspace import Stage, Workspace
 
 logger = logging.getLogger(__name__)
@@ -23,12 +24,12 @@ async def action_finalize(
 
     if notifier:
         if chat_id:
-            pr_url = state.pr_url or "(no PR)"
+            pr_url = state.pr_url or tr("(no PR)")
             title = tg_format.read_ticket_title(workspace)
             hdr = tg_format.tg_header("✅", state.company_id, state.ticket_id, title)
             message = (
                 f"{hdr}\n"
-                f"PR ready for human merge: {pr_url}"
+                + tr("PR ready for human merge: {pr_url}", pr_url=pr_url)
             )
             try:
                 await notifier.send_message(chat_id, message)
@@ -66,9 +67,9 @@ async def on_ticket_done(
             hdr = tg_format.tg_header("✅", state.company_id, state.ticket_id, title)
             await notifier.send_message(chat_id, (
                 f"{hdr}\n"
-                f"Pipeline complete.\n\n"
-                f"PR ready for merge: {state.pr_url or 'N/A'}\n\n"
-                f"Ticket moved to review status."
+                + tr("Pipeline complete.\n\n"
+                     "PR ready for merge: {pr_url}\n\n"
+                     "Ticket moved to review status.", pr_url=state.pr_url or tr("N/A"))
             ))
 
     # Transition tracker ticket to in-review status (Jira: "In Review",

@@ -32,6 +32,7 @@ import subprocess
 from pathlib import Path
 
 from orchestrator.build_env import explicit_gradle_user_home
+from orchestrator.tg_i18n import N_
 
 logger = logging.getLogger(__name__)
 
@@ -157,7 +158,7 @@ def looks_like_gradle_cache_corruption(error_message: str | None) -> bool:
 
 # Help text shown in TG / dashboard when the architecture mismatch is detected.
 # Kept here so the orchestrator and dashboard render the same guidance.
-ARCH_MISMATCH_HELP = (
+ARCH_MISMATCH_HELP = N_(
     "Gradle picked the x86-64 build of aapt2 but the host can't run it.\n"
     "Pipeline can't auto-fix this. To unblock, choose one:\n"
     "1. Install x86-64 emulation:\n"

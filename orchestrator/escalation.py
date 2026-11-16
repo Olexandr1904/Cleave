@@ -17,6 +17,7 @@ from orchestrator.constants import (
     REPORT_BA_QUESTIONS,
     STAGE_RUNTIME_OUTPUT,
 )
+from orchestrator.tg_i18n import model_text, tr
 from workspace.workspace import Stage, Workspace
 
 logger = logging.getLogger(__name__)
@@ -55,26 +56,29 @@ def build_max_iterations_hint(
     are the real levers.
     """
     if has_output:
-        lead = (
-            f"The agent ran {iterations} times without completing this stage. "
-            f"Last output is shown above — it may say PASS but something is still "
-            f"blocking progress."
+        lead = tr(
+            "The agent ran {iterations} times without completing this stage. "
+            "Last output is shown above — it may say PASS but something is still "
+            "blocking progress.",
+            iterations=iterations,
         )
     else:
-        lead = (
-            f"The agent ran {iterations} times but did not produce any result "
-            f"(each attempt timed out, crashed, or was interrupted before writing "
-            f"output) — there is no agent output to show."
+        lead = tr(
+            "The agent ran {iterations} times but did not produce any result "
+            "(each attempt timed out, crashed, or was interrupted before writing "
+            "output) — there is no agent output to show.",
+            iterations=iterations,
         )
     return (
         f"\n{sep}\n"
         f"{lead}\n\n"
-        f"Options:\n"
-        f"  Reply with context — give the agent more information and resume\n"
-        f"  Reply \"skip\" — advance past this stage to the next one\n"
-        f"  Reply \"retry\" — re-run this stage (resets the attempt counter)\n"
-        f"  Send \"retry {ticket_id} from {stage_id}\" — reset counter and run again\n"
-        f"  Send \"retry {ticket_id} from dev\" — restart the dev agent from scratch"
+        + tr("Options:\n"
+             "  Reply with context — give the agent more information and resume\n"
+             "  Reply \"skip\" — advance past this stage to the next one\n"
+             "  Reply \"retry\" — re-run this stage (resets the attempt counter)\n"
+             "  Send \"retry {ticket_id} from {stage_id}\" — reset counter and run again\n"
+             "  Send \"retry {ticket_id} from dev\" — restart the dev agent from scratch",
+             ticket_id=ticket_id, stage_id=stage_id)
     )
 
 
@@ -178,10 +182,12 @@ async def handle_escalate(
         stage_def = workflow.stages.get(stage_id_str) if workflow else None
         cap = stage_def.max_iterations if stage_def else "?"
         iterations = state.stage_iterations.get(stage_id_str, 0)
-        header = f"{hdr}\nStage: {stage} — stuck after {iterations}/{cap} attempts\n"
+        header = f"{hdr}\n" + tr("Stage: {stage} — stuck after {iterations}/{cap} attempts",
+                                 stage=stage, iterations=iterations, cap=cap) + "\n"
     else:
-        header = f"{hdr}\nStage: {stage}\n"
+        header = f"{hdr}\n" + tr("Stage: {stage}", stage=stage) + "\n"
 
+    # Stored in English (the agent reads it on resume); Telegram gets it marked for translation.
     reason = tg_format.strip_markdown(
         await build_blocked_reason(workspace, stage_id_str)
     )
@@ -195,20 +201,21 @@ async def handle_escalate(
     elif is_agent_stage:
         hint = (
             f"\n{sep}\n"
-            f"↩️ Reply with your answer or additional context, or:\n"
-            f"  Reply \"skip\" — advance past this stage to the next one\n"
-            f"  Reply \"retry\" — re-run this stage"
+            + tr("↩️ Reply with your answer or additional context, or:\n"
+                 "  Reply \"skip\" — advance past this stage to the next one\n"
+                 "  Reply \"retry\" — re-run this stage")
         )
     else:
         hint = (
             f"\n{sep}\n"
-            f"Options:\n"
-            f"  Reply \"skip\" — advance past this stage to the next one\n"
-            f"  Reply \"retry\" — re-run this stage\n"
-            f"  Send \"retry {state.ticket_id}\" to retry from this stage\n"
-            f"  Send \"retry {state.ticket_id} from dev\" to restart from an earlier stage"
+            + tr("Options:\n"
+                 "  Reply \"skip\" — advance past this stage to the next one\n"
+                 "  Reply \"retry\" — re-run this stage\n"
+                 "  Send \"retry {ticket_id}\" to retry from this stage\n"
+                 "  Send \"retry {ticket_id} from dev\" to restart from an earlier stage",
+                 ticket_id=state.ticket_id)
         )
-    message = f"{header}\n{reason}{hint}"
+    message = f"{header}\n{model_text(reason)}{hint}"
 
     try:
         msg_id = await notifier.send_message(chat_id, message)

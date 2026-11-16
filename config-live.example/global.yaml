@@ -8,6 +8,9 @@ os: unix
 telegram:
   bot_token: "${TELEGRAM_BOT_TOKEN}"
   default_chat_id: "${TELEGRAM_CHAT_ID}"
+  # The language the bot writes in Telegram: en (default) or uk. For messages tied to no project, and for every
+  # project without its own telegram.language.
+  language: "en"
 
 claude:
   api_key: "${CLAUDE_API_KEY}"

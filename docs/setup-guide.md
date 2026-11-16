@@ -225,6 +225,10 @@ for the full install/unload steps.
 | `build.check_command` | Build command (e.g., `./gradlew assembleDebug`) |
 | `architecture.protected_files` | Files agents must never modify |
 
+### Telegram language
+
+The bot writes in English unless a project sets `telegram.language: uk` in its `project.yaml` (or `global.yaml` sets it for every project without its own). Commands and everything posted to GitHub stay English. Change it later in the dashboard's **Settings**. See [docs/telegram.md](telegram.md#language).
+
 ### Disabling a project or repo
 
 Set `enabled: false` in `project.yaml` or `{repo-id}.yaml` to exclude it from the pipeline.

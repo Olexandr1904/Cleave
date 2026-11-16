@@ -30,6 +30,40 @@ Replies to [reviewer messages](#replying-to-reviewer-messages) and taps on its *
   Reviewer: replies are ignored — reviewer.telegram_chat_id is not an allowed chat
 ```
 
+## Language
+
+The bot writes in English (the default) or Ukrainian, per project:
+
+```yaml
+# config-live/projects/<id>/project.yaml
+telegram:
+  language: uk        # en (default) or uk
+```
+
+A project without `telegram.language` follows `telegram.language` in `global.yaml`, and English when that has none too. Any other value stops the config from loading (`'telegram.language' must be one of ('en', 'uk')`). Set it in the dashboard (**Settings → Telegram language**, or the **+ New Project** wizard's Notifications step), or in the YAML. A change made in Settings applies to the next message; one made in the YAML by hand, after a restart.
+
+**Which language a message takes:**
+
+| Message | Language |
+|---|---|
+| A ticket's messages, buttons, and the answers to replies and taps on them | the ticket's project's |
+| Reviewer messages and lines (the reviewer chat is shared by every repo) | the project of the PR's repo |
+| Answers to replies on reviewer messages, and to taps on their **Yes** / **No** | the anchored job's project's (`global.yaml`'s when none is known, e.g. reviewer mode off) |
+| Free-text and switch commands (`status`, `tickets start`, …) | the language of the projects whose `default_chat_id` is that chat when they agree, else `global.yaml`'s |
+| Credential lines (no project) | `global.yaml`'s |
+
+**What is translated:** everything the bot sends, including what models wrote. Cleave's own texts (notifications, hints, errors, button labels) come from a hand-written Ukrainian catalogue (`orchestrator/tg_uk/`). Text a model wrote — finding titles and Telegram lines, the suggested event's reason, why a candidate was dropped, drafted re-check replies, the `text N` text, edit and draft results, escalation reasons and agent output, the comment classifier's assessment, an error's detail — is translated when the message is sent: one `claude -p` turn on `haiku` per message (no tools, the reviewer sessions' scrubbed environment, on the claude.ai login), 60 s at most. Code spans and blocks, links, paths and `file:line` anchors, `#N`, ticket keys, SHAs and @-mentions are masked before the model sees the text and put back after; a text whose masks or numbers do not come back intact is shown as written, and so is everything in the message when the turn fails or times out: a translation never holds back or loses a message. An English project never makes the call. A review or re-check message is translated once, before its first part goes out, and kept with the job's run: a resend sends exactly the same parts, even after the project's language changed.
+
+**What stays as it is:**
+
+- **Commands.** Hints quote them in the grammar's words (`"post 1 2 4 approve"`, `"edit 2: …"`, `"review again"`, `"skip"`, `"retry ACME-12 from dev"`, `fix`, `won't fix: <reason>`), and every reply works as before, in English or with the Russian/Ukrainian synonyms.
+- **GitHub.** Reviews and replies are posted in English, from the job copy's report and replies plan, which never hold a translation; edit and draft sessions still write English whatever language your instruction is in. In Ukrainian, `text N` and edit/draft results end with `(На GitHub піде англійський текст.)`.
+- **What people wrote:** PR and ticket titles, quoted review comments, branch names, your own words (an edit instruction, a won't-fix reason).
+- **Names Cleave and GitHub use:** stage and state ids (`DEV`, `PR_REVIEW`, `superseded`), events (`REQUEST_CHANGES`), `Summary`, repo and project ids.
+- **Everything outside Telegram:** the dashboard, stored job reasons and workspace errors, events and logs.
+
+The cost: haiku turns of a few hundred to a few thousand tokens, only for messages that hold model text (a review message, an escalation, a `text N`), on the claude.ai subscription's usage like the reviewer's sessions.
+
 ---
 
 ## Switch commands
@@ -43,7 +77,7 @@ Fixed commands pause and resume the ticket pipeline and reviewer mode. They are 
 | any of the above + a repo id, e.g. `tickets pause app` or `reviews start acme/app` | Same, for one repo (`repo` or `project/repo`) |
 | `status` | The switch block (tickets and reviews, global and per repo), then the pipeline summary |
 
-Commands are case-insensitive. Russian/Ukrainian words are accepted as input synonyms: `тикеты` / `тікети` for `tickets`; `ревью` / `рев'ю` (ASCII or typographic apostrophe) for `reviews`; `пауза` for `pause`; `старт` for `start`; `статус` for `status`. Replies are in English whichever spelling you use.
+Commands are case-insensitive. Russian/Ukrainian words are accepted as input synonyms: `тикеты` / `тікети` for `tickets`; `ревью` / `рев'ю` (ASCII or typographic apostrophe) for `reviews`; `пауза` for `pause`; `старт` for `start`; `статус` for `status`. Replies are in the chat's [language](#language) whichever spelling you use.
 
 The switch block looks like this (`(global)` marks a repo that is paused only because the global switch is):
 

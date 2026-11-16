@@ -28,6 +28,7 @@ Telegram bot adapter behind the NotifierInterface. Sends formatted notifications
 - FR15: Inline action buttons on messages that expect discrete choices (approve/reject gates, PR review complete, retry on failure/deferral); escalation messages stay text-reply only
 - FR16: `Button` dataclass in `NotifierInterface` — adapter-agnostic; `TelegramAdapter` translates to `InlineKeyboardMarkup`, routes `CallbackQuery` presses to `CommandHandler.handle_callback()`
 - FR17: Button confirmations sent as Telegram replies to the original button message (`reply_to_message_id`)
+- FR18: Every message, button label and model-written text in the project's `telegram.language` (`en` default, or `uk`): Cleave's texts from the Ukrainian catalogue (`orchestrator/tg_i18n.py`, `orchestrator/tg_uk/`), model text translated at send time (`orchestrator/tg_translate.py`); commands, GitHub text and stored state unchanged — see [docs/telegram.md](../telegram.md#language)
 - FR18: Messages with buttons MUST NOT contain redundant text reply hints for the same actions; text hints only for free-text inputs (escalation answers, PR comment decisions)
 
 ## Technical Approach

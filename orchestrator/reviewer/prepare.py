@@ -216,20 +216,25 @@ async def _prepare(
         # The drift check comes before everything that may fail: a changed section is reported even then.
         drift = _drift(ctx, store, now)
         try:
+            # The readiness command needs the forge token: it runs from the review clone, never a job clone.
+            threads = await ctx.readiness.threads(ctx.clone.path, n)
+            if threads["head_sha"] != head:
+                raise PrepareError("superseded", "head moved", drift)
             clone = await ctx.clone.make_job_clone(job_clone_dir, n)
-        except CloneError as e:
+        except (ForgeError, CloneError, ReadinessError) as e:
             raise _prepare_error(e, drift) from None
     try:
-        return await _prepare_job_clone(ctx, clone, pr, paths, tracker, drift)
+        return await _prepare_job_clone(ctx, clone, pr, paths, tracker, drift, threads)
     except (ForgeError, CloneError, ReadinessError) as e:
         raise _prepare_error(e, drift) from None
 
 
 async def _prepare_job_clone(
-    ctx: RepoContext, clone: ReviewClone, pr: PRFull, paths: JobPaths, tracker, drift: bool,
+    ctx: RepoContext, clone: ReviewClone, pr: PRFull, paths: JobPaths, tracker, drift: bool, threads: dict,
 ) -> Prepared:
     """The rest of Prepare, in the job clone, the review clone's lock not held."""
     process, base, n, head = ctx.cfg.process, ctx.cfg.base_branch, pr.number, pr.head_sha
+    await clone.detach_at_base()
     # Again on the job clone's checkout: the base branch may since have put a symlink on the way.
     _check_inside(clone.path.resolve(), paths.run_dir, paths.replies_plan)
     merge_base = await clone.merge_base(head)
@@ -249,9 +254,6 @@ async def _prepare_job_clone(
         meta_env(head, base, pr.changed_files, changed, merge_base, paths.worktree), encoding="utf-8")
     (run / "pr_body.md").write_text(f"{pr.title}\n\n{pr.body}\n", encoding="utf-8")
     (run / "existing_comments.md").write_text(existing_comments_md(await ctx.forge.comments(n)), encoding="utf-8")
-    threads = await ctx.readiness.threads(clone.path, n)
-    if threads["head_sha"] != head:
-        raise PrepareError("superseded", "head moved", drift)
     _write_json(run / "threads.json", threads)
     key = m.group(0) if (m := TICKET_KEY.search(pr.title)) else ""
     _write_json(run / "ticket.json", await ticket_json(tracker, key))

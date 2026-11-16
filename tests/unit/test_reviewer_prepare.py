@@ -13,7 +13,7 @@ from orchestrator.reviewer.db import connect
 from orchestrator.reviewer.forge_github import ForgeError
 from orchestrator.reviewer.models import Job, PRComments, PRFull
 from orchestrator.reviewer.prepare import (
-    JobPaths, Prepared, PrepareError, existing_comments_md, job_paths, prepare, section_hash, section_text,
+    JobPaths, PrepareError, existing_comments_md, job_paths, prepare, section_hash, section_text,
     ticket_json,
 )
 from orchestrator.reviewer.readiness import ReadinessError
@@ -196,7 +196,7 @@ async def test_prepare_writes_artifacts(world, origin):
     ]
     assert existing_comments_md(PRComments((), (), ())) == "(none)\n"
     assert json.loads((run / "threads.json").read_text()) == world.readiness.snapshot
-    assert world.readiness.calls == [(world.root / "clone", 7)]   # from the job clone, at the base
+    assert world.readiness.calls == [(world.ctx.clone.path, 7)]   # with the token: from the review clone
     assert json.loads((run / "ticket.json").read_text()) == {
         "summary": "Cart sync", "description": "Keep the cart in sync across devices.",
         "comments": [{"author": "octo", "created": "2026-11-10", "body": "Also on tablets."}],
@@ -394,7 +394,7 @@ async def test_review_clone_is_locked_only_for_its_own_part(world, monkeypatch):
             seen[name] = lock.locked()
             return await fn(*args, **kwargs)
         return wrapped
-    for name in ("refresh", "fetch_pr_head", "make_job_clone", "merge_base", "add_worktree"):
+    for name in ("refresh", "fetch_pr_head", "make_job_clone", "detach_at_base", "merge_base", "add_worktree"):
         monkeypatch.setattr(ReviewClone, name, record(name, getattr(ReviewClone, name)))
     threads = world.readiness.threads
     async def recorded_threads(clone_dir, pr):
@@ -402,13 +402,15 @@ async def test_review_clone_is_locked_only_for_its_own_part(world, monkeypatch):
         return await threads(clone_dir, pr)
     world.readiness.threads = recorded_threads
     await world.prepare()
-    assert seen == {"refresh": True, "fetch_pr_head": True, "make_job_clone": True,
-                    "merge_base": False, "add_worktree": False, "threads": False}
+    assert seen == {"refresh": True, "fetch_pr_head": True, "make_job_clone": True, "threads": True,
+                    "detach_at_base": False, "merge_base": False, "add_worktree": False}
     assert not lock.locked()
 
-async def test_steps_and_threads_run_in_the_job_clone(world):
-    prepared = await world.prepare()
-    assert world.readiness.calls == [(prepared.clone.path, 7)]
+async def test_steps_run_in_the_job_clone_and_threads_in_the_review_clone(world):
+    await world.prepare()
+    # The readiness command needs the forge token: never from a job clone.
+    assert world.readiness.calls == [(world.ctx.clone.path, 7)]
+    assert json.loads((world.paths.run_dir / "threads.json").read_text()) == world.readiness.snapshot
     assert (world.root / "clone" / "tools" / "review" / "runs" / "PR_7" / "anchors.json").is_file()
     assert not (world.ctx.clone.path / "tools" / "review" / "runs").exists()   # nothing in the review clone
 

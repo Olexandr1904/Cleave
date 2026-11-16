@@ -537,6 +537,7 @@ async def job_clone(tmp_path, bare, number=7):
     await clone.fetch_pr_head(number)
     async with clone.lock:
         job = await clone.make_job_clone(tmp_path / "work" / "acme" / "app" / "job1" / "clone", number)
+    await job.detach_at_base()   # outside the lock: the job clone is the job's own
     return clone, job
 
 
@@ -583,3 +584,14 @@ async def test_job_clone_refuses_an_existing_path(tmp_path, pr7):
         async with clone.lock:
             await clone.make_job_clone(dest, 7)
     assert (dest / "keep.txt").read_text() == "mine"
+
+
+async def test_job_clone_has_no_checkout_until_detached(tmp_path, pr7):
+    bare, base, _ = pr7
+    clone = await refreshed(tmp_path, bare)
+    await clone.fetch_pr_head(7)
+    async with clone.lock:
+        job = await clone.make_job_clone(tmp_path / "work" / "job1" / "clone", 7)
+    assert not (job.path / "docs").exists()   # the review clone's lock covered no checkout
+    await job.detach_at_base()
+    assert git("rev-parse", "HEAD", cwd=job.path) == base and (job.path / "docs" / "process.md").is_file()

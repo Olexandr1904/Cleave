@@ -1,6 +1,6 @@
 # tests/unit/test_reviewer_prepare.py
 from __future__ import annotations
-import dataclasses, hashlib, json, subprocess
+import asyncio, dataclasses, hashlib, json, subprocess
 from dataclasses import dataclass
 from pathlib import Path
 from types import SimpleNamespace
@@ -106,16 +106,27 @@ class FakeTracker:
 class World:
     ctx: RepoContext
     job: Job
-    paths: JobPaths
     store: ReviewerStore
     forge: FakeForge
     readiness: FakeReadiness
     tracker: FakeTracker
     script: Path
-    worktree: Path
+    work: Path
+    runs: int = 0
+
+    def next_job_dir(self) -> Path:
+        """A fresh directory per prepare, as the runner gives every job its own; paths and worktree follow it."""
+        self.runs += 1
+        self.root = self.work / f"job{self.runs}"
+        self.paths = job_paths(self.root / "clone", self.ctx.cfg.process, 7, self.job.head_sha,
+                               self.work.parent / "jobs", self.job.id)
+        self.worktree = self.root / "review-wt" / "PR_7"
+        return self.root / "clone"
 
     async def prepare(self):
-        return await prepare(self.ctx, self.job, self.paths, store=self.store, tracker=self.tracker, now=T0)
+        clone_dir = self.next_job_dir()
+        return await prepare(self.ctx, self.job, self.paths, store=self.store, tracker=self.tracker, now=T0,
+                             job_clone_dir=clone_dir)
 
 @pytest.fixture
 def world(tmp_path, origin):
@@ -131,9 +142,8 @@ def world(tmp_path, origin):
     forge, readiness = FakeForge(pr_full(origin.head)), FakeReadiness(origin.head)
     ctx = RepoContext("acme", "app", cfg, clone, readiness, forge)
     job = Job("job1", ctx.scope, 7, "review", origin.head, origin.head, "running", "", T0, T0)
-    paths = job_paths(clone.path, cfg.process, 7, origin.head, tmp_path / "jobs", "job1")
     store = ReviewerStore(connect(tmp_path / "rv" / "reviewer.db"))
-    return World(ctx, job, paths, store, forge, readiness, FakeTracker(), script, tmp_path / "review-wt" / "PR_7")
+    return World(ctx, job, store, forge, readiness, FakeTracker(), script, tmp_path / "work")
 
 async def outcome(world):
     with pytest.raises(PrepareError) as e:
@@ -172,11 +182,6 @@ def test_job_paths(tmp_path):
         job_paths(clone, cfg, 7, head, tmp_path / "jobs", "j1")
 
 async def test_prepare_writes_artifacts(world, origin):
-    await world.ctx.clone.refresh()
-    world.paths.run_dir.mkdir(parents=True)
-    (world.paths.run_dir / "report_old.md").write_text("an older head's report")
-    world.paths.replies_plan.parent.mkdir(parents=True)
-    world.paths.replies_plan.write_text("[]")   # an earlier job's plan at this head
     prepared = await world.prepare()
     run, wt = world.paths.run_dir, world.worktree
     assert (run / "meta.env").read_text().splitlines() == [
@@ -191,7 +196,7 @@ async def test_prepare_writes_artifacts(world, origin):
     ]
     assert existing_comments_md(PRComments((), (), ())) == "(none)\n"
     assert json.loads((run / "threads.json").read_text()) == world.readiness.snapshot
-    assert world.readiness.calls == [(world.ctx.clone.path, 7)]
+    assert world.readiness.calls == [(world.root / "clone", 7)]   # from the job clone, at the base
     assert json.loads((run / "ticket.json").read_text()) == {
         "summary": "Cart sync", "description": "Keep the cart in sync across devices.",
         "comments": [{"author": "octo", "created": "2026-11-10", "body": "Also on tablets."}],
@@ -200,9 +205,9 @@ async def test_prepare_writes_artifacts(world, origin):
     assert json.loads((run / "anchors.json").read_text()) == {"pr": "7", "worktree": str(wt), "merge_base": origin.base}
     assert (wt / "feature.txt").read_text() == "feature"
     assert git("rev-parse", "HEAD", cwd=wt) == origin.head
-    assert not (run / "report_old.md").exists()
     assert world.paths.replies_plan.parent.is_dir() and not world.paths.replies_plan.exists()
-    assert prepared == Prepared(world.forge.pr, False)
+    assert (prepared.pr, prepared.drift, prepared.clone.path) == (world.forge.pr, False, world.root / "clone")
+    assert git("rev-parse", "HEAD", cwd=prepared.clone.path) == origin.base
 
 async def test_prepare_step_failure_is_redacted(world):
     world.ctx.cfg.process.prepare_steps = [["sh", "-c", f"echo 'fatal: bad token {TOKEN}' >&2; exit 1"]]
@@ -219,7 +224,7 @@ async def test_prepare_step_timeout(world, origin, monkeypatch):
     assert await outcome(world) == ("failed", "prepare step 1 failed: timed out after 300 s")
     # A step's own git must never read the host's system or global config (credential helpers).
     env = {**base_env(), "GIT_CONFIG_NOSYSTEM": "1", "GIT_CONFIG_GLOBAL": "/dev/null", "GIT_TERMINAL_PROMPT": "0"}
-    assert calls == [([str(world.script), "7", str(world.worktree), origin.base], world.ctx.clone.path, env, 300)]
+    assert calls == [([str(world.script), "7", str(world.worktree), origin.base], world.root / "clone", env, 300)]
 
 async def test_prepare_step_bad_placeholder(world):
     world.ctx.cfg.process.prepare_steps = [["sh", "-c", "true", "{report}"]]
@@ -249,6 +254,7 @@ async def test_prepare_pr_base_differs(world):
 async def test_prepare_refuses_a_symlink_on_the_way(world, origin, tmp_path):
     outside = tmp_path / "outside" / "runs" / "PR_7"
     outside.mkdir(parents=True)
+    world.next_job_dir()   # the plan's file name, the same for every job at this head
     plan = outside / world.paths.replies_plan.name
     for kept in (outside / "keep.txt", plan):
         kept.write_text("keep")
@@ -376,3 +382,58 @@ async def test_prepare_fills_every_placeholder_a_step_may_use(world, monkeypatch
     world.ctx.cfg.process.prepare_steps = [["tool", *(f"{{{n}}}" for n in names)]]
     await world.prepare()
     assert len(calls) == 1 and len(calls[0]) == 1 + len(names) and "{" not in " ".join(calls[0])
+
+
+# --- Parallel review jobs: Prepare in a job clone ---
+
+async def test_review_clone_is_locked_only_for_its_own_part(world, monkeypatch):
+    lock = world.ctx.clone.lock
+    seen = {}
+    def record(name, fn):
+        async def wrapped(*args, **kwargs):
+            seen[name] = lock.locked()
+            return await fn(*args, **kwargs)
+        return wrapped
+    for name in ("refresh", "fetch_pr_head", "make_job_clone", "merge_base", "add_worktree"):
+        monkeypatch.setattr(ReviewClone, name, record(name, getattr(ReviewClone, name)))
+    threads = world.readiness.threads
+    async def recorded_threads(clone_dir, pr):
+        seen["threads"] = lock.locked()
+        return await threads(clone_dir, pr)
+    world.readiness.threads = recorded_threads
+    await world.prepare()
+    assert seen == {"refresh": True, "fetch_pr_head": True, "make_job_clone": True,
+                    "merge_base": False, "add_worktree": False, "threads": False}
+    assert not lock.locked()
+
+async def test_steps_and_threads_run_in_the_job_clone(world):
+    prepared = await world.prepare()
+    assert world.readiness.calls == [(prepared.clone.path, 7)]
+    assert (world.root / "clone" / "tools" / "review" / "runs" / "PR_7" / "anchors.json").is_file()
+    assert not (world.ctx.clone.path / "tools" / "review" / "runs").exists()   # nothing in the review clone
+
+async def test_parallel_prepares_report_drift_once(world, origin):
+    await world.prepare()   # the section's hash stored
+    push_doc(origin.work, PROCESS.replace("Fetch the PR.", "Fetch the PR and its threads."))
+    async def one():
+        clone_dir = world.next_job_dir()
+        return await prepare(world.ctx, world.job, world.paths, store=world.store, tracker=world.tracker,
+                             now=T0, job_clone_dir=clone_dir)
+    results = await asyncio.gather(one(), one())
+    assert sorted(r.drift for r in results) == [False, True]
+
+def test_worktree_outside_the_job_dir_is_refused(tmp_path):
+    cfg = ProcessPartConfig(doc=DOC, run_dir="tools/review/runs/PR_{pr}",
+                            replies_plan="tools/threads/runs/PR_{pr}/replies_{head9}.json",
+                            worktree_dir="../../elsewhere/PR_{pr}")
+    with pytest.raises(PrepareError, match="^worktree_dir is outside the job's directory$") as e:
+        job_paths(tmp_path / "work" / "j1" / "clone", cfg, 7, "a" * 40, tmp_path / "jobs", "j1")
+    assert e.value.outcome == "failed"
+
+async def test_drift_is_carried_by_a_later_failure(world, origin):
+    await world.prepare()
+    push_doc(origin.work, PROCESS.replace("Fetch the PR.", "Fetch the PR first."))
+    world.readiness.error = ReadinessError("exit 1: no such PR")
+    with pytest.raises(PrepareError) as e:
+        await world.prepare()
+    assert (e.value.outcome, e.value.reason, e.value.drift) == ("failed", "exit 1: no such PR", True)

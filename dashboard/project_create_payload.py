@@ -111,8 +111,9 @@ def validate_payload(payload: dict[str, Any]) -> None:
 
 
 def telegram_language(payload: dict[str, Any]) -> str:
-    """The Telegram language the wizard chose for the project (English when it sent none)."""
-    return (payload.get("extras") or {}).get("telegram_language") or "en"
+    """The Telegram language the wizard chose for the project; "" when it sent none (the project then follows
+    global.yaml's)."""
+    return (payload.get("extras") or {}).get("telegram_language") or ""
 
 
 def derive_env_vars(payload: dict[str, Any]) -> dict[str, str]:
@@ -224,7 +225,8 @@ def redact_to_input_md(payload: dict[str, Any]) -> str:
     tg_var = f"{prefix}_TELEGRAM_BOT_TOKEN" if extras.get("telegram_bot_token") else None
     lines.append(f"- telegram_bot_token_var: {tg_var}")
     lines.append(f"- telegram_chat_id: {extras.get('telegram_chat_id')}")
-    lines.append(f"- telegram_language: {telegram_language(payload)}")
+    if language := telegram_language(payload):
+        lines.append(f"- telegram_language: {language}")
     lines.append(f"- arch_rules_file: {extras.get('arch_rules_file')}")
     lines.append("- protected_files: [" + ", ".join(extras.get("protected_files") or []) + "]")
     lines.append(f"- max_concurrent_tickets: {extras.get('max_concurrent_tickets')}")

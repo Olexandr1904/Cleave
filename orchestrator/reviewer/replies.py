@@ -27,7 +27,9 @@ from orchestrator.reviewer.report_edit import item_text
 from orchestrator.reviewer.service import RepoContext, ReviewerService, _where, utcnow
 from orchestrator.reviewer.small_jobs import SmallJobRunner
 from orchestrator.reviewer.store import ReviewerStore
-from orchestrator.tg_i18n import ENGLISH, N_, UKRAINIAN, current_language, model_text, telegram_language, tr
+from orchestrator.tg_i18n import (
+    ENGLISH, N_, UKRAINIAN, current_language, marked_texts, model_text, telegram_language, tr,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -61,8 +63,8 @@ class _To:
 
 
 class ReviewerReplies:
-    """Routes the replies to reviewer messages and the taps on its echoes. Long work (the LLM fallback, a post) runs
-    in tracked tasks, so the Telegram handler is never held."""
+    """Routes the replies to reviewer messages and the taps on its echoes. Long work (the LLM fallback, a post, a text to
+    translate) runs in tracked tasks, so the Telegram handler is never held."""
 
     def __init__(
         self,
@@ -261,8 +263,11 @@ class ReviewerReplies:
                 texts = {entry["n"]: _reply_text(entry) for entry in run.replies}
             else:
                 texts = {item.number: item_text(item) for item in _report(run).items}
-            for n in checked.numbers:
-                await self._answer(to, texts[n] + github_note())
+            answers = [texts[n] + github_note() for n in checked.numbers]
+            if any(marked_texts(answer) for answer in answers):  # a model turn translates them: not in the handler
+                self._track(to, self._answer_each(to, answers))
+            else:
+                await self._answer_each(to, answers)
         elif checked.action in ("edit", "draft"):
             if self._credential_failing("claude_login"):
                 await self._answer(to, tr(_NO_LOGIN))
@@ -279,6 +284,10 @@ class ReviewerReplies:
         else:  # post, post_replies
             await self._answer(to, tr("Checking before posting: {command}.", command=describe(checked, job.head_sha)))
             self._track(to, self._post(ctx, job, checked, to))
+
+    async def _answer_each(self, to: _To, texts: list[str]) -> None:
+        for text in texts:
+            await self._answer(to, text)
 
     async def _post(self, ctx: RepoContext, job: Job, cmd: ReplyCommand, to: _To) -> None:
         post = self._posting.post_review if cmd.action == "post" else self._posting.post_replies

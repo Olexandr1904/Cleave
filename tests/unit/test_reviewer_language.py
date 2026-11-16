@@ -2,6 +2,7 @@
 goes out), lines, answers, `text N` and edit results; GitHub text stays English."""
 from __future__ import annotations
 
+import asyncio
 from datetime import timedelta
 
 from orchestrator.reviewer import runner as runner_module
@@ -104,6 +105,32 @@ async def test_deliver_keeps_the_language_of_the_parts_already_out(tmp_path, mon
     assert run.message_sent and run.language == "uk"
 
 
+async def test_a_retry_translates_only_what_is_missing_and_keeps_the_rest(tmp_path, monkeypatch):
+    rig = runner_tests.Rig(tmp_path, monkeypatch)
+    _ukrainian_runner(rig)
+    asked, answers = [], []
+
+    async def translations(texts):  # the first turn leaves one text out; the second one fails
+        asked.append(list(texts))
+        return answers.pop(0)(texts)
+
+    answers += [lambda texts: {t: f"УК {t}" for t in texts[1:]}, lambda texts: {}]
+    rig.chat.translations = translations
+    rig.chat.fail = 1
+    job = rig.add_job()
+    await rig.runner.run_job(job)
+    first = asked[0]
+    assert rig.store.run(job.id).translations == {t: f"УК {t}" for t in first[1:]}
+
+    rig.t = runner_tests.T0 + timedelta(minutes=1)
+    await rig.runner.resend_unsent()
+
+    assert asked[1] == first[:1]  # only the text left out
+    [text] = rig.chat.texts
+    assert f"УК {first[1]}" in text and first[0] in text  # the earlier translations kept; the missing one as written
+    assert rig.store.run(job.id).message_sent
+
+
 async def test_a_run_from_before_languages_stays_english(tmp_path, monkeypatch):
     rig = runner_tests.Rig(tmp_path, monkeypatch)
     rig.write = lambda paths: runner_tests.write_review(paths, report=runner_tests.LONG_REPORT, tg={})
@@ -169,6 +196,28 @@ async def test_text_n_in_ukrainian_with_the_github_note(tmp_path):
     before, after = split_at_file_line(item.body)
     assert asked == [[item.title, "\n".join(before + after).strip()]]  # one translation: the title and the body
     assert rig.store.run(rig.job.id).report == parse_report(REPORT, HEAD).to_dict()  # nothing stored changes
+
+
+async def test_a_text_to_translate_never_holds_the_telegram_handler(tmp_path):
+    """python-telegram-bot handles one update at a time: a `text N` whose translation takes a model turn is sent
+    from a tracked task, so the handler returns at once."""
+    rig = replies_tests.Rig(tmp_path)
+    rig.replies._language_of = lambda project_id: "uk"
+    release = asyncio.Event()
+
+    async def slow_localize(text):
+        await release.wait()
+        return fill(text, {})
+
+    rig.chat.localize = slow_localize
+
+    await asyncio.wait_for(rig.replies.handle_reply(replies_tests.CHAT, 100, "text 2"), 1)
+
+    assert rig.chat.sent == []
+    release.set()
+    await rig.replies.wait_idle()
+    [text] = rig.texts()
+    assert text.startswith("#2 · ")
 
 
 async def test_answers_take_the_anchored_jobs_project_language(tmp_path):

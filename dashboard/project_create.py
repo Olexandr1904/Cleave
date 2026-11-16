@@ -110,10 +110,10 @@ def build_create_route(
             _busy = False
             _active_workspace = None
 
-            # The wizard's Telegram language, written by Cleave whatever the agent wrote (a failure is logged:
-            # the project then follows global.yaml's language, and the Settings view can set it).
+            # The Telegram language the wizard chose (none: the project follows global.yaml's), written by Cleave
+            # whatever the agent wrote. A failure is logged: the Settings view can set it.
             project_yaml = project_config_dir / "project.yaml"
-            if project_yaml.exists():
+            if language and project_yaml.exists():
                 try:
                     set_yaml_language(project_yaml, language)
                 except Exception:

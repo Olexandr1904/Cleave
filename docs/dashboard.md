@@ -263,7 +263,7 @@ Click **+ New Project** in the toolbar. The wizard runs the [Atlas project-setup
 1. **Project** — id, display name
 2. **Jira** — URL, email, project key, trigger labels (defaults to `[ai-pipeline]`), ignore labels, status name mapping; validates against the live Jira API before continuing
 3. **Repository** — VCS provider, owner/repo, default branch, branch prefix, merge method, clone URL; validates against the GitHub/GitLab API
-4. **Notifications** — per-project Telegram chat id (optional; falls back to the global default) and the Telegram language (`English`, the default, or `Українська`); Cleave writes the language into `project.yaml` once Atlas has written the file
+4. **Notifications** — per-project Telegram chat id (optional; falls back to the global default) and the Telegram language (`English` or `Українська`, preselected with the global one). Left as it is, the project follows the global language; another choice is written into `project.yaml` by Cleave once Atlas has written the file
 5. **Review** — Atlas writes `config-live/projects/<id>/{project,repos/*}.yaml`
 
 The orchestrator hot-reloads the new project: registers the GitHub adapter, attaches the Jira tracker if it wasn't already attached, extends the Telegram allowlist, and emits `project_loaded` events. No daemon restart.

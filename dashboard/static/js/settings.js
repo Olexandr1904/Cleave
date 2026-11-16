@@ -79,13 +79,14 @@ async function renderLanguage(el) {
     if (!r.ok) throw new Error(`GET failed: ${r.status}`);
     const { options, global, projects } = await r.json();
     const rows = [{ id: null, label: 'Global (no project)', value: global },
-      ...projects.map(p => ({ id: p.id, label: `${p.name} (${p.id})`, value: p.effective }))];
+      ...projects.map(p => ({ id: p.id, label: `${p.name} (${p.id})`, value: p.effective, inherits: !p.language }))];
     el.innerHTML = `
       <h2 class="settings-section-title">Telegram language</h2>
       <p class="settings-help">The language the bot writes in Telegram for each project, including what models wrote (translated when it is sent). GitHub and the dashboard stay in English; reply commands stay as they are. A project without its own setting follows the global one. Saved into the project's <code>project.yaml</code> (<code>global.yaml</code> for the global one); applies to the next message.</p>
       ${rows.map((row, i) => `
         <div class="settings-row">
-          <label class="settings-label settings-label-wide" for="tg-lang-${i}">${esc(row.label)}</label>
+          <label class="settings-label settings-label-wide" for="tg-lang-${i}">${esc(row.label)}${row.inherits
+            ? ' <small class="settings-help">(follows global)</small>' : ''}</label>
           <select id="tg-lang-${i}" class="settings-spinner">${options.map(o =>
             `<option value="${esc(o)}"${o === row.value ? ' selected' : ''}>${esc(LANGUAGE_NAMES[o] || o)}</option>`).join('')}</select>
           <button id="tg-lang-save-${i}" class="btn-primary" disabled>Save</button>

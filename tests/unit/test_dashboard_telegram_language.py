@@ -56,6 +56,12 @@ def test_replaces_an_existing_language(tmp_path):
     assert yaml.safe_load(path.read_text(encoding="utf-8"))["telegram"]["language"] == "uk"
 
 
+def test_keeps_a_comment_on_the_language_line(tmp_path):
+    path = _write(tmp_path / "project.yaml", 'telegram:\n  language: en   # the operator reads English\n')
+    set_yaml_language(path, "uk")
+    assert path.read_text(encoding="utf-8") == 'telegram:\n  language: "uk"   # the operator reads English\n'
+
+
 def test_appends_a_block_when_there_is_none(tmp_path):
     path = _write(tmp_path / "global.yaml", "os: mac\nlogging:\n  level: INFO")
     set_yaml_language(path, "uk")
@@ -214,4 +220,30 @@ def test_wizard_language_is_validated_and_listed():
         validate_payload(_payload("ua"))
     assert "extras.telegram_language" in e.value.field_errors
     assert "- telegram_language: uk\n" in redact_to_input_md(_payload("uk"))
-    assert "- telegram_language: en\n" in redact_to_input_md(_payload())
+    assert "telegram_language" not in redact_to_input_md(_payload())  # none chosen: the global one
+
+
+def test_create_without_a_language_leaves_the_project_on_the_global_one(tmp_path, monkeypatch):
+    import time
+
+    from tests.integration.test_project_create_flow import VALID_PAYLOAD, _make_app
+
+    monkeypatch.delenv("ACME_JIRA_TOKEN", raising=False)
+    monkeypatch.delenv("ACME_GITHUB_TOKEN", raising=False)
+    done = []
+
+    async def fake_atlas(workspace, config_dir):
+        proj = config_dir / "projects" / workspace.project_id
+        (proj / "repos").mkdir(parents=True)
+        (proj / "project.yaml").write_text(PROJECT, encoding="utf-8")
+        done.append(True)
+
+    from dashboard import project_create as pc
+
+    resp = TestClient(_make_app(tmp_path, fake_atlas)).post("/api/projects/create", json=VALID_PAYLOAD)
+    assert resp.status_code == 202
+    deadline = time.time() + 2
+    while time.time() < deadline and (not done or pc._busy):
+        time.sleep(0.05)
+    assert not pc._busy
+    assert (tmp_path / "config-live" / "projects" / "acme" / "project.yaml").read_text(encoding="utf-8") == PROJECT

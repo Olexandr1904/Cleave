@@ -21,7 +21,7 @@ from dashboard.reviews_api import _cross_site
 from orchestrator.tg_i18n import project_language
 
 _TELEGRAM = re.compile(r"telegram:[ \t]*(#.*)?")  # the block's own line
-_LANGUAGE = re.compile(r"([ \t]+)language:")
+_LANGUAGE = re.compile(r"([ \t]+)language:[^#\r\n]*?([ \t]+#.*)?")  # its indent, and a comment after the value
 _CHILD = re.compile(r"([ \t]+)\S")
 
 
@@ -49,7 +49,8 @@ def set_yaml_language(path: Path, language: str) -> None:
         block = range(start + 1, end)
         found = next((i for i in block if _LANGUAGE.match(lines[i])), None)
         if found is not None:
-            lines[found] = _LANGUAGE.match(lines[found])[1] + entry
+            m = _LANGUAGE.fullmatch(lines[found].rstrip("\r\n"))
+            lines[found] = f"{m[1]}{entry.rstrip()}{m[2] or ''}\n"
         else:
             child = next((m for i in block if not lines[i].lstrip().startswith("#")
                           and (m := _CHILD.match(lines[i]))), None)

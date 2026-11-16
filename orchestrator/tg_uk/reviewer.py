@@ -133,6 +133,9 @@ TEXTS: dict[str, str] = {
         "Публікацію в #{number} запущено, але вона зупинилася на внутрішній помилці ({name}): можливо, щось уже"
         " опубліковано. Перевірте PR, перш ніж публікувати знову.",
     "Not a post command. Nothing was done.": "Це не команда публікації. Нічого не зроблено.",
+    "#{n} cannot be posted: {why}. Nothing was done.": "#{n} не можна опублікувати: {why}. Нічого не зроблено.",
+    "Posting stopped on an internal error ({name}); check the PR before posting again.":
+        "Публікація зупинилася на внутрішній помилці ({name}); перевірте PR, перш ніж публікувати знову.",
     "Waiting for the first poll: nothing posted.": "Чекаю на перше опитування: нічого не опубліковано.",
     "The report changed while posting (an edit landed): look at it again and reply. Nothing was done.":
         "Звіт змінився під час публікації (застосовано правку): перегляньте його ще раз і відповідайте. Нічого не"

@@ -565,8 +565,8 @@ class JobRunner:
             run.language = current_language()
         with telegram_language(run.language):  # "" (a run from before languages): English
             text = _message(job, run)
-            if not run.message_ids and not set(marked := marked_texts(text)) <= run.translations.keys():
-                run.translations = await self._chat.translations(marked)
+            if not run.message_ids and (missing := [t for t in marked_texts(text) if t not in run.translations]):
+                run.translations = {**run.translations, **await self._chat.translations(missing)}
         parts = message_parts(fill(text, run.translations), limit=MESSAGE_LIMIT)
         for part in parts[len(run.message_ids):]:
             message_id = await self._send(part, job_id=job.id)

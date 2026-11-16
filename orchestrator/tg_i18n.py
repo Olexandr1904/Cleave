@@ -40,9 +40,10 @@ def project_language(global_config: Any, projects: Mapping[str, Any], project_id
 
 
 def chat_language(global_config: Any, projects: Mapping[str, Any], chat_id: str) -> str:
-    """The language of the projects whose default_chat_id is this chat, when they agree; else the global one."""
+    """The language of the projects whose messages go to this chat (their default_chat_id, else global.yaml's), when
+    they agree; else the global one."""
     languages = {project_language(global_config, projects, project_id) for project_id, project in projects.items()
-                 if project.config.telegram.default_chat_id == chat_id}
+                 if (project.config.telegram.default_chat_id or global_config.telegram.default_chat_id) == chat_id}
     return languages.pop() if len(languages) == 1 else project_language(global_config, projects, "")
 
 

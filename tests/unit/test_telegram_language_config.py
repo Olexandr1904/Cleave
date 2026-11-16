@@ -65,3 +65,13 @@ def test_chat_language(tmp_path):
     assert chat_language(global_config, projects, "1") == "en"  # no project's chat
     global_config.telegram.language = "uk"
     assert chat_language(global_config, projects, "3") == "uk"
+
+
+def test_chat_language_counts_a_project_on_the_global_chat(tmp_path):
+    """A project without its own default_chat_id writes to global.yaml's chat: its language is that chat's."""
+    config_dir = _write(tmp_path, "telegram:\n  default_chat_id: '1'\n", {
+        "acme": "project:\n  id: acme\ntelegram:\n  language: uk\n",
+    })
+    global_config, projects = load_config(config_dir)
+    assert chat_language(global_config, projects, "1") == "uk"
+    assert chat_language(global_config, projects, "9") == "en"

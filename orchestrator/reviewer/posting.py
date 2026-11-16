@@ -73,7 +73,7 @@ from orchestrator.reviewer.report_edit import (
 )
 from orchestrator.reviewer.service import RepoContext, _where, utcnow
 from orchestrator.reviewer.store import ReviewerStore
-from orchestrator.tg_i18n import N_, tr
+from orchestrator.tg_i18n import N_, detail, tr
 
 logger = logging.getLogger(__name__)
 
@@ -579,7 +579,7 @@ class Posting:
             raise _Refused(not_posted_line(number, f"Prepare's threads snapshot is of {other}"))
         valid, invalid = validate_plan(run.replies, prepared, me)
         if (bad := next((n for n in cmd.numbers if n in invalid), None)) is not None:
-            raise _Refused(f"#{bad} cannot be posted: {invalid[bad]}. Nothing was done.")
+            raise _Refused(tr("#{n} cannot be posted: {why}. Nothing was done.", n=bad, why=detail(invalid[bad])))
         entries = [valid[n] for n in cmd.numbers]
         for entry in entries:
             if problems := body_problems(entry["body"], ctx.allowed_links):
@@ -834,8 +834,8 @@ class Posting:
         logger.warning("Posting on %s #%d stopped: %s", job.scope, job.number, _where(e))
         post = self._post
         if post is None:
-            return PostOutcome(
-                "failed", f"Posting stopped on an internal error ({name}); check the PR before posting again.")
+            return PostOutcome("failed", tr(
+                "Posting stopped on an internal error ({name}); check the PR before posting again.", name=name))
         if post.state == "posting":
             try:
                 self._end(post, "unverified", error=f"internal error ({name})")

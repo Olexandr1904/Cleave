@@ -22,7 +22,7 @@ from orchestrator.pipeline.actions.fetch_pr_comments import action_fetch_pr_comm
 from orchestrator.pipeline.actions.finalize import action_finalize
 from orchestrator.pipeline.actions.push_and_open_pr import action_push_and_open_pr
 from orchestrator.runtime import Runtime
-from orchestrator.tg_i18n import ENGLISH, project_language, telegram_language
+from orchestrator.tg_i18n import project_language, telegram_language
 from orchestrator.ticket_prioritizer import PrioritizedTicket
 from orchestrator.workflow_router import WorkflowDefinition
 from workspace.workspace import Stage, Workspace
@@ -277,10 +277,7 @@ class Orchestrator:
 
     def telegram_language_of(self, workspace: Workspace) -> str:
         """The language Telegram messages about the workspace's ticket are written in: its project's."""
-        global_config = getattr(self, "_global_config", None)
-        if not hasattr(getattr(global_config, "telegram", None), "language"):  # tests that build it in part
-            return ENGLISH
-        return project_language(global_config, getattr(self, "_projects", None) or {}, workspace.state.company_id)
+        return project_language(self._global_config, self._projects, workspace.state.company_id)
 
     def _get_chat_id(self, workspace: Workspace) -> str:
         """Get Telegram chat ID for a workspace (project or global)."""

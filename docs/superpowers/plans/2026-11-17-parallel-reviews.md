@@ -133,3 +133,6 @@ Rules:
 - [ ] **Step 2:** During the jobs, `/api/reviews` shows `last_poll_at` advancing every poll interval.
 - [ ] **Step 3:** After each job, its `work/…/<job_id>` is gone; `~/CleaveData/reviewer/work` is empty when nothing runs.
 - [ ] **Step 4:** A job's `permission_denials` hold no `Read`/`Bash` denial of the job clone's own objects (the session's `git show`/`git diff` read them).
+- [ ] **Step 5:** A post runs while jobs run.
+- [ ] **Step 6:** A restart during a job (only with the operator's go) leaves no `work/…/<job_id>`.
+- [ ] **Step 7:** The plan 6 Task 9 isolation probe pointed at a job clone gives the same results as on 2026-11-16, and a session writing its job clone's `.git/config` fails only its own job.

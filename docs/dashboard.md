@@ -100,7 +100,7 @@ Credentials are re-checked in the background every 15 minutes, and immediately a
 
 **Reviews** in the sidebar (`#/reviews`) shows the reviews board of every repo with `reviewer.enabled: true` in its repo YAML: the open PRs that involve you, and whose turn it is on each. With no such repo the view says `No repo has reviews enabled.` It refreshes with the toolbar's **Refresh** and **Auto** like the Board; the Board's **Hide done** and **+ New Project** are not shown on it.
 
-Nothing is posted from the dashboard: Telegram is the only posting path. Queued reviews and re-checks run unattended, one job at a time, and their result comes to Telegram (see [review and re-check messages](telegram.md#review-and-re-check-messages)); you post it by replying there (see [replying to reviewer messages](telegram.md#replying-to-reviewer-messages)). The dashboard shows what was posted.
+Nothing is posted from the dashboard: Telegram is the only posting path. Queued reviews and re-checks run unattended, up to `reviewer.max_parallel_jobs` (default 6) at once and one per PR, and their result comes to Telegram (see [review and re-check messages](telegram.md#review-and-re-check-messages)); you post it by replying there (see [replying to reviewer messages](telegram.md#replying-to-reviewer-messages)). The dashboard shows what was posted.
 
 ### Reviews switch panel
 
@@ -142,7 +142,7 @@ Click a row (outside its links and buttons) to open the PR in the [side panel](#
 
 A review is queued automatically when your turn is a review, the head has been quiet for `reviewer.quiet_minutes` (default 30), the head is not skipped, reviews are running and the process document is on the base branch. A PR with at least `reviewer.max_files_auto` (default 40) changed files is not reviewed automatically: Telegram gets a line instead.
 
-The job runner takes the queued jobs one at a time and writes these states:
+The job runner starts queued jobs as they become runnable, up to `reviewer.max_parallel_jobs` at once (one per PR; none while the work volume has less free space than `workspaces.min_free_disk_gb`), and writes these states:
 
 | State | Meaning |
 |---|---|
@@ -185,6 +185,8 @@ Each job's files are kept in `<reviewer data dir>/jobs/<job id>/`: what the sess
 ### Review clone
 
 Each reviewed repo has a Cleave-owned single-branch clone of its base branch at `<reviewer data dir>/repos/<project_id>/<repo_id>` (default `~/CleaveData/reviewer/repos/<project_id>/<repo_id>`), created on the first poll. The forge token reaches git only through the environment of that one git process: it is never written to `.git/config` or the keychain.
+
+No review session runs in it. Each review or re-check gets a **job clone** of its own, `git clone --local` from it (objects hard-linked, no token, its origin the review clone's path) at `<reviewer data dir>/work/<project_id>/<repo_id>/<job_id>/clone`, with the PR's worktree beside it; the job's directory is removed when the job ends, and any left at start-up is removed then. The review clone is locked only for a job's git there (refresh, the PR head, the readiness threads, the job clone), for a poll's refresh and readiness, and for a post's poster runs.
 
 Repos added by hot reload (the **+ New Project** wizard) are not on the Reviews view until the daemon restarts.
 

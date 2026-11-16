@@ -109,6 +109,8 @@ When one lives elsewhere, for example `claude` from its native installer in `~/.
 
 **Your shell's variables are not there.** Under launchd the daemon gets only the plist's variables and `.env`, which `run.sh` exports whole. Put what your shell profile supplies and the builds need in `.env`: `JAVA_HOME` (Homebrew's openjdk is keg-only, so nothing finds it by itself), and `ANDROID_HOME` if `run.sh` does not find the SDK.
 
+**Job clones.** Each running review gets a `git clone --local` of its repo's review clone under `~/CleaveData/reviewer/work/` (hard-linked objects: keep `work/` on the same volume as `repos/`), removed when the job ends and at start-up. Up to `reviewer.max_parallel_jobs` (default 6) run at once; none starts while the volume has less free space than `workspaces.min_free_disk_gb`.
+
 **Review clones: make the first clone by hand.** The daemon keeps one clone per reviewed repo in `repos/<project_id>/<repo_id>` next to `reviewer.db` (by default `~/CleaveData/reviewer/`), and gives each git call there 300 s. That covers a fetch, but a large repo's first clone can take longer, and then every poll fails. So make the first clone (or a re-clone, after removing a broken one) by hand, with the daemon stopped, through the daemon's own code and a longer timeout:
 ```bash
 cd ~/Cleave

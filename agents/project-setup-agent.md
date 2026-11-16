@@ -139,7 +139,7 @@ references (`${VAR_NAME}`). Never write raw secrets into config files.
 
 ### Phase 6 — Extras
 
-22. Ask for **Telegram chat ID override** (optional — default: inherit from global)
+22. Ask for **Telegram chat ID override** (optional — default: inherit from global) and the **Telegram language** (`en` or `uk`; default: `en`)
 23. Ask for **architecture rules file** path (optional, e.g. `docs/arch-rules.md`)
 24. Ask for **protected files** list (optional, comma-separated, e.g. `.github/, build.gradle.kts`)
 25. Ask for **max concurrent tickets** (optional — default: inherit from project/global)
@@ -203,6 +203,7 @@ Then continue with the shared sections:
 telegram:
   bot_token: "${TELEGRAM_BOT_TOKEN}"
   default_chat_id: "{telegram_chat_id_or_inherit}"
+  language: "{telegram_language}"   # en or uk: the language the bot writes in Telegram
 
 parallelism:
   max_concurrent_tickets: 7

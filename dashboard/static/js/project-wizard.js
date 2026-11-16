@@ -26,7 +26,7 @@ const state = {
     },
     vcs: { provider: 'github', github: { default_branch: 'develop', branch_prefix: 'feature', merge_method: 'squash' }, gitlab: {} },
     quality: { lint: {hard_gate: true}, test: {hard_gate: true}, build: {hard_gate: true} },
-    extras: { protected_files: [] },
+    extras: { protected_files: [], telegram_language: 'en' },
   },
   errors: {},
   running: null,
@@ -550,12 +550,21 @@ const renderers = {
         ${e.telegram_chat_id ? `<span class="error">${e.telegram_chat_id}</span>` : ''}
       </div>
       <div class="form-field">
+        <label>Telegram language</label>
+        <select id="f-ex-tg-language">
+          <option value="en"${(d.telegram_language || 'en') === 'en' ? ' selected' : ''}>English</option>
+          <option value="uk"${d.telegram_language === 'uk' ? ' selected' : ''}>Українська</option>
+        </select>
+        <small class="hint">The language the bot writes in Telegram for this project. GitHub stays in English. Changeable later in Settings.</small>
+      </div>
+      <div class="form-field">
         <button id="f-tg-check" class="btn-check" type="button">Test Telegram</button>
         <div id="f-tg-check-result"></div>
       </div>
     `;
     body.querySelector('#f-ex-tg-token').oninput = (ev) => { d.telegram_bot_token = ev.target.value || null; state.validated.telegram = false; };
     body.querySelector('#f-ex-tg-chat').oninput = (ev) => { d.telegram_chat_id = ev.target.value || null; state.validated.telegram = false; };
+    body.querySelector('#f-ex-tg-language').onchange = (ev) => { d.telegram_language = ev.target.value; };
     body.querySelector('#f-tg-check').onclick = async () => {
       const btn = body.querySelector('#f-tg-check');
       const res_el = body.querySelector('#f-tg-check-result');
@@ -610,6 +619,7 @@ const renderers = {
         <tr><td>Token</td><td>•••• → ${env(vp === 'github' ? 'GITHUB_TOKEN' : 'GITLAB_TOKEN')}</td></tr>
         <tr><th colspan="2">Notifications</th></tr>
         <tr><td>Telegram</td><td>${tg}</td></tr>
+        <tr><td>Language</td><td>${d.extras.telegram_language === 'uk' ? 'Українська' : 'English'}</td></tr>
       </table>
       <p class="hint" style="margin-top:12px;">Quality gates and advanced settings can be configured later in the project YAML.</p>
     `;

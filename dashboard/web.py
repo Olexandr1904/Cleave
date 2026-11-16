@@ -503,6 +503,10 @@ def create_app(
         )
         routes.extend(action_routes)
 
+    if global_config is not None and projects is not None:
+        from dashboard.telegram_language import build_language_routes
+        routes.extend(build_language_routes(global_config, projects, config_dir or "config-live"))
+
     if switches is not None:
         from dashboard.switches_api import build_switch_routes
         routes.extend(build_switch_routes(switches, lambda: projects or {}))

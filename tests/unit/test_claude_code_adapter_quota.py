@@ -163,6 +163,19 @@ class TestStallAsQuota:
         assert isinstance(err, QuotaExhaustedError)
         assert err.retry_at is None
 
+    def test_stall_after_an_allowed_rate_limit_event_is_not_quota(self):
+        # The CLI sends an informational rate_limit_event early in every run. Status "allowed" (here 3% of the
+        # five-hour window used) means nothing is limited: a silence after it is a stall, not a quota wait.
+        info = {"status": "allowed", "resetsAt": 1794842400, "rateLimitType": "five_hour",
+                "overageStatus": "rejected"}
+        assert _stall_as_quota(self._progress("rate_limit_event", info)) is None
+
+    def test_stall_after_a_rejected_rate_limit_event_is_quota(self):
+        info = {"status": "rejected", "resetsAt": 1794842400, "rateLimitType": "five_hour"}
+        err = _stall_as_quota(self._progress("rate_limit_event", info))
+        assert isinstance(err, QuotaExhaustedError)
+        assert err.retry_at == datetime(2026, 11, 16, 15, 20, 0, tzinfo=timezone.utc)
+
     def test_stall_after_normal_tool_is_not_quota(self):
         # A genuine hang mid-work (last event was a tool/assistant turn) is not
         # a quota wait — it must stay a generic stall, not auto-defer forever.

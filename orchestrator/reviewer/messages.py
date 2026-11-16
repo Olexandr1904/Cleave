@@ -1,11 +1,14 @@
-"""The reviewer's Telegram messages, in English: the review message and the re-check message."""
+"""The reviewer's Telegram messages, in the current Telegram language: the review message and the re-check message.
+What the review model wrote (a finding's title or Telegram line, the event's reason, why a candidate was dropped, a
+drafted reply) is marked for translation (tg_i18n.model_text)."""
 from __future__ import annotations
 
 import posixpath
 
 from orchestrator.reviewer.report import CONFIRMED, KIND_EMOJI, Report, ReportItem
+from orchestrator.tg_i18n import N_, count, model_text, tr
 
-_REVIEW_HINT = (
+_REVIEW_HINT = N_(
     'Reply to this message: "post 1 2 4 approve" · "text 2" · "edit 2: …" · "review again"'
 )
 # Characters of any one text from the report, the replies plan, tg_lines or the PR that a line prints:
@@ -31,28 +34,34 @@ def review_message(
         total = len(report.items) + len(report.dropped)
     confirmed = sum(kind in CONFIRMED for kind in kinds)
     ticket = f" · {ticket_key}" if ticket_key else ""
-    counts = (
-        f"head {report.head_sha[:9]} · {_count(files, 'file')} · {_count(total, 'candidate')}"
-        f" → {confirmed} confirmed · {_count(kinds.count('question'), 'question')}"
-        f" · {kinds.count('preexisting')} pre-existing · {len(report.dropped)} dropped"
+    counts = tr(
+        "head {head} · {files} · {candidates} → {confirmed} confirmed · {questions} · {preexisting} pre-existing"
+        " · {dropped} dropped",
+        head=report.head_sha[:9], files=count(files, "file"), candidates=count(total, "candidate"),
+        confirmed=confirmed, questions=count(kinds.count("question"), "question"),
+        preexisting=kinds.count("preexisting"), dropped=len(report.dropped),
     )
     lines = [
-        f'[{scope}] Review of PR #{number} "{_cut(title)}"{ticket}',
+        tr('[{scope}] Review of PR #{number} "{title}"{ticket}', scope=scope, number=number, title=_cut(title),
+           ticket=ticket),
         counts,
-        f"Suggested: {report.event} — {_cut(report.event_reason)}",
+        tr("Suggested: {event} — {reason}", event=report.event, reason=model_text(_cut(report.event_reason))),
     ]
     if posted_at_head or summary_posted:
-        summary = " and the Summary" if summary_posted else ""
-        lines.append(f"Already posted at this head: {_count(posted_at_head, 'comment')}{summary}")
+        comments = count(posted_at_head, "comment")
+        if summary_posted:
+            lines.append(tr("Already posted at this head: {comments} and the Summary", comments=comments))
+        else:
+            lines.append(tr("Already posted at this head: {comments}", comments=comments))
     lines.append("")
     lines += [_item_line(item, tg_lines) for item in report.items]
     if report.dropped:
-        lines.append("Dropped: " + "; ".join(
-            f"{d.number} — {_cut(tg_lines.get(d.number) or d.why)}" for d in report.dropped
-        ))
+        lines.append(tr("Dropped: {dropped}", dropped="; ".join(
+            f"{d.number} — {model_text(_cut(tg_lines.get(d.number) or d.why))}" for d in report.dropped
+        )))
     if not report.items and not report.dropped:
-        lines.append("No findings.")
-    lines += ["", _REVIEW_HINT, url]
+        lines.append(tr("No findings."))
+    lines += ["", tr(_REVIEW_HINT), url]
     return "\n".join(lines)
 
 
@@ -65,20 +74,21 @@ def recheck_message(
     replies: list[dict],
     tg_lines: dict[int, str],
 ) -> str:
-    k = len(replies)
     lines = [
-        f'[{scope}] Re-check of PR #{number} "{_cut(title)}"',
-        f"head {head_sha[:9]} · {k} drafted repl{'y' if k == 1 else 'ies'}",
+        tr('[{scope}] Re-check of PR #{number} "{title}"', scope=scope, number=number, title=_cut(title)),
+        tr("head {head} · {replies}", head=head_sha[:9],
+           replies=count(len(replies), "drafted reply", "drafted replies")),
         "",
     ]
     if replies:
         for entry in replies:
             gist = tg_lines.get(entry["n"]) or entry["body"].strip().partition("\n")[0]
-            lines.append(f"{entry['n']}. {_cut(gist)}")
+            lines.append(f"{entry['n']}. {model_text(_cut(gist))}")
         numbers = " ".join(str(entry["n"]) for entry in replies)
-        lines += ["", f'Reply to this message: "post replies {numbers}" · "text {replies[0]["n"]}"']
+        lines += ["", tr('Reply to this message: "post replies {numbers}" · "text {first}"', numbers=numbers,
+                         first=replies[0]["n"])]
     else:
-        lines += ["No replies drafted.", ""]
+        lines += [tr("No replies drafted."), ""]
     lines.append(url)
     return "\n".join(lines)
 
@@ -129,7 +139,7 @@ def message_parts(text: str, limit: int, max_parts: int = 10) -> list[str]:
     def cut(n: int) -> list[str]:
         """The first n pieces, then the closing line."""
         left_out = total - pieces[n][0]
-        closing = f"… {_count(left_out, 'more line')} — the full report is on the dashboard"
+        closing = tr("… {lines} — the full report is on the dashboard", lines=count(left_out, "more line"))
         return split_message("\n".join([*(piece for _, piece in pieces[:n]), closing]), limit)
 
     lo, hi = 0, len(pieces) - 1  # the most pieces that fit: cut(0) does, all of them never do
@@ -162,11 +172,7 @@ def _item_line(item: ReportItem, tg_lines: dict[int, str]) -> str:
     if item.path:
         line = "" if item.line is None else f":{item.line}"
         where = f"{_cut(posixpath.basename(item.path))}{line} — "
-    return f"{KIND_EMOJI[item.kind]} {item.number}. {where}{_cut(tg_lines.get(item.number) or item.title)}"
-
-
-def _count(n: int, noun: str) -> str:
-    return f"{n} {noun}{'' if n == 1 else 's'}"
+    return f"{KIND_EMOJI[item.kind]} {item.number}. {where}{model_text(_cut(tg_lines.get(item.number) or item.title))}"
 
 
 def _cut(text: str) -> str:

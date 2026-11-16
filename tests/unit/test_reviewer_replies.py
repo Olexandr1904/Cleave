@@ -17,6 +17,7 @@ from orchestrator.reviewer.report import parse_report
 from orchestrator.reviewer.report_edit import item_text
 from orchestrator.reviewer.service import RepoContext
 from orchestrator.reviewer.store import ReviewerStore
+from orchestrator.tg_i18n import fill
 from tests.unit.test_reviewer_reply_llm import FULL
 from tests.unit.test_reviewer_report import HEAD, REPORT
 from tests.unit.test_reviewer_runner import board_row
@@ -45,6 +46,12 @@ class FakeChat:
         self.store.add_anchor(CHAT, message_id, kwargs.get("job_id", ""), T0.isoformat(),
                               scope=kwargs.get("scope", ""), number=kwargs.get("number", 0))
         return message_id
+
+    async def translations(self, texts):  # ReviewerChat without a translator
+        return {}
+
+    async def localize(self, text):
+        return fill(text, {})
 
 
 class FakePosting:

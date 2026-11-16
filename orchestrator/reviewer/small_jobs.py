@@ -31,6 +31,7 @@ from orchestrator.reviewer.runner import may_still_save
 from orchestrator.reviewer.service import _where, utcnow
 from orchestrator.reviewer.session import _outcome, _secret_rules, session_env
 from orchestrator.reviewer.store import ReviewerStore
+from orchestrator.tg_i18n import ENGLISH, N_, telegram_language
 
 logger = logging.getLogger(__name__)
 
@@ -39,11 +40,12 @@ SMALL_MAX_TURNS = 30
 _KINDS = ("edit", "draft")
 _DENY = ("Bash", "Write", "Edit", "NotebookEdit", "WebFetch", "WebSearch", "Agent", "Skill")
 _MAX_PARTS = 3
-_UNREADABLE = "draft unreadable"
-_OUTDATED = "the review is outdated"
-_INTERRUPTED = "interrupted (daemon restarted)"
+# A job's reasons are stored in English; N_ lists them for the Telegram lines that name them (lines.detail).
+_UNREADABLE = N_("draft unreadable")
+_OUTDATED = N_("the review is outdated")
+_INTERRUPTED = N_("interrupted (daemon restarted)")
 _WAITING = "waiting for the review message to be delivered"
-_REASONS = {"quota": "usage limit reached", "login": "claude login failing"}
+_REASONS = {"quota": N_("usage limit reached"), "login": N_("claude login failing")}
 _PREAMBLE = "You are running unattended inside Cleave. Nobody will answer questions: never stop to ask.\n"
 
 
@@ -187,7 +189,10 @@ class SmallJobRunner:
         now: Callable[[], datetime] = utcnow,
         environ: Mapping[str, str] = os.environ,
         idle_seconds: float = 30,
+        language_of: Callable[[str], str] = lambda project_id: ENGLISH,
     ) -> None:
+        # The Telegram language of a project id: a job's lines take its repo's project's.
+        self._language_of = language_of
         self._store = store
         self._chat = chat
         self._llm = llm
@@ -228,8 +233,9 @@ class SmallJobRunner:
         try:
             for job in self.recover():
                 if request := self._request(job):
-                    await self._send(small_failed_line(job.scope, job.number, job.kind, request["number"],
-                                                       _INTERRUPTED), request["job"])
+                    with telegram_language(self._language(job)):
+                        await self._send(small_failed_line(job.scope, job.number, job.kind, request["number"],
+                                                           _INTERRUPTED), request["job"])
         except Exception as e:
             logger.warning("Reviewer edit and draft jobs not recovered: %s", _where(e))
 
@@ -258,26 +264,32 @@ class SmallJobRunner:
     async def run_job(self, job: Job) -> None:
         """Run the session and splice its answer in: the job ends done with its reply, or failed with its line, the
         copy's base report then unchanged. Every line is a reply anchor to the review job. A job whose review's
-        message is still going out stays queued. Never raises (cancellation aside: recover() fails it then)."""
-        target_id, number = "", 0
-        try:
-            request = self._request(job)
-            target_id, number = request["job"], request["number"]
-            if self._waits(job):
+        message is still going out stays queued. Never raises (cancellation aside: recover() fails it then). Its
+        lines are in its repo's project's Telegram language."""
+        with telegram_language(self._language(job)):
+            target_id, number = "", 0
+            try:
+                request = self._request(job)
+                target_id, number = request["job"], request["number"]
+                if self._waits(job):
+                    return
+                self._change(job, "running", "")
+                reply = await self._run(job, target_id, number, request["instruction"])
+            except (_Failed, ReportError) as e:
+                reason = str(e)
+            except Exception as e:
+                logger.warning("Reviewer %s job %s failed: %s", job.kind, job.id, _where(e))
+                reason = f"internal error: {type(e).__name__}"
+            else:
+                self._change(job, "done", "")
+                await self._send(reply, target_id)
                 return
-            self._change(job, "running", "")
-            reply = await self._run(job, target_id, number, request["instruction"])
-        except (_Failed, ReportError) as e:
-            reason = str(e)
-        except Exception as e:
-            logger.warning("Reviewer %s job %s failed: %s", job.kind, job.id, _where(e))
-            reason = f"internal error: {type(e).__name__}"
-        else:
-            self._change(job, "done", "")
-            await self._send(reply, target_id)
-            return
-        self._change(job, "failed", reason)
-        await self._send(small_failed_line(job.scope, job.number, job.kind, number, reason), target_id)
+            self._change(job, "failed", reason)
+            await self._send(small_failed_line(job.scope, job.number, job.kind, number, reason), target_id)
+
+    def _language(self, job: Job) -> str:
+        """The Telegram language of the job's repo's project (its scope is "<project>/<repo>")."""
+        return self._language_of(job.scope.partition("/")[0])
 
     def _waits(self, job: Job) -> bool:
         """Whether the job waits for its review's message to go out; then it stays queued, saying so. Until the
@@ -308,7 +320,7 @@ class SmallJobRunner:
         try:
             base = ensure_base(job_dir, f"report_{head[:9]}.md")
         except FileNotFoundError:
-            raise _Failed("the job's report file is missing") from None
+            raise _Failed(N_("the job's report file is missing")) from None
         # The report the model reads: the base holds the earlier edits and drafts, the job's report file none (a
         # post overwrites it with a ticked copy of the base). ensure_base made the base if there was none.
         report_name = base.relative_to(job_dir).as_posix()
@@ -332,7 +344,7 @@ class SmallJobRunner:
             job_cfg=self._config.jobs[job.kind], secret_paths=self._config.secret_paths, environ=self._environ,
         )
         if outcome.kind != "ok":
-            raise _Failed(_REASONS.get(outcome.kind) or outcome.error or "the session failed")
+            raise _Failed(_REASONS.get(outcome.kind) or outcome.error or N_("the session failed"))
         # No await from these reads to the save: a change saved to the run during the session is kept, and a
         # review outdated during it is left as it is.
         target = self._store.job(target_id)
@@ -343,7 +355,7 @@ class SmallJobRunner:
         text = base.read_bytes().decode("utf-8")
         if job.kind == "edit":
             if not (body := outcome.text.strip()):
-                raise _Failed("the session wrote no new text")
+                raise _Failed(N_("the session wrote no new text"))
             new = apply_edit(text, head, number, body, drafted)
             line = edited_line
         else:
@@ -360,10 +372,11 @@ class SmallJobRunner:
         return line(job.scope, job.number, number, item_text(next(i for i in parsed.items if i.number == number)))
 
     async def _send(self, text: str, job_id: str) -> None:
-        """`text` in parts, each a reply anchor to the job; a failed send is logged with the exception class only,
-        and ends the text."""
+        """`text`, its model-written text translated, in parts, each a reply anchor to the job; a failed send is
+        logged with the exception class only, and ends the text."""
         if self._chat is None:
             return
+        text = await self._chat.localize(text)
         for part in message_parts(text, limit=MESSAGE_LIMIT, max_parts=_MAX_PARTS):
             try:
                 await self._chat.send(part, job_id=job_id)

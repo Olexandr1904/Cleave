@@ -17,6 +17,7 @@ from pathlib import Path
 from typing import NamedTuple
 
 from orchestrator.reviewer.markdown import AMBIGUOUS_BREAKS, BOM, fenced, split_lines
+from orchestrator.tg_i18n import N_, model_text, tr
 from orchestrator.reviewer.report import (
     _ITEM,
     Report,
@@ -174,12 +175,20 @@ def apply_draft(text: str, head: str, number: int, title: str, path: str, line: 
 
 
 def item_text(item: ReportItem) -> str:
-    """The item as the operator reads it: number, place and note, the title, and the body without its first
-    `**File:**` line."""
+    """The item as the operator reads it in Telegram: number, place and note, the title, and the body without its
+    first `**File:**` line; the title and the body marked for translation into the Telegram language."""
     where = item.path if item.line is None else f"{item.path}:{item.line}"
-    note = f" ({item.note})" if item.note else ""
+    note = f" ({_note(item.note)})" if item.note else ""
     before, after = split_at_file_line(item.body)
-    return f"#{item.number} · {where}{note}\n**{item.title}**\n\n" + "\n".join(before + after).strip()
+    return (f"#{item.number} · {where}{note}\n**{model_text(item.title)}**\n\n"
+            + model_text("\n".join(before + after).strip()))
+
+
+def _note(note: str) -> str:
+    """An item's note ("moves to <L>" or "outside the diff", see report.py) in the Telegram language."""
+    if m := re.fullmatch(r"moves to (\d+)", note):
+        return tr("moves to {line}", line=m[1])
+    return tr(N_("outside the diff")) if note == "outside the diff" else note
 
 
 def split_at_file_line(body: str) -> tuple[list[str], list[str]]:

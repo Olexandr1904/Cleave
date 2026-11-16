@@ -11,6 +11,8 @@ from typing import Any
 from integrations.base.notifier import Button
 from orchestrator.reviewer.service import utcnow
 from orchestrator.reviewer.store import ReviewerStore
+from orchestrator.tg_i18n import current_language
+from orchestrator.tg_translate import Translator, localize
 
 logger = logging.getLogger(__name__)
 
@@ -25,6 +27,19 @@ class ReviewerChat:
     store: ReviewerStore | None = None
     now: Callable[[], datetime] = utcnow
     sleep: Callable[[float], Awaitable[None]] = asyncio.sleep
+    translator: Translator | None = None  # the model-written texts' (None: they stay as they are)
+
+    async def translations(self, texts: list[str]) -> dict[str, str]:
+        """The model-written `texts` in the current Telegram language, those that were translated; {} in English,
+        without a translator, or when the translation fails."""
+        if self.translator is None or not texts:
+            return {}
+        return await self.translator.translations(texts, current_language())
+
+    async def localize(self, text: str) -> str:
+        """`text` with its model-written texts in the current language: done before a text is split into parts, so
+        a mark is never cut in two."""
+        return await localize(text, self.translator)
 
     async def send(
         self,

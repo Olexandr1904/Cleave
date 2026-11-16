@@ -155,9 +155,15 @@ DEFAULT_MAX_TURNS = 100
 API_KEY_VARS = ("ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "CLAUDE_CODE_USE_BEDROCK", "CLAUDE_CODE_USE_VERTEX")
 
 
+# Claude Code's Bash tool gives a foreground command 2 minutes by default and 10 at most; a Gradle build outlasts
+# both. The ceiling stays under IDLE_STALL_SECONDS, because a running command prints nothing to the stream.
+BASH_TIMEOUT_DEFAULTS = {"BASH_DEFAULT_TIMEOUT_MS": "900000", "BASH_MAX_TIMEOUT_MS": "1500000"}
+
+
 def claude_env(env: Mapping[str, str] | None) -> dict[str, str]:
-    """The environment for a `claude` run: `env`, or the daemon's when None, as a copy without the API_KEY_VARS."""
-    source = os.environ if env is None else env
+    """The environment for a `claude` run, as a copy without the API_KEY_VARS: `env`, or, when None, the daemon's
+    with the BASH_TIMEOUT_DEFAULTS it does not set itself."""
+    source = {**BASH_TIMEOUT_DEFAULTS, **os.environ} if env is None else env
     return {k: v for k, v in source.items() if k not in API_KEY_VARS}
 
 

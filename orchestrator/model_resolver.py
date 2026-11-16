@@ -14,9 +14,10 @@ from dataclasses import dataclass
 LABEL_PREFIX = "model-"
 
 SHORT_NAME_TO_MODEL: dict[str, str] = {
-    "haiku":  "claude-haiku-4-5-20251001",
-    "opus":   "claude-opus-4-7",
-    "sonnet": "claude-sonnet-4-6",
+    "fable":  "claude-fable-5-2",
+    "haiku":  "claude-haiku-5-5",
+    "opus":   "claude-opus-5-5",
+    "sonnet": "claude-sonnet-5-5",
 }
 
 

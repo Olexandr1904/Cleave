@@ -92,9 +92,19 @@ def test_label_prefix_constant():
     assert LABEL_PREFIX == "model-"
 
 
-def test_short_name_map_covers_three_models():
-    """The mapping covers exactly haiku, opus, sonnet."""
-    assert set(SHORT_NAME_TO_MODEL.keys()) == {"haiku", "opus", "sonnet"}
+def test_short_names_map_to_the_current_generation():
+    assert SHORT_NAME_TO_MODEL == {
+        "fable": "claude-fable-5-2",
+        "haiku": "claude-haiku-5-5",
+        "opus": "claude-opus-5-5",
+        "sonnet": "claude-sonnet-5-5",
+    }
+
+
+def test_short_names_and_the_dashboard_list_agree():
+    from dashboard.settings_store import ALLOWED_MODELS
+
+    assert set(SHORT_NAME_TO_MODEL.values()) == set(ALLOWED_MODELS)
 
 
 def test_model_short_name_reverse_map():

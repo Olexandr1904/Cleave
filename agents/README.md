@@ -80,4 +80,4 @@ All dependencies are resolved by `id` at startup. Missing dependencies produce w
 
 ## Model Selection
 
-Agents do not pick their own Claude model. The model is decided per ticket at workspace creation and stored on `WorkspaceState.model` — every agent dispatched against that ticket uses it. Operators can override per ticket with a Jira label (`model-haiku`, `model-opus`, `model-sonnet`); otherwise the global default from the dashboard is snapshotted. See [docs/features/per-ticket-model-selection.md](../docs/features/per-ticket-model-selection.md).
+Agents do not pick their own Claude model. The model is decided per ticket at workspace creation and stored on `WorkspaceState.model` — every agent dispatched against that ticket uses it. Operators can override per ticket with a Jira label (`model-fable`, `model-haiku`, `model-opus`, `model-sonnet`); otherwise the global default from the dashboard is snapshotted. See [docs/features/per-ticket-model-selection.md](../docs/features/per-ticket-model-selection.md).

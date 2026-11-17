@@ -58,6 +58,8 @@ def _ensure_msg_ids(c: dict) -> list[int]:
 _REVIEW_STORE_UNREAD = "Reply not handled: the reviewer's store could not be read; nothing was done."
 _REVIEWER_OFF = "Reviewer mode is off on this daemon: nothing was done."
 _REVIEWER_NOT_A_REPLY = "Reply to the reviewer's message to act on it; nothing was done."
+_SKILL_STORE_UNREAD = "Reply not handled: the skill-run store could not be read; nothing was done."
+_SKILL_OFF = "The skill flow is off on this daemon; nothing was done."
 
 _FIX_TOKENS = ("fix it", "fix", "fxi", "fifx", "fixx", "fx", "fi", "yes")
 _WONT_FIX_TOKENS = (
@@ -102,6 +104,8 @@ class CommandHandler:
 
     # The reviewer's replies (has_repos, is_anchor, handle_reply, handle_callback); None: no reviewer on this daemon.
     _reviewer: Any | None = None
+    # The skill flow's replies (is_anchor, handle_reply, handle_callback, answer); None: no skill flow on this daemon.
+    _skill: Any | None = None
 
     def __init__(
         self,
@@ -121,9 +125,11 @@ class CommandHandler:
         get_projects: Callable[[], dict[str, Any]] | None = None,
         reviewer: Any | None = None,
         reviewer_chat_ids: set[str] | None = None,
+        skill: Any | None = None,
     ) -> None:
         self._switches = switches
         self._reviewer = reviewer
+        self._skill = skill
         # The chats the reviewer's replies and taps are read in. Never "every chat": unlike allowed_chat_ids, none
         # (or an empty set) is no chat, so an empty allowlist leaves the reviewer off.
         self._reviewer_chat_ids: set[str] = set(reviewer_chat_ids or ())
@@ -605,7 +611,13 @@ class CommandHandler:
     async def handle_reply(
         self, reply_to_msg_id: int, text: str, chat_id: str, sent_at: datetime | None = None,
     ) -> bool:
-        """Handle a reply to a reviewer message or an escalation message. Returns True if matched.
+        """Handle a reply to a skill run's message, a reviewer message or an escalation message. Returns True if
+        matched.
+
+        A reply to a skill run's message goes to the skill flow, with `sent_at` for its age limit, before anything
+        else: the intent parser would read its "ok" as the approval of a ticket's gate. When the skill-run store
+        cannot be read, the ticket-reply matching still runs, and a reply it does not match is answered and kept
+        from the intent parser all the same.
 
         A reply in one of the reviewer's chats to a reviewer message goes to the reviewer, with `sent_at` (the
         reply's Telegram date) for its age limit. Such a reply never reaches the intent parser, which would read the
@@ -616,6 +628,18 @@ class CommandHandler:
         """
         if self._allowed_chat_ids is not None and chat_id not in self._allowed_chat_ids:
             return False
+        if self._skill is not None:
+            try:
+                skill_anchored = self._skill.is_anchor(chat_id, reply_to_msg_id)
+            except Exception as e:
+                logger.warning("Skill-run reply anchor not looked up: %s", type(e).__name__)
+                if not await self._pipeline_reply(reply_to_msg_id, text, chat_id):
+                    # A dead end, best effort: a reply to it is the skill flow's too; the store may be what failed.
+                    await self._skill.answer(chat_id, reply_to_msg_id, _SKILL_STORE_UNREAD)
+                return True
+            if skill_anchored:
+                await self._skill.handle_reply(chat_id, reply_to_msg_id, text, sent_at=sent_at)
+                return True
         if self._reviewer is None:
             return await self._pipeline_reply(reply_to_msg_id, text, chat_id)
         if chat_id not in self._reviewer_chat_ids:
@@ -918,9 +942,19 @@ class CommandHandler:
         return True
 
     async def handle_callback(self, action: str, ticket_id: str, chat_id: str, message_id: int) -> None:
-        """Handle an inline button press. Bypasses LLM intent parsing. An `rv_` action is the reviewer's, never a
-        workspace's, and is read in the reviewer's chats only."""
+        """Handle an inline button press. Bypasses LLM intent parsing. An `sk_` action is the skill flow's and an
+        `rv_` action the reviewer's, never a workspace's; an `rv_` action is read in the reviewer's chats only."""
         if self._allowed_chat_ids is not None and chat_id not in self._allowed_chat_ids:
+            return
+
+        if action.startswith("sk_"):
+            if self._skill is None:
+                try:
+                    await self._notifier.send_message(chat_id, _SKILL_OFF, reply_to_message_id=message_id)
+                except Exception as e:  # the class only: a Telegram error's text can hold the bot token
+                    logger.warning("Skill-flow-off answer not sent: %s", type(e).__name__)
+            else:
+                await self._skill.handle_callback(action, ticket_id, chat_id, message_id)
             return
 
         if action.startswith("rv_"):

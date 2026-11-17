@@ -46,3 +46,4 @@ config-live/
 .worktrees/
 data/events.db
 data/*.log
+data/*.log.*

@@ -959,3 +959,223 @@ class TestReviewerReplies:
             awaiting.transition.assert_not_called()
         assert mock_notifier.send_message.await_args_list[-len(reviewer_forms):] == [
             call("42", self.UNANCHORED)] * len(reviewer_forms)
+
+
+from orchestrator.skillflow.chat import SkillChat
+from orchestrator.skillflow.replies import SkillReplies
+from orchestrator.skillflow.store import SkillStore
+
+SKILL_STORE_UNREAD = "Reply not handled: the skill-run store could not be read; nothing was done."
+SKILL_DEAD_END = "Reply to a skill run's own message to act on it; nothing was done."
+
+
+class _FakeSkill:
+    """SkillReplies as the command handler sees it: (chat id, message id) anchors, or an anchor lookup that raises;
+    calls recorded, a reply's sent_at apart. Its answer goes out through `notifier`, as the real one's SkillChat
+    sends through the daemon's notifier."""
+
+    def __init__(self, anchors=(), lookup_error=None, notifier=None):
+        self.anchors, self.lookup_error, self.notifier = set(anchors), lookup_error, notifier
+        self.replies, self.sent_ats, self.callbacks, self.answers = [], [], [], []
+
+    async def answer(self, chat_id, reply_to, text):
+        self.answers.append((chat_id, reply_to, text))
+        await self.notifier.send_message(chat_id, text, reply_to_message_id=reply_to)
+
+    def is_anchor(self, chat_id, message_id):
+        if self.lookup_error is not None:
+            raise self.lookup_error
+        return (chat_id, message_id) in self.anchors
+
+    async def handle_reply(self, chat_id, message_id, text, sent_at=None):
+        self.replies.append((chat_id, message_id, text))
+        self.sent_ats.append(sent_at)
+
+    async def handle_callback(self, action, run_id, chat_id, message_id):
+        self.callbacks.append((action, run_id, chat_id, message_id))
+
+
+class _RecordingHandler(CommandHandler):
+    """The real handler, with what the skill tests read: `sent`, the texts it sent, and `intent_parser_calls`. A
+    reply it does not handle goes on to handle_message, as TelegramAdapter._handle_incoming sends it: only a handled
+    reply is kept from the intent parser."""
+
+    @property
+    def sent(self) -> list[str]:
+        return [c.args[1] for c in self._notifier.send_message.await_args_list]
+
+    @property
+    def intent_parser_calls(self) -> int:
+        return self._intent_parser.parse.await_count
+
+    async def handle_reply(self, reply_to_msg_id, text, chat_id, sent_at=None):
+        handled = await super().handle_reply(reply_to_msg_id, text, chat_id, sent_at=sent_at)
+        if not handled:
+            await self.handle_message(text, chat_id)
+        return handled
+
+
+@pytest.fixture
+def handler_with_skill(mock_intent_parser, mock_notifier, mock_mode_handler):
+    def build(anchors=(), lookup_error=None, workspaces=(), reviewer=None):
+        skill = _FakeSkill(anchors, lookup_error, mock_notifier)
+        handler = _RecordingHandler(
+            intent_parser=mock_intent_parser, notifier=mock_notifier, mode_handler=mock_mode_handler,
+            active_workspaces_fn=lambda: list(workspaces), allowed_chat_ids={"-100"}, skill=skill,
+            reviewer=reviewer, reviewer_chat_ids={"-100"},
+        )
+        return handler, skill
+    return build
+
+
+@pytest.fixture
+def handler(mock_intent_parser, mock_notifier, mock_mode_handler):
+    return _RecordingHandler(intent_parser=mock_intent_parser, notifier=mock_notifier, mode_handler=mock_mode_handler,
+                             active_workspaces_fn=lambda: [], allowed_chat_ids={"-100"})
+
+
+async def test_reply_to_a_skill_message_goes_to_the_skill_flow(handler_with_skill):
+    handler, skill = handler_with_skill(anchors={("-100", 7)})
+    assert await handler.handle_reply(7, "ok", "-100") is True
+    assert skill.replies == [("-100", 7, "ok")] and handler.intent_parser_calls == 0
+
+
+async def test_reply_to_another_message_is_not_the_skill_flows(handler_with_skill):
+    handler, skill = handler_with_skill(anchors=set())
+    await handler.handle_reply(8, "ok", "-100")
+    assert skill.replies == []
+    assert handler.intent_parser_calls == 1   # left to handle_message, as before
+
+
+async def test_a_failed_skill_lookup_never_reaches_the_intent_parser(handler_with_skill):
+    handler, skill = handler_with_skill(lookup_error=sqlite3.OperationalError("locked"))
+    assert await handler.handle_reply(7, "ok", "-100") is True
+    assert "skill-run store could not be read" in handler.sent[-1] and handler.intent_parser_calls == 0
+    assert skill.answers == [("-100", 7, SKILL_STORE_UNREAD)]   # the skill flow's answer about no run: a dead end
+
+
+async def test_skill_reply_from_a_chat_that_is_not_allowed_is_ignored(handler_with_skill):
+    handler, skill = handler_with_skill(anchors={("-999", 7)})
+    assert await handler.handle_reply(7, "ok", "-999") is False and skill.replies == []
+
+
+async def test_sk_callback_routing(handler_with_skill):
+    handler, skill = handler_with_skill(anchors=set())
+    await handler.handle_callback("sk_drop", "r1", "-100", 7)
+    assert skill.callbacks == [("sk_drop", "r1", "-100", 7)]
+
+
+async def test_sk_callback_without_a_skill_flow(handler):
+    await handler.handle_callback("sk_ok", "r1", "-100", 7)
+    assert "skill flow is off" in handler.sent[-1]
+
+
+async def test_a_skill_reply_carries_its_telegram_date(handler_with_skill):
+    """The skill flow applies the age rule: the handler passes the reply's date, as the adapter gives it."""
+    handler, skill = handler_with_skill(anchors={("-100", 7)})
+    await handler.handle_reply(7, "ok", "-100", sent_at=NOW - timedelta(minutes=16))
+    from integrations.telegram.telegram_adapter import TelegramAdapter
+    with patch("integrations.telegram.telegram_adapter.Bot"):
+        adapter = TelegramAdapter(bot_token="fake-token")
+    adapter.set_command_handler(handler)
+    await adapter._handle_incoming(_reply_update("ok", reply_to=7, chat=-100, sent_at=NOW - timedelta(minutes=1)), None)
+    assert skill.replies == [("-100", 7, "ok")] * 2
+    assert skill.sent_ats == [NOW - timedelta(minutes=16), NOW - timedelta(minutes=1)]
+    assert handler.intent_parser_calls == 0
+
+
+async def test_a_failed_skill_lookup_still_takes_a_ticket_reply(handler_with_skill, caplog):
+    blocked = _make_workspace("ACME-1", Stage.BLOCKED, previous_state=Stage.DEV)
+    blocked.state.escalation_msg_id = 7
+    blocked.meta_dir = "/nonexistent"
+    handler, skill = handler_with_skill(lookup_error=sqlite3.OperationalError("database is locked"),
+                                        workspaces=[blocked])
+    with caplog.at_level(logging.WARNING, logger="integrations.telegram.command_handler"):
+        assert await handler.handle_reply(7, "retry", "-100") is True
+    blocked.transition.assert_called_once_with(Stage.DEV)
+    assert "Retrying" in handler.sent[-1] and not any("skill-run store" in text for text in handler.sent)
+    assert "OperationalError" in caplog.text and "database is locked" not in caplog.text
+    assert skill.replies == [] and skill.answers == [] and handler.intent_parser_calls == 0
+
+
+async def test_with_the_skill_flow_on_the_reviewers_replies_and_taps_are_as_before(handler_with_skill):
+    reviewer = _reviewer(anchors=(("-100", 100),))
+    handler, skill = handler_with_skill(anchors={("-100", 7)}, reviewer=reviewer)
+    assert await handler.handle_reply(7, "ok", "-100") is True     # the skill run's: before the reviewer's lookup
+    assert skill.replies == [("-100", 7, "ok")]
+    skill.replies.clear()
+    assert await handler.handle_reply(100, "post 1", "-100") is True
+    reviewer.handle_reply.assert_awaited_once_with("-100", 100, "post 1", sent_at=None)
+    assert reviewer.is_anchor.call_args_list == [call("-100", 100)]
+    await handler.handle_callback("rv_ok", "abc123", "-100", 55)
+    reviewer.handle_callback.assert_awaited_once_with("rv_ok", "abc123", "-100", 55)
+    await handler.handle_callback("approve", "ACME-2", "-100", 56)
+    assert "No workspace awaiting approval for ACME-2." in handler.sent[-1]
+    await handler.handle_callback("sk_ok", "r1", "-999", 7)    # a chat that is not allowed: nothing
+    assert skill.replies == [] and skill.callbacks == []
+
+
+def _locked(*args, **kwargs):
+    raise sqlite3.OperationalError("database is locked")
+
+
+@pytest.fixture
+def real_skill(tmp_path, mock_intent_parser, mock_notifier, mock_mode_handler):
+    """The handler over the real SkillReplies, chat and store, its notifier giving the message ids 500, 501, …"""
+    ids = iter(range(500, 600))
+    mock_notifier.send_message = AsyncMock(side_effect=lambda *args, **kwargs: next(ids))
+    store = SkillStore(connect(tmp_path / "reviewer.db"))
+
+    async def no_sleep(seconds):
+        pass
+
+    skill = SkillReplies(store, SkillChat(mock_notifier, store, sleep=no_sleep), wake=lambda: None)
+    handler = _RecordingHandler(intent_parser=mock_intent_parser, notifier=mock_notifier,
+                                mode_handler=mock_mode_handler, active_workspaces_fn=lambda: [],
+                                allowed_chat_ids={"-100"}, skill=skill)
+    handler.handle_message = AsyncMock()   # where an unhandled reply would go on to
+    return handler, store
+
+
+async def test_a_reply_to_a_skill_answer_about_no_run_never_reaches_handle_message(real_skill, monkeypatch):
+    handler, store = real_skill
+    real_anchor, real_run = store.anchor, store.run
+    store.add_anchor("-100", 7, "gone", "2026-11-20T10:00:00+00:00")   # names a run the store does not have
+    monkeypatch.setattr(store, "anchor", _locked)
+    assert await handler.handle_reply(7, "ok", "-100") is True           # the store could not be read
+    monkeypatch.setattr(store, "anchor", real_anchor)
+    assert await handler.handle_reply(7, "ok", "-100") is True           # the run cannot be read
+    await handler.handle_callback("sk_ok", "nope", "-100", 8)             # a run not known
+    monkeypatch.setattr(store, "run", _locked)
+    await handler.handle_callback("sk_ok", "r1", "-100", 9)               # an internal error
+    monkeypatch.setattr(store, "run", real_run)
+    assert handler.sent == [SKILL_STORE_UNREAD, "This skill run cannot be read; nothing was done.",
+                            "This skill run is not known; nothing was done.",
+                            "Internal error (OperationalError); nothing was done."]
+    for message_id in range(500, 504):
+        assert store.anchor("-100", message_id) == ""
+        assert await handler.handle_reply(message_id, "approve", "-100") is True
+    assert await handler.handle_reply(507, "ok", "-100") is True         # a reply to a dead-end answer
+    assert handler.sent[4:] == [SKILL_DEAD_END] * 5 and store.anchor("-100", 508) == ""
+    handler.handle_message.assert_not_awaited()
+    assert handler.intent_parser_calls == 0
+
+
+async def test_a_not_handled_answer_whose_anchor_fails_stays(real_skill, mock_notifier, monkeypatch, caplog):
+    handler, store = real_skill
+    monkeypatch.setattr(store, "anchor", _locked)
+    monkeypatch.setattr(store, "add_anchor", _locked)
+    with caplog.at_level(logging.WARNING):
+        assert await handler.handle_reply(7, "ok", "-100") is True
+    assert handler.sent == [SKILL_STORE_UNREAD]
+    assert mock_notifier.send_message.await_args.kwargs == {"reply_to_message_id": 7}
+    mock_notifier.delete_message.assert_not_awaited()   # the operator needs to read it
+    assert "OperationalError" in caplog.text and "database is locked" not in caplog.text
+    handler.handle_message.assert_not_awaited()
+
+
+async def test_the_skill_flow_off_answer_that_cannot_be_sent_is_logged(handler, mock_notifier, caplog):
+    mock_notifier.send_message.side_effect = RuntimeError("Unauthorized: bot0000:not-a-real-token")
+    with caplog.at_level(logging.WARNING, logger="integrations.telegram.command_handler"):
+        await handler.handle_callback("sk_ok", "r1", "-100", 7)     # does not raise
+    assert "RuntimeError" in caplog.text and "not-a-real-token" not in caplog.text

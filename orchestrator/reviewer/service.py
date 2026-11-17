@@ -21,6 +21,7 @@ from orchestrator.reviewer.readiness import ReadinessError
 from orchestrator.reviewer.report import Report
 from orchestrator.reviewer.store import ReviewerStore
 from orchestrator.switches import Switches, scope_of
+from orchestrator.tg_i18n import ENGLISH, telegram_language
 
 logger = logging.getLogger(__name__)
 
@@ -184,7 +185,10 @@ class ReviewerService:
         event_bus=None,
         now: Callable[[], datetime] = utcnow,
         max_backoff_seconds: int = 3600,
+        language_of: Callable[[str], str] = lambda project_id: ENGLISH,
     ) -> None:
+        # The Telegram language of a project id: a repo's lines take its project's.
+        self._language_of = language_of
         self._repos = repos
         self._store = store
         self._switches = switches
@@ -234,7 +238,11 @@ class ReviewerService:
     async def poll(self, ctx: RepoContext) -> None:
         """One poll of one repo. Never raises (cancellation aside): failures become its status. A repo whose
         clone a job prepares or cleans up, or a post holds, is left alone, nothing recorded: it stays due, tried
-        again shortly."""
+        again shortly. Its lines are in the repo's project's Telegram language."""
+        with telegram_language(self._language_of(ctx.project_id)):
+            await self._poll_one(ctx)
+
+    async def _poll_one(self, ctx: RepoContext) -> None:
         now = self._now()
         try:
             outcome = await self._record(ctx, now)

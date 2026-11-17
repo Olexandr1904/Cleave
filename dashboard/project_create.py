@@ -21,9 +21,11 @@ from dashboard.project_create_payload import (
     PayloadValidationError,
     derive_env_vars,
     redact_to_input_md,
+    telegram_language,
     validate_payload,
 )
 from dashboard.setup_workspace import create_setup_workspace
+from dashboard.telegram_language import set_yaml_language
 
 logger = logging.getLogger(__name__)
 
@@ -63,6 +65,7 @@ def build_create_route(
 
         project_id = payload["identity"]["project_id"]
         repo_id = payload["identity"]["repo_id"]
+        language = telegram_language(payload)
 
         project_config_dir = config_dir / "projects" / project_id
         if project_config_dir.exists():
@@ -106,6 +109,15 @@ def build_create_route(
             global _busy, _active_workspace
             _busy = False
             _active_workspace = None
+
+            # The Telegram language the wizard chose (none: the project follows global.yaml's), written by Cleave
+            # whatever the agent wrote. A failure is logged: the Settings view can set it.
+            project_yaml = project_config_dir / "project.yaml"
+            if language and project_yaml.exists():
+                try:
+                    set_yaml_language(project_yaml, language)
+                except Exception:
+                    logger.exception("Telegram language not written for %s", project_id)
 
             # Atlas success <=> project.yaml exists on disk.
             if orchestrator is not None and (project_config_dir / "project.yaml").exists():

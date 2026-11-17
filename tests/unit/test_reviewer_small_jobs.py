@@ -30,6 +30,7 @@ from orchestrator.reviewer.small_jobs import (
     small_settings_json,
 )
 from orchestrator.reviewer.store import ReviewerStore
+from orchestrator.tg_i18n import fill
 from tests.unit.test_reviewer_messages import URL
 from tests.unit.test_reviewer_report import HEAD, REPORT
 from tests.unit.test_reviewer_runner import Rig as RunnerRig
@@ -83,6 +84,12 @@ class FakeChat:
     async def send(self, text, *, job_id="", scope="", number=0, reply_to=None, buttons=None):
         self.sent.append((text, job_id))
         return 500 + len(self.sent)
+
+    async def translations(self, texts):  # ReviewerChat without a translator
+        return {}
+
+    async def localize(self, text):
+        return fill(text, {})
 
 
 class Rig:

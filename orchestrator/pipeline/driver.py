@@ -17,6 +17,7 @@ from orchestrator import tg_format
 from orchestrator.agent_runtime import last_attempt_block
 from orchestrator.constants import REPORT_BA, RUNTIME_OUTPUT_PLAN_REVIEW
 from orchestrator.pipeline.agent_stage import _emit, _log_pipeline
+from orchestrator.tg_i18n import detail, model_text, tr
 from orchestrator.workflow_router import (
     WorkflowDefinition,
     get_next_stage,
@@ -135,8 +136,8 @@ def build_gate_summary(
     tid = state.ticket_id
     title = tg_format.read_ticket_title(workspace)
     buttons = [
-        Button(label="Approve", action=f"approve:{tid}"),
-        Button(label="Reject", action=f"reject:{tid}"),
+        Button(label=tr("Approve"), action=f"approve:{tid}"),
+        Button(label=tr("Reject"), action=f"reject:{tid}"),
     ]
 
     if gate_state == Stage.PR_REVIEW:
@@ -147,21 +148,21 @@ def build_gate_summary(
             # Extract the last Resolution Summary line
             for line in reversed(content.splitlines()):
                 if line.startswith("Fixed:") or line.startswith("## Resolution Summary"):
-                    summary = line
+                    summary = detail(line)
                     break
             if not summary:
-                summary = "Review complete."
+                summary = tr("Review complete.")
         else:
             comments_file = workspace.reports_dir / "pr-review-comments.md"
             if comments_file.exists():
                 count = comments_file.read_text(encoding="utf-8").count("## Comment by")
-                summary = f"{count} comment(s) processed."
+                summary = tr("{count} comment(s) processed.", count=count)
             else:
-                summary = "No PR comments found."
+                summary = tr("No PR comments found.")
         hdr = tg_format.tg_header("⏸", state.company_id, state.ticket_id, title)
         text = (
             f"{hdr}\n"
-            f"PR: {state.pr_url or 'N/A'}\n"
+            f"PR: {state.pr_url or tr('N/A')}\n"
             f"{summary}"
         )
         return text, buttons
@@ -174,16 +175,16 @@ def build_gate_summary(
         review_verdict = _extract_plan_review_verdict(
             workspace.reports_dir / RUNTIME_OUTPUT_PLAN_REVIEW,
         )
-        gate_title = "Plan review complete."
+        gate_title = tr("Plan review complete.")
         if ba_verdict:
-            gate_title += f"\n\nBA decision:\n{ba_verdict}"
+            gate_title += "\n\n" + tr("BA decision:") + f"\n{model_text(ba_verdict)}"
         if review_verdict:
-            gate_title += f"\n\nPlan reviewer:\n{review_verdict}"
-        gate_title += "\n\nApprove = start coding. Reject = back to analysis."
+            gate_title += "\n\n" + tr("Plan reviewer:") + f"\n{model_text(review_verdict)}"
+        gate_title += "\n\n" + tr("Approve = start coding. Reject = back to analysis.")
     elif gate_state == Stage.QA:
-        gate_title = "QA passed.\n\nApprove = push code & open PR. Reject = back to dev."
+        gate_title = tr("QA passed.\n\nApprove = push code & open PR. Reject = back to dev.")
     else:
-        gate_title = f"Awaiting approval at {gate_state}"
+        gate_title = tr("Awaiting approval at {gate_state}", gate_state=gate_state)
 
     hdr = tg_format.tg_header("⏸", state.company_id, state.ticket_id, title)
     text = (

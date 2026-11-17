@@ -1,4 +1,5 @@
-"""The reviewer's Telegram lines, in English."""
+"""The reviewer's Telegram lines, in the current Telegram language. A reason or an error a line names is Cleave's own
+text when the catalogue holds it, else it is translated like a model's (tg_i18n.detail)."""
 from __future__ import annotations
 
 from collections.abc import Iterable, Sequence
@@ -6,126 +7,129 @@ from datetime import datetime
 
 from orchestrator.reviewer.board import TurnChange
 from orchestrator.reviewer.models import BoardRow
+from orchestrator.tg_i18n import ENGLISH, N_, count, current_language, detail, tr
+
+# The job kinds and turn actions a line names, for tr(): an action the readiness tool names otherwise stays as is.
+_NAMES = (N_("review"), N_("recheck"), N_("edit"), N_("draft"))
 
 
 def turn_line(scope: str, row: BoardRow, change: TurnChange) -> str:
     if change.action == "answer_threads":
-        return (
-            f"[{scope}] #{row.number}: replies in {len(change.threads)} thread(s)"
-            f" — handle them locally · {row.url}"
+        return tr(
+            "[{scope}] #{number}: replies in {threads} thread(s) — handle them locally · {url}",
+            scope=scope, number=row.number, threads=len(change.threads), url=row.url,
         )
-    return f"[{scope}] #{row.number}: your turn — {change.action} · {row.url}"
+    return tr("[{scope}] #{number}: your turn — {action} · {url}", scope=scope, number=row.number,
+              action=tr(change.action), url=row.url)
 
 
 def large_line(scope: str, row: BoardRow) -> str:
-    return (
-        f"[{scope}] #{row.number} is large ({row.changed_files} files)"
-        f" — no automatic review · {row.url}"
-    )
+    return tr("[{scope}] #{number} is large ({files} files) — no automatic review · {url}",
+              scope=scope, number=row.number, files=row.changed_files, url=row.url)
 
 
 def readiness_failed_line(scope: str, reason: str, retry_minutes: int) -> str:
-    return (
-        f"[{scope}] readiness command failed: {reason}. Keeping the last board;"
-        f" next try in {retry_minutes} min."
-    )
+    return tr("[{scope}] readiness command failed: {reason}. Keeping the last board; next try in {minutes} min.",
+              scope=scope, reason=detail(reason), minutes=retry_minutes)
 
 
 def poll_failed_line(scope: str, reason: str, minutes: int) -> str:
-    return (
-        f"[{scope}] poll failed: {reason}. Keeping the last board;"
-        f" next try in {minutes} min."
-    )
+    return tr("[{scope}] poll failed: {reason}. Keeping the last board; next try in {minutes} min.",
+              scope=scope, reason=detail(reason), minutes=minutes)
 
 
 def doc_missing_line(scope: str, doc: str, base: str) -> str:
-    return f"[{scope}] reviews are off: {doc} is not on {base}."
+    return tr("[{scope}] reviews are off: {doc} is not on {base}.", scope=scope, doc=doc, base=base)
 
 
 def job_failed_line(scope: str, number: int, kind: str, reason: str) -> str:
-    return f"[{scope}] #{number}: {kind} failed — {reason}"
+    return tr("[{scope}] #{number}: {kind} failed — {reason}", scope=scope, number=number, kind=tr(kind),
+              reason=detail(reason))
 
 
 def job_deferred_line(scope: str, number: int, kind: str, retry_at: datetime) -> str:
-    return (
-        f"[{scope}] #{number}: {kind} deferred — usage limit reached;"
-        f" next try at {retry_at:%H:%M} UTC"
-    )
+    return tr("[{scope}] #{number}: {kind} deferred — usage limit reached; next try at {at} UTC",
+              scope=scope, number=number, kind=tr(kind), at=f"{retry_at:%H:%M}")
 
 
 def login_line() -> str:
-    return (
+    return tr(
         "[reviewer] claude is not logged in on the host. Log in from a GUI Terminal"
         " (run claude, then /login); reviews wait until then."
     )
 
 
 def drift_line(scope: str, doc: str, section: str) -> str:
-    return (
-        f'[{scope}] The "{section}" section of {doc} changed on the base branch:'
-        " check that Cleave's Prepare still matches it."
+    return tr(
+        '[{scope}] The "{section}" section of {doc} changed on the base branch:'
+        " check that Cleave's Prepare still matches it.",
+        scope=scope, section=section, doc=doc,
     )
 
 
 def outdated_line(state: str, reason: str) -> str:
     if state == "superseded":
         if reason == "new head":
-            return "Outdated: there is a review of a newer head. Nothing was done."
-        return "Outdated: there is a newer review. Nothing was done."
+            return tr("Outdated: there is a review of a newer head. Nothing was done.")
+        return tr("Outdated: there is a newer review. Nothing was done.")
     if state == "stale":
-        return f"Outdated: this report no longer matches the PR ({reason}). Nothing was done."
-    return f'This job ended {state}: only "review again" and "skip" work here. Nothing was done.'
+        return tr("Outdated: this report no longer matches the PR ({reason}). Nothing was done.",
+                  reason=detail(reason))
+    return tr('This job ended {state}: only "review again" and "skip" work here. Nothing was done.', state=state)
 
 
 def pr_closed_line(number: int) -> str:
-    return f"PR #{number} is closed: nothing posted."
+    return tr("PR #{number} is closed: nothing posted.", number=number)
 
 
 def head_moved_line(old: str, new: str) -> str:
-    return (f"Head moved ({old[:9]} → {new[:9]}): nothing posted."
-            ' Reply "review again" for a review of the new head.')
+    return tr('Head moved ({old} → {new}): nothing posted. Reply "review again" for a review of the new head.',
+              old=old[:9], new=new[:9])
 
 
 def already_reviewed_line(when: str) -> str:
-    return (f"You already submitted a review on this PR after the report ({when}): nothing posted."
-            ' Add "anyway" to your reply to post regardless.')
+    return tr('You already submitted a review on this PR after the report ({when}): nothing posted.'
+              ' Add "anyway" to your reply to post regardless.', when=when)
 
 
 def body_problem_line(number: int, problem: str) -> str:
-    return f'#{number}: its text {problem}: nothing posted. Fix it with "edit {number}: …".'
+    return tr('#{number}: its text {problem}: nothing posted. Fix it with "edit {number}: …".', number=number,
+              problem=detail(problem))
 
 
 def recheck_body_problem_line(number: int, problem: str) -> str:
     """A re-check message takes no "edit"."""
-    return (f"#{number}: its text {problem}: nothing posted. A re-check reply cannot be edited here:"
-            " answer that thread on GitHub yourself.")
+    return tr("#{number}: its text {problem}: nothing posted. A re-check reply cannot be edited here:"
+              " answer that thread on GitHub yourself.", number=number, problem=detail(problem))
 
 
 def not_posted_line(number: int, why: str) -> str:
-    return f"Not posted on #{number}: {why}."
+    return tr("Not posted on #{number}: {why}.", number=number, why=detail(why))
 
 
 def nothing_left_line(number: int, head: str) -> str:
-    return f"Nothing left to post on #{number} at {head[:9]}: what you named is already posted."
+    return tr("Nothing left to post on #{number} at {head}: what you named is already posted.", number=number,
+              head=head[:9])
 
 
 def summary_landed_line(number: int, head: str) -> str:
-    return f'The Summary already landed at #{number} at {head[:9]}: add "no summary". Nothing was done.'
+    return tr('The Summary already landed at #{number} at {head}: add "no summary". Nothing was done.',
+              number=number, head=head[:9])
 
 
 def posted_line(number: int, head: str, event: str, urls: Sequence[str], inline: Sequence[int],
                 moved: Sequence[int], in_body: Sequence[int], skipped: Sequence[int]) -> str:
-    k = len(urls)
     parts = [f"{label}: {_spaced(numbers)}" for label, numbers in (
-        ("inline", inline), ("moved anchor", moved), ("in the review body", in_body),
-        ("already posted, skipped", skipped)) if numbers]
-    return (f"Posted on #{number} at {head[:9]} — {event}, {k} review{'' if k == 1 else 's'}: {' '.join(urls)}\n"
-            + (" · ".join(parts) or "Summary only"))
+        (tr("inline"), inline), (tr("moved anchor"), moved), (tr("in the review body"), in_body),
+        (tr("already posted, skipped"), skipped)) if numbers]
+    return (tr("Posted on #{number} at {head} — {event}, {reviews}: {urls}", number=number, head=head[:9],
+               event=event, reviews=count(len(urls), "review"), urls=" ".join(urls)) + "\n"
+            + (" · ".join(parts) or tr("Summary only")))
 
 
 def replies_posted_line(number: int, results: Sequence[str]) -> str:
     """`results`: one line per named reply, in order."""
-    return f"Posted replies on #{number}:\n" + "\n".join(results)
+    return tr("Posted replies on #{number}:", number=number) + "\n" + "\n".join(results)
 
 
 def replies_partial_line(number: int, why: str, results: Sequence[str], by_hand: Sequence[str], retry: str,
@@ -133,17 +137,18 @@ def replies_partial_line(number: int, why: str, results: Sequence[str], by_hand:
     """Some of the named replies landed. `why`: what did not; `results`: a line per reply that landed (or was
     posted before); `by_hand`: what only the operator can finish; `retry`: the reply that posts the rest, ""
     when none can; `url`: set when a step may have landed unseen."""
-    text = f"Partly posted replies on #{number} — {why}.\n" + "\n".join(results)
+    text = tr("Partly posted replies on #{number} — {why}.", number=number, why=detail(why)) + "\n"
+    text += "\n".join(results)
     text += "".join(f"\n{line}" for line in by_hand)
     if url:
-        text += f"\nCheck the PR on GitHub before posting again: {url}"
-    return text + (f'\nReply "{retry}" to post the rest.' if retry else "")
+        text += "\n" + tr("Check the PR on GitHub before posting again: {url}", url=url)
+    return text + ("\n" + tr('Reply "{retry}" to post the rest.', retry=retry) if retry else "")
 
 
 def left_out_line(number: int, why: str, url: str) -> str:
     """The replies tool plans nothing, but GitHub does not show what it leaves out as posted."""
-    return (f"Nothing posted on #{number}: the replies tool has nothing to post, but GitHub does not show"
-            f" everything posted ({why}). Check the PR on GitHub: {url}")
+    return tr("Nothing posted on #{number}: the replies tool has nothing to post, but GitHub does not show"
+              " everything posted ({why}). Check the PR on GitHub: {url}", number=number, why=detail(why), url=url)
 
 
 def partial_line(number: int, head: str, landed_batches: Sequence[tuple[int, str]], total: int,
@@ -153,37 +158,39 @@ def partial_line(number: int, head: str, landed_batches: Sequence[tuple[int, str
     tool reports posted that GitHub does not show."""
     batches = ", ".join(str(i) for i, _ in landed_batches)
     urls = " ".join(url for _, url in landed_batches)
-    text = (f"Partly posted on #{number} at {head[:9]}: batch {batches} of {total} landed ({urls});"
-            f" landed {_spaced(landed) or 'none'}; not landed {_spaced(missing) or 'none'} — {why}.")
+    none = tr("none")
+    text = tr("Partly posted on #{number} at {head}: batch {batches} of {total} landed ({urls});"
+              " landed {landed}; not landed {missing} — {why}.", number=number, head=head[:9], batches=batches,
+              total=total, urls=urls, landed=_spaced(landed) or none, missing=_spaced(missing) or none,
+              why=detail(why))
     if unconfirmed:
-        text += (f" The tool also reports batch {', '.join(map(str, unconfirmed))} posted, which GitHub does not"
-                 " show: check the PR on GitHub.")
-    return text + (f'\nReply "{retry}" to post the rest.' if retry else "")
+        text += " " + tr("The tool also reports batch {batches} posted, which GitHub does not show: check the PR"
+                         " on GitHub.", batches=", ".join(map(str, unconfirmed)))
+    return text + ("\n" + tr('Reply "{retry}" to post the rest.', retry=retry) if retry else "")
 
 
 def not_shown_line(number: int, why: str, url: str) -> str:
     """A post that may have landed (the tool reports it, or GitHub shows something else new) but that GitHub
     does not show as planned."""
-    return (f"Posting on #{number} ran, but GitHub does not show it as planned ({why})."
-            f" Check the PR on GitHub before posting again: {url}")
+    return tr("Posting on #{number} ran, but GitHub does not show it as planned ({why})."
+              " Check the PR on GitHub before posting again: {url}", number=number, why=detail(why), url=url)
 
 
 def already_approved_line(number: int, head: str) -> str:
-    return f"Already approved #{number} at {head[:9]}. Nothing was done."
+    return tr("Already approved #{number} at {head}. Nothing was done.", number=number, head=head[:9])
 
 
 def approve_unknown_line(number: int, head: str) -> str:
-    return (f'An approve of #{number} at {head[:9]} may have landed: check the PR, then add "anyway" to your reply'
-            " to approve again. Nothing was done.")
+    return tr('An approve of #{number} at {head} may have landed: check the PR, then add "anyway" to your reply'
+              " to approve again. Nothing was done.", number=number, head=head[:9])
 
 
 def not_understood_line(kind: str) -> str:
     """`kind`: the anchored job's (review or recheck)."""
     if kind == "recheck":
-        examples = '"post replies 1 3", "text 1" or "review again"'
-    else:
-        examples = '"post 1 2 4 approve", "text 2", "edit 2: …", "draft 7" or "review again"'
-    return f"Not understood; nothing was done. Reply like {examples}."
+        return tr('Not understood; nothing was done. Reply like "post replies 1 3", "text 1" or "review again".')
+    return tr('Not understood; nothing was done. Reply like "post 1 2 4 approve", "text 2", "edit 2: …",'
+              ' "draft 7" or "review again".')
 
 
 def interrupted_line(scope: str, number: int, kind: str = "review", numbers: Sequence[int] = ()) -> str:
@@ -191,44 +198,55 @@ def interrupted_line(scope: str, number: int, kind: str = "review", numbers: Seq
     "anyway": only those GitHub does not show are named again."""
     if kind == "replies":
         named = f" {_spaced(numbers)}" if numbers else ""
-        return (f"[{scope}] #{number}: a post of replies{named} was interrupted by a restart. Check the PR, then"
-                ' reply "post replies …" with the ones GitHub does not show.')
-    return (f'[{scope}] #{number}: a post was interrupted by a restart. Check the PR, then reply "post …" again'
-            ' with "anyway": what landed is skipped.')
+        return tr('[{scope}] #{number}: a post of replies{named} was interrupted by a restart. Check the PR, then'
+                  ' reply "post replies …" with the ones GitHub does not show.', scope=scope, number=number,
+                  named=named)
+    return tr('[{scope}] #{number}: a post was interrupted by a restart. Check the PR, then reply "post …" again'
+              ' with "anyway": what landed is skipped.', scope=scope, number=number)
 
 
 def unverified_line(number: int, error: str, url: str) -> str:
-    return (f"Posting on #{number} ran, but GitHub could not be read to check it ({error})."
-            f" Check the PR before posting again: {url}")
+    return tr("Posting on #{number} ran, but GitHub could not be read to check it ({error})."
+              " Check the PR before posting again: {url}", number=number, error=detail(error), url=url)
 
 
 def approved_line(number: int, head: str, url: str) -> str:
-    return f"Approved #{number} at {head[:9]} without a body: {url}"
+    return tr("Approved #{number} at {head} without a body: {url}", number=number, head=head[:9], url=url)
 
 
 def github_unreadable_line(number: int, error: str) -> str:
-    return f"GitHub could not be read for #{number} ({error}): nothing posted."
+    return tr("GitHub could not be read for #{number} ({error}): nothing posted.", number=number,
+              error=detail(error))
 
 
 def internal_error_line(number: int, name: str) -> str:
     """Posting stopped on an error of Cleave's once the confirm run (or the approve) had run: it may have landed."""
-    return (f"Posting on #{number} ran, but stopped on an internal error ({name}): it may have landed. Check the PR"
-            " before posting again.")
+    return tr("Posting on #{number} ran, but stopped on an internal error ({name}): it may have landed. Check the PR"
+              " before posting again.", number=number, name=name)
 
 
 def edited_line(scope: str, pr: int, n: int, item_text: str) -> str:
-    return (f"[{scope}] #{pr}: new text (nothing posted)\n\n{item_text}"
-            f'\n\nReply "post {n}" to post it, or "edit {n}: …" again.')
+    return (tr("[{scope}] #{pr}: new text (nothing posted)", scope=scope, pr=pr) + f"\n\n{item_text}\n\n"
+            + tr('Reply "post {n}" to post it, or "edit {n}: …" again.', n=n) + github_note())
 
 
 def drafted_line(scope: str, pr: int, n: int, item_text: str) -> str:
-    return (f"[{scope}] #{pr}: drafted as a question (nothing posted)\n\n{item_text}"
-            f'\n\nReply "post {n}" to post it.')
+    return (tr("[{scope}] #{pr}: drafted as a question (nothing posted)", scope=scope, pr=pr)
+            + f"\n\n{item_text}\n\n" + tr('Reply "post {n}" to post it.', n=n) + github_note())
 
 
 def small_failed_line(scope: str, pr: int, kind: str, n: int, reason: str) -> str:
     """`kind`: edit or draft."""
-    return f"[{scope}] #{pr}: {kind} of {n} failed — {reason}"
+    return tr("[{scope}] #{pr}: {kind} of {n} failed — {reason}", scope=scope, pr=pr, kind=tr(kind), n=n,
+              reason=detail(reason))
+
+
+def github_note() -> str:
+    """After a finding's or a reply's text shown in another language than English: what GitHub gets. "" in
+    English."""
+    if current_language() == ENGLISH:
+        return ""
+    return "\n\n" + tr("(GitHub gets the English text.)")
 
 
 def _spaced(numbers: Iterable[int]) -> str:

@@ -5,10 +5,16 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 
+# The languages Cleave writes in Telegram: English (the default) and Ukrainian.
+TELEGRAM_LANGUAGES = ("en", "uk")
+
+
 @dataclass
 class TelegramConfig:
     bot_token: str = ""
     default_chat_id: str = ""
+    # One of TELEGRAM_LANGUAGES; "" follows global.yaml's, and English when that has none.
+    language: str = ""
 
 
 @dataclass

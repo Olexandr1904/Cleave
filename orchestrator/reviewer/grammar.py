@@ -2,7 +2,8 @@
 
 A reply is acted on at once only when the grammar knows every one of its tokens; anything else
 parses to None and goes to the LLM fallback. Russian and Ukrainian words are accepted input
-synonyms only: every text the operator reads is English.
+synonyms; the answers are in the Telegram language (tg_i18n), and the commands they quote stay
+in the grammar's English words.
 """
 from __future__ import annotations
 
@@ -14,6 +15,7 @@ from dataclasses import dataclass
 
 from orchestrator.reviewer.lines import _spaced
 from orchestrator.reviewer.report import CONFIRMED, Report
+from orchestrator.tg_i18n import tr
 
 # Matched on the raw text, so the instruction keeps the operator's own wording.
 _EDIT = re.compile(
@@ -133,68 +135,66 @@ def check_command(
     """The command with "all confirmed" expanded into numbers, or why nothing is done."""
     recheck = kind == "recheck"
     if not recheck and cmd.action == "post_replies":
-        return (
-            'This is a review message: "post replies" works on a re-check message. '
-            "Nothing was done."
-        )
+        return tr('This is a review message: "post replies" works on a re-check message. Nothing was done.')
     if recheck and cmd.action in ("post", "edit", "draft"):
-        return 'This is a re-check message: reply "post replies 1 3". Nothing was done.'
+        return tr('This is a re-check message: reply "post replies 1 3". Nothing was done.')
     # Shapes only the LLM can produce: the grammar never gives these counts of numbers.
     if cmd.action == "edit" and (len(cmd.numbers) != 1 or not cmd.instruction.strip()):
-        return 'Edit one number at a time: "edit 2: …". Nothing was done.'
+        return tr('Edit one number at a time: "edit 2: …". Nothing was done.')
     if cmd.action == "text" and not cmd.numbers:
-        return 'Name a number: "text 2". Nothing was done.'
+        return tr('Name a number: "text 2". Nothing was done.')
     if cmd.action == "draft" and len(cmd.numbers) != 1:
-        return 'Draft one number at a time: "draft 7". Nothing was done.'
+        return tr('Draft one number at a time: "draft 7". Nothing was done.')
     if cmd.action == "post_replies" and not cmd.numbers:
-        return 'Name the replies: "post replies 1 3". Nothing was done.'
+        return tr('Name the replies: "post replies 1 3". Nothing was done.')
     items = report.items if report else ()
     dropped = {d.number for d in report.dropped} if report else set()
     if cmd.all_confirmed:  # the confirmed numbers not posted yet; a named one is checked as named
         confirmed = [item.number for item in items if item.kind in CONFIRMED]
         left = tuple(n for n in confirmed if n not in posted)
         if confirmed and not left and not cmd.numbers:
-            return (
-                "Nothing left to post: every confirmed finding is already posted at this head. "
-                "Nothing was done."
-            )
+            return tr("Nothing left to post: every confirmed finding is already posted at this head. "
+                      "Nothing was done.")
         cmd = dataclasses.replace(cmd, numbers=cmd.numbers + left, all_confirmed=False)
     known = {item.number for item in items} | dropped
     if recheck:
         known |= {entry["n"] for entry in replies}
     if unknown := [n for n in cmd.numbers if n not in known]:
-        label = "Unknown number" if len(unknown) == 1 else "Unknown numbers"
-        return f"{label}: {_spaced(unknown)}. Nothing was done."
+        if len(unknown) == 1:
+            return tr("Unknown number: {numbers}. Nothing was done.", numbers=_spaced(unknown))
+        return tr("Unknown numbers: {numbers}. Nothing was done.", numbers=_spaced(unknown))
     undrafted = [n for n in cmd.numbers if n in dropped and n not in drafted]
     if cmd.action in ("post", "text", "edit") and undrafted:
-        return f'#{undrafted[0]} was dropped: reply "draft {undrafted[0]}" first. Nothing was done.'
+        return tr('#{n} was dropped: reply "draft {n}" first. Nothing was done.', n=undrafted[0])
     already = [n for n in cmd.numbers if n in posted]
     if cmd.action in ("post", "post_replies") and already:
-        return f"#{already[0]} is already posted at this head. Nothing was done."
+        return tr("#{n} is already posted at this head. Nothing was done.", n=already[0])
     if cmd.action == "draft":
         for n in cmd.numbers:
             if n not in dropped:
-                return f"#{n} is not a dropped number. Nothing was done."
+                return tr("#{n} is not a dropped number. Nothing was done.", n=n)
             if n in drafted:
-                return f'#{n} is drafted already: reply "text {n}". Nothing was done.'
+                return tr('#{n} is drafted already: reply "text {n}". Nothing was done.', n=n)
     if cmd.action == "post" and not cmd.numbers and (
         cmd.event == "COMMENT" or (cmd.event == "REQUEST_CHANGES" and cmd.no_summary)
     ):
-        return "Nothing to post: name numbers or keep the Summary. Nothing was done."
+        return tr("Nothing to post: name numbers or keep the Summary. Nothing was done.")
     return cmd
 
 
 def describe(cmd: ReplyCommand, head: str) -> str:
-    """One line naming a checked command (its "all confirmed" already expanded)."""
+    """One line naming a checked command (its "all confirmed" already expanded); the command's own words stay the
+    grammar's."""
     numbers = _spaced(cmd.numbers)
     if cmd.action == "post":
         if cmd.numbers:
-            text = f"post {numbers} + {cmd.event} at {head[:9]}"
-            text += ", no summary" if cmd.no_summary else ""
+            text = tr("post {numbers} + {event} at {head}", numbers=numbers, event=cmd.event, head=head[:9])
+            text += tr(", no summary") if cmd.no_summary else ""
+        elif cmd.no_summary:
+            text = tr("{event} without a body at {head}", event=cmd.event, head=head[:9])
         else:
-            body = "without a body" if cmd.no_summary else "with the Summary"
-            text = f"{cmd.event} {body} at {head[:9]}"
-        return text + (", anyway" if cmd.anyway else "")
+            text = tr("{event} with the Summary at {head}", event=cmd.event, head=head[:9])
+        return text + (tr(", anyway") if cmd.anyway else "")
     if cmd.action == "post_replies":
         return f"post replies {numbers}"
     if cmd.action == "edit":
@@ -202,7 +202,7 @@ def describe(cmd: ReplyCommand, head: str) -> str:
     if cmd.action == "review_again":
         return "review again"
     if cmd.action == "skip":
-        return "skip this head"
+        return tr("skip this head")
     return f"{cmd.action} {numbers}"  # text, draft
 
 

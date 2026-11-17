@@ -29,6 +29,7 @@ from orchestrator.reviewer.runner import JobRunner, RunnerConfig, may_still_save
 from orchestrator.reviewer.service import RepoContext, ReviewerService
 from orchestrator.reviewer.session import SessionOutcome, recheck_prompt, review_prompt
 from orchestrator.reviewer.store import ReviewerStore
+from orchestrator.tg_i18n import fill
 from orchestrator.switches import Switches
 from tests.unit.test_reviewer_messages import REPLIES, TG, URL
 from tests.unit.test_reviewer_messages import review as task4_review
@@ -97,6 +98,10 @@ class FakeChat:
         self.next_id += 1
         self.store.add_anchor(CHAT_ID, self.next_id - 1, job_id, self.now().isoformat(), scope=scope, number=number)
         return self.next_id - 1
+    async def translations(self, texts):  # ReviewerChat without a translator
+        return {}
+    async def localize(self, text):
+        return fill(text, {})
 
 class Rig:
     """A runner on a real store and switches, a fixed clock, a fake clone, chat and event bus; prepare and

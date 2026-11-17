@@ -128,3 +128,51 @@ class TestCallbackQueryRouting:
 
             handler.handle_callback.assert_called_once_with("approve", "T-1", "12345", 42)
             update.callback_query.answer.assert_called_once()
+
+
+class _UkrainianTranslator:
+    """Translates every marked text by prefixing it; records what it was asked."""
+
+    def __init__(self) -> None:
+        self.asked: list[tuple[list[str], str]] = []
+
+    async def translations(self, texts, language):
+        self.asked.append((list(texts), language))
+        return {t: f"УК {t}" for t in texts}
+
+
+class TestLocalizedSend:
+    async def test_marked_text_is_translated_before_it_is_sent(self):
+        from orchestrator.tg_i18n import model_text, telegram_language
+
+        with patch("integrations.telegram.telegram_adapter.Bot") as MockBot:
+            bot_instance = AsyncMock()
+            bot_instance.send_message = AsyncMock(return_value=MagicMock(message_id=7))
+            MockBot.return_value = bot_instance
+            events = MagicMock()
+            adapter = TelegramAdapter(bot_token="fake-token", event_bus=events)
+            translator = _UkrainianTranslator()
+            adapter.set_translator(translator)
+
+            with telegram_language("uk"):
+                await adapter.send_message("123", f"Причина: {model_text('disk full')}")
+                await adapter.edit_message("123", 7, f"Причина: {model_text('timeout')}")
+
+            assert bot_instance.send_message.call_args.kwargs["text"] == "Причина: УК disk full"
+            assert bot_instance.edit_message_text.call_args.kwargs["text"] == "Причина: УК timeout"
+            assert translator.asked == [(["disk full"], "uk"), (["timeout"], "uk")]
+            assert "УК disk full" in events.emit.call_args.kwargs["data"]["text_preview"]
+
+    async def test_plain_text_needs_no_translator(self):
+        with patch("integrations.telegram.telegram_adapter.Bot") as MockBot:
+            bot_instance = AsyncMock()
+            bot_instance.send_message = AsyncMock(return_value=MagicMock(message_id=8))
+            MockBot.return_value = bot_instance
+            adapter = TelegramAdapter(bot_token="fake-token")
+            translator = _UkrainianTranslator()
+            adapter.set_translator(translator)
+
+            await adapter.send_message("123", "Plain text")
+
+            assert bot_instance.send_message.call_args.kwargs["text"] == "Plain text"
+            assert translator.asked == []

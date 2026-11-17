@@ -5,6 +5,8 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 
+from orchestrator.tg_i18n import N_, tr
+
 _MODES = {
     "тикеты": "tickets", "тікети": "tickets", "tickets": "tickets",
     "ревью": "reviews", "рев'ю": "reviews", "рев’ю": "reviews", "ревʼю": "reviews", "reviews": "reviews",
@@ -45,20 +47,30 @@ def resolve_scope(repo: str, scopes: list[str]) -> tuple[str | None, str]:
     if len(matches) == 1:
         return matches[0], ""
     if matches:
-        return None, f'"{repo}" exists in several projects: {", ".join(matches)} — use project/repo'
-    return None, f'Unknown repo "{repo}". Known: {", ".join(scopes) or "—"}'
+        return None, tr('"{repo}" exists in several projects: {scopes} — use project/repo',
+                        repo=repo, scopes=", ".join(matches))
+    return None, tr('Unknown repo "{repo}". Known: {scopes}', repo=repo, scopes=", ".join(scopes) or "—")
+
+
+# A switch's states as the status shows them (Switches stores "running" or "paused").
+_STATE_WORDS = {"running": N_("running"), "paused": N_("paused")}
 
 
 def format_switch_status(snapshot: dict) -> str:
     lines = []
-    for mode, title, empty in (("tickets", "Tickets", "no repos"), ("reviews", "Reviews", "no repos with reviews")):
+    for mode, title, empty in (("tickets", N_("Tickets"), N_("no repos")),
+                               ("reviews", N_("Reviews"), N_("no repos with reviews"))):
         block = snapshot[mode]
-        lines.append(f"{title}: {block['global']}")
+        lines.append(f"{tr(title)}: {_state(block['global'])}")
         for repo in block["repos"]:
-            label = repo["effective"]
+            label = _state(repo["effective"])
             if repo["effective"] != repo["state"]:
-                label += " (global)"
+                label += tr(" (global)")
             lines.append(f"· {repo['scope']} — {label}")
         if not block["repos"]:
-            lines.append(f"· {empty}")
+            lines.append(f"· {tr(empty)}")
     return "\n".join(lines)
+
+
+def _state(state: str) -> str:
+    return tr(_STATE_WORDS[state]) if state in _STATE_WORDS else state

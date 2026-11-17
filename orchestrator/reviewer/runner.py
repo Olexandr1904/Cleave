@@ -44,6 +44,7 @@ from orchestrator.reviewer.retention import sweep
 from orchestrator.reviewer.service import RepoContext, _where, utcnow
 from orchestrator.reviewer.session import SessionOutcome, recheck_prompt, review_prompt, run_session
 from orchestrator.reviewer.store import ReviewerStore
+from orchestrator.tg_i18n import ENGLISH, N_, current_language, fill, marked_texts, telegram_language
 
 logger = logging.getLogger(__name__)
 
@@ -52,7 +53,8 @@ _QUOTA_RETRY = timedelta(hours=1)  # when the CLI gives no reset time, or one al
 _NEWER_STATES = ("queued", "running", "deferred", "done", "posted")
 _PENDING_STATES = ("queued", "deferred", "running")
 _PREPARE_STATES = {"failed": "failed", "superseded": "superseded", "cancelled": "cancelled", "requeue": "queued"}
-_CONFIG_CHANGED = "the session changed its job clone's git config"
+# A job's reasons are stored in English; N_ lists them for the Telegram lines that name them (lines.detail).
+_CONFIG_CHANGED = N_("the session changed its job clone's git config")
 # The third usage-limit or login deferral of a job fails it: session output that fakes either cannot loop.
 _MAX_DEFERRALS = 3
 _DEFERRED_TOO_OFTEN = f"deferred {_MAX_DEFERRALS} times (usage limit or login)"
@@ -97,14 +99,14 @@ def settle(job: Job, row: BoardRow | None, jobs: list[Job], skipped: bool = Fals
     `skipped`: the operator skipped the job's head after it was queued. A review the operator asked for
     (Review now) needs no review turn."""
     if row is None:
-        return "stale", "PR gone"
+        return "stale", N_("PR gone")
     if row.head_sha != job.head_sha:
         return "superseded", "new head"
     if skipped:
         return "skipped", "skipped by operator"
     review_now = job.kind == "review" and job.key.endswith(REVIEW_NOW_SUFFIX)
     if job.kind not in row.my_actions and not review_now:
-        return "stale", "turn gone"
+        return "stale", N_("turn gone")
     if any(j.kind == job.kind and j.state in _NEWER_STATES for j in _created_after(job, jobs)):
         return "superseded", "newer job"
     return "done", ""
@@ -199,8 +201,11 @@ class JobRunner:
         now: Callable[[], datetime] = utcnow,
         environ: Mapping[str, str] = os.environ,
         idle_seconds: float = 30,
+        language_of: Callable[[str], str] = lambda project_id: ENGLISH,
     ) -> None:
         self._contexts = {ctx.scope: ctx for ctx in repos}
+        # The Telegram language of a project id: a job's lines and message take its repo's project's.
+        self._language_of = language_of
         self._store = store
         self._switches = switches
         self._credential_failing = credential_failing
@@ -300,7 +305,7 @@ class JobRunner:
         """A review or re-check still running at start-up was interrupted: it fails, so plan 3's rules retry it
         once. Edit and draft jobs are not this runner's."""
         for job in self._store.jobs_in_state("running", kinds=("review", "recheck")):
-            self._change(job, "failed", "interrupted (daemon restarted)")
+            self._change(job, "failed", N_("interrupted (daemon restarted)"))
 
     def _clear_work(self) -> None:
         """Remove every job directory under the work root: at start-up none belongs to a running job."""
@@ -387,22 +392,24 @@ class JobRunner:
 
     async def run_job(self, job: Job) -> None:
         """Prepare, run the session, keep its output, settle the state and send the message. The job never
-        stays running: anything unexpected fails it (cancellation aside: recover() fails it then)."""
+        stays running: anything unexpected fails it (cancellation aside: recover() fails it then). Its lines and
+        message are in its repo's project's Telegram language."""
         ctx = self._contexts[job.scope]
-        try:
-            await self._run(ctx, job)
-        except PrepareError as e:
-            if e.outcome == "unavailable":
-                await self._github_unavailable(job, e.reason)
-            elif (state := _PREPARE_STATES[e.outcome]) == "failed":
-                await self._fail(job, e.reason)
-            else:
-                self._change(job, state, e.reason)
-            if e.drift:
-                await self._send_drift(ctx)
-        except Exception as e:
-            logger.warning("Reviewer job %s (%s #%s) failed: %s", job.id, job.scope, job.number, _where(e))
-            await self._fail(job, f"internal error: {type(e).__name__}")
+        with telegram_language(self._language_of(ctx.project_id)):
+            try:
+                await self._run(ctx, job)
+            except PrepareError as e:
+                if e.outcome == "unavailable":
+                    await self._github_unavailable(job, e.reason)
+                elif (state := _PREPARE_STATES[e.outcome]) == "failed":
+                    await self._fail(job, e.reason)
+                else:
+                    self._change(job, state, e.reason)
+                if e.drift:
+                    await self._send_drift(ctx)
+            except Exception as e:
+                logger.warning("Reviewer job %s (%s #%s) failed: %s", job.id, job.scope, job.number, _where(e))
+                await self._fail(job, f"internal error: {type(e).__name__}")
 
     async def _github_unavailable(self, job: Job, reason: str) -> None:
         """Queue the job again once its wait is over; its sixth time in a row fails it."""
@@ -434,7 +441,9 @@ class JobRunner:
                     if state != "done":
                         self._change(job, state, reason)
                         continue
-                if not await self._deliver(job, run):
+                with telegram_language(self._language(job.scope)):
+                    delivered = await self._deliver(job, run)
+                if not delivered:
                     return
             except Exception as e:  # one bad saved run must not hold back the others, nor the jobs
                 logger.warning("Reviewer message of job %s not resent: %s", job.id, _where(e))
@@ -512,7 +521,7 @@ class JobRunner:
             if first:
                 await self._send(login_line())
         elif outcome.kind == "failed":
-            await self._fail(job, outcome.error or "the session failed")
+            await self._fail(job, outcome.error or N_("the session failed"))
         else:
             await self._finish(ctx, job, paths, run, prepared)
 
@@ -581,7 +590,7 @@ class JobRunner:
             shutil.copyfile(paths.replies_plan, paths.job_dir / _PLAN_COPY)
         output = paths.job_dir / (paths.report.name if review else _PLAN_COPY)
         if not output.is_file():
-            await self._fail(job, "no report written" if review else "no replies plan written")
+            await self._fail(job, N_("no report written") if review else N_("no replies plan written"))
             return
         text = output.read_text(encoding="utf-8", errors="replace")
         try:
@@ -632,11 +641,21 @@ class JobRunner:
     async def _deliver(self, job: Job, run: JobRun) -> bool:
         """Whether the job's whole message is out. Sent part by part, each part a reply anchor to the job,
         starting at the first part not delivered yet: the parts come from the saved run alone, so they are the
-        same on every attempt, and run.message_ids holds those already out. A failed part ends the attempt."""
+        same on every attempt, and run.message_ids holds those already out. A failed part ends the attempt.
+
+        The message's Telegram language and its model-written texts' translations are the run's: until a part is
+        out, each attempt takes the current language and translates what is not translated yet (a failed
+        translation leaves a text as it is); from the first part on, they never change."""
         if self._chat is None:
             return False
         run.last_attempt_at = self._stamp()
-        parts = message_parts(_message(job, run), limit=MESSAGE_LIMIT)
+        if not run.message_ids:
+            run.language = current_language()
+        with telegram_language(run.language):  # "" (a run from before languages): English
+            text = _message(job, run)
+            if not run.message_ids and (missing := [t for t in marked_texts(text) if t not in run.translations]):
+                run.translations = {**run.translations, **await self._chat.translations(missing)}
+        parts = message_parts(fill(text, run.translations), limit=MESSAGE_LIMIT)
         for part in parts[len(run.message_ids):]:
             message_id = await self._send(part, job_id=job.id)
             if message_id is None:
@@ -648,6 +667,11 @@ class JobRunner:
         run.message_sent = True
         self._store.save_run(run)
         return True
+
+    def _language(self, scope: str) -> str:
+        """The Telegram language of the repo's project; the global one for a repo no longer reviewed."""
+        ctx = self._contexts.get(scope)
+        return self._language_of(ctx.project_id if ctx is not None else "")
 
     def _attempt_failed(self, run: JobRun) -> None:
         run.send_attempts += 1

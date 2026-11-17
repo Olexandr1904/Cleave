@@ -73,19 +73,22 @@ from orchestrator.reviewer.report_edit import (
 )
 from orchestrator.reviewer.service import RepoContext, _where, utcnow
 from orchestrator.reviewer.store import ReviewerStore
+from orchestrator.tg_i18n import N_, detail, tr
 
 logger = logging.getLogger(__name__)
 
 EVENT_STATE = {"APPROVE": "APPROVED", "REQUEST_CHANGES": "CHANGES_REQUESTED", "COMMENT": "COMMENTED"}
 _MAX_PATH = 200  # characters of a payload comment's path shown in a reply
 _FINDINGS = "### Findings without a diff anchor"  # where a payload body's Summary ends and its findings start
-_REPORT_CHANGED = "The report changed while posting (an edit landed): look at it again and reply. Nothing was done."
+# The texts below and the reasons marked N_ are kept in English (a Post's error) and translated where Telegram gets
+# them (lines.detail, tr).
+_REPORT_CHANGED = N_("The report changed while posting (an edit landed): look at it again and reply. Nothing was done.")
 _PREPARED_THREADS = "threads.prepared.json"  # Prepare's threads snapshot, kept in a re-check's copy by the runner
-_NO_SNAPSHOT = "Prepare's threads snapshot is not in this job's copy: nothing posted."
+_NO_SNAPSHOT = N_("Prepare's threads snapshot is not in this job's copy: nothing posted.")
 _PLAN_KEYS = ("n", "thread_id", "comment_id", "review_id", "body", "resolve")  # what the written plan keeps
 _RESULT_STEP = {"replied": "reply", "commented": "comment", "resolved": "resolve"}  # a confirm result's step
 _STEP_ORDER = ("reply", "resolve", "comment")
-_RESOLVED = " · resolved (reply not seen on GitHub: resolved threads are not listed)"
+_RESOLVED = N_(" · resolved (reply not seen on GitHub: resolved threads are not listed)")
 _T = TypeVar("_T")
 
 
@@ -323,14 +326,14 @@ class Posting:
 
     async def _post_review(self, ctx: RepoContext, job: Job, cmd: ReplyCommand) -> PostOutcome:
         if cmd.action != "post":  # the caller routes by action; this is the module that posts
-            raise _Refused("Not a post command. Nothing was done.")
+            raise _Refused(tr("Not a post command. Nothing was done."))
         # 1. The job as it is now; me; the named numbers checked again, since an identical post may have landed
         # after the reply was checked.
         job = self._current(job.id)
         number, head = job.number, job.head_sha
         me = self._store.repo_state(job.scope).me
         if not me:
-            raise _Refused("Waiting for the first poll: nothing posted.")
+            raise _Refused(tr("Waiting for the first poll: nothing posted."))
         run = self._store.run(job.id)
         report = Report.from_dict(run.report)
         posted = self._store.posted_numbers(job, report)
@@ -361,7 +364,7 @@ class Posting:
         except ReportError as e:
             raise _Refused(not_posted_line(number, str(e))) from None
         except FileNotFoundError:
-            raise _Refused(not_posted_line(number, "the job's report file is missing")) from None
+            raise _Refused(not_posted_line(number, N_("the job's report file is missing"))) from None
         text = base.read_bytes().decode("utf-8")
         self._refuse_changed(job, text, items, cmd.numbers)
         ticked = tick(text, set(cmd.numbers))
@@ -549,14 +552,14 @@ class Posting:
 
     async def _post_replies(self, ctx: RepoContext, job: Job, cmd: ReplyCommand) -> PostOutcome:
         if cmd.action != "post_replies":  # the caller routes by action; this is the module that posts
-            raise _Refused("Not a post command. Nothing was done.")
+            raise _Refused(tr("Not a post command. Nothing was done."))
         # 1. The job as it is now; me; the named numbers checked again, since an identical post may have landed
         # after the reply was checked.
         job = self._current(job.id)
         number, head = job.number, job.head_sha
         me = self._store.repo_state(job.scope).me
         if not me:
-            raise _Refused("Waiting for the first poll: nothing posted.")
+            raise _Refused(tr("Waiting for the first poll: nothing posted."))
         run = self._store.run(job.id)
         checked = check_command(cmd, job.kind, None, run.replies, self._store.posted_numbers(job, None),
                                 set(run.drafted))
@@ -572,7 +575,7 @@ class Posting:
             raise _Refused(not_posted_line(number, f"Prepare's threads snapshot is of {other}"))
         valid, invalid = validate_plan(run.replies, prepared, me)
         if (bad := next((n for n in cmd.numbers if n in invalid), None)) is not None:
-            raise _Refused(f"#{bad} cannot be posted: {invalid[bad]}. Nothing was done.")
+            raise _Refused(tr("#{n} cannot be posted: {why}. Nothing was done.", n=bad, why=detail(invalid[bad])))
         entries = [valid[n] for n in cmd.numbers]
         for entry in entries:
             if problems := body_problems(entry["body"], ctx.allowed_links):
@@ -695,7 +698,7 @@ class Posting:
             stamp = self._end(post, "posted", **fields)
             self._mark_posted(post, stamp)
             text = replies_posted_line(number, [_landed_text(n, by_n[n], planned[n], links) if n in planned
-                                                else f"{n}: already posted" for n in numbers])
+                                                else tr("{n}: already posted", n=n) for n in numbers])
             return PostOutcome("posted", text + _held_anyway(result, unknown))
         problems = [f"#{n}: " + ", ".join(_unseen_text(by_n[n], kind, after, known) for kind in kinds)
                     for n, kinds in missing.items()]
@@ -719,7 +722,7 @@ class Posting:
             self._mark_posted(post, stamp)
         landed = {n for n, _ in seen}
         results_text = [_landed_text(n, by_n[n], [kind for kind in planned[n] if (n, kind) in seen], links)
-                        if n in landed else f"{n}: already posted"
+                        if n in landed else tr("{n}: already posted", n=n)
                         for n in numbers if n in landed or (n not in planned and n not in left_out)]
         by_hand = [_by_hand_text(by_n[n], kinds, known) for n, kinds in missing.items() if n in landed]
         rest = [n for n in missing if n not in landed]
@@ -773,7 +776,7 @@ class Posting:
         except ReportError as e:
             raise _Refused(not_posted_line(job.number, f"the report is unreadable: {e}")) from None
         if any(now.get(n) != items[n] for n in numbers):
-            raise _Refused(_REPORT_CHANGED)
+            raise _Refused(tr(_REPORT_CHANGED))
 
     def _refuse_second_approve(self, job: Job, me: str, cmd: ReplyCommand, reviews: list[ForgeReview]) -> None:
         """An APPROVE at a head already approved: by a review of mine GitHub lists there (Cleave's own included),
@@ -821,8 +824,8 @@ class Posting:
         logger.warning("Posting on %s #%d stopped: %s", job.scope, job.number, _where(e))
         post = self._post
         if post is None:
-            return PostOutcome(
-                "failed", f"Posting stopped on an internal error ({name}); check the PR before posting again.")
+            return PostOutcome("failed", tr(
+                "Posting stopped on an internal error ({name}); check the PR before posting again.", name=name))
         if post.state == "posting":
             try:
                 self._end(post, "unverified", error=f"internal error ({name})")
@@ -854,11 +857,11 @@ def _prepared_threads(job_dir: str, number: int) -> dict:
     """Prepare's threads snapshot, which the runner keeps in the job copy before the session."""
     path = Path(job_dir) / _PREPARED_THREADS
     if not job_dir or path.is_symlink() or not path.is_file():
-        raise _Refused(_NO_SNAPSHOT)
+        raise _Refused(tr(_NO_SNAPSHOT))
     try:
         return parse_threads_snapshot(path.read_text(encoding="utf-8"))
     except (OSError, UnicodeDecodeError, ReadinessError):
-        raise _Refused(not_posted_line(number, "Prepare's threads snapshot in this job's copy is unreadable")) from None
+        raise _Refused(not_posted_line(number, N_("Prepare's threads snapshot in this job's copy is unreadable"))) from None
 
 
 def _write_plan(job_dir: Path, head9: str, entries: list[dict], number: int) -> Path:
@@ -866,7 +869,7 @@ def _write_plan(job_dir: Path, head9: str, entries: list[dict], number: int) -> 
     keeps its own ledger beside it."""
     posting = job_dir / "posting"
     if posting.is_symlink() or (posting.exists() and not posting.is_dir()):
-        raise _Refused(not_posted_line(number, "the job copy's posting directory is not Cleave's"))
+        raise _Refused(not_posted_line(number, N_("the job copy's posting directory is not Cleave's")))
     _make_dirs(posting)
     path = posting / f"replies_{head9}.json"
     plan = [{key: entry[key] for key in _PLAN_KEYS if key in entry} for entry in entries]
@@ -968,23 +971,26 @@ def _seen(entry: dict, kind: str, before: dict, after: dict, me: str, reported: 
 
 
 def _landed_text(n: int, entry: dict, kinds: list[str], links: dict[int, str]) -> str:
-    """What landed of an entry: `kinds`, its steps GitHub shows."""
+    """What landed of an entry: `kinds`, its steps GitHub shows (a Telegram line)."""
     if "thread_id" not in entry:
-        return f"{n}: answered {links[n]}"
+        return tr("{n}: answered {url}", n=n, url=links[n])
     if "reply" not in kinds:
-        return f"{n}: resolved"
-    return f"{n}: replied {links[n]}" + (_RESOLVED if "resolve" in kinds else "")
+        return tr("{n}: resolved", n=n)
+    return tr("{n}: replied {url}", n=n, url=links[n]) + (tr(_RESOLVED) if "resolve" in kinds else "")
 
 
 def _by_hand_text(entry: dict, missing: list[str], known: bool) -> str:
     """What only the operator can finish of an entry that partly landed (one of its two steps). `known`: whether
-    the tool's report was read."""
+    the tool's report was read. A Telegram line."""
     thread_id = _shown(entry["thread_id"])
     if missing == ["resolve"]:
-        return f"#{entry['n']}: your reply is in thread {thread_id}; resolve it on GitHub yourself."
-    unseen = "the tool reports no reply in it" if known else "the reply in it is not seen"
-    return (f"#{entry['n']}: thread {thread_id} was resolved, but {unseen}; reply on GitHub yourself if it is"
-            " missing.")
+        return tr("#{n}: your reply is in thread {thread}; resolve it on GitHub yourself.", n=entry["n"],
+                  thread=thread_id)
+    if known:
+        return tr("#{n}: thread {thread} was resolved, but the tool reports no reply in it; reply on GitHub yourself"
+                  " if it is missing.", n=entry["n"], thread=thread_id)
+    return tr("#{n}: thread {thread} was resolved, but the reply in it is not seen; reply on GitHub yourself if it"
+              " is missing.", n=entry["n"], thread=thread_id)
 
 
 def _unseen_text(entry: dict, kind: str, after: dict, known: bool) -> str:
@@ -1075,9 +1081,10 @@ def _held_anyway(result: CommandResult, unknown: str) -> str:
     """The lines a post GitHub shows in full adds about a confirm run that did not end well."""
     text = ""
     if result.returncode != 0:
-        text += f"\nThe tool exited {result.returncode}, but GitHub shows everything posted."
+        text += "\n" + tr("The tool exited {code}, but GitHub shows everything posted.", code=result.returncode)
     if unknown and not result.timed_out:
-        text += f"\nThe tool's output was not understood ({unknown}), but GitHub shows everything posted."
+        text += "\n" + tr("The tool's output was not understood ({unknown}), but GitHub shows everything posted.",
+                          unknown=unknown)
     return text
 
 
@@ -1086,7 +1093,7 @@ def _nothing_left(number: int, head: str, cmd: ReplyCommand) -> str:
     there) can still go without a body."""
     text = nothing_left_line(number, head)
     if cmd.event == "APPROVE" and not cmd.numbers:
-        text += ' Reply "approve no summary" to approve without a body.'
+        text += " " + tr('Reply "approve no summary" to approve without a body.')
     return text
 
 

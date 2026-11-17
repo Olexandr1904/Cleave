@@ -53,6 +53,10 @@
 | 2026-04-07 | Initial draft — seeded from PRD and architecture docs |
 | 2026-04-29 | `_parse_vcs_section` now passes through any top-level VCSConfig fields beyond `provider`/`github`/`gitlab` (e.g. `skip_pre_push_hook`). Earlier the loader only handled the three nested sub-configs and silently dropped everything else, so operators could set `vcs.skip_pre_push_hook: true` in yaml and the value would never reach the runtime config object — looked configured, did nothing. Validation against VCSConfig fields kept strict (a typo like `skip_pre_pus_hook` raises ConfigError). |
 
+## Telegram language (2026-11-16)
+
+`TelegramConfig.language` — `en` or `uk` (`TELEGRAM_LANGUAGES` in `config/schemas.py`); any other value is a `ConfigError` naming `telegram.language`. It does not cascade through the repo's `telegram` copy: the language of a project is read with `orchestrator.tg_i18n.project_language(global_config, projects, project_id)` — the project's own, else `global.yaml`'s, else English — from the live config, which the dashboard's Settings view updates in memory as it writes the YAML. See [docs/telegram.md](../telegram.md#language).
+
 ## TrackerConfig wrapper (2026-05-12)
 
 `ProjectConfig.tracker: TrackerConfig` replaces `ProjectConfig.jira: JiraConfig`. `TrackerConfig` wraps `provider` ("jira" | "trello"), `jira: JiraConfig`, and `trello: TrelloConfig`. The config loader accepts both the new `tracker:` block and legacy top-level `jira:` blocks (migrated transparently at load time with an INFO log). If both are present, `tracker:` wins and a WARNING is logged. Unknown providers raise `ConfigError`.

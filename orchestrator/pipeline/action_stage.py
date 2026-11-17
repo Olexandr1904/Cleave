@@ -9,6 +9,7 @@ from orchestrator import stage_verifier, tg_format
 from orchestrator.approval_gate import should_approval_gate
 from orchestrator.escalation import handle_escalate
 from orchestrator.pipeline.agent_stage import _emit, _log_pipeline, rollback_iteration
+from orchestrator.tg_i18n import tr
 from orchestrator.workflow_router import WorkflowDefinition, get_next_stage
 from workspace.workspace import Stage, Workspace
 
@@ -161,14 +162,14 @@ async def handle_action_stage(
             hdr = tg_format.tg_header("🔗", state.company_id, state.ticket_id, title)
             msg = (
                 f"{hdr}\n"
-                f"PR opened: {pr_url}\n\n"
-                f"Review the diff and merge when ready. The pipeline will wait.\n\n"
-                f"If there are review comments, Cleave will escalate them one by one "
-                f"for your decision (Fix or Won't Fix). Reply to any escalation message "
-                f"to provide context.\n\n"
-                f"When done: tap Review Complete or reply to this message."
+                + tr("PR opened: {pr_url}\n\n"
+                     "Review the diff and merge when ready. The pipeline will wait.\n\n"
+                     "If there are review comments, Cleave will escalate them one by one "
+                     "for your decision (Fix or Won't Fix). Reply to any escalation message "
+                     "to provide context.\n\n"
+                     "When done: tap Review Complete or reply to this message.", pr_url=pr_url)
             )
-            pr_buttons = [Button(label="Review Complete", action=f"reviewed:{state.ticket_id}")]
+            pr_buttons = [Button(label=tr("Review Complete"), action=f"reviewed:{state.ticket_id}")]
             msg_id = await notifier.send_message(chat_id, msg, buttons=pr_buttons)
             workspace.state.escalation_msg_id = msg_id
             workspace.state.escalation_chat_id = chat_id

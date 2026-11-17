@@ -180,6 +180,10 @@ class JobRun:
     drafted: list[int] = field(default_factory=list)
     posted_at_head: int = 0
     summary_posted: bool = False
+    # The Telegram language of the job's message and its model-written texts translated into it (text → translation),
+    # fixed before its first part goes out so every part comes from them. "": a run from before languages (English).
+    language: str = ""
+    translations: dict = field(default_factory=dict)
 
     def to_json(self) -> str:
         return json.dumps(dataclasses.asdict(self))

@@ -23,6 +23,8 @@ _ITEM = re.compile(r"^### \[([ xX])\] (\d+)\. (.+)$", re.ASCII)
 # Linear: the trailing " (<lens>)" is cut off by _strip_lens, not by backtracking.
 _DROPPED = re.compile(r"^- ([0-9]+)\. (.+?) [-—] (.+)$")
 _DROPPED_START = re.compile(r"- [0-9]+\.")
+# A dropped line without its " - <reason>" separator (or the space after "N."): models sometimes write one sentence.
+_DROPPED_LOOSE = re.compile(r"^- ([0-9]+)\.[ \t]*(\S.*)$")
 _EVENT = re.compile(r"^(\S+) [-—] (.+)$")
 _BACKTICKED = re.compile(r"`([^`]*)`")
 _PATH_LINE = re.compile(r"^(.+):(\d+)$", re.ASCII)
@@ -122,6 +124,11 @@ def parse_report(text: str, head_sha: str, drafted: frozenset[int] = frozenset()
             for line in outside_fences:
                 if m := _DROPPED.match(line):
                     dropped.append(DroppedItem(claim(m[1], "dropped"), m[2], _strip_lens(m[3])))
+                elif m := _DROPPED_LOOSE.match(line):
+                    # Never posted, so never a reason to lose the review: the whole line (its lens cut) is both
+                    # the candidate and its reason.
+                    text = _strip_lens(m[2])
+                    dropped.append(DroppedItem(claim(m[1], "dropped"), text, text))
                 elif _DROPPED_START.match(line):
                     raise ReportError(f"dropped line not understood: {line[:60]}")
         elif name.startswith("✅"):

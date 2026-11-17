@@ -9,6 +9,7 @@ import pytest
 
 from orchestrator.reviewer.markdown import fenced, split_lines
 from orchestrator.reviewer.report import (
+    DroppedItem,
     Report,
     ReportError,
     parse_replies_plan,
@@ -162,10 +163,7 @@ def test_report_size_cap():
     ("### [ ] 3. Date parsed in the local zone", "### [ ] 3 " + "x" * 100,
      "item heading not understood: ### [ ] 3 " + "x" * 50),
     ("## 🟡 Minor", "### 🟡 Minor", "kind heading at level 3: ### 🟡 Minor"),
-    (DROPPED_9, "- 9. Old warning: pre-dates the PR (xhigh)",
-     "dropped line not understood: - 9. Old warning: pre-dates the PR (xhigh)"),
-    (DROPPED_9, "- 9.Old warning - pre-dates the PR (xhigh)",
-     "dropped line not understood: - 9.Old warning - pre-dates the PR (xhigh)"),
+    (DROPPED_9, "- 9.", "dropped line not understood: - 9."),
 ])
 def test_off_format_lines_fail_loudly(old, new, message):
     with pytest.raises(ReportError) as e:
@@ -345,3 +343,17 @@ def test_lines_split_as_commonmark_splits_them():
     odd = parse_report(REPORT.replace(NPE_BODY, f"Read{LS}## Summary\x0cfirst.\n"), HEAD)
     assert odd.items[0].body.endswith(f"\nRead{LS}## Summary\x0cfirst.")
     assert odd.summary == r.summary and [i.number for i in odd.items] == [1, 2, 3, 4, 5, 6]
+
+
+@pytest.mark.parametrize("line, text", [
+    # No " - <reason>" separator: models sometimes write a dropped candidate as one sentence.
+    ("- 9. Old warning: pre-dates the PR, the base had it already (lens B: UNCHANGED)",
+     "Old warning: pre-dates the PR, the base had it already"),
+    ("- 9.Old warning, pre-dates the PR (xhigh)", "Old warning, pre-dates the PR"),
+])
+def test_a_dropped_line_off_format_is_kept_whole(line, text):
+    """A dropped candidate is never posted: an off-format line is kept whole (its lens cut) as both the candidate
+    and its reason, so the operator still sees it, and the review is not lost over it."""
+    report = parse_report(REPORT.replace(DROPPED_9, line), HEAD)
+    assert report.dropped[-1] == DroppedItem(9, text, text)
+    assert [d.number for d in report.dropped] == [7, 8, 9]

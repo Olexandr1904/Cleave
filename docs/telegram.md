@@ -30,6 +30,40 @@ Replies to [reviewer messages](#replying-to-reviewer-messages) and taps on its *
   Reviewer: replies are ignored — reviewer.telegram_chat_id is not an allowed chat
 ```
 
+## Language
+
+The bot writes in English (the default) or Ukrainian, per project:
+
+```yaml
+# config-live/projects/<id>/project.yaml
+telegram:
+  language: uk        # en (default) or uk
+```
+
+A project without `telegram.language` follows `telegram.language` in `global.yaml`, and English when that has none too. Any other value stops the config from loading (`'telegram.language' must be one of ('en', 'uk')`). Set it in the dashboard (**Settings → Telegram language**, or the **+ New Project** wizard's Notifications step), or in the YAML. A change made in Settings applies to the next message; one made in the YAML by hand, after a restart.
+
+**Which language a message takes:**
+
+| Message | Language |
+|---|---|
+| A ticket's messages, buttons, and the answers to replies and taps on them | the ticket's project's |
+| Reviewer messages and lines (the reviewer chat is shared by every repo) | the project of the PR's repo |
+| Answers to replies on reviewer messages, and to taps on their **Yes** / **No** | the anchored job's project's (`global.yaml`'s when none is known, e.g. reviewer mode off) |
+| Free-text and switch commands (`status`, `tickets start`, …) | the language of the projects whose `default_chat_id` is that chat when they agree, else `global.yaml`'s |
+| Credential lines (no project) | `global.yaml`'s |
+
+**What is translated:** everything the bot sends, including what models wrote. Cleave's own texts (notifications, hints, errors, button labels) come from a hand-written Ukrainian catalogue (`orchestrator/tg_uk/`). Text a model wrote — finding titles and Telegram lines, the suggested event's reason, why a candidate was dropped, drafted re-check replies, the `text N` text, edit and draft results, escalation reasons and agent output, the comment classifier's assessment, an error's detail — is translated when the message is sent: one `claude -p` turn on `haiku` per message (no tools, the reviewer sessions' scrubbed environment, on the claude.ai login), 60 s at most. Code spans and blocks, links, paths and `file:line` anchors, `#N`, ticket keys, SHAs and @-mentions are masked before the model sees the text and put back after; a text whose masks or numbers do not come back intact is shown as written, and so is everything in the message when the turn fails or times out: a translation never holds back or loses a message. An English project never makes the call. A review or re-check message is translated once, before its first part goes out, and kept with the job's run: a resend sends exactly the same parts, even after the project's language changed.
+
+**What stays as it is:**
+
+- **Commands.** Hints quote them in the grammar's words (`"post 1 2 4 approve"`, `"edit 2: …"`, `"review again"`, `"skip"`, `"retry ACME-12 from dev"`, `fix`, `won't fix: <reason>`), and every reply works as before, in English or with the Russian/Ukrainian synonyms.
+- **GitHub.** Reviews and replies are posted in English, from the job copy's report and replies plan, which never hold a translation; edit and draft sessions still write English whatever language your instruction is in. In Ukrainian, `text N` and edit/draft results end with `(На GitHub піде англійський текст.)`.
+- **What people wrote:** PR and ticket titles, quoted review comments, branch names, your own words (an edit instruction, a won't-fix reason).
+- **Names Cleave and GitHub use:** stage and state ids (`DEV`, `PR_REVIEW`, `superseded`), events (`REQUEST_CHANGES`), `Summary`, repo and project ids.
+- **Everything outside Telegram:** the dashboard, stored job reasons and workspace errors, events and logs.
+
+The cost: haiku turns of a few hundred to a few thousand tokens, only for messages that hold model text (a review message, an escalation, a `text N`), on the claude.ai subscription's usage like the reviewer's sessions.
+
 ---
 
 ## Switch commands
@@ -43,7 +77,7 @@ Fixed commands pause and resume the ticket pipeline and reviewer mode. They are 
 | any of the above + a repo id, e.g. `tickets pause app` or `reviews start acme/app` | Same, for one repo (`repo` or `project/repo`) |
 | `status` | The switch block (tickets and reviews, global and per repo), then the pipeline summary |
 
-Commands are case-insensitive. Russian/Ukrainian words are accepted as input synonyms: `тикеты` / `тікети` for `tickets`; `ревью` / `рев'ю` (ASCII or typographic apostrophe) for `reviews`; `пауза` for `pause`; `старт` for `start`; `статус` for `status`. Replies are in English whichever spelling you use.
+Commands are case-insensitive. Russian/Ukrainian words are accepted as input synonyms: `тикеты` / `тікети` for `tickets`; `ревью` / `рев'ю` (ASCII or typographic apostrophe) for `reviews`; `пауза` for `pause`; `старт` for `start`; `статус` for `status`. Replies are in the chat's [language](#language) whichever spelling you use.
 
 The switch block looks like this (`(global)` marks a repo that is paused only because the global switch is):
 
@@ -100,7 +134,7 @@ For messages that expect discrete choices, Cleave attaches inline keyboard butto
 | **Review Complete** | PR_REVIEW notifications (you've finished reviewing the PR) | `reviewed:<ticket>` |
 | **Fix** / **Won't Fix** | PR review comment escalations (per comment) | `pr_fix:<key>` / `pr_wontfix:<key>` |
 | **Retry Now** / **Retry** | DEFERRED notifications (quota / transient error) and FAILED notifications | `retry:<ticket>` |
-| **🧹 Clear cache & retry** | FAILED notifications whose error matches the AAPT2 corruption signature | `clear_gradle:<ticket>` — wipes `<gradle_home>/caches/*/transforms` then retries |
+| **🧹 Clear cache & retry** | FAILED notifications whose error matches the AAPT2 corruption signature | `clear_gradle:<ticket>` — stops that gradle home's own daemons, wipes `<gradle_home>/caches/*/transforms` then retries. Needs `GRADLE_USER_HOME` set (Cleave's own, in `.env`): the shared `~/.gradle` is never cleared |
 | **Show N unanswered** | PR_REVIEW summary when comments are pending your decision | `unanswered:<ticket>` |
 | **Yes** / **No** | The reviewer's echo of a reply it understood through the model (see [replies the grammar does not know](#replies-the-grammar-does-not-know)) | `rv_ok:<id>` / `rv_no:<id>` |
 
@@ -173,11 +207,10 @@ For each repo with reviews enabled (see the [Reviews view](dashboard.md#reviews-
 | `[acme/app] readiness command failed: <reason>. Keeping the last board; next try in 10 min.` | The first failed poll of a streak, when the repo's readiness command is what failed. The later failures of the streak send nothing, whatever fails, until a poll succeeds |
 | `[acme/app] poll failed: <reason>. Keeping the last board; next try in 10 min.` | The first failed poll of a streak, when the review clone, a GitHub read or anything else is what failed. The later failures of the streak send nothing, a readiness failure included |
 | `[acme/app] reviews are off: docs/review/code-review-process.md is not on develop.` | Once, when the base branch has no process document (again if it goes missing after coming back) |
-| `[acme/app] #1712: review failed — <reason>` (or `recheck failed`) | A review or re-check job failed: Prepare could not get the PR ready (the process document or its `reviewer.process.prepare_section` missing, the PR's base is not `reviewer.base_branch`, a prepare step, git, a GitHub read or the readiness command failed), the session failed or ran past `reviewer.jobs.<kind>.timeout_seconds`, it wrote no report (no replies plan for a re-check) or one Cleave cannot read, or it changed the review clone's git config (`the session changed the review clone's git config`: Cleave writes the saved config back). A failed job is queued again on the next poll; after two failures at the same head it is not (**Review now** still queues a review) |
+| `[acme/app] #1712: review failed — <reason>` (or `recheck failed`) | A review or re-check job failed: Prepare could not get the PR ready (the process document or its `reviewer.process.prepare_section` missing, the PR's base is not `reviewer.base_branch`, a prepare step, git, a GitHub read or the readiness command failed), the session failed or ran past `reviewer.jobs.<kind>.timeout_seconds`, it wrote no report (no replies plan for a re-check) or one Cleave cannot read, or it changed its job clone's git config (`the session changed its job clone's git config`: the job clone is removed with the job, so nothing of it is used again). A failed job is queued again on the next poll; after two failures at the same head it is not (**Review now** still queues a review) |
 | `[acme/app] #1712: review deferred — usage limit reached; next try at 14:00 UTC` | The session hit the Claude usage limit. The job runs again at the limit's reset time (an hour later when the CLI gives none), and no other job starts before then. Sent once per streak: again only after a session has ended some other way. A job's third deferral (usage limit or login) fails it instead: `review failed — deferred 3 times (usage limit or login)` |
 | `[reviewer] claude is not logged in on the host. Log in from a GUI Terminal (run claude, then /login); reviews wait until then.` | A session failed because the `claude` CLI says it is not logged in (its error starts with `Not logged in` or `Failed to authenticate`). The job is deferred 15 minutes and credential health re-checks the claude login (see the [credential strip](dashboard.md#credential-strip)); no job starts while that check fails, nor within 15 minutes of the last login failure. Sent once per streak: again only after a session has ended some other way |
 | `[acme/app] The "Prepare" section of docs/review/code-review-process.md changed on the base branch: check that Cleave's Prepare still matches it.` | A job found the process document's preparation section (`reviewer.process.prepare_section`, default `Prepare`) changed since the repo's previous job. Cleave does that section's work itself, so check that it still matches. Sent whatever the job's outcome; the repo's first job records the section without a line |
-| `[acme/app] #1712: worktree <path> was not removed — <reason>` | After a job, git refused to remove the PR's worktree (`reviewer.process.worktree_dir`): it has changes or untracked files. Cleave never forces it; remove it by hand, the PR's next job fails until then. The reason is also in the job's notes on the dashboard |
 
 A job whose PR got a new head or was closed while it was being prepared ends `superseded` or `cancelled` without a line; with the forge token failing, it goes back to the queue. With GitHub unavailable (a 5xx, a timeout or no connection) it is queued again after 1, 5, 15 and then 60 minutes, other jobs running meanwhile; the sixth time in a row fails it (`review failed — GitHub unavailable (6 attempts)`). A re-check waits while a review of the same PR is queued, deferred or running, and until a poll has recorded your login (`waiting for the first poll`). A job interrupted by a daemon restart is marked failed (`interrupted (daemon restarted)`) without a line.
 
@@ -185,7 +218,7 @@ The first poll of a repo records the turns that already exist without sending a 
 
 ### Review and re-check messages
 
-Reviews and re-checks run unattended, one job at a time: Cleave prepares the PR in its [review clone](dashboard.md#review-clone), runs the repo's review process in an isolated Claude Code session on the host's claude.ai login, and sends the result to the same chat as the [reviewer lines](#reviewer-lines). Nothing is posted to GitHub until you reply to the message (see [replying to reviewer messages](#replying-to-reviewer-messages)).
+Reviews and re-checks run unattended, up to `reviewer.max_parallel_jobs` (default 6) at once and one per PR: Cleave prepares each PR in a job clone of its own, made from its [review clone](dashboard.md#review-clone), runs the repo's review process in an isolated Claude Code session on the host's claude.ai login, and sends the result to the same chat as the [reviewer lines](#reviewer-lines). Nothing is posted to GitHub until you reply to the message (see [replying to reviewer messages](#replying-to-reviewer-messages)).
 
 A review sends the review message:
 
@@ -300,8 +333,8 @@ Nothing runs until you tap **Yes**, which runs the echoed command against the jo
 3. **Your reviews on GitHub** — a second approve at the same head is refused, with `anyway` too: `Already approved #1712 at 26c4929c5. Nothing was done.` (a review of yours that approved that head, Cleave's own included, or an approve Cleave recorded there). An approve where an approving post of Cleave's ended unknown at this head (unverified, or interrupted by a restart) needs `anyway`: `An approve of #1712 at 26c4929c5 may have landed: check the PR, then add "anyway" to your reply to approve again. Nothing was done.` A review you submitted yourself after the review job started needs `anyway` too: `You already submitted a review on this PR after the report (<time>): nothing posted. Add "anyway" to your reply to post regardless.`
 4. **The named findings' text** — the [body check](#the-body-check).
 5. **The ticked copy** — `approve no summary` uses no tool: right before the approve, GitHub's head is checked again, your reviews are read again for step 3's approve rule (not for a review of your own since the job started, already checked), and the job must still be done or posted; then one approve call goes to GitHub, never retried, then step 9. Otherwise the job's copy of the report is ticked on exactly the numbers you named (with `no summary`, without its Summary). Cleave keeps its own copy of the report in the job's directory; the review session cannot change it.
-6. **The dry run** — the tool with `reviewer.poster.dry_run_flag` (default `--dry-run`), from the review clone (while a job prepares or cleans up the clone, Cleave waits for it up to 10 minutes, then refuses: `the review clone is busy …`). It must exit 0, print nothing Cleave does not understand, and plan exactly what you named: it lists your numbers, at the job's head, with your event; each inline comment is one of your numbers; each of your numbers is inline, in the review body, or skipped by the tool's ledger as already posted; no number you did not name is in a comment or the body; its `Summary:` line agrees with the payloads (the report's Summary is in a review body exactly when it says `yes`); and each comment and the review body (the Summary too) pass the body check. Else: `Not posted on #1712: <why>.` (a dry run that runs out of time: `the dry run failed: timed out after <n> s`). A dry run that plans nothing answers `Nothing left to post on #1712 at 26c4929c5: what you named is already posted.` (after a bare `approve`, it adds `Reply "approve no summary" to approve without a body.`).
-7. **Right before the confirm run** — GitHub's head again, your reviews again (the approve rule of step 3), the review clone's git config unchanged by a session, the job still done or posted, and the named findings unchanged: an edit that landed during the dry run answers `The report changed while posting (an edit landed): look at it again and reply. Nothing was done.`
+6. **The dry run** — the tool with `reviewer.poster.dry_run_flag` (default `--dry-run`), from the review clone (while a job's Prepare or another post holds the clone, Cleave waits for it up to 10 minutes, then refuses: `the review clone is in use; try again in a minute`). It must exit 0, print nothing Cleave does not understand, and plan exactly what you named: it lists your numbers, at the job's head, with your event; each inline comment is one of your numbers; each of your numbers is inline, in the review body, or skipped by the tool's ledger as already posted; no number you did not name is in a comment or the body; its `Summary:` line agrees with the payloads (the report's Summary is in a review body exactly when it says `yes`); and each comment and the review body (the Summary too) pass the body check. Else: `Not posted on #1712: <why>.` (a dry run that runs out of time: `the dry run failed: timed out after <n> s`). A dry run that plans nothing answers `Nothing left to post on #1712 at 26c4929c5: what you named is already posted.` (after a bare `approve`, it adds `Reply "approve no summary" to approve without a body.`).
+7. **Right before the confirm run** — GitHub's head again, your reviews again (the approve rule of step 3), the job still done or posted, and the named findings unchanged: an edit that landed during the dry run answers `The report changed while posting (an edit landed): look at it again and reply. Nothing was done.`
 8. **The confirm run** — the dry run's command with `reviewer.poster.confirm_flag` (default `--yes`) in place of the dry-run flag, nothing else changed.
 9. **The post-condition, on GitHub only** — read up to 3 times, 2 seconds apart: exactly the planned number of new reviews by you since right before the confirm run, each with your event at the head, the planned number of comments, and the planned body in the first. GitHub is the truth whatever the tool's exit or output says: a confirm run that failed, timed out or printed something Cleave does not understand is checked the same way, and only what GitHub shows is recorded as landed.
 
@@ -370,7 +403,7 @@ A draft becomes finding 7 under Questions, keeping its number (the Dropped line 
 #### Replies to the other lines
 
 - The large-PR line (`… is large (57 files) — no automatic review …`) takes `review again` and `skip`; anything else answers `Only "review again" and "skip" work on this line; nothing was done.`
-- A line about a job (`review failed`, `review deferred`, `worktree … was not removed`, an edit, draft or posting answer) is that job's: a reply to it works as a reply to the job's message. On a failed or deferred job, only `review again` and `skip` run.
+- A line about a job (`review failed`, `review deferred`, an edit, draft or posting answer) is that job's: a reply to it works as a reply to the job's message. On a failed or deferred job, only `review again` and `skip` run.
 - Every other line (a turn, replies in threads, a failed poll or readiness command, the missing process document, the changed Prepare section, the login line) answers `This line takes no replies; nothing was done.`
 
 #### After a restart

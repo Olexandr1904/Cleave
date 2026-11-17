@@ -100,7 +100,7 @@ Credentials are re-checked in the background every 15 minutes, and immediately a
 
 **Reviews** in the sidebar (`#/reviews`) shows the reviews board of every repo with `reviewer.enabled: true` in its repo YAML: the open PRs that involve you, and whose turn it is on each. With no such repo the view says `No repo has reviews enabled.` It refreshes with the toolbar's **Refresh** and **Auto** like the Board; the Board's **Hide done** and **+ New Project** are not shown on it.
 
-Nothing is posted from the dashboard: Telegram is the only posting path. Queued reviews and re-checks run unattended, one job at a time, and their result comes to Telegram (see [review and re-check messages](telegram.md#review-and-re-check-messages)); you post it by replying there (see [replying to reviewer messages](telegram.md#replying-to-reviewer-messages)). The dashboard shows what was posted.
+Nothing is posted from the dashboard: Telegram is the only posting path. Queued reviews and re-checks run unattended, up to `reviewer.max_parallel_jobs` (default 6) at once and one per PR, and their result comes to Telegram (see [review and re-check messages](telegram.md#review-and-re-check-messages)); you post it by replying there (see [replying to reviewer messages](telegram.md#replying-to-reviewer-messages)). The dashboard shows what was posted.
 
 ### Reviews switch panel
 
@@ -142,7 +142,7 @@ Click a row (outside its links and buttons) to open the PR in the [side panel](#
 
 A review is queued automatically when your turn is a review, the head has been quiet for `reviewer.quiet_minutes` (default 30), the head is not skipped, reviews are running and the process document is on the base branch. A PR with at least `reviewer.max_files_auto` (default 40) changed files is not reviewed automatically: Telegram gets a line instead.
 
-The job runner takes the queued jobs one at a time and writes these states:
+The job runner starts queued jobs as they become runnable, up to `reviewer.max_parallel_jobs` at once (one per PR; none while the work volume has less free space than `workspaces.min_free_disk_gb`), and writes these states:
 
 | State | Meaning |
 |---|---|
@@ -186,6 +186,8 @@ Each job's files are kept in `<reviewer data dir>/jobs/<job id>/`: what the sess
 
 Each reviewed repo has a Cleave-owned single-branch clone of its base branch at `<reviewer data dir>/repos/<project_id>/<repo_id>` (default `~/CleaveData/reviewer/repos/<project_id>/<repo_id>`), created on the first poll. The forge token reaches git only through the environment of that one git process: it is never written to `.git/config` or the keychain.
 
+No review session runs in it. Each review or re-check gets a **job clone** of its own, `git clone --local` from it (objects hard-linked, no token, its origin the review clone's path) at `<reviewer data dir>/work/<project_id>/<repo_id>/<job_id>/clone`, with the PR's worktree beside it; the job's directory is removed when the job ends, and any left at start-up is removed then. The review clone is locked only for a job's git there (refresh, the PR head, the readiness threads, the job clone), for a poll's refresh and readiness, and for a post's poster runs.
+
 Repos added by hot reload (the **+ New Project** wizard) are not on the Reviews view until the daemon restarts.
 
 ---
@@ -220,9 +222,8 @@ Useful when something looks wrong and you want to see exactly what the daemon di
 
 ## Settings view
 
-Currently a single setting:
-
 - **Claude model picker** — `Haiku` / `Sonnet` / `Opus`. The choice is the global default model, applied to new workspaces unless a `model-*` Jira label overrides it. Changes are stored in dashboard SQLite (`settings` table) and hot-reloaded by adapters on the next agent dispatch — no daemon restart required. In-flight workspaces keep the model that was current when they were created.
+- **Telegram language** — `English` / `Українська`, one row for `Global (no project)` and one per loaded project, each showing the language it uses now (a project without its own setting shows the global one). **Save** writes `telegram.language` into that project's `project.yaml` (`global.yaml` for the global row): only that line changes, added to the `telegram:` block (or a new block) when missing, and the file is read back to check that nothing else did. A `telegram:` section written inline (`telegram: {…}`) is refused with a message: edit that file by hand. The running daemon uses the new language from the next message; no restart. See [docs/telegram.md](telegram.md#language) for what is translated.
 
 See [docs/labels.md](labels.md) for per-ticket overrides.
 
@@ -264,7 +265,7 @@ Click **+ New Project** in the toolbar. The wizard runs the [Atlas project-setup
 1. **Project** — id, display name
 2. **Jira** — URL, email, project key, trigger labels (defaults to `[ai-pipeline]`), ignore labels, status name mapping; validates against the live Jira API before continuing
 3. **Repository** — VCS provider, owner/repo, default branch, branch prefix, merge method, clone URL; validates against the GitHub/GitLab API
-4. **Notifications** — per-project Telegram chat id (optional; falls back to the global default)
+4. **Notifications** — per-project Telegram chat id (optional; falls back to the global default) and the Telegram language (`English` or `Українська`, preselected with the global one). Left as it is, the project follows the global language; another choice is written into `project.yaml` by Cleave once Atlas has written the file
 5. **Review** — Atlas writes `config-live/projects/<id>/{project,repos/*}.yaml`
 
 The orchestrator hot-reloads the new project: registers the GitHub adapter, attaches the Jira tracker if it wasn't already attached, extends the Telegram allowlist, and emits `project_loaded` events. No daemon restart.
@@ -290,6 +291,7 @@ Read endpoints (`GET`):
 - `/api/workspaces` — every workspace from disk, with state.json + report/meta listings
 - `/api/workspaces/{ticket_id}/report/{filename}?folder=reports|meta|logs` — fetch one file
 - `/api/settings/model` — global default model (also `PUT` to change)
+- `/api/settings/telegram-language` — `{"options": ["en", "uk"], "global": "<lang>", "projects": [{"id", "name", "language", "effective"}]}` (`language` is the project's own setting, `""` when it follows the global one); `PUT` with `{"project_id": "<id>" | null, "language": "en" | "uk"}` writes it (null: `global.yaml`) → 200 `{"language", "effective"}`, 400 for another language, 404 for a project not loaded, 409 when the YAML's `telegram:` section cannot be edited line by line, 403 `cross-site request refused` under the same rule as the reviews routes
 - `/api/daemon/status` — current mode + uptime
 
 Write endpoints (`POST`):
@@ -299,7 +301,7 @@ Write endpoints (`POST`):
 - `/api/workspaces/{id}/take-control|release-control` — hand a workspace to a human and back
 - `/api/workspaces/{id}/pause|unpause|resume|archive|delete|clean` — workspace lifecycle
 - `/api/workspaces/{id}/rerun` — DONE-only: re-clone source, refresh ticket data from tracker, restart pipeline from ANALYSIS; body `{ "reason": "<non-empty string>" }`
-- `/api/workspaces/{id}/clear-gradle-and-retry` — server-side validates the workspace is FAILED and the error matches the AAPT2 signature before wiping caches
+- `/api/workspaces/{id}/clear-gradle-and-retry` — server-side validates the workspace is FAILED and the error matches the AAPT2 signature before wiping caches; it clears only an explicitly set `GRADLE_USER_HOME` (never the shared `~/.gradle`) and stops only that home's Gradle daemons
 - `/api/projects/create` and `/api/projects/validate-step` — the wizard's two endpoints (validate one step against live APIs, then commit)
 - `/api/reviews/review-now` and `/api/reviews/skip` (there is no posting route: posting is done from Telegram only) — body `{"scope": "<project>/<repo>", "number": <PR number>}`; 404 for a PR not on the board, 409 from review-now when a review at that head is already queued, running or deferred; 403 `cross-site request refused` unless the body is sent as `Content-Type: application/json` and any `Origin` / `Sec-Fetch-Site` header says the request comes from the dashboard itself (so another site open in the browser cannot queue a review; curl, which sends neither header, works)
 

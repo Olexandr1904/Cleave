@@ -24,6 +24,7 @@ from orchestrator import tg_format
 from orchestrator.constants import REPORT_BA, REPORT_DEV, REPORT_QA, REPORT_SCOPE_GUARD
 from orchestrator.reviewer.grammar import parse_reply
 from orchestrator.switches import GLOBAL, switch_scopes
+from orchestrator.tg_i18n import ENGLISH, N_, detail, telegram_language, tr
 from workspace.workspace import Stage
 
 logger = logging.getLogger(__name__)
@@ -55,9 +56,9 @@ def _ensure_msg_ids(c: dict) -> list[int]:
     return c["msg_ids"]
 
 
-_REVIEW_STORE_UNREAD = "Reply not handled: the reviewer's store could not be read; nothing was done."
-_REVIEWER_OFF = "Reviewer mode is off on this daemon: nothing was done."
-_REVIEWER_NOT_A_REPLY = "Reply to the reviewer's message to act on it; nothing was done."
+_REVIEW_STORE_UNREAD = N_("Reply not handled: the reviewer's store could not be read; nothing was done.")
+_REVIEWER_OFF = N_("Reviewer mode is off on this daemon: nothing was done.")
+_REVIEWER_NOT_A_REPLY = N_("Reply to the reviewer's message to act on it; nothing was done.")
 _SKILL_STORE_UNREAD = "Reply not handled: the skill-run store could not be read; nothing was done."
 _SKILL_OFF = "The skill flow is off on this daemon; nothing was done."
 
@@ -106,6 +107,10 @@ class CommandHandler:
     _reviewer: Any | None = None
     # The skill flow's replies (is_anchor, handle_reply, handle_callback, answer); None: no skill flow on this daemon.
     _skill: Any | None = None
+    # The Telegram language of a project (its id; "" for the global one) and of a chat: a ticket's answers are in its
+    # project's, the others in the chat's. English unless the daemon passes them.
+    _language_of: Callable[[str], str] = staticmethod(lambda project_id: ENGLISH)
+    _chat_language: Callable[[str], str] = staticmethod(lambda chat_id: ENGLISH)
 
     def __init__(
         self,
@@ -126,7 +131,13 @@ class CommandHandler:
         reviewer: Any | None = None,
         reviewer_chat_ids: set[str] | None = None,
         skill: Any | None = None,
+        language_of: Callable[[str], str] | None = None,
+        chat_language: Callable[[str], str] | None = None,
     ) -> None:
+        if language_of is not None:
+            self._language_of = language_of
+        if chat_language is not None:
+            self._chat_language = chat_language
         self._switches = switches
         self._reviewer = reviewer
         self._skill = skill
@@ -198,7 +209,11 @@ class CommandHandler:
         await self._notifier.send_message(chat_id, text)
 
     async def handle_message(self, text: str, chat_id: str) -> None:
-        """Process an incoming Telegram message."""
+        """Process an incoming Telegram message, answered in the chat's language."""
+        with telegram_language(self._chat_language(chat_id)):
+            await self._handle_message(text, chat_id)
+
+    async def _handle_message(self, text: str, chat_id: str) -> None:
         if self._allowed_chat_ids is not None and chat_id not in self._allowed_chat_ids:
             logger.warning(
                 "Rejecting command from unauthorized chat_id=%s", chat_id,
@@ -209,14 +224,14 @@ class CommandHandler:
             await self._handle_switch_command(command, chat_id)
             return
         if self._is_reviewer_command(text):
-            await self._notifier.send_message(chat_id, _REVIEWER_NOT_A_REPLY)
+            await self._notifier.send_message(chat_id, tr(_REVIEWER_NOT_A_REPLY))
             return
         # Send a visible processing message so the user knows we're working
         processing_msg_id = None
         preview = text[:100].replace("\n", " ")
         try:
             processing_msg_id = await self._notifier.send_message(
-                chat_id, f"\u2699\ufe0f Processing... ({preview})",
+                chat_id, tr("\u2699\ufe0f Processing... ({preview})", preview=preview),
             )
         except Exception:
             logger.debug("Failed to send processing indicator", exc_info=True)
@@ -251,7 +266,8 @@ class CommandHandler:
             return
         else:
             await self._reply(chat_id, intent.reply or
-                "I didn't understand that. I can do: status, analyze, approve, reject, retry, set_mode, reviewed.", processing_msg_id)
+                tr("I didn't understand that. I can do: status, analyze, approve, reject, retry, set_mode, reviewed."),
+                processing_msg_id)
 
     def _is_reviewer_command(self, text: str) -> bool:
         """Whether a message, while a repo is in reviewer mode, is a reviewer command that names a review's numbers
@@ -302,7 +318,7 @@ class CommandHandler:
             if matches:
                 msg = self._status_handler.format_drill_down(matches[0])
             else:
-                msg = f"No active workspace found for {ticket_id}."
+                msg = tr("No active workspace found for {ticket_id}.", ticket_id=ticket_id)
         else:
             msg = self._summary_text(workspaces)
             if self._switches is not None:
@@ -343,7 +359,8 @@ class CommandHandler:
             scope, error = resolve_scope(command.repo, scopes[command.mode])
             if scope is None and command.mode == "reviews":
                 other, other_error = resolve_scope(command.repo, scopes["tickets"])
-                error = f"Reviews are not enabled for {other} (reviewer.enabled in YAML)" if other else other_error
+                error = (tr("Reviews are not enabled for {scope} (reviewer.enabled in YAML)", scope=other)
+                         if other else other_error)
             if scope is None:
                 await self._notifier.send_message(chat_id, error)
                 return
@@ -354,53 +371,67 @@ class CommandHandler:
         mode = intent.params.get("mode", "")
         try:
             self._mode_handler.set_mode(mode)
-            await self._reply(chat_id, intent.reply or f"Switched to {mode} mode.", processing_msg_id)
+            await self._reply(chat_id, intent.reply or tr("Switched to {mode} mode.", mode=mode), processing_msg_id)
         except ValueError as e:
-            await self._reply(chat_id, str(e), processing_msg_id)
+            await self._reply(chat_id, detail(str(e)), processing_msg_id)
 
     async def _handle_approve(self, intent: ParsedIntent, chat_id: str, workspaces: list[Any], processing_msg_id: int | None = None) -> None:
         ticket_id = intent.params.get("ticket_id")
         awaiting = self._approval_handler.find_awaiting(workspaces, ticket_id)
         if not awaiting:
-            await self._reply(chat_id, "No workspaces awaiting approval.", processing_msg_id)
-            return
-        if len(awaiting) > 1 and not ticket_id:
-            tickets = ", ".join(ws.state.ticket_id for ws in awaiting)
-            await self._reply(chat_id, f"Multiple workspaces awaiting approval: {tickets}. Please specify which one.", processing_msg_id)
-            return
-        ws = awaiting[0]
-        next_state = self._approval_handler.resolve_next_state(ws)
-        ws.transition(next_state)
-        await self._reply(chat_id, intent.reply or f"Approved {ws.state.ticket_id}. Moving to {next_state}.", processing_msg_id)
-
-    async def _handle_reject(self, intent: ParsedIntent, chat_id: str, workspaces: list[Any], processing_msg_id: int | None = None) -> None:
-        ticket_id = intent.params.get("ticket_id")
-        awaiting = self._approval_handler.find_awaiting(workspaces, ticket_id)
-        if not awaiting:
-            await self._reply(chat_id, "No workspaces awaiting approval.", processing_msg_id)
+            await self._reply(chat_id, tr("No workspaces awaiting approval."), processing_msg_id)
             return
         if len(awaiting) > 1 and not ticket_id:
             tickets = ", ".join(ws.state.ticket_id for ws in awaiting)
             await self._reply(
                 chat_id,
-                f"Multiple workspaces awaiting approval: {tickets}. Please specify which one to reject.",
+                tr("Multiple workspaces awaiting approval: {tickets}. Please specify which one.", tickets=tickets),
+                processing_msg_id,
+            )
+            return
+        ws = awaiting[0]
+        next_state = self._approval_handler.resolve_next_state(ws)
+        ws.transition(next_state)
+        await self._reply(
+            chat_id,
+            intent.reply or tr("Approved {ticket_id}. Moving to {state}.", ticket_id=ws.state.ticket_id,
+                               state=next_state),
+            processing_msg_id,
+        )
+
+    async def _handle_reject(self, intent: ParsedIntent, chat_id: str, workspaces: list[Any], processing_msg_id: int | None = None) -> None:
+        ticket_id = intent.params.get("ticket_id")
+        awaiting = self._approval_handler.find_awaiting(workspaces, ticket_id)
+        if not awaiting:
+            await self._reply(chat_id, tr("No workspaces awaiting approval."), processing_msg_id)
+            return
+        if len(awaiting) > 1 and not ticket_id:
+            tickets = ", ".join(ws.state.ticket_id for ws in awaiting)
+            await self._reply(
+                chat_id,
+                tr("Multiple workspaces awaiting approval: {tickets}. Please specify which one to reject.",
+                   tickets=tickets),
                 processing_msg_id,
             )
             return
         ws = awaiting[0]
         ws.transition(Stage.FAILED)
         ws.update_state(error="Rejected by operator via Telegram")
-        await self._reply(chat_id, intent.reply or f"Rejected {ws.state.ticket_id}. Marked as FAILED.", processing_msg_id)
+        await self._reply(
+            chat_id,
+            intent.reply or tr("Rejected {ticket_id}. Marked as FAILED.", ticket_id=ws.state.ticket_id),
+            processing_msg_id,
+        )
 
     async def _handle_analyze(self, intent: ParsedIntent, chat_id: str, workspaces: list[Any], processing_msg_id: int | None = None) -> None:
         ticket_ids = intent.params.get("ticket_ids", [])
         if not ticket_ids:
-            await self._reply(chat_id, "Please specify ticket IDs to analyze.", processing_msg_id)
+            await self._reply(chat_id, tr("Please specify ticket IDs to analyze."), processing_msg_id)
             return
         if not self._analyze_callback:
             await self._reply(
                 chat_id,
-                "Analyze is not available — no orchestrator callback configured.",
+                tr("Analyze is not available — no orchestrator callback configured."),
                 processing_msg_id,
             )
             return
@@ -409,7 +440,7 @@ class CommandHandler:
             result = await self._analyze_callback(ticket_ids)
         except Exception as e:
             logger.error("analyze_callback failed: %s", e, exc_info=True)
-            await self._reply(chat_id, f"Analyze failed: {e}", processing_msg_id)
+            await self._reply(chat_id, tr("Analyze failed: {error}", error=detail(str(e))), processing_msg_id)
             return
         # result is expected to be dict with keys: valid (list of ticket IDs),
         # invalid (list of "TICKET: reason" strings). Missing keys default to [].
@@ -417,13 +448,13 @@ class CommandHandler:
         invalid = list(result.get("invalid", [])) if isinstance(result, dict) else []
         lines: list[str] = []
         if valid:
-            lines.append(f"Queued {len(valid)} ticket(s) for analysis: {', '.join(valid)}")
+            lines.append(tr("Queued {n} ticket(s) for analysis: {tickets}", n=len(valid), tickets=", ".join(valid)))
         if invalid:
-            lines.append("Could not queue:")
+            lines.append(tr("Could not queue:"))
             for entry in invalid:
-                lines.append(f"  - {entry}")
+                lines.append(f"  - {detail(entry)}")
         if not lines:
-            lines.append(intent.reply or "No tickets were queued.")
+            lines.append(intent.reply or tr("No tickets were queued."))
         await self._reply(chat_id, "\n".join(lines), processing_msg_id)
 
     _VALID_RETRY_STATES = {
@@ -440,7 +471,7 @@ class CommandHandler:
         """Signal that code review is complete for a PR_REVIEW workspace."""
         pr_workspaces = [ws for ws in workspaces if ws.state.current_state == Stage.PR_REVIEW]
         if not pr_workspaces:
-            await self._reply(chat_id, "No workspaces in PR_REVIEW state.", processing_msg_id)
+            await self._reply(chat_id, tr("No workspaces in PR_REVIEW state."), processing_msg_id)
             return
 
         ticket_id = intent.params.get("ticket_id")
@@ -450,18 +481,23 @@ class CommandHandler:
             target = pr_workspaces[0]
         else:
             ids = ", ".join(ws.state.ticket_id for ws in pr_workspaces)
-            await self._reply(chat_id, f"Multiple PRs in review: {ids}. Specify: 'reviewed TICKET-ID'", processing_msg_id)
+            await self._reply(
+                chat_id, tr("Multiple PRs in review: {ids}. Specify: 'reviewed TICKET-ID'", ids=ids),
+                processing_msg_id,
+            )
             return
 
         if not target:
-            await self._reply(chat_id, f"Workspace {ticket_id} not found in PR_REVIEW.", processing_msg_id)
+            await self._reply(
+                chat_id, tr("Workspace {ticket_id} not found in PR_REVIEW.", ticket_id=ticket_id), processing_msg_id,
+            )
             return
 
         target.state.human_input_reply = "reviewed"
         target.save_state()
         await self._reply(
             chat_id,
-            f"Got it. Fetching PR comments for {target.state.ticket_id} now.",
+            tr("Got it. Fetching PR comments for {ticket_id} now.", ticket_id=target.state.ticket_id),
             processing_msg_id,
         )
         # Wake the orchestrator immediately
@@ -471,12 +507,14 @@ class CommandHandler:
     async def _handle_retry(self, intent: ParsedIntent, chat_id: str, workspaces: list[Any], processing_msg_id: int | None = None) -> None:
         ticket_id = intent.params.get("ticket_id")
         if not ticket_id:
-            await self._reply(chat_id, "Please specify a ticket ID to retry.", processing_msg_id)
+            await self._reply(chat_id, tr("Please specify a ticket ID to retry."), processing_msg_id)
             return
 
         matches = [ws for ws in workspaces if ws.state.ticket_id == ticket_id]
         if not matches:
-            await self._reply(chat_id, f"No active workspace found for {ticket_id}.", processing_msg_id)
+            await self._reply(
+                chat_id, tr("No active workspace found for {ticket_id}.", ticket_id=ticket_id), processing_msg_id,
+            )
             return
 
         ws = matches[0]
@@ -487,7 +525,7 @@ class CommandHandler:
             if not target_state:
                 valid = ", ".join(self._VALID_RETRY_STATES.keys())
                 await self._reply(
-                    chat_id, f"Unknown stage '{from_stage}'. Valid stages: {valid}",
+                    chat_id, tr("Unknown stage '{stage}'. Valid stages: {valid}", stage=from_stage, valid=valid),
                     processing_msg_id,
                 )
                 return
@@ -519,7 +557,7 @@ class CommandHandler:
 
         await self._reply(
             chat_id,
-            f"Retrying {ticket_id} from {target_state}.",
+            tr("Retrying {ticket_id} from {state}.", ticket_id=ticket_id, state=target_state),
             processing_msg_id,
         )
         logger.info("Retry %s -> %s", ticket_id, target_state)
@@ -538,15 +576,15 @@ class CommandHandler:
             if recent:
                 await self._reply(
                     chat_id,
-                    f"{recent} Your new message was NOT added — that input is already being processed. "
-                    f"If the pipeline blocks again with a new question, you can answer it then, "
-                    f"or use `retry <ticket>` to re-run the stage.",
+                    tr("{recent} Your new message was NOT added — that input is already being processed. "
+                       "If the pipeline blocks again with a new question, you can answer it then, "
+                       "or use `retry <ticket>` to re-run the stage.", recent=recent),
                     processing_msg_id,
                 )
             else:
                 await self._reply(
                     chat_id,
-                    "No blocked workspaces are waiting for input.",
+                    tr("No blocked workspaces are waiting for input."),
                     processing_msg_id,
                 )
             return
@@ -556,7 +594,8 @@ class CommandHandler:
             target = next((ws for ws in blocked if ws.state.ticket_id == ticket_id), None)
             if not target:
                 await self._reply(
-                    chat_id, f"No blocked workspace found for {ticket_id}.", processing_msg_id,
+                    chat_id, tr("No blocked workspace found for {ticket_id}.", ticket_id=ticket_id),
+                    processing_msg_id,
                 )
                 return
         elif len(blocked) == 1:
@@ -565,14 +604,15 @@ class CommandHandler:
             tickets = ", ".join(ws.state.ticket_id for ws in blocked)
             await self._reply(
                 chat_id,
-                f"Multiple blocked workspaces: {tickets}. Please prefix your answer with the ticket ID.",
+                tr("Multiple blocked workspaces: {tickets}. Please prefix your answer with the ticket ID.",
+                   tickets=tickets),
                 processing_msg_id,
             )
             return
 
         input_text = intent.params.get("input_text", "").strip()
         if not input_text:
-            await self._reply(chat_id, "Empty input — nothing to resume with.", processing_msg_id)
+            await self._reply(chat_id, tr("Empty input — nothing to resume with."), processing_msg_id)
             return
 
         target.state.human_input_reply = input_text
@@ -585,7 +625,8 @@ class CommandHandler:
 
         await self._reply(
             chat_id,
-            intent.reply or f"Got it. Resuming {target.state.ticket_id} from {resume_state} with your input.",
+            intent.reply or tr("Got it. Resuming {ticket_id} from {state} with your input.",
+                               ticket_id=target.state.ticket_id, state=resume_state),
             processing_msg_id,
         )
         logger.info(
@@ -603,10 +644,10 @@ class CommandHandler:
         if not self._recently_unblocked:
             return None
         parts = [
-            f"{ticket} (resumed from {state}, {int(now - ts)}s ago)"
+            tr("{ticket} (resumed from {state}, {seconds}s ago)", ticket=ticket, state=state, seconds=int(now - ts))
             for ticket, (ts, state) in self._recently_unblocked.items()
         ]
-        return f"Already started: {', '.join(parts)}."
+        return tr("Already started: {tickets}.", tickets=", ".join(parts))
 
     async def handle_reply(
         self, reply_to_msg_id: int, text: str, chat_id: str, sent_at: datetime | None = None,
@@ -655,7 +696,8 @@ class CommandHandler:
         except Exception as e:
             logger.warning("Reply anchor not looked up: %s", type(e).__name__)
             if not await self._pipeline_reply(reply_to_msg_id, text, chat_id):
-                message_id = await self._notifier.send_message(chat_id, _REVIEW_STORE_UNREAD)
+                with telegram_language(self._chat_language(chat_id)):
+                    message_id = await self._notifier.send_message(chat_id, tr(_REVIEW_STORE_UNREAD))
                 try:  # so a reply to the answer is the reviewer's too; the store may be what failed
                     self._reviewer.anchor_answer(chat_id, message_id)
                 except Exception as anchor_error:
@@ -675,7 +717,24 @@ class CommandHandler:
             return True
 
     async def _pipeline_reply(self, reply_to_msg_id: int, text: str, chat_id: str) -> bool:
-        """Handle a reply to a ticket's escalation message. Returns True if matched."""
+        """Handle a reply to a ticket's escalation message, answered in the ticket's project's language. Returns
+        True if matched."""
+        ws = self._replied_workspace(reply_to_msg_id)
+        language = self._language_of(ws.state.company_id) if ws is not None else self._chat_language(chat_id)
+        with telegram_language(language):
+            return await self._ticket_reply(reply_to_msg_id, text, chat_id)
+
+    def _replied_workspace(self, reply_to_msg_id: int) -> Any | None:
+        """The workspace whose message the reply answers, looked up as _ticket_reply matches it: a pending PR
+        comment's message first, then an escalation message."""
+        workspaces = self._active_workspaces_fn()
+        for ws in workspaces:
+            if ws.state.current_state == "PR_REVIEW" and any(
+                    reply_to_msg_id in _ensure_msg_ids(c) for c in ws.state.pending_review_comments or []):
+                return ws
+        return next((ws for ws in workspaces if ws.state.escalation_msg_id == reply_to_msg_id), None)
+
+    async def _ticket_reply(self, reply_to_msg_id: int, text: str, chat_id: str) -> bool:
         workspaces = self._active_workspaces_fn()
 
         # Check escalated PR comment replies first (pending_review_comments)
@@ -694,16 +753,15 @@ class CommandHandler:
                 file_line = f"{c.get('file','?')}:{c.get('line','?')}"
                 if decision == "fix":
                     c["decision"] = "fix"
-                    decision_label = f"FIX (matched: {matched_token!r}). Dev-agent will re-engage on {file_line}."
+                    decision_label = tr("FIX (matched: {token!r}). Dev-agent will re-engage on {file_line}.",
+                                        token=matched_token, file_line=file_line)
                     recorded_label = "FIX"
                     stored_decision = "fix"
                 else:  # wont_fix
                     reason_text = wf_reason or "operator decision"
                     c["decision"] = f"won't fix: {reason_text}"
-                    decision_label = (
-                        f"WON'T FIX (matched: {matched_token!r}). "
-                        f'Posting on GitHub: "{reason_text}".'
-                    )
+                    decision_label = tr("WON'T FIX (matched: {token!r}). Posting on GitHub: \"{reason}\".",
+                                        token=matched_token, reason=reason_text)
                     recorded_label = "WON'T FIX"
                     stored_decision = c["decision"]
 
@@ -711,7 +769,8 @@ class CommandHandler:
                 _title = tg_format.read_ticket_title(ws)
                 _emoji = "✅" if decision == "fix" else "❌"
                 _hdr = tg_format.tg_header(_emoji, ws.state.company_id, ws.state.ticket_id, _title)
-                confirm = f"{_hdr}\n✓ Recognized as {recorded_label}. {decision_label}"
+                confirm = f"{_hdr}\n" + tr("✓ Recognized as {label}. {decision}", label=recorded_label,
+                                           decision=decision_label)
                 if self._events is not None:
                     self._events.emit(
                         "pr_comment_decision_recorded",
@@ -733,15 +792,16 @@ class CommandHandler:
                     # loops over live state and resends only the actual remaining ones —
                     # the label is a hint, not a guarantee.
                     btn = [Button(
-                        label=f"Show {len(undecided)} unanswered",
+                        label=tr("Show {n} unanswered", n=len(undecided)),
                         action=f"unanswered:{ws.state.ticket_id}",
                     )]
                     await self._notifier.send_message(
-                        chat_id, f"{confirm}\n{len(undecided)} comment(s) remaining.", buttons=btn,
+                        chat_id, f"{confirm}\n" + tr("{n} comment(s) remaining.", n=len(undecided)), buttons=btn,
                     )
                 else:
                     await self._notifier.send_message(
-                        chat_id, f"{confirm}\nAll decisions in for {ws.state.ticket_id}. Executing now.",
+                        chat_id, f"{confirm}\n" + tr("All decisions in for {ticket_id}. Executing now.",
+                                                     ticket_id=ws.state.ticket_id),
                     )
                     if hasattr(self, '_wake_fn') and self._wake_fn:
                         self._wake_fn()
@@ -759,7 +819,7 @@ class CommandHandler:
                 _hdr = tg_format.tg_header("🔍", ws.state.company_id, ws.state.ticket_id, _title)
                 await self._notifier.send_message(
                     chat_id,
-                    f"{_hdr}\nGot it. Fetching PR comments now.",
+                    f"{_hdr}\n" + tr("Got it. Fetching PR comments now."),
                 )
                 if hasattr(self, '_wake_fn') and self._wake_fn:
                     self._wake_fn()
@@ -790,7 +850,7 @@ class CommandHandler:
                     _hdr = tg_format.tg_header("⏭", ws.state.company_id, ws.state.ticket_id, _title)
                     await self._notifier.send_message(
                         chat_id,
-                        f"{_hdr}\nSkipped {prev}. Advanced to {resume_state}.",
+                        f"{_hdr}\n" + tr("Skipped {stage}. Advanced to {state}.", stage=prev, state=resume_state),
                     )
                     if hasattr(self, '_wake_fn') and self._wake_fn:
                         self._wake_fn()
@@ -806,7 +866,7 @@ class CommandHandler:
                     _hdr = tg_format.tg_header("🔄", ws.state.company_id, ws.state.ticket_id, _title)
                     await self._notifier.send_message(
                         chat_id,
-                        f"{_hdr}\nRetrying {resume_state}.",
+                        f"{_hdr}\n" + tr("Retrying {state}.", state=resume_state),
                     )
                     if hasattr(self, '_wake_fn') and self._wake_fn:
                         self._wake_fn()
@@ -824,7 +884,7 @@ class CommandHandler:
                 _hdr = tg_format.tg_header("▶", ws.state.company_id, ws.state.ticket_id, _title)
                 await self._notifier.send_message(
                     chat_id,
-                    f"{_hdr}\nResuming from {resume_state} with your input.",
+                    f"{_hdr}\n" + tr("Resuming from {state} with your input.", state=resume_state),
                 )
                 logger.info(
                     "Unblocked %s via reply to msg %d",
@@ -848,7 +908,7 @@ class CommandHandler:
             and (not target_id or w.state.ticket_id == target_id)
         ]
         if not matches:
-            await self._reply(chat_id, "No tickets have unanswered PR comments.", processing_msg_id)
+            await self._reply(chat_id, tr("No tickets have unanswered PR comments."), processing_msg_id)
             return
 
         total = 0
@@ -857,12 +917,13 @@ class CommandHandler:
             for c in ws.state.pending_review_comments:
                 if c.get("decision") is not None:
                     continue
-                text, buttons = build_escalated_comment_message(
-                    ws.state, c, ws.state.pr_number,
-                    ticket_title=c.get("ticket_title", ""),
-                    recall=True,
-                )
-                new_msg_id = await self._notifier.send_message(chat_id, text, buttons=buttons)
+                with telegram_language(self._language_of(ws.state.company_id)):  # the ticket's, as at escalation
+                    text, buttons = build_escalated_comment_message(
+                        ws.state, c, ws.state.pr_number,
+                        ticket_title=c.get("ticket_title", ""),
+                        recall=True,
+                    )
+                    new_msg_id = await self._notifier.send_message(chat_id, text, buttons=buttons)
                 if new_msg_id:
                     _ensure_msg_ids(c).append(new_msg_id)
                     ws_total += 1
@@ -876,7 +937,7 @@ class CommandHandler:
                     data={"ticket_id": ws.state.ticket_id, "count": ws_total, "via": via},
                 )
         await self._reply(
-            chat_id, f"Resent {total} unanswered comment(s).", processing_msg_id,
+            chat_id, tr("Resent {n} unanswered comment(s).", n=total), processing_msg_id,
         )
 
     async def _stage_reinvestigation(self, c, ws, hint_text: str, chat_id: str) -> bool:
@@ -889,10 +950,10 @@ class CommandHandler:
         if rounds >= 3:
             _title = tg_format.read_ticket_title(ws)
             _hdr = tg_format.tg_header("⚠️", ws.state.company_id, ws.state.ticket_id, _title)
-            msg = (
-                f"{_hdr}\n"
-                f"Hint limit reached (3/3) for @{c.get('author','?')} on {file_line}. "
-                f"Reply \"fix\" or \"won't fix: <reason>\" to close this comment."
+            msg = f"{_hdr}\n" + tr(
+                "Hint limit reached (3/3) for @{author} on {file_line}. "
+                "Reply \"fix\" or \"won't fix: <reason>\" to close this comment.",
+                author=c.get('author', '?'), file_line=file_line,
             )
             await self._notifier.send_message(chat_id, msg)
             if self._events is not None:
@@ -920,10 +981,9 @@ class CommandHandler:
         next_round = rounds + 1
         _title = tg_format.read_ticket_title(ws)
         _hdr = tg_format.tg_header("🔍", ws.state.company_id, ws.state.ticket_id, _title)
-        msg = (
-            f"{_hdr}\n"
-            f"Recognized as hint (round {next_round}/3). "
-            f"Re-checking @{c.get('author','?')}'s comment on {file_line} with your context."
+        msg = f"{_hdr}\n" + tr(
+            "Recognized as hint (round {round}/3). Re-checking @{author}'s comment on {file_line} with your context.",
+            round=next_round, author=c.get('author', '?'), file_line=file_line,
         )
         await self._notifier.send_message(chat_id, msg)
         if self._events is not None:
@@ -961,28 +1021,47 @@ class CommandHandler:
             if chat_id not in self._reviewer_chat_ids:
                 return
             if self._reviewer is None:
-                await self._notifier.send_message(chat_id, _REVIEWER_OFF, reply_to_message_id=message_id)
+                with telegram_language(self._chat_language(chat_id)):
+                    await self._notifier.send_message(chat_id, tr(_REVIEWER_OFF), reply_to_message_id=message_id)
             else:
                 await self._reviewer.handle_callback(action, ticket_id, chat_id, message_id)
             return
 
+        # A pr_fix / pr_wontfix tap names "<ticket>:<comment id>".
+        tid = ticket_id.split(":", 1)[0]
+        ws = next((w for w in self._active_workspaces_fn() if w.state.ticket_id == tid), None)
+        language = self._language_of(ws.state.company_id) if ws is not None else self._chat_language(chat_id)
+        with telegram_language(language):
+            await self._ticket_callback(action, ticket_id, chat_id, message_id)
+
+    async def _ticket_callback(self, action: str, ticket_id: str, chat_id: str, message_id: int) -> None:
+        """A tap on a ticket message's button, answered in the current language."""
         workspaces = self._active_workspaces_fn()
 
         if action == "approve":
             ws = next((w for w in workspaces if w.state.ticket_id == ticket_id and w.state.current_state == "AWAITING_APPROVAL"), None)
             if not ws:
-                await self._notifier.send_message(chat_id, f"No workspace awaiting approval for {ticket_id}.", reply_to_message_id=message_id)
+                await self._notifier.send_message(
+                    chat_id, tr("No workspace awaiting approval for {ticket_id}.", ticket_id=ticket_id),
+                    reply_to_message_id=message_id,
+                )
                 return
             next_state = self._approval_handler.resolve_next_state(ws)
             ws.transition(next_state)
             _title = tg_format.read_ticket_title(ws)
             _hdr = tg_format.tg_header("✅", ws.state.company_id, ws.state.ticket_id, _title)
-            await self._notifier.send_message(chat_id, f"{_hdr}\nApproved. Moving to {next_state}.", reply_to_message_id=message_id)
+            await self._notifier.send_message(
+                chat_id, f"{_hdr}\n" + tr("Approved. Moving to {state}.", state=next_state),
+                reply_to_message_id=message_id,
+            )
 
         elif action == "reject":
             ws = next((w for w in workspaces if w.state.ticket_id == ticket_id and w.state.current_state == "AWAITING_APPROVAL"), None)
             if not ws:
-                await self._notifier.send_message(chat_id, f"No workspace awaiting approval for {ticket_id}.", reply_to_message_id=message_id)
+                await self._notifier.send_message(
+                    chat_id, tr("No workspace awaiting approval for {ticket_id}.", ticket_id=ticket_id),
+                    reply_to_message_id=message_id,
+                )
                 return
             # The plan-review gate's own message promises "back to analysis";
             # marking the ticket FAILED there would make that a lie. Other
@@ -991,9 +1070,9 @@ class CommandHandler:
             ws.transition(target)
             if target == "FAILED":
                 ws.update_state(error="Rejected by operator via Telegram")
-                _outcome = "Rejected. Marked as FAILED."
+                _outcome = tr("Rejected. Marked as FAILED.")
             else:
-                _outcome = f"Rejected. Back to {target}."
+                _outcome = tr("Rejected. Back to {state}.", state=target)
             _title = tg_format.read_ticket_title(ws)
             _hdr = tg_format.tg_header("❌", ws.state.company_id, ws.state.ticket_id, _title)
             await self._notifier.send_message(chat_id, f"{_hdr}\n{_outcome}", reply_to_message_id=message_id)
@@ -1001,20 +1080,28 @@ class CommandHandler:
         elif action == "reviewed":
             ws = next((w for w in workspaces if w.state.ticket_id == ticket_id and w.state.current_state == "PR_REVIEW"), None)
             if not ws:
-                await self._notifier.send_message(chat_id, f"No workspace in PR_REVIEW for {ticket_id}.", reply_to_message_id=message_id)
+                await self._notifier.send_message(
+                    chat_id, tr("No workspace in PR_REVIEW for {ticket_id}.", ticket_id=ticket_id),
+                    reply_to_message_id=message_id,
+                )
                 return
             ws.state.human_input_reply = "reviewed"
             ws.save_state()
             _title = tg_format.read_ticket_title(ws)
             _hdr = tg_format.tg_header("🔍", ws.state.company_id, ws.state.ticket_id, _title)
-            await self._notifier.send_message(chat_id, f"{_hdr}\nGot it. Fetching PR comments now.", reply_to_message_id=message_id)
+            await self._notifier.send_message(
+                chat_id, f"{_hdr}\n" + tr("Got it. Fetching PR comments now."), reply_to_message_id=message_id,
+            )
             if hasattr(self, '_wake_fn') and self._wake_fn:
                 self._wake_fn()
 
         elif action == "retry":
             ws = next((w for w in workspaces if w.state.ticket_id == ticket_id), None)
             if not ws:
-                await self._notifier.send_message(chat_id, f"No active workspace found for {ticket_id}.", reply_to_message_id=message_id)
+                await self._notifier.send_message(
+                    chat_id, tr("No active workspace found for {ticket_id}.", ticket_id=ticket_id),
+                    reply_to_message_id=message_id,
+                )
                 return
             ws.state.human_input_pending = False
             ws.state.error = None
@@ -1023,7 +1110,10 @@ class CommandHandler:
             ws.save_state()
             _title = tg_format.read_ticket_title(ws)
             _hdr = tg_format.tg_header("🔄", ws.state.company_id, ws.state.ticket_id, _title)
-            await self._notifier.send_message(chat_id, f"{_hdr}\nRetrying from {target_state}.", reply_to_message_id=message_id)
+            await self._notifier.send_message(
+                chat_id, f"{_hdr}\n" + tr("Retrying from {state}.", state=target_state),
+                reply_to_message_id=message_id,
+            )
             if hasattr(self, '_wake_fn') and self._wake_fn:
                 self._wake_fn()
 
@@ -1033,7 +1123,7 @@ class CommandHandler:
             ws = next((w for w in workspaces if w.state.ticket_id == ticket_id), None)
             if not ws:
                 await self._notifier.send_message(
-                    chat_id, f"No active workspace found for {ticket_id}.",
+                    chat_id, tr("No active workspace found for {ticket_id}.", ticket_id=ticket_id),
                     reply_to_message_id=message_id,
                 )
                 return
@@ -1044,7 +1134,7 @@ class CommandHandler:
                 _title = tg_format.read_ticket_title(ws)
                 _hdr = tg_format.tg_header("⚠️", ws.state.company_id, ws.state.ticket_id, _title)
                 await self._notifier.send_message(
-                    chat_id, f"{_hdr}\nFailed to clear Gradle cache: {e}",
+                    chat_id, f"{_hdr}\n" + tr("Failed to clear Gradle cache: {error}", error=detail(str(e))),
                     reply_to_message_id=message_id,
                 )
                 return
@@ -1065,7 +1155,8 @@ class CommandHandler:
             _hdr = tg_format.tg_header("🧹", ws.state.company_id, ws.state.ticket_id, _title)
             await self._notifier.send_message(
                 chat_id,
-                f"{_hdr}\nCleared {mb:.0f} MB of Gradle transforms cache. Retrying from {target}.",
+                f"{_hdr}\n" + tr("Cleared {mb:.0f} MB of Gradle transforms cache. Retrying from {state}.",
+                                 mb=mb, state=target),
                 reply_to_message_id=message_id,
             )
             if hasattr(self, '_wake_fn') and self._wake_fn:
@@ -1081,7 +1172,9 @@ class CommandHandler:
             comment_id_str = parts[1] if len(parts) > 1 else ""
             ws = next((w for w in workspaces if w.state.ticket_id == tid), None)
             if not ws or not ws.state.pending_review_comments:
-                await self._notifier.send_message(chat_id, f"No pending comments for {tid}.", reply_to_message_id=message_id)
+                await self._notifier.send_message(
+                    chat_id, tr("No pending comments for {ticket_id}.", ticket_id=tid), reply_to_message_id=message_id,
+                )
                 return
 
             matched_comment = None
@@ -1090,22 +1183,20 @@ class CommandHandler:
                     if action == "pr_fix":
                         c["decision"] = "fix"
                         stored_decision = "fix"
-                        recorded_label = "FIX"
                         matched_token = "button:fix"
-                        btn_label = "'Fix' button"
-                        action_tail = "Dev-agent will re-engage"
+                        recognized = N_("✓ Recognized as FIX (matched: 'Fix' button). "
+                                        "Dev-agent will re-engage on {file_line}.")
                     else:
                         c["decision"] = "won't fix: operator decision"
                         stored_decision = c["decision"]
-                        recorded_label = "WON'T FIX"
                         matched_token = "button:wontfix"
-                        btn_label = "'Won't Fix' button"
-                        action_tail = 'Posting on GitHub: "operator decision"'
+                        recognized = N_("✓ Recognized as WON'T FIX (matched: 'Won't Fix' button). "
+                                        "Posting on GitHub: \"operator decision\" on {file_line}.")
                     matched_comment = c
                     break
 
             if matched_comment is None:
-                await self._notifier.send_message(chat_id, "Comment not found.", reply_to_message_id=message_id)
+                await self._notifier.send_message(chat_id, tr("Comment not found."), reply_to_message_id=message_id)
                 return
 
             ws.save_state()
@@ -1113,11 +1204,7 @@ class CommandHandler:
             _title = tg_format.read_ticket_title(ws)
             _emoji = "✅" if action == "pr_fix" else "❌"
             _hdr = tg_format.tg_header(_emoji, ws.state.company_id, ws.state.ticket_id, _title)
-            confirm = (
-                f"{_hdr}\n"
-                f"✓ Recognized as {recorded_label} (matched: {btn_label}). "
-                f"{action_tail} on {file_line}."
-            )
+            confirm = f"{_hdr}\n" + tr(recognized, file_line=file_line)
             if self._events is not None:
                 self._events.emit(
                     "pr_comment_decision_recorded",
@@ -1135,16 +1222,18 @@ class CommandHandler:
             if undecided:
                 from integrations.base.notifier import Button
                 btn = [Button(
-                    label=f"Show {len(undecided)} unanswered",
+                    label=tr("Show {n} unanswered", n=len(undecided)),
                     action=f"unanswered:{tid}",
                 )]
-                msg_text = f"{confirm}\n{len(undecided)} comment(s) remaining."
+                msg_text = f"{confirm}\n" + tr("{n} comment(s) remaining.", n=len(undecided))
                 await self._notifier.send_message(chat_id, msg_text, buttons=btn, reply_to_message_id=message_id)
             else:
-                msg_text = f"{confirm}\nAll decisions in for {tid}. Executing now."
+                msg_text = f"{confirm}\n" + tr("All decisions in for {ticket_id}. Executing now.", ticket_id=tid)
                 if hasattr(self, '_wake_fn') and self._wake_fn:
                     self._wake_fn()
                 await self._notifier.send_message(chat_id, msg_text, reply_to_message_id=message_id)
 
         else:
-            await self._notifier.send_message(chat_id, f"Unknown action: {action}", reply_to_message_id=message_id)
+            await self._notifier.send_message(
+                chat_id, tr("Unknown action: {action}", action=action), reply_to_message_id=message_id,
+            )

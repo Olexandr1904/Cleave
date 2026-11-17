@@ -124,10 +124,17 @@ def _stall_as_quota(progress: "_ProgressState") -> QuotaExhaustedError | None:
     for the 5-hour window to reset, not hung. Returning a QuotaExhaustedError
     routes it into the existing defer/auto-resume path instead of a permanent
     FAILED. A stall after any other event is a genuine hang -> None.
+
+    Only a refusal blocks the run: the CLI also sends this event early in a
+    run that is fine, with status "allowed". An event without a status keeps
+    the old reading.
     """
     if progress.last_event_kind != "rate_limit_event":
         return None
-    retry_at = _rate_limit_retry_at(progress.last_rate_limit_info or {})
+    info = progress.last_rate_limit_info or {}
+    if info.get("status", "rejected") != "rejected":
+        return None
+    retry_at = _rate_limit_retry_at(info)
     when = retry_at.strftime("%H:%M UTC") if retry_at else "an unknown time"
     return QuotaExhaustedError(
         f"Claude Code CLI rate-limited (usage limit reached); idle after "
@@ -478,6 +485,7 @@ class ClaudeCodeAdapter(LLMInterface):
             cwd=cwd,
             env=claude_env(env),
             start_new_session=True,
+            limit=_STDOUT_LINE_LIMIT,
         )
         if pid_callback is not None and proc.pid:
             try:
@@ -791,6 +799,10 @@ POST_RESULT_IDLE_GRACE_SECONDS = 600
 # poll) so a long tool call is not mistaken for a stall.
 IDLE_STALL_SECONDS = 1800
 
+# The longest stream-json line the reader takes. asyncio's default is 64 KiB, but a Read of a long file comes
+# back as one line (a 756-line document was about 86 KB); past the limit readline() raises.
+_STDOUT_LINE_LIMIT = 16 * 1024 * 1024
+
 # How often the watchdog checks the grace condition. Cheap poll.
 _WATCHDOG_POLL_SECONDS = 5
 
@@ -949,6 +961,11 @@ async def _drain_stream_json(
             line_bytes = await stream.readline()
         except (asyncio.CancelledError, asyncio.IncompleteReadError):
             raise
+        except ValueError:
+            # A line over the reader's limit: skip it and keep reading. Stopping here would leave the CLI
+            # running unread until the stall watchdog killed it.
+            _write_progress(log_path, "stdout line over the reader limit; skipped")
+            continue
         if not line_bytes:
             return
         line = line_bytes.decode("utf-8", errors="replace").rstrip("\n")

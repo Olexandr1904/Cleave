@@ -22,6 +22,7 @@ from orchestrator.pipeline.actions.fetch_pr_comments import action_fetch_pr_comm
 from orchestrator.pipeline.actions.finalize import action_finalize
 from orchestrator.pipeline.actions.push_and_open_pr import action_push_and_open_pr
 from orchestrator.runtime import Runtime
+from orchestrator.tg_i18n import project_language, telegram_language
 from orchestrator.ticket_prioritizer import PrioritizedTicket
 from orchestrator.workflow_router import WorkflowDefinition
 from workspace.workspace import Stage, Workspace
@@ -284,6 +285,10 @@ class Orchestrator:
         repo_config = self._get_repo_config(workspace)
         return self._vcs, repo_config
 
+    def telegram_language_of(self, workspace: Workspace) -> str:
+        """The language Telegram messages about the workspace's ticket are written in: its project's."""
+        return project_language(self._global_config, self._projects, workspace.state.company_id)
+
     def _get_chat_id(self, workspace: Workspace) -> str:
         """Get Telegram chat ID for a workspace (project or global)."""
         repo_config = self._get_repo_config(workspace)
@@ -357,15 +362,17 @@ class Orchestrator:
                 is_max_iterations=is_max_iterations,
             )
 
-        await advance_workspace(
-            workspace,
-            workflow=self._workflow,
-            mode_handler=getattr(self, "_mode_handler", None),
-            handle_agent_stage_fn=self._handle_agent_stage,
-            handle_action_stage_fn=self._handle_action_stage,
-            handle_escalate_fn=_escalate,
-            _resume_depth=_resume_depth,
-        )
+        # Every Telegram message of this step is in the ticket's project's language.
+        with telegram_language(self.telegram_language_of(workspace)):
+            await advance_workspace(
+                workspace,
+                workflow=self._workflow,
+                mode_handler=getattr(self, "_mode_handler", None),
+                handle_agent_stage_fn=self._handle_agent_stage,
+                handle_action_stage_fn=self._handle_action_stage,
+                handle_escalate_fn=_escalate,
+                _resume_depth=_resume_depth,
+            )
 
     async def _on_ticket_done(self, workspace: Workspace) -> None:
         """Resolved internally — kept as a small helper used by both stage handlers."""

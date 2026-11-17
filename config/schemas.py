@@ -5,10 +5,16 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 
+# The languages Cleave writes in Telegram: English (the default) and Ukrainian.
+TELEGRAM_LANGUAGES = ("en", "uk")
+
+
 @dataclass
 class TelegramConfig:
     bot_token: str = ""
     default_chat_id: str = ""
+    # One of TELEGRAM_LANGUAGES; "" follows global.yaml's, and English when that has none.
+    language: str = ""
 
 
 @dataclass
@@ -82,7 +88,10 @@ class DefaultsConfig:
     # Cap the JVM heap the build toolchain may request, written to
     # GRADLE_USER_HOME/gradle.properties at startup so it overrides each repo's
     # own (often oversized) org.gradle.jvmargs / kotlin.daemon.jvmargs.
-    cap_build_memory: bool = True
+    # Off by default, and written only to a GRADLE_USER_HOME set explicitly
+    # (one of Cleave's own, in .env): ~/.gradle is shared with other builds on
+    # the host, and capping it there made a CI runner's builds run out of memory.
+    cap_build_memory: bool = False
     build_gradle_heap_mb: int = 2048
     build_kotlin_heap_mb: int = 1536
     pr_comment_fetch_delay_minutes: int = 30
@@ -163,6 +172,8 @@ class ReviewerGlobalConfig:
     db_path: str = ""
     telegram_chat_id: str = ""
     jobs: dict[str, ReviewerJobConfig] = field(default_factory=_default_reviewer_jobs)
+    # Reviews and re-checks running at once, across all repos (one per PR): a guard for the host's memory.
+    max_parallel_jobs: int = 6
 
 
 @dataclass

@@ -64,6 +64,7 @@ from config.schemas import (
     ReviewerJobConfig,
     SkillFlowConfig,
     STATUS_COMMAND_PLACEHOLDERS,
+    TELEGRAM_LANGUAGES,
     TelegramConfig,
     TestConfig,
     THREADS_COMMAND_PLACEHOLDERS,
@@ -165,6 +166,18 @@ def _parse_section(data: dict, section_name: str, dataclass_type: type, file_pat
         ) from e
 
 
+def _parse_telegram_section(data: dict, file_path: str) -> TelegramConfig:
+    """The `telegram:` section; its language, when set, must be one Cleave writes in."""
+    telegram = _parse_section(data, "telegram", TelegramConfig, file_path)
+    if telegram.language and telegram.language not in TELEGRAM_LANGUAGES:
+        raise ConfigError(
+            f"'telegram.language' must be one of {TELEGRAM_LANGUAGES} (got {telegram.language!r})",
+            file_path=file_path,
+            field="telegram.language",
+        )
+    return telegram
+
+
 def _mapping(value: Any, field_name: str, file_path: str) -> dict:
     """A copy of a YAML section: {} when empty, ConfigError when it is not a mapping."""
     if not value:
@@ -184,6 +197,12 @@ def _parse_reviewer_global(data: dict, file_path: str) -> ReviewerGlobalConfig:
         raise ConfigError(
             f"Invalid fields in 'reviewer': {e}", file_path=file_path, field="reviewer",
         ) from e
+    cap = reviewer.max_parallel_jobs
+    if isinstance(cap, bool) or not isinstance(cap, int) or cap < 1:
+        raise ConfigError(
+            f"'reviewer.max_parallel_jobs' must be a whole number of at least 1, not {cap!r}",
+            file_path=file_path, field="reviewer.max_parallel_jobs",
+        )
     for kind, job_raw in jobs_raw.items():
         where = f"reviewer.jobs.{kind}"
         if kind not in reviewer.jobs:
@@ -251,7 +270,7 @@ def load_global_config(config_dir: str) -> GlobalConfig:
 
     return GlobalConfig(
         os=os_name,
-        telegram=_parse_section(data, "telegram", TelegramConfig, file_str),
+        telegram=_parse_telegram_section(data, file_str),
         claude=_parse_section(data, "claude", ClaudeConfig, file_str),
         workspaces=_parse_section(data, "workspaces", WorkspacesConfig, file_str),
         defaults=_parse_defaults_section(data, file_str),
@@ -491,7 +510,7 @@ def _load_project_config(project_dir: Path, global_defaults: dict) -> ProjectCon
     return ProjectConfig(
         project=_parse_section(data, "project", ProjectInfo, file_str),
         tracker=_parse_tracker_section(data, file_str),
-        telegram=_parse_section(data, "telegram", TelegramConfig, file_str),
+        telegram=_parse_telegram_section(data, file_str),
         parallelism=_parse_section(data, "parallelism", ParallelismConfig, file_str),
         defaults=_parse_defaults_section(data, file_str),
         env_refs=env_refs,

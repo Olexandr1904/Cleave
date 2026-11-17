@@ -6,6 +6,8 @@ import re
 from dataclasses import dataclass, field
 from typing import Any
 
+from config.schemas import TELEGRAM_LANGUAGES
+
 SLUG_RE = re.compile(r"^[a-z][a-z0-9-]{0,62}$")
 VCS_PROVIDERS = {"github", "gitlab"}
 
@@ -100,8 +102,18 @@ def validate_payload(payload: dict[str, Any]) -> None:
         _require(errors, gl, "project_id", "vcs.gitlab.project_id")
         _require(errors, gl, "token", "vcs.gitlab.token")
 
+    language = (payload.get("extras") or {}).get("telegram_language")
+    if language is not None and language not in TELEGRAM_LANGUAGES:
+        errors["extras.telegram_language"] = f"must be one of {list(TELEGRAM_LANGUAGES)}"
+
     if errors:
         raise PayloadValidationError(field_errors=errors)
+
+
+def telegram_language(payload: dict[str, Any]) -> str:
+    """The Telegram language the wizard chose for the project; "" when it sent none (the project then follows
+    global.yaml's)."""
+    return (payload.get("extras") or {}).get("telegram_language") or ""
 
 
 def derive_env_vars(payload: dict[str, Any]) -> dict[str, str]:
@@ -213,6 +225,8 @@ def redact_to_input_md(payload: dict[str, Any]) -> str:
     tg_var = f"{prefix}_TELEGRAM_BOT_TOKEN" if extras.get("telegram_bot_token") else None
     lines.append(f"- telegram_bot_token_var: {tg_var}")
     lines.append(f"- telegram_chat_id: {extras.get('telegram_chat_id')}")
+    if language := telegram_language(payload):
+        lines.append(f"- telegram_language: {language}")
     lines.append(f"- arch_rules_file: {extras.get('arch_rules_file')}")
     lines.append("- protected_files: [" + ", ".join(extras.get("protected_files") or []) + "]")
     lines.append(f"- max_concurrent_tickets: {extras.get('max_concurrent_tickets')}")

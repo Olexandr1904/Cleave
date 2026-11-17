@@ -24,6 +24,7 @@ class TestManualControlSkip:
         orch._mode_handler = None
         orch._notifier = None
         orch._global_config = MagicMock()
+        orch._projects = {}
         orch._agent_runtime = MagicMock()
         orch._dry_run = False
 

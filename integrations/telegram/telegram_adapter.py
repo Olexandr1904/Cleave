@@ -11,6 +11,7 @@ from telegram.ext import Application, CallbackQueryHandler, MessageHandler, filt
 from telegram.request import HTTPXRequest
 
 from integrations.base.notifier import Button, NotifierInterface
+from orchestrator.tg_translate import Translator, localize
 
 logger = logging.getLogger(__name__)
 
@@ -34,6 +35,12 @@ class TelegramAdapter(NotifierInterface):
         self._app: Application | None = None
         self._command_handler: Any | None = None
         self._events = event_bus
+        # Translates the model-written text a message marks into the current Telegram language (None: kept as is).
+        self._translator: Translator | None = None
+
+    def set_translator(self, translator: Translator | None) -> None:
+        """Register the translator of the model-written text messages mark (orchestrator/tg_translate.py)."""
+        self._translator = translator
 
     def set_command_handler(self, handler: Any) -> None:
         """Register the CommandHandler for processing incoming messages."""
@@ -51,8 +58,11 @@ class TelegramAdapter(NotifierInterface):
         Sends as plain text (no parse_mode) so that user-facing content like
         branch names, BA/QA report excerpts, and LLM-generated replies can
         contain characters such as _, *, and backticks without triggering
-        Telegram's Markdown parser and returning 400 Bad Request.
+        Telegram's Markdown parser and returning 400 Bad Request. Model-written
+        text the message marks is translated into the current Telegram language
+        first (orchestrator/tg_i18n.py), and the marks removed.
         """
+        message = await localize(message, self._translator)
         kwargs: dict[str, Any] = {
             "chat_id": chat_id,
             "text": message,
@@ -72,7 +82,8 @@ class TelegramAdapter(NotifierInterface):
         return msg.message_id
 
     async def edit_message(self, chat_id: str, message_id: int, text: str) -> None:
-        """Edit an existing message."""
+        """Edit an existing message (its marked text translated as in send_message)."""
+        text = await localize(text, self._translator)
         await self._bot.edit_message_text(
             chat_id=chat_id,
             message_id=message_id,

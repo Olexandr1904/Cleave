@@ -192,6 +192,13 @@ async def test_reviewer_chat_target():
         await broken.send("line")
 
 
+def test_reviewer_chat_carries_the_translator():
+    project = LoadedProject(config=ProjectConfig(telegram=TelegramConfig(default_chat_id="7")))
+    translator = object()
+    assert _reviewer_chat(_Notifier(), GlobalConfig(), {"acme": project}, translator=translator).translator is translator
+    assert _reviewer_chat(_Notifier(), GlobalConfig(), {"acme": project}).translator is None
+
+
 IGNORED = "  Reviewer: replies are ignored — reviewer.telegram_chat_id is not an allowed chat\n"
 
 
@@ -475,7 +482,13 @@ def test_main_wires_replies_with_telegram(tmp_path, monkeypatch, capsys):
     assert isinstance(parser, ReplyParser) and type(parser._llm).__name__ == "ClaudeCodeAdapter"
     assert parser._job_cfg == ReviewerJobConfig("sonnet", "", 60)   # reviewer.jobs.command
     assert parser._work_dir == tmp_path / "rv" / "command"
-    assert replies.kwargs == {"credential_failing": runner.args[3]}
+    language_of = runner.kwargs["language_of"]
+    assert replies.kwargs == {"credential_failing": runner.args[3], "language_of": language_of}
+    # Every part of the reviewer writes in the project's Telegram language (English by default), and the chat
+    # translates the model-written text of its messages.
+    assert small.kwargs["language_of"] is service.kwargs["language_of"] is language_of
+    assert language_of("acme") == language_of("") == "en"
+    assert chat.translator is not None and chat.translator._model == "haiku"
     # A reply to a reviewer message goes to the replies, never to the ticket pipeline's intent parser; the
     # reviewer reads the allowlist's chats only.
     assert built["handler"]._reviewer is replies

@@ -7,7 +7,15 @@ import logging
 from dataclasses import dataclass, field
 from typing import Any
 
+from orchestrator.tg_i18n import ENGLISH, current_language, tr
+
 logger = logging.getLogger(__name__)
+
+# Added to the prompt when the chat's Telegram language is not English: the reply is shown as it is written.
+_REPLY_LANGUAGES = {"uk": "Ukrainian"}
+REPLY_LANGUAGE_LINE = (
+    'Write the "reply" field in {language}; keep the JSON keys, the intent names and the params exactly as above.'
+)
 
 INTENT_SYSTEM_PROMPT = """\
 You are the command parser for Cleave, an autonomous dev pipeline.
@@ -63,7 +71,8 @@ class ParsedIntent:
             return ParsedIntent(
                 intent="unknown",
                 params={"raw_text": raw},
-                reply="I didn't understand that. I can do: status checks, analyze tickets, approve/reject steps, switch modes, unanswered comment recall.",
+                reply=tr("I didn't understand that. I can do: status checks, analyze tickets, approve/reject steps, "
+                         "switch modes, unanswered comment recall."),
             )
 
 
@@ -93,6 +102,9 @@ class IntentParser:
             blocked_workspaces=", ".join(pipeline_context.get("blocked_workspaces", [])) or "none",
             deferred_workspaces=", ".join(pipeline_context.get("deferred_workspaces", [])) or "none",
         )
+        language = current_language()
+        if language != ENGLISH and language in _REPLY_LANGUAGES:
+            system += "\n" + REPLY_LANGUAGE_LINE.format(language=_REPLY_LANGUAGES[language])
 
         try:
             raw = await self._llm.quick_query(
@@ -106,5 +118,5 @@ class IntentParser:
             return ParsedIntent(
                 intent="error",
                 params={},
-                reply="I'm having trouble understanding right now. Try again in a moment.",
+                reply=tr("I'm having trouble understanding right now. Try again in a moment."),
             )

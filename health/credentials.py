@@ -24,13 +24,14 @@ from health.validators import (
     check_trello,
 )
 from integrations.telegram.resolve import daemon_bot_token
+from orchestrator.tg_i18n import ENGLISH, N_, telegram_language, tr
 
 logger = logging.getLogger(__name__)
 
 LOGIN_EXPIRING = timedelta(days=3)
 LOGIN_LAST_DAY = timedelta(days=1)
 _FAILING = frozenset({"invalid", "no_access"})
-_RELOGIN_FIX = "Log in again on the host in a GUI terminal."
+_RELOGIN_FIX = N_("Log in again on the host in a GUI terminal.")
 
 
 @dataclass
@@ -88,7 +89,7 @@ def build_credentials(
     if telegram is not None:
         creds.append(telegram)
     creds.append(Credential(
-        "claude_login", "claude_login", "claude", "claude login", "host", "", "",
+        "claude_login", "claude_login", "claude", N_("claude login"), "host", "", "",
         lambda: check_claude_login(claude_bin),
     ))
     return creds
@@ -192,21 +193,23 @@ def classify(
 
 
 def fix_text(cred: Credential, state: str, reason: str = "") -> str:
+    """The fix, in the current Telegram language: English for the dashboard's status, the line's language for a
+    Telegram line (CredentialHealth makes each in its own)."""
     if state == "unreachable":
         if cred.kind == "claude_login" and reason == "claude not found":
-            return "Add the directory with claude (/opt/homebrew/bin) to the daemon's PATH and restart it."
-        return "Network or service unavailable; next check in 15 min."
+            return tr("Add the directory with claude (/opt/homebrew/bin) to the daemon's PATH and restart it.")
+        return tr("Network or service unavailable; next check in 15 min.")
     if cred.kind == "claude_login":
-        return _RELOGIN_FIX if state in ("invalid", "expiring") else ""
+        return tr(_RELOGIN_FIX) if state in ("invalid", "expiring") else ""
     if state == "invalid":
         if cred.env_var:
-            return f"Create a new token, put it in .env as {cred.env_var}, restart the daemon."
-        return f"Create a new token, set it in {cred.field}, restart the daemon."
+            return tr("Create a new token, put it in .env as {env_var}, restart the daemon.", env_var=cred.env_var)
+        return tr("Create a new token, set it in {field}, restart the daemon.", field=cred.field)
     if state == "no_access":
         if cred.provider == "github":
-            return (f"Check the token's access to {cred.target}; "
-                    "a classic GitHub token may need SSO authorization for the organization.")
-        return f"Check the token's access to {cred.target}."
+            return tr("Check the token's access to {target}; "
+                      "a classic GitHub token may need SSO authorization for the organization.", target=cred.target)
+        return tr("Check the token's access to {target}.", target=cred.target)
     return ""
 
 
@@ -237,9 +240,11 @@ class CredentialHealth:
         interval_seconds: float = 900.0,
         recheck_gap_seconds: float = 60.0,
         tz: tzinfo | None = None,
+        language: Callable[[], str] = lambda: ENGLISH,
     ) -> None:
         self._credentials_fn = credentials_fn
         self._send_line = send_line
+        self._language = language  # the Telegram lines' (global.yaml's telegram.language)
         self._now = now
         self._interval = interval_seconds
         self._recheck_gap = timedelta(seconds=recheck_gap_seconds)
@@ -333,38 +338,42 @@ class CredentialHealth:
         state, expires_at = classify(cred, result, now)
         memory = self._memory.get(cred.key)
         since = memory.status.since if memory is not None and memory.status.state == state else now
+        with telegram_language(ENGLISH):  # the dashboard's, whichever task asked for the check
+            fix = fix_text(cred, state, result.reason)
         status = CredentialStatus(
             cred.key, cred.kind, cred.provider, cred.label, cred.target, cred.env_var, cred.field,
-            state=state, reason=result.reason, fix=fix_text(cred, state, result.reason),
+            state=state, reason=result.reason, fix=fix,
             http_status=result.extra.get("status"),
             since=since, checked_at=now, expires_at=expires_at,
         )
         if memory is None:
             memory = self._memory[cred.key] = _Memory(status)
         memory.status = status
-        for line in self._lines(cred, status, memory, now):
-            await self._send(line)
+        with telegram_language(self._language()):
+            for line in self._lines(cred, status, memory, now):
+                await self._send(line)
         return status
 
     def _lines(
         self, cred: Credential, status: CredentialStatus, memory: _Memory, now: datetime,
     ) -> list[str]:
-        """Telegram lines for this result; updates the memory they depend on."""
+        """Telegram lines for this result, in the current language; updates the memory they depend on."""
         previous = memory.previous
         if status.state not in ("unknown", "unreachable"):
             memory.previous = status.state
         if cred.kind == "telegram":
             return []
         lines = []
+        label = tr(cred.label)  # a name ("GitHub acme/app"), or the login's, which the catalogue holds
         if status.state in _FAILING and previous not in _FAILING:
+            fix = fix_text(cred, status.state, status.reason)  # status.fix is the dashboard's, in English
             if status.state == "invalid":
-                lines.append(f"⚠️ {cred.label}: invalid or expired. {status.fix}")
+                lines.append(tr("⚠️ {label}: invalid or expired. {fix}", label=label, fix=fix))
             else:
-                lines.append(
-                    f"⚠️ {cred.label}: no access (HTTP {status.http_status}). {status.fix}"
-                )
+                lines.append(tr("⚠️ {label}: no access (HTTP {status}). {fix}", label=label,
+                                status=status.http_status, fix=fix))
         elif status.state in ("ok", "expiring") and previous in _FAILING:
-            lines.append(f"✅ {cred.label}: working again.")
+            lines.append(tr("✅ {label}: working again.", label=label))
         if cred.kind == "claude_login":
             warning = self._expiry_warning(memory, status.expires_at, now)
             if warning:
@@ -388,7 +397,7 @@ class CredentialHealth:
         else:
             return None
         when = expires_at.astimezone(self._tz).strftime("%Y-%m-%d %H:%M")
-        return f"⏳ The claude login on the host expires {when}. {_RELOGIN_FIX}"
+        return tr("⏳ The claude login on the host expires {when}. {fix}", when=when, fix=tr(_RELOGIN_FIX))
 
     async def _send(self, line: str) -> None:
         if self._send_line is None:

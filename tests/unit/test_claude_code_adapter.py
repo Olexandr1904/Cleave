@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import sys
 import time
 from datetime import datetime, timezone
 from unittest.mock import AsyncMock, patch, MagicMock
@@ -16,6 +17,7 @@ from integrations.llm.claude_code_adapter import (
     IDLE_STALL_SECONDS,
     ClaudeCodeAdapter,
     QuotaExhaustedError,
+    _drain_stream_json,
     _post_result_watchdog,
     _ProgressState,
 )
@@ -661,3 +663,30 @@ async def test_resume_falls_back_by_default(monkeypatch):
     adapter, calls = adapter_with_run_cli(monkeypatch, [RuntimeError("No conversation found"), OK])
     await adapter.execute_in_workspace("p", "/tmp", session_id="s", resume=True)
     assert [c.get("resume", False) for c in calls] == [True, False]
+_RESULT_LINE = json.dumps({"type": "result", "subtype": "success", "is_error": False, "result": "DONE",
+                           "num_turns": 2, "total_cost_usd": 0.0})
+
+
+class TestLongStdoutLines:
+    """A stream-json line can be far longer than asyncio's 64 KiB default: a Read of a long file comes back as one
+    line (a 756-line document was about 86 KB). The reader must keep reading after it."""
+
+    async def test_events_after_a_100_kb_line_are_read(self, tmp_path):
+        big = json.dumps({"type": "user", "message": {"role": "user", "content": [
+            {"type": "tool_result", "tool_use_id": "t1", "content": "x" * 100_000}]}})
+        fake = tmp_path / "claude"
+        fake.write_text(f"#!{sys.executable}\nimport sys\nsys.stdin.read()\nprint({big!r})\nprint({_RESULT_LINE!r})\n")
+        fake.chmod(0o755)
+        with patch("integrations.llm.claude_code_adapter.shutil.which", return_value=str(fake)):
+            adapter = ClaudeCodeAdapter()
+        response = await asyncio.wait_for(
+            adapter.execute_in_workspace(prompt="p", cwd=str(tmp_path), timeout=30), timeout=60)
+        assert response.content == "DONE"
+
+    async def test_a_line_over_the_reader_limit_is_skipped_not_fatal(self):
+        reader = asyncio.StreamReader(limit=1024)
+        reader.feed_data(b"x" * 5000 + b"\n" + _RESULT_LINE.encode() + b"\n")
+        reader.feed_eof()
+        progress = _ProgressState()
+        await asyncio.wait_for(_drain_stream_json(reader, progress, None, None), timeout=5)
+        assert (progress.final_event or {}).get("result") == "DONE"

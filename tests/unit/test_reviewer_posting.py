@@ -857,7 +857,7 @@ async def test_report_copy_problems_refused(tmp_path):
 
 class BusyClone(ReviewClone):
     @asynccontextmanager
-    async def reader(self, *, wait=600.0, step=2.0):
+    async def reader(self, *, wait=600.0):
         raise CloneError("the review clone is in use; try again in a minute")
         yield
 
@@ -867,27 +867,6 @@ async def test_clone_in_use_refused(tmp_path):
     assert await rig.post() == PostOutcome(
         "refused", "Not posted on #1712: the review clone is in use; try again in a minute.")
     assert rig.poster.calls == [] and rig.posts() == []
-
-
-class ChangingClone(ReviewClone):
-    """In a job's session phase whose git files change while the dry run runs."""
-
-    def __init__(self, *args):
-        super().__init__(*args)
-        self.changed = []
-
-    def changed_git_files(self):
-        return self.changed
-
-
-async def test_git_config_changed_before_confirm_refused(tmp_path):
-    clone = ChangingClone(tmp_path / "clone", "file:///nowhere", "develop", "ghp_not_real")
-    rig = Rig(tmp_path, clone=clone)
-    rig.poster.on_dry = lambda: setattr(clone, "changed", [clone.path / ".git" / "config"])
-    assert await rig.post() == PostOutcome(
-        "refused", "Not posted on #1712: the review session changed the clone's git config;"
-                   " posting waits until the job ends.")
-    assert rig.confirms() == [] and rig.posts() == []
 
 
 @pytest.mark.parametrize("where", ["confirm", "approve"])
@@ -1021,6 +1000,23 @@ def test_check_dry_run_pure():
     two = check_dry_run(parse_review_dry_run(TWO), parse_report(REPORT, HEAD), (1, 2, 5), "APPROVE", HEAD, ALLOWED)
     assert two.batches == ((1, 5), (2,))
     assert EVENT_STATE == {"APPROVE": "APPROVED", "REQUEST_CHANGES": "CHANGES_REQUESTED", "COMMENT": "COMMENTED"}
+
+
+def test_a_pre_existing_items_ticket_line_is_never_posted():
+    """The tool leaves an item's `**Ticket:**` line out of its comment, as the spec has it (deploy plan Task 14);
+    the rest of the item's text is still required."""
+    report = parse_report(REPORT.replace("**Ticket:** ACME-99\n", "**Ticket:** ACME-99\nThe cursor is never closed.\n"),
+                          HEAD)
+    comment = {"path": "app/src/main/LegacySync.kt", "line": 300, "side": "RIGHT",
+               "body": "**Cursor leak**\n\nThe cursor is never closed."}
+    text = (f"Event  : COMMENT\nSummary: yes\nInline : 1 comment(s)\n  # 6 app/src/main/LegacySync.kt:300  - Cursor leak\n"
+            f"HEAD   : {HEAD}\nPosting 1 comment(s) in 1 review(s)\n--- DRY RUN batch 1/1 ---\n"
+            + json.dumps({"commit_id": HEAD, "event": "COMMENT", "comments": [comment], "body": SUMMARY}) + "\n")
+    plan = check_dry_run(parse_review_dry_run(text), report, (6,), "COMMENT", HEAD, ALLOWED)
+    assert isinstance(plan, DryRunPlan) and plan.inline == (6,)
+    other = parse_review_dry_run(text.replace("never closed", "closed twice"))
+    assert check_dry_run(other, report, (6,), "COMMENT", HEAD, ALLOWED) == (
+        "the comment on app/src/main/LegacySync.kt:300 matches no named number")
 
 
 def check(text, report=REPORT, **kwargs):

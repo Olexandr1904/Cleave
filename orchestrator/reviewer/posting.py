@@ -67,27 +67,27 @@ from orchestrator.reviewer.report_edit import (
     body_problems,
     drop_summary,
     ensure_base,
-    split_at_file_line,
     tick,
     write_atomic,
 )
 from orchestrator.reviewer.service import RepoContext, _where, utcnow
 from orchestrator.reviewer.store import ReviewerStore
+from orchestrator.tg_i18n import N_, detail, tr
 
 logger = logging.getLogger(__name__)
 
 EVENT_STATE = {"APPROVE": "APPROVED", "REQUEST_CHANGES": "CHANGES_REQUESTED", "COMMENT": "COMMENTED"}
 _MAX_PATH = 200  # characters of a payload comment's path shown in a reply
 _FINDINGS = "### Findings without a diff anchor"  # where a payload body's Summary ends and its findings start
-_CHANGED = "the review session changed the clone's git config; posting waits until the job ends"
-_CHANGED_AFTER = "the review session changed the clone's git config, so the threads command was not run"
-_REPORT_CHANGED = "The report changed while posting (an edit landed): look at it again and reply. Nothing was done."
+# The texts below and the reasons marked N_ are kept in English (a Post's error) and translated where Telegram gets
+# them (lines.detail, tr).
+_REPORT_CHANGED = N_("The report changed while posting (an edit landed): look at it again and reply. Nothing was done.")
 _PREPARED_THREADS = "threads.prepared.json"  # Prepare's threads snapshot, kept in a re-check's copy by the runner
-_NO_SNAPSHOT = "Prepare's threads snapshot is not in this job's copy: nothing posted."
+_NO_SNAPSHOT = N_("Prepare's threads snapshot is not in this job's copy: nothing posted.")
 _PLAN_KEYS = ("n", "thread_id", "comment_id", "review_id", "body", "resolve")  # what the written plan keeps
 _RESULT_STEP = {"replied": "reply", "commented": "comment", "resolved": "resolve"}  # a confirm result's step
 _STEP_ORDER = ("reply", "resolve", "comment")
-_RESOLVED = " · resolved (reply not seen on GitHub: resolved threads are not listed)"
+_RESOLVED = N_(" · resolved (reply not seen on GitHub: resolved threads are not listed)")
 _T = TypeVar("_T")
 
 
@@ -250,13 +250,14 @@ def _not_postable(entry: dict, threads: list[dict], bodies: list[dict], me: str)
     return None
 
 
-def _check_steps(steps: list[dict], entries: list[dict], threads: dict,
-                 allowed: tuple[str, ...]) -> dict[int, list[str]] | str:
+def _check_steps(steps: list[dict], entries: list[dict], threads: dict, allowed: tuple[str, ...],
+                 pr_url: str) -> dict[int, list[str]] | str:
     """The steps the confirm run takes, by entry number, or why the dry run does not post exactly the named
     entries: a thread entry gets a reply (and a resolve when its `resolve` is true), a review entry a comment, and
     a named entry with no step is already posted. A resolve alone passes here: whether its reply is in the thread
-    is GitHub's to say, right before the confirm run. A reply or a comment carries its entry's text, a resolve
-    none; each step names its entry's thread (or path) or review body; every text passes the body check."""
+    is GitHub's to say, right before the confirm run. A reply carries its entry's text, a comment the same after a
+    line naming the review it answers (`_shown_text`); a resolve posts none, and shows none or its entry's text.
+    Each step names its entry's thread (or path) or review body; every text passes the body check."""
     by_n = {entry["n"]: entry for entry in entries}
     planned: dict[int, list[str]] = {}
     for step in steps:
@@ -267,9 +268,9 @@ def _check_steps(steps: list[dict], entries: list[dict], threads: dict,
     for step in steps:
         entry, what, body = by_n[step["n"]], f"the {step['step']} for #{step['n']}", step.get("body", "")
         if step["step"] == "resolve":
-            if _words(body):
+            if _words(body) not in ("", _words(entry["body"])):
                 return f"{what} carries a text"
-        elif _words(body) != _words(entry["body"]):
+        elif _words(body) != _words(_shown_text(step["step"], entry, threads, pr_url)):
             return f"{what} is not its planned text"
         if not _aims_at(step["target"], entry, threads):
             return f"{what} is aimed at {step['target'][:80]}"
@@ -325,14 +326,14 @@ class Posting:
 
     async def _post_review(self, ctx: RepoContext, job: Job, cmd: ReplyCommand) -> PostOutcome:
         if cmd.action != "post":  # the caller routes by action; this is the module that posts
-            raise _Refused("Not a post command. Nothing was done.")
+            raise _Refused(tr("Not a post command. Nothing was done."))
         # 1. The job as it is now; me; the named numbers checked again, since an identical post may have landed
         # after the reply was checked.
         job = self._current(job.id)
         number, head = job.number, job.head_sha
         me = self._store.repo_state(job.scope).me
         if not me:
-            raise _Refused("Waiting for the first poll: nothing posted.")
+            raise _Refused(tr("Waiting for the first poll: nothing posted."))
         run = self._store.run(job.id)
         report = Report.from_dict(run.report)
         posted = self._store.posted_numbers(job, report)
@@ -363,7 +364,7 @@ class Posting:
         except ReportError as e:
             raise _Refused(not_posted_line(number, str(e))) from None
         except FileNotFoundError:
-            raise _Refused(not_posted_line(number, "the job's report file is missing")) from None
+            raise _Refused(not_posted_line(number, N_("the job's report file is missing"))) from None
         text = base.read_bytes().decode("utf-8")
         self._refuse_changed(job, text, items, cmd.numbers)
         ticked = tick(text, set(cmd.numbers))
@@ -387,8 +388,6 @@ class Posting:
             before_reviews = await self._read(number, ctx.forge.reviews(number))
             before = {r.id for r in before_reviews}
             self._refuse_second_approve(job, me, cmd, before_reviews)
-            if ctx.clone.changed_git_files():  # the lease checked them on entry; a session may have since
-                raise _Refused(not_posted_line(number, _CHANGED))
             self._current(job.id)
             # An edit may have landed during the dry run: the text the operator now has is not the one checked.
             self._refuse_changed(job, base.read_bytes().decode("utf-8"), items, cmd.numbers)
@@ -553,14 +552,14 @@ class Posting:
 
     async def _post_replies(self, ctx: RepoContext, job: Job, cmd: ReplyCommand) -> PostOutcome:
         if cmd.action != "post_replies":  # the caller routes by action; this is the module that posts
-            raise _Refused("Not a post command. Nothing was done.")
+            raise _Refused(tr("Not a post command. Nothing was done."))
         # 1. The job as it is now; me; the named numbers checked again, since an identical post may have landed
         # after the reply was checked.
         job = self._current(job.id)
         number, head = job.number, job.head_sha
         me = self._store.repo_state(job.scope).me
         if not me:
-            raise _Refused("Waiting for the first poll: nothing posted.")
+            raise _Refused(tr("Waiting for the first poll: nothing posted."))
         run = self._store.run(job.id)
         checked = check_command(cmd, job.kind, None, run.replies, self._store.posted_numbers(job, None),
                                 set(run.drafted))
@@ -576,7 +575,7 @@ class Posting:
             raise _Refused(not_posted_line(number, f"Prepare's threads snapshot is of {other}"))
         valid, invalid = validate_plan(run.replies, prepared, me)
         if (bad := next((n for n in cmd.numbers if n in invalid), None)) is not None:
-            raise _Refused(f"#{bad} cannot be posted: {invalid[bad]}. Nothing was done.")
+            raise _Refused(tr("#{n} cannot be posted: {why}. Nothing was done.", n=bad, why=detail(invalid[bad])))
         entries = [valid[n] for n in cmd.numbers]
         for entry in entries:
             if problems := body_problems(entry["body"], ctx.allowed_links):
@@ -593,10 +592,8 @@ class Posting:
                 await lease.enter_async_context(ctx.clone.reader(wait=self._reader_wait))
             except CloneError as e:
                 raise _Refused(not_posted_line(number, str(e))) from None
-            _unchanged(ctx, number)  # before every command that runs with the token
             planned = await self._replies_dry_run(ctx, values, number, entries, prepared)
             pr = await self._pr_at_head(ctx, number, head)
-            _unchanged(ctx, number)
             before = await self._threads_before(ctx, number, head)
             # An entry the dry run leaves out is already posted only when GitHub agrees.
             by_n = {entry["n"]: entry for entry in entries}
@@ -611,7 +608,6 @@ class Posting:
             for n in sorted(planned):  # GitHub, right before the confirm run, must still allow each step
                 if (refused := _not_postable_now(by_n[n], planned[n], before, prepared, me, number)) is not None:
                     raise _Refused(refused)
-            _unchanged(ctx, number)
             self._current(job.id)
             post = self._start(job, dataclasses.replace(cmd, event=""), "replies")
             result = await ctx.poster.replies(ctx.clone.path, values, confirm=True)
@@ -632,7 +628,8 @@ class Posting:
             steps = parse_replies_steps(result.stdout)
         except PosterOutputError as e:
             raise _Refused(not_posted_line(number, f"the dry run's output was not understood: {e}")) from None
-        planned = _check_steps(steps, entries, prepared, ctx.allowed_links)
+        planned = _check_steps(steps, entries, prepared, ctx.allowed_links,
+                               f"https://github.com/{ctx.readiness.repo}/pull/{number}")
         if isinstance(planned, str):
             raise _Refused(not_posted_line(number, planned))
         return planned
@@ -675,9 +672,6 @@ class Posting:
         for read in range(self._verify_reads):
             if read:
                 await self._sleep(self._verify_wait)
-            if ctx.clone.changed_git_files():
-                failure = _CHANGED_AFTER
-                break
             try:
                 snapshot = await ctx.readiness.threads(ctx.clone.path, number)
             except ReadinessError as e:
@@ -705,7 +699,7 @@ class Posting:
             stamp = self._end(post, "posted", **fields)
             self._mark_posted(post, stamp)
             text = replies_posted_line(number, [_landed_text(n, by_n[n], planned[n], links) if n in planned
-                                                else f"{n}: already posted" for n in numbers])
+                                                else tr("{n}: already posted", n=n) for n in numbers])
             return PostOutcome("posted", text + _held_anyway(result, unknown))
         problems = [f"#{n}: " + ", ".join(_unseen_text(by_n[n], kind, after, known) for kind in kinds)
                     for n, kinds in missing.items()]
@@ -729,7 +723,7 @@ class Posting:
             self._mark_posted(post, stamp)
         landed = {n for n, _ in seen}
         results_text = [_landed_text(n, by_n[n], [kind for kind in planned[n] if (n, kind) in seen], links)
-                        if n in landed else f"{n}: already posted"
+                        if n in landed else tr("{n}: already posted", n=n)
                         for n in numbers if n in landed or (n not in planned and n not in left_out)]
         by_hand = [_by_hand_text(by_n[n], kinds, known) for n, kinds in missing.items() if n in landed]
         rest = [n for n in missing if n not in landed]
@@ -783,7 +777,7 @@ class Posting:
         except ReportError as e:
             raise _Refused(not_posted_line(job.number, f"the report is unreadable: {e}")) from None
         if any(now.get(n) != items[n] for n in numbers):
-            raise _Refused(_REPORT_CHANGED)
+            raise _Refused(tr(_REPORT_CHANGED))
 
     def _refuse_second_approve(self, job: Job, me: str, cmd: ReplyCommand, reviews: list[ForgeReview]) -> None:
         """An APPROVE at a head already approved: by a review of mine GitHub lists there (Cleave's own included),
@@ -831,8 +825,8 @@ class Posting:
         logger.warning("Posting on %s #%d stopped: %s", job.scope, job.number, _where(e))
         post = self._post
         if post is None:
-            return PostOutcome(
-                "failed", f"Posting stopped on an internal error ({name}); check the PR before posting again.")
+            return PostOutcome("failed", tr(
+                "Posting stopped on an internal error ({name}); check the PR before posting again.", name=name))
         if post.state == "posting":
             try:
                 self._end(post, "unverified", error=f"internal error ({name})")
@@ -864,11 +858,11 @@ def _prepared_threads(job_dir: str, number: int) -> dict:
     """Prepare's threads snapshot, which the runner keeps in the job copy before the session."""
     path = Path(job_dir) / _PREPARED_THREADS
     if not job_dir or path.is_symlink() or not path.is_file():
-        raise _Refused(_NO_SNAPSHOT)
+        raise _Refused(tr(_NO_SNAPSHOT))
     try:
         return parse_threads_snapshot(path.read_text(encoding="utf-8"))
     except (OSError, UnicodeDecodeError, ReadinessError):
-        raise _Refused(not_posted_line(number, "Prepare's threads snapshot in this job's copy is unreadable")) from None
+        raise _Refused(not_posted_line(number, N_("Prepare's threads snapshot in this job's copy is unreadable"))) from None
 
 
 def _write_plan(job_dir: Path, head9: str, entries: list[dict], number: int) -> Path:
@@ -876,7 +870,7 @@ def _write_plan(job_dir: Path, head9: str, entries: list[dict], number: int) -> 
     keeps its own ledger beside it."""
     posting = job_dir / "posting"
     if posting.is_symlink() or (posting.exists() and not posting.is_dir()):
-        raise _Refused(not_posted_line(number, "the job copy's posting directory is not Cleave's"))
+        raise _Refused(not_posted_line(number, N_("the job copy's posting directory is not Cleave's")))
     _make_dirs(posting)
     path = posting / f"replies_{head9}.json"
     plan = [{key: entry[key] for key in _PLAN_KEYS if key in entry} for entry in entries]
@@ -884,17 +878,21 @@ def _write_plan(job_dir: Path, head9: str, entries: list[dict], number: int) -> 
     return path
 
 
-def _unchanged(ctx: RepoContext, number: int) -> None:
-    """Before a command that runs with the token: the lease checked the git files on entry; a session may have
-    changed them since."""
-    if ctx.clone.changed_git_files():
-        raise _Refused(not_posted_line(number, _CHANGED))
-
-
 def _wanted_steps(entry: dict) -> list[str]:
     if "thread_id" in entry:
         return ["reply", "resolve"] if entry.get("resolve") is True else ["reply"]
     return ["comment"]
+
+
+def _shown_text(kind: str, entry: dict, threads: dict, pr_url: str) -> str:
+    """The text the replies tool posts for an entry's reply or comment: a comment first names the review body it
+    answers, `Re: [review by <author>](<PR url>#pullrequestreview-<id>)` and a blank line, its author as Prepare's
+    snapshot (`threads`) gives it."""
+    if kind != "comment":
+        return entry["body"]
+    review = _find(_listed(threads, "review_bodies"), entry["review_id"]) or {}
+    link = f"{pr_url}#pullrequestreview-{entry['review_id']}"
+    return f"Re: [review by {review.get('author')}]({link})\n\n{entry['body']}"
 
 
 def _allowed_steps(entry: dict) -> list[list[str]]:
@@ -985,23 +983,26 @@ def _seen(entry: dict, kind: str, before: dict, after: dict, me: str, reported: 
 
 
 def _landed_text(n: int, entry: dict, kinds: list[str], links: dict[int, str]) -> str:
-    """What landed of an entry: `kinds`, its steps GitHub shows."""
+    """What landed of an entry: `kinds`, its steps GitHub shows (a Telegram line)."""
     if "thread_id" not in entry:
-        return f"{n}: answered {links[n]}"
+        return tr("{n}: answered {url}", n=n, url=links[n])
     if "reply" not in kinds:
-        return f"{n}: resolved"
-    return f"{n}: replied {links[n]}" + (_RESOLVED if "resolve" in kinds else "")
+        return tr("{n}: resolved", n=n)
+    return tr("{n}: replied {url}", n=n, url=links[n]) + (tr(_RESOLVED) if "resolve" in kinds else "")
 
 
 def _by_hand_text(entry: dict, missing: list[str], known: bool) -> str:
     """What only the operator can finish of an entry that partly landed (one of its two steps). `known`: whether
-    the tool's report was read."""
+    the tool's report was read. A Telegram line."""
     thread_id = _shown(entry["thread_id"])
     if missing == ["resolve"]:
-        return f"#{entry['n']}: your reply is in thread {thread_id}; resolve it on GitHub yourself."
-    unseen = "the tool reports no reply in it" if known else "the reply in it is not seen"
-    return (f"#{entry['n']}: thread {thread_id} was resolved, but {unseen}; reply on GitHub yourself if it is"
-            " missing.")
+        return tr("#{n}: your reply is in thread {thread}; resolve it on GitHub yourself.", n=entry["n"],
+                  thread=thread_id)
+    if known:
+        return tr("#{n}: thread {thread} was resolved, but the tool reports no reply in it; reply on GitHub yourself"
+                  " if it is missing.", n=entry["n"], thread=thread_id)
+    return tr("#{n}: thread {thread} was resolved, but the reply in it is not seen; reply on GitHub yourself if it"
+              " is missing.", n=entry["n"], thread=thread_id)
 
 
 def _unseen_text(entry: dict, kind: str, after: dict, known: bool) -> str:
@@ -1054,9 +1055,10 @@ def _body_parts(body: str) -> tuple[str, str]:
 
 
 def _item_words(item: ReportItem) -> str:
-    """The item's own text, its first `**File:**` line left out, as `_words`."""
-    before, after = split_at_file_line(item.body)
-    return _words("\n".join(before + after))
+    """The item's own text as the posting tool posts it, as `_words`: every line that starts (after its indent)
+    with `**File:**` or `**Ticket:**` left out (spec: a Ticket line is never posted)."""
+    return _words("\n".join(line for line in item.body.split("\n")
+                            if not line.lstrip().startswith(("**File:**", "**Ticket:**"))))
 
 
 def _words(text: str) -> str:
@@ -1092,9 +1094,10 @@ def _held_anyway(result: CommandResult, unknown: str) -> str:
     """The lines a post GitHub shows in full adds about a confirm run that did not end well."""
     text = ""
     if result.returncode != 0:
-        text += f"\nThe tool exited {result.returncode}, but GitHub shows everything posted."
+        text += "\n" + tr("The tool exited {code}, but GitHub shows everything posted.", code=result.returncode)
     if unknown and not result.timed_out:
-        text += f"\nThe tool's output was not understood ({unknown}), but GitHub shows everything posted."
+        text += "\n" + tr("The tool's output was not understood ({unknown}), but GitHub shows everything posted.",
+                          unknown=unknown)
     return text
 
 
@@ -1103,7 +1106,7 @@ def _nothing_left(number: int, head: str, cmd: ReplyCommand) -> str:
     there) can still go without a body."""
     text = nothing_left_line(number, head)
     if cmd.event == "APPROVE" and not cmd.numbers:
-        text += ' Reply "approve no summary" to approve without a body.'
+        text += " " + tr('Reply "approve no summary" to approve without a body.')
     return text
 
 

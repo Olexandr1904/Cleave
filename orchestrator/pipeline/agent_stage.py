@@ -28,6 +28,7 @@ from orchestrator.git_ops import git_diff_files_vs_base, git_head_sha
 from orchestrator.agent_failure_summarizer import summarize_agent_failure
 from orchestrator.fake_test_detector import detect_source_reading_tests
 from orchestrator.quality_gates import GateResult, failing_hard_gates, run_gates
+from orchestrator.tg_i18n import tr
 from orchestrator.workflow_router import WorkflowDefinition, get_next_stage
 from workspace.workspace import Stage, Workspace
 
@@ -402,12 +403,12 @@ async def handle_agent_stage(
         output_lower = (result.output or "").lower()
         warnings = []
         if "sdk" in output_lower and "not found" in output_lower:
-            warnings.append("Android SDK not installed — build not verified")
+            warnings.append(tr("Android SDK not installed — build not verified"))
         if "java" in output_lower and ("not found" in output_lower or "command not found" in output_lower):
-            warnings.append("JDK not installed — tests not run")
+            warnings.append(tr("JDK not installed — tests not run"))
         if "hold" in output_lower or "could not" in output_lower:
             if not warnings:
-                warnings.append("Quality gates could not run locally")
+                warnings.append(tr("Quality gates could not run locally"))
         if warnings:
             chat_id = get_chat_id(workspace)
             if chat_id:
@@ -415,9 +416,9 @@ async def handle_agent_stage(
                 hdr = tg_format.tg_header("⚠️", state.company_id, state.ticket_id, title)
                 await notifier.send_message(chat_id, (
                     f"{hdr}\n"
-                    f"QA passed but with warnings:\n"
+                    + tr("QA passed but with warnings:") + "\n"
                     + "\n".join(f"  • {w}" for w in warnings)
-                    + f"\n\nCI on GitHub will be the authoritative gate."
+                    + "\n\n" + tr("CI on GitHub will be the authoritative gate.")
                 ))
 
     next_stage = get_next_stage(stage_id, workflow, outcome)

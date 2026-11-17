@@ -223,3 +223,9 @@ def test_failure_summarizer_overrides(tmp_path):
     assert cfg.failure_summarizer.enabled is False
     assert cfg.failure_summarizer.model == "claude-haiku-4-5-20251001"
     assert cfg.failure_summarizer.timeout_seconds == 10
+
+
+def test_build_memory_caps_are_off_unless_asked(tmp_path):
+    # Caps rewrite gradle.properties in the gradle user home: a config that does not ask for them leaves it alone.
+    (tmp_path / "global.yaml").write_text("logging:\n  level: DEBUG\n")
+    assert load_global_config(str(tmp_path)).defaults.cap_build_memory is False

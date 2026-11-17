@@ -531,6 +531,11 @@ const renderers = {
     const e = state.errors;
     let hasGlobal = false;
     try { const r = await (await fetch('/api/projects/telegram-globals')).json(); hasGlobal = r.has_global; } catch {}
+    // The global Telegram language: the project follows it unless another one is picked here.
+    let globalLanguage = 'en';
+    try { globalLanguage = (await (await fetch('/api/settings/telegram-language')).json()).global || 'en'; } catch {}
+    state._globalLanguage = globalLanguage;
+    const language = d.telegram_language || globalLanguage;
     const tgRequired = !hasGlobal;
     state._tgRequired = tgRequired;
     const tgHint = hasGlobal
@@ -550,12 +555,23 @@ const renderers = {
         ${e.telegram_chat_id ? `<span class="error">${e.telegram_chat_id}</span>` : ''}
       </div>
       <div class="form-field">
+        <label>Telegram language</label>
+        <select id="f-ex-tg-language">
+          <option value="en"${language === 'en' ? ' selected' : ''}>English</option>
+          <option value="uk"${language === 'uk' ? ' selected' : ''}>Українська</option>
+        </select>
+        <small class="hint">The language the bot writes in Telegram for this project; left as it is, the project follows the global setting. GitHub stays in English. Changeable later in Settings.</small>
+      </div>
+      <div class="form-field">
         <button id="f-tg-check" class="btn-check" type="button">Test Telegram</button>
         <div id="f-tg-check-result"></div>
       </div>
     `;
     body.querySelector('#f-ex-tg-token').oninput = (ev) => { d.telegram_bot_token = ev.target.value || null; state.validated.telegram = false; };
     body.querySelector('#f-ex-tg-chat').oninput = (ev) => { d.telegram_chat_id = ev.target.value || null; state.validated.telegram = false; };
+    body.querySelector('#f-ex-tg-language').onchange = (ev) => {
+      d.telegram_language = ev.target.value === globalLanguage ? null : ev.target.value;
+    };
     body.querySelector('#f-tg-check').onclick = async () => {
       const btn = body.querySelector('#f-tg-check');
       const res_el = body.querySelector('#f-tg-check-result');
@@ -610,6 +626,9 @@ const renderers = {
         <tr><td>Token</td><td>•••• → ${env(vp === 'github' ? 'GITHUB_TOKEN' : 'GITLAB_TOKEN')}</td></tr>
         <tr><th colspan="2">Notifications</th></tr>
         <tr><td>Telegram</td><td>${tg}</td></tr>
+        <tr><td>Language</td><td>${d.extras.telegram_language
+          ? (d.extras.telegram_language === 'uk' ? 'Українська' : 'English')
+          : `${(state._globalLanguage || 'en') === 'uk' ? 'Українська' : 'English'} <small class="hint">(the global setting)</small>`}</td></tr>
       </table>
       <p class="hint" style="margin-top:12px;">Quality gates and advanced settings can be configured later in the project YAML.</p>
     `;

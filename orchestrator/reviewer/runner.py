@@ -1,12 +1,12 @@
-"""The job runner: takes the queued review and re-check jobs one at a time, from Prepare in the review clone
-through the model session to the job's state, its copy in the jobs directory and its Telegram message."""
+"""The job runner: runs the queued review and re-check jobs, several at once (one per PR), each from Prepare in a
+job clone of its own through the model session to the job's state, its copy in the jobs directory and its
+Telegram message."""
 from __future__ import annotations
 
 import asyncio
 import logging
 import os
 import shutil
-import tempfile
 import unicodedata
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
@@ -17,14 +17,13 @@ from typing import Any
 from config.schemas import ReviewerJobConfig
 from orchestrator.reviewer.board import TICKET_KEY
 from orchestrator.reviewer.chat import ReviewerChat
-from orchestrator.reviewer.clone import git_file_changed, guarded_git_files
+from orchestrator.reviewer.clone import ReviewClone, git_file_changed, guarded_git_files
 from orchestrator.reviewer.jobs import REVIEW_NOW_SUFFIX
 from orchestrator.reviewer.lines import (
     drift_line,
     job_deferred_line,
     job_failed_line,
     login_line,
-    worktree_left_line,
 )
 from orchestrator.reviewer.messages import (
     MESSAGE_LIMIT,
@@ -45,6 +44,7 @@ from orchestrator.reviewer.retention import sweep
 from orchestrator.reviewer.service import RepoContext, _where, utcnow
 from orchestrator.reviewer.session import SessionOutcome, recheck_prompt, review_prompt, run_session
 from orchestrator.reviewer.store import ReviewerStore
+from orchestrator.tg_i18n import ENGLISH, N_, current_language, fill, marked_texts, telegram_language
 
 logger = logging.getLogger(__name__)
 
@@ -53,7 +53,8 @@ _QUOTA_RETRY = timedelta(hours=1)  # when the CLI gives no reset time, or one al
 _NEWER_STATES = ("queued", "running", "deferred", "done", "posted")
 _PENDING_STATES = ("queued", "deferred", "running")
 _PREPARE_STATES = {"failed": "failed", "superseded": "superseded", "cancelled": "cancelled", "requeue": "queued"}
-_CONFIG_CHANGED = "the session changed the review clone's git config"
+# A job's reasons are stored in English; N_ lists them for the Telegram lines that name them (lines.detail).
+_CONFIG_CHANGED = N_("the session changed its job clone's git config")
 # The third usage-limit or login deferral of a job fails it: session output that fakes either cannot loop.
 _MAX_DEFERRALS = 3
 _DEFERRED_TOO_OFTEN = f"deferred {_MAX_DEFERRALS} times (usage limit or login)"
@@ -80,6 +81,17 @@ class RunnerConfig:
     secret_paths: list[Path]
     jobs: dict[str, ReviewerJobConfig]
     ledgers_dir: Path | None = None  # None: no retention sweep
+    work_dir: Path | None = None  # the job clones' root; None: `work` beside jobs_dir
+    max_parallel: int = 6  # heavy jobs running at once
+    min_free_bytes: int = 0  # no job starts while the work dir's volume has less free
+
+    @property
+    def work_root(self) -> Path:
+        return self.work_dir or self.jobs_dir.parent / "work"
+
+    def job_root(self, project_id: str, repo_id: str, job_id: str) -> Path:
+        """The directory a job owns while it runs: its job clone and the clone's worktree."""
+        return self.work_root / project_id / repo_id / job_id
 
 
 def settle(job: Job, row: BoardRow | None, jobs: list[Job], skipped: bool = False) -> tuple[str, str]:
@@ -87,14 +99,14 @@ def settle(job: Job, row: BoardRow | None, jobs: list[Job], skipped: bool = Fals
     `skipped`: the operator skipped the job's head after it was queued. A review the operator asked for
     (Review now) needs no review turn."""
     if row is None:
-        return "stale", "PR gone"
+        return "stale", N_("PR gone")
     if row.head_sha != job.head_sha:
         return "superseded", "new head"
     if skipped:
         return "skipped", "skipped by operator"
     review_now = job.kind == "review" and job.key.endswith(REVIEW_NOW_SUFFIX)
     if job.kind not in row.my_actions and not review_now:
-        return "stale", "turn gone"
+        return "stale", N_("turn gone")
     if any(j.kind == job.kind and j.state in _NEWER_STATES for j in _created_after(job, jobs)):
         return "superseded", "newer job"
     return "done", ""
@@ -159,26 +171,6 @@ def _resend_due(run: JobRun, now: datetime) -> bool:
     return now >= datetime.fromisoformat(run.last_attempt_at) + _RESEND_WAITS[run.send_attempts]
 
 
-def _restore(path: Path, saved: bytes | None) -> bool:
-    """Whether the file no longer held `saved`; then it holds it again (None: it is removed), written to a new
-    temp file beside it and renamed over it, so neither a symlink in its place nor anything planted beside it
-    is followed."""
-    if not git_file_changed(path, saved):
-        return False
-    if saved is None:
-        path.unlink()
-        return True
-    fd, spare = tempfile.mkstemp(dir=path.parent, prefix=f".{path.name}.")
-    try:
-        with os.fdopen(fd, "wb") as f:
-            f.write(saved)
-        os.replace(spare, path)
-    except BaseException:
-        Path(spare).unlink(missing_ok=True)
-        raise
-    return True
-
-
 def _message(job: Job, run: JobRun) -> str:
     tg_lines = {int(n): line for n, line in run.tg_lines.items()}
     if job.kind == "review":
@@ -189,9 +181,9 @@ def _message(job: Job, run: JobRun) -> str:
 
 
 class JobRunner:
-    """Runs one heavy job at a time. It holds the review clone's lock for a job's whole run, Prepare through
-    cleanup, and runs the session in the clone's session phase: the one part of a job in which a poll reads
-    the clone (see ReviewClone)."""
+    """Runs heavy jobs as tasks, up to `max_parallel` at once and one per PR. Each job runs in a job clone of its
+    own under `work_root`, removed when it ends; a job holds the review clone's lock only for Prepare's git there
+    (see prepare)."""
 
     def __init__(
         self,
@@ -209,8 +201,11 @@ class JobRunner:
         now: Callable[[], datetime] = utcnow,
         environ: Mapping[str, str] = os.environ,
         idle_seconds: float = 30,
+        language_of: Callable[[str], str] = lambda project_id: ENGLISH,
     ) -> None:
         self._contexts = {ctx.scope: ctx for ctx in repos}
+        # The Telegram language of a project id: a job's lines and message take its repo's project's.
+        self._language_of = language_of
         self._store = store
         self._switches = switches
         self._credential_failing = credential_failing
@@ -228,7 +223,11 @@ class JobRunner:
         # The end of the current usage-limit wait (no job starts before it), and whether the streak's deferred
         # line is out; both reset once a session has ended otherwise.
         self._quota_until: datetime | None = None
+        self._quota_since: datetime | None = None  # when the current usage-limit wait began
         self._quota_line_sent = False
+        self._in_flight: dict[str, tuple[Job, asyncio.Task]] = {}  # job id -> (job, its task)
+        self._wait_a_cycle: set[str] = set()  # requeued jobs: not started again before an idle wait has passed
+        self._disk_held = False  # whether the last check found too little free space
         self._swept_at: datetime | None = None  # the last retention sweep; None: due
         self._last_read: dict[str, dict[int, datetime]] = {}  # per repo: when the sweep last read each PR
 
@@ -238,38 +237,88 @@ class JobRunner:
         await self.loop(stop)
 
     async def start(self) -> None:
-        """recover() once, at start-up. Never raises."""
+        """recover() once, at start-up, then the job directories a dead process left, removed in a thread (a job
+        clone holds a whole checkout). Never raises."""
         try:
             self.recover()
         except Exception as e:
             logger.warning("Reviewer jobs not recovered: %s", _where(e))
+        try:
+            await asyncio.to_thread(self._clear_work)
+        except Exception as e:
+            logger.warning("Reviewer work directory not cleared: %s", _where(e))
 
     async def loop(self, stop: asyncio.Event) -> None:
-        """One job at a time until `stop`. Never raises (cancellation aside)."""
-        while not stop.is_set():
-            try:
-                await self.resend_unsent()
-                job = self.next_job()
-                if job is None:
-                    await self._sweep()
-                else:
-                    await self.run_job(job)
-                    # A requeued job (forge token failing) waits a cycle: the forge gate may not have
-                    # caught up yet, and preparing it again at once would loop on the forge.
-                    if self._store.job(job.id).state != "queued":
-                        continue
-            except Exception as e:
-                logger.warning("Reviewer job cycle failed: %s", _where(e))
-            try:
-                await asyncio.wait_for(stop.wait(), timeout=self._idle)
-            except asyncio.TimeoutError:
-                pass
+        """Jobs as tasks, up to max_parallel at once, until `stop`; then it waits for the jobs in flight. Cancelled,
+        it cancels and awaits them first: no job task outlives it. Never raises (cancellation aside)."""
+        try:
+            while not stop.is_set():
+                try:
+                    await self.resend_unsent()
+                    if not self._start_jobs() and not self._in_flight:
+                        await self._sweep()
+                except Exception as e:
+                    logger.warning("Reviewer job cycle failed: %s", _where(e))
+                if await self._wait(stop):
+                    # A requeued job (forge token failing) waits a cycle: the forge gate may not have caught up
+                    # yet, and preparing it again at once would loop on the forge.
+                    self._wait_a_cycle.clear()
+            if self._in_flight:
+                await asyncio.wait([task for _, task in self._in_flight.values()])
+        finally:
+            tasks = [task for _, task in self._in_flight.values()]
+            for task in tasks:
+                task.cancel()
+            if tasks:
+                await asyncio.gather(*tasks, return_exceptions=True)
+
+    def _start_jobs(self) -> int:
+        """Start next_job() as a task while there is room; the number started."""
+        started = 0
+        while len(self._in_flight) < self._config.max_parallel and (job := self.next_job()) is not None:
+            self._in_flight[job.id] = (job, asyncio.create_task(self._run_one(job)))
+            started += 1
+        return started
+
+    async def _run_one(self, job: Job) -> None:
+        try:
+            await self.run_job(job)
+            if self._store.job(job.id).state == "queued":
+                self._wait_a_cycle.add(job.id)
+        except Exception as e:  # run_job's own handling failed: logged here, the job held for a cycle
+            logger.warning("Reviewer job %s (%s #%s) failed: %s", job.id, job.scope, job.number, _where(e))
+            self._wait_a_cycle.add(job.id)
+        finally:
+            self._in_flight.pop(job.id, None)
+
+    async def _wait(self, stop: asyncio.Event) -> bool:
+        """Until a job in flight ends, `stop`, or the idle wait: True when the idle wait ran out."""
+        stopping = asyncio.ensure_future(stop.wait())
+        try:
+            done, _ = await asyncio.wait({stopping, *(task for _, task in self._in_flight.values())},
+                                         timeout=self._idle, return_when=asyncio.FIRST_COMPLETED)
+        finally:
+            stopping.cancel()
+        return not done
 
     def recover(self) -> None:
         """A review or re-check still running at start-up was interrupted: it fails, so plan 3's rules retry it
         once. Edit and draft jobs are not this runner's."""
         for job in self._store.jobs_in_state("running", kinds=("review", "recheck")):
-            self._change(job, "failed", "interrupted (daemon restarted)")
+            self._change(job, "failed", N_("interrupted (daemon restarted)"))
+
+    def _clear_work(self) -> None:
+        """Remove every job directory under the work root: at start-up none belongs to a running job."""
+        work = self._config.work_root
+        if work.is_dir() and not work.is_symlink():
+            for entry in work.iterdir():
+                try:
+                    if entry.is_dir() and not entry.is_symlink():
+                        shutil.rmtree(entry)
+                    else:
+                        entry.unlink()
+                except OSError as e:
+                    logger.warning("Reviewer work directory %s not removed: %s", entry, type(e).__name__)
 
     async def _sweep(self) -> None:
         """The retention sweep of every repo, when a ledgers directory is set and 24 hours have passed since the
@@ -292,7 +341,8 @@ class JobRunner:
     def next_job(self) -> Job | None:
         """The first runnable job whose repo is configured and passes the gates: reviews running there, its
         forge token and the claude login not failing, no login failure in the last 15 minutes, no usage-limit
-        wait; a re-check also waits for its PR's pending review and for the repo's recorded login."""
+        wait, enough free space for a job clone; not one in flight, nor one of a PR with a job in flight; a
+        re-check also waits for its PR's pending review and for the repo's recorded login."""
         now = self._now()
         if self._credential_failing("claude_login"):
             return None
@@ -300,7 +350,12 @@ class JobRunner:
             return None
         if self._quota_until is not None and now < self._quota_until:
             return None
+        if self._low_disk():
+            return None
+        busy = {(j.scope, j.number) for j, _ in self._in_flight.values()}
         for job in self._store.runnable_jobs(now.isoformat()):
+            if job.id in self._in_flight or job.id in self._wait_a_cycle or (job.scope, job.number) in busy:
+                continue
             ctx = self._contexts.get(job.scope)
             if (ctx is not None
                     and self._switches.is_running("reviews", ctx.project_id, ctx.repo_id)
@@ -308,6 +363,21 @@ class JobRunner:
                     and (job.kind != "recheck" or self._recheck_ready(job))):
                 return job
         return None
+
+    def _low_disk(self) -> bool:
+        """Whether the work root's volume has less free space than min_free_bytes; logged once per streak."""
+        need = self._config.min_free_bytes
+        if need <= 0:
+            return False
+        path = self._config.work_root
+        while not path.exists() and path != path.parent:
+            path = path.parent
+        free = shutil.disk_usage(path).free
+        low = free < need
+        if low and not self._disk_held:
+            logger.warning("Reviewer jobs held: %.1f GB free, under %.1f GB", free / 1024**3, need / 1024**3)
+        self._disk_held = low
+        return low
 
     def _recheck_ready(self, job: Job) -> bool:
         """A re-check runs after its PR's pending review (review first), and once a poll has recorded the
@@ -322,22 +392,24 @@ class JobRunner:
 
     async def run_job(self, job: Job) -> None:
         """Prepare, run the session, keep its output, settle the state and send the message. The job never
-        stays running: anything unexpected fails it (cancellation aside: recover() fails it then)."""
+        stays running: anything unexpected fails it (cancellation aside: recover() fails it then). Its lines and
+        message are in its repo's project's Telegram language."""
         ctx = self._contexts[job.scope]
-        try:
-            await self._run(ctx, job)
-        except PrepareError as e:
-            if e.outcome == "unavailable":
-                await self._github_unavailable(job, e.reason)
-            elif (state := _PREPARE_STATES[e.outcome]) == "failed":
-                await self._fail(job, e.reason)
-            else:
-                self._change(job, state, e.reason)
-            if e.drift:
-                await self._send_drift(ctx)
-        except Exception as e:
-            logger.warning("Reviewer job %s (%s #%s) failed: %s", job.id, job.scope, job.number, _where(e))
-            await self._fail(job, f"internal error: {type(e).__name__}")
+        with telegram_language(self._language_of(ctx.project_id)):
+            try:
+                await self._run(ctx, job)
+            except PrepareError as e:
+                if e.outcome == "unavailable":
+                    await self._github_unavailable(job, e.reason)
+                elif (state := _PREPARE_STATES[e.outcome]) == "failed":
+                    await self._fail(job, e.reason)
+                else:
+                    self._change(job, state, e.reason)
+                if e.drift:
+                    await self._send_drift(ctx)
+            except Exception as e:
+                logger.warning("Reviewer job %s (%s #%s) failed: %s", job.id, job.scope, job.number, _where(e))
+                await self._fail(job, f"internal error: {type(e).__name__}")
 
     async def _github_unavailable(self, job: Job, reason: str) -> None:
         """Queue the job again once its wait is over; its sixth time in a row fails it."""
@@ -359,6 +431,8 @@ class JobRunner:
             return
         now = self._now()
         for job, run in self._store.done_unsent():
+            if job.id in self._in_flight:  # its own task is delivering it
+                continue
             try:
                 if not (may_still_save(job, run) and _resend_due(run, now)):
                     continue
@@ -367,16 +441,20 @@ class JobRunner:
                     if state != "done":
                         self._change(job, state, reason)
                         continue
-                if not await self._deliver(job, run):
+                with telegram_language(self._language(job.scope)):
+                    delivered = await self._deliver(job, run)
+                if not delivered:
                     return
             except Exception as e:  # one bad saved run must not hold back the others, nor the jobs
                 logger.warning("Reviewer message of job %s not resent: %s", job.id, _where(e))
                 self._attempt_failed(run)  # a run that cannot be rebuilt reaches the cap, not a loop
 
     async def _run(self, ctx: RepoContext, job: Job) -> None:
-        paths = job_paths(ctx.clone.path, ctx.cfg.process, job.number, job.head_sha,
+        root = self._config.job_root(ctx.project_id, ctx.repo_id, job.id)
+        paths = job_paths(root / "clone", ctx.cfg.process, job.number, job.head_sha,
                           self._config.jobs_dir, job.id)
         previous = self._store.run(job.id) or JobRun(job.id)  # a deferred or requeued job's earlier run
+        started = self._now()
         self._change(job, "running", "")
         # The counts, notes, cost and turns are the job's, over all its runs.
         run = JobRun(job.id, started_at=self._stamp(), job_dir=str(paths.job_dir), deferrals=previous.deferrals,
@@ -384,34 +462,37 @@ class JobRunner:
                      turns=previous.turns)
         self._store.save_run(run)
         paths.job_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
-        async with ctx.clone.lock:
-            try:
-                prepared = await prepare(ctx, job, paths, store=self._store,
-                                         tracker=self._trackers.get(ctx.project_id), now=self._stamp())
-                # Prepare's snapshot, kept before the session: the session may rewrite the run directory's.
-                if _regular(threads := paths.run_dir / "threads.json"):
-                    shutil.copyfile(threads, paths.job_dir / _PREPARED_THREADS)
-                if run.requeues:  # GitHub answered: the next "unavailable" starts a new count
-                    run.requeues = 0
-                    self._store.save_run(run)
-                if prepared.drift:  # at once: prepare has stored the new hash, a later failure must not lose it
-                    await self._send_drift(ctx)
-                outcome, changed_config = await self._session(ctx, job, paths)
-            finally:
-                left = await ctx.clone.remove_worktree(paths.worktree)
-                if left:
-                    run.notes.append(left)
-                    self._store.save_run(run)
-                    await self._send(worktree_left_line(ctx.scope, job.number, paths.worktree, left),
-                                     job_id=job.id)
+        await self._remove_root(root, job, run)  # an earlier run's, if its removal failed
+        try:
+            prepared = await prepare(ctx, job, paths, store=self._store, tracker=self._trackers.get(ctx.project_id),
+                                     now=self._stamp(), job_clone_dir=root / "clone")
+            # Prepare's snapshot, kept before the session: the session may rewrite the run directory's.
+            if _regular(threads := paths.run_dir / "threads.json"):
+                shutil.copyfile(threads, paths.job_dir / _PREPARED_THREADS)
+            if run.requeues:  # GitHub answered: the next "unavailable" starts a new count
+                run.requeues = 0
+                self._store.save_run(run)
+            if prepared.drift:  # at once: prepare has stored the new hash, a later failure must not lose it
+                await self._send_drift(ctx)
+            outcome, changed_config = await self._session(ctx, job, paths, prepared.clone)
+            await self._settle_outcome(ctx, job, paths, run, prepared, outcome, changed_config, started)
+        finally:  # the job clone and its worktree, whatever happened: the job's copy keeps what is kept
+            # The run as stored now: _fail and the chat may have written its error and notes since.
+            await self._remove_root(root, job, self._store.run(job.id) or run)
+
+    async def _settle_outcome(
+        self, ctx: RepoContext, job: Job, paths: JobPaths, run: JobRun, prepared: Prepared,
+        outcome: SessionOutcome, changed_config: bool, started: datetime,
+    ) -> None:
         run.finished_at = self._stamp()
         run.cost_usd += outcome.cost_usd
         run.turns += outcome.turns
         self._store.save_run(run)
-        # A session that ended otherwise ends a streak: its next usage-limit or login failure sends its line.
-        if outcome.kind != "quota":
-            self._quota_until, self._quota_line_sent = None, False
-        if outcome.kind != "login":
+        # A session that ended otherwise ends a streak (its next usage-limit or login failure sends its line),
+        # but only one that started once the wait had begun: one already running then says nothing of it.
+        if outcome.kind != "quota" and (self._quota_since is None or started >= self._quota_since):
+            self._quota_until, self._quota_since, self._quota_line_sent = None, None, False
+        if outcome.kind != "login" and (self._login_failed_at is None or started >= self._login_failed_at):
             self._login_failed_at = None
         if changed_config:
             await self._fail(job, _CONFIG_CHANGED)
@@ -421,7 +502,9 @@ class JobRunner:
             if retry_at is None or retry_at <= end:  # never runnable at once
                 retry_at = end + _QUOTA_RETRY
             retry_at = retry_at.astimezone(timezone.utc)
-            self._quota_until = retry_at  # no other job starts before it either
+            self._quota_since = end  # the latest hit: only a session started after it lifts the wait
+            # No other job starts before it either; the latest reset of the jobs that hit the limit.
+            self._quota_until = max(self._quota_until or retry_at, retry_at)
             if not await self._deferred_too_often(job, run):
                 self._change(job, "deferred", "usage limit reached", retry_at.isoformat())
                 if not self._quota_line_sent:  # one line per streak
@@ -438,9 +521,24 @@ class JobRunner:
             if first:
                 await self._send(login_line())
         elif outcome.kind == "failed":
-            await self._fail(job, outcome.error or "the session failed")
+            await self._fail(job, outcome.error or N_("the session failed"))
         else:
             await self._finish(ctx, job, paths, run, prepared)
+
+    async def _remove_root(self, root: Path, job: Job, run: JobRun) -> None:
+        """Remove the job's directory (its job clone and worktree) in a thread: a checkout's many files would hold
+        the event loop. One left behind is noted and logged; the next start removes it."""
+        if not root.exists() and not root.is_symlink():
+            return
+        try:
+            if root.is_symlink():
+                root.unlink()
+            else:
+                await asyncio.to_thread(shutil.rmtree, root)
+        except OSError as e:
+            logger.warning("Reviewer job %s: its directory was not removed: %s", job.id, type(e).__name__)
+            run.notes.append(f"job directory not removed: {type(e).__name__}")
+            self._store.save_run(run)
 
     async def _deferred_too_often(self, job: Job, run: JobRun) -> bool:
         """Count the job's deferral; its third fails the job instead (with its line)."""
@@ -451,28 +549,27 @@ class JobRunner:
         await self._fail(job, _DEFERRED_TOO_OFTEN)
         return True
 
-    async def _session(self, ctx: RepoContext, job: Job, paths: JobPaths) -> tuple[SessionOutcome, bool]:
-        """The session's outcome, and whether it changed the clone's .git/config, .git/info/attributes or
-        .git/commondir (then written back: the daemon's next git call in the clone carries the token)."""
+    async def _session(
+        self, ctx: RepoContext, job: Job, paths: JobPaths, clone: ReviewClone,
+    ) -> tuple[SessionOutcome, bool]:
+        """The session's outcome, in the job clone, and whether it changed the job clone's .git/config,
+        .git/info/attributes or .git/commondir. Nothing is written back: no git runs in the job clone after its
+        session, and the job clone is removed with the job."""
         process = ctx.cfg.process
         if job.kind == "review":
             prompt = review_prompt(process.doc, process.prepare_section, job.number, paths)
         else:
             me = self._store.repo_state(ctx.scope).me
             prompt = recheck_prompt(process.doc, process.recheck_section, job.number, paths, job.head_sha, me)
-        saved = guarded_git_files(ctx.clone.path)
-        try:
-            async with ctx.clone.session_phase(saved):
-                outcome = await run_session(
-                    self._llm, kind=job.kind, clone_dir=ctx.clone.path, paths=paths, prompt=prompt,
-                    job_cfg=self._config.jobs[job.kind], helper_scripts=process.helper_scripts,
-                    secret_paths=self._config.secret_paths, environ=self._environ,
-                )
-        finally:  # out of the session phase: no poll's readiness runs while they are written back
-            changed = [path for path, data in saved.items() if _restore(path, data)]
-            if changed:
-                logger.warning("Reviewer job %s: the session changed %s; written back",
-                               job.id, ", ".join(map(str, changed)))
+        saved = guarded_git_files(clone.path)
+        outcome = await run_session(
+            self._llm, kind=job.kind, clone_dir=clone.path, paths=paths, prompt=prompt,
+            job_cfg=self._config.jobs[job.kind], helper_scripts=process.helper_scripts,
+            secret_paths=self._config.secret_paths, environ=self._environ,
+        )
+        changed = [path for path, data in saved.items() if git_file_changed(path, data)]
+        if changed:
+            logger.warning("Reviewer job %s: the session changed %s", job.id, ", ".join(map(str, changed)))
         return outcome, bool(changed)
 
     async def _finish(
@@ -493,7 +590,7 @@ class JobRunner:
             shutil.copyfile(paths.replies_plan, paths.job_dir / _PLAN_COPY)
         output = paths.job_dir / (paths.report.name if review else _PLAN_COPY)
         if not output.is_file():
-            await self._fail(job, "no report written" if review else "no replies plan written")
+            await self._fail(job, N_("no report written") if review else N_("no replies plan written"))
             return
         text = output.read_text(encoding="utf-8", errors="replace")
         try:
@@ -544,11 +641,21 @@ class JobRunner:
     async def _deliver(self, job: Job, run: JobRun) -> bool:
         """Whether the job's whole message is out. Sent part by part, each part a reply anchor to the job,
         starting at the first part not delivered yet: the parts come from the saved run alone, so they are the
-        same on every attempt, and run.message_ids holds those already out. A failed part ends the attempt."""
+        same on every attempt, and run.message_ids holds those already out. A failed part ends the attempt.
+
+        The message's Telegram language and its model-written texts' translations are the run's: until a part is
+        out, each attempt takes the current language and translates what is not translated yet (a failed
+        translation leaves a text as it is); from the first part on, they never change."""
         if self._chat is None:
             return False
         run.last_attempt_at = self._stamp()
-        parts = message_parts(_message(job, run), limit=MESSAGE_LIMIT)
+        if not run.message_ids:
+            run.language = current_language()
+        with telegram_language(run.language):  # "" (a run from before languages): English
+            text = _message(job, run)
+            if not run.message_ids and (missing := [t for t in marked_texts(text) if t not in run.translations]):
+                run.translations = {**run.translations, **await self._chat.translations(missing)}
+        parts = message_parts(fill(text, run.translations), limit=MESSAGE_LIMIT)
         for part in parts[len(run.message_ids):]:
             message_id = await self._send(part, job_id=job.id)
             if message_id is None:
@@ -560,6 +667,11 @@ class JobRunner:
         run.message_sent = True
         self._store.save_run(run)
         return True
+
+    def _language(self, scope: str) -> str:
+        """The Telegram language of the repo's project; the global one for a repo no longer reviewed."""
+        ctx = self._contexts.get(scope)
+        return self._language_of(ctx.project_id if ctx is not None else "")
 
     def _attempt_failed(self, run: JobRun) -> None:
         run.send_attempts += 1

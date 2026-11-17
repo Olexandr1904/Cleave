@@ -10,6 +10,7 @@ from typing import Any
 
 from integrations.base.notifier import Button
 from orchestrator import tg_format
+from orchestrator.tg_i18n import model_text, tr
 
 
 def _g(o: Any, key: str, default: Any = None) -> Any:
@@ -33,7 +34,7 @@ def build_escalated_comment_message(
     comment_id, author, file, line, body, reason, verdict (optional).
     """
     sep = "─" * 30
-    recall_prefix = "🔁 (still pending) " if recall else ""
+    recall_prefix = tr("🔁 (still pending) ") if recall else ""
     hdr = tg_format.tg_header(
         f"{recall_prefix}💬",
         state.company_id,
@@ -42,30 +43,34 @@ def build_escalated_comment_message(
     )
 
     verdict = _g(cc, "verdict", "Unsure")
-    reason = _g(cc, "reason", "") or ""
-    if verdict in ("Valid", "Not valid"):
-        assessment_line = f"  {verdict} — {reason}"
+    # The classifier's assessment is model-written; the comment's body is its author's and stays as written.
+    reason = model_text(_g(cc, "reason", "") or "")
+    if verdict == "Valid":
+        assessment_line = f"  {tr('Valid')} — {reason}"
+    elif verdict == "Not valid":
+        assessment_line = f"  {tr('Not valid')} — {reason}"
     else:
         assessment_line = f"  {reason}"
 
     body = _g(cc, "body", "") or ""
     text = (
         f"{hdr}\n"
-        f"PR #{pr_number} — Comment by @{_g(cc, 'author', '?')} "
-        f"on {_g(cc, 'file', '?')}:{_g(cc, 'line', '?')}\n"
+        + tr("PR #{pr_number} — Comment by @{author} on {file}:{line}",
+             pr_number=pr_number, author=_g(cc, 'author', '?'), file=_g(cc, 'file', '?'),
+             line=_g(cc, 'line', '?'))
+        + f"\n{sep}\n"
+        + tr("Suggestion:") + f"\n  {body[:300]}\n\n"
+        + tr("Agent assessment:") + f"\n{assessment_line}\n"
         f"{sep}\n"
-        f"Suggestion:\n  {body[:300]}\n\n"
-        f"Agent assessment:\n{assessment_line}\n"
-        f"{sep}\n"
-        "Tap a button below, or reply to this message with:\n"
-        "  - fix — re-engage dev-agent\n"
-        "  - won't fix: <reason> — post the reason on GitHub and resolve\n"
-        "  - free text — re-investigate with your hint\n"
+        + tr("Tap a button below, or reply to this message with:\n"
+             "  - fix — re-engage dev-agent\n"
+             "  - won't fix: <reason> — post the reason on GitHub and resolve\n"
+             "  - free text — re-investigate with your hint\n")
     )
 
     comment_key = f"{state.ticket_id}:{_g(cc, 'comment_id')}"
     buttons = [
-        Button(label="Fix", action=f"pr_fix:{comment_key}"),
-        Button(label="Won't Fix", action=f"pr_wontfix:{comment_key}"),
+        Button(label=tr("Fix"), action=f"pr_fix:{comment_key}"),
+        Button(label=tr("Won't Fix"), action=f"pr_wontfix:{comment_key}"),
     ]
     return text, buttons

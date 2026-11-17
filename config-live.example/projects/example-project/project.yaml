@@ -24,6 +24,9 @@ jira:
 telegram:
   bot_token: "${TELEGRAM_BOT_TOKEN}"
   default_chat_id: "${TELEGRAM_CHAT_ID}"
+  # The language the bot writes in Telegram: en or uk. Without it, the project follows global.yaml's (English
+  # when that has none).
+  # language: "uk"
 
 parallelism:
   max_concurrent_tickets: 3

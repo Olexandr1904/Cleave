@@ -12,21 +12,27 @@ from dataclasses import dataclass
 
 _MAX_DRY_RUN = 2_000_000  # characters
 _MAX_DIGITS = 9  # of a number read from a line
-_LABEL = re.compile(r"^(Event|Summary|Inline|HEAD|Anchors)\s*:\s*(.*)$")
+_LABEL = re.compile(r"^(Report|Repo|PR|Event|Summary|Inline|HEAD|Anchors)\s*:\s*(.*)$")
 _VALUES = {
+    "Report": re.compile(r".+"),
+    "Repo": re.compile(r"[^/\s]+/[^/\s]+"),
+    "PR": re.compile(r"#[0-9]+"),
     "Event": re.compile(r"APPROVE|REQUEST_CHANGES|COMMENT"),
     "Summary": re.compile(r"yes|no"),
     "Inline": re.compile(r"[0-9]+ comment\(s\)"),
     "HEAD": re.compile(r"[0-9a-fA-F]{7,40}"),
     "Anchors": re.compile(r"[0-9]+ inline, [0-9]+ degraded to body"),
 }
-# `^\s+#0*([0-9]+)\s+(\S+)\s+-\s(.+)$` with the leading zeros dropped in code: `0*` and `[0-9]+` overlap,
-# and backtracking between them is quadratic on a long run of zeros.
-_ITEM = re.compile(r"^\s+#([0-9]+)\s+(\S+)\s+-\s(.+)$")
+# `^\s+# ?0*([0-9]+)\s+(\S+)\s+-\s(.+)$` with the leading zeros dropped in code: `0*` and `[0-9]+` overlap,
+# and backtracking between them is quadratic on a long run of zeros. The tool pads a number under 10 with a space.
+_ITEM = re.compile(r"^\s+# ?([0-9]+)\s+(\S+)\s+-\s(.+)$")
 _SKIPPING = re.compile(r"^Skipping ([0-9]+) finding\(s\) already posted by an earlier run$")
 _POSTING = re.compile(r"^Posting ([0-9]+) comment\(s\) in ([0-9]+) review\(s\)$")
-# The header's lines in the spec's order; only items repeat. Anchors and Skipping may be absent.
-_ORDER = ("Event", "Summary", "Inline", "item", "HEAD", "Anchors", "Skipping", "Posting")
+_NOTHING = re.compile(r"^Nothing left to post on this head\.$")
+# The header's lines in the spec's order; only items repeat. Report, Repo, PR, Anchors, Skipping and Nothing may be
+# absent.
+_ORDER = ("Report", "Repo", "PR", "Event", "Summary", "Inline", "item", "HEAD", "Anchors", "Skipping", "Posting",
+          "Nothing")
 _REQUIRED = ("Event", "Summary", "Inline", "HEAD", "Posting")
 _BATCH = re.compile(r"^--- DRY RUN batch ([0-9]+)/([0-9]+) ---$")
 _POSTED = re.compile(r"^Posted batch ([0-9]+)/([0-9]+): (\S+)$")
@@ -90,7 +96,7 @@ def parse_review_dry_run(text: str) -> ReviewDryRun:
             skipped = _number(m[1])
         elif kind == "Posting":
             posting = (_number(m[1]), _number(m[2]))
-        else:
+        elif kind != "Nothing":
             value = m[2].strip()
             if not _VALUES[kind].fullmatch(value):
                 raise PosterOutputError(f"{kind} is not understood: {value[:60]}")
@@ -111,7 +117,8 @@ def parse_review_dry_run(text: str) -> ReviewDryRun:
 
 
 def parse_review_confirm(text: str) -> list[tuple[int, int, str]]:
-    """`(i, M, url)` per posted batch: 1..k in order with one total M, k <= M (a failed batch stops early)."""
+    """`(i, M, url)` per posted batch: 1..k in order with one total M, k <= M (a failed batch stops early). Before
+    the first batch, the tool prints the dry run's header lines."""
     batches: list[tuple[int, int, str]] = []
     for line in text.split("\n"):
         if m := _POSTED.match(line):
@@ -122,8 +129,12 @@ def parse_review_confirm(text: str) -> list[tuple[int, int, str]]:
         elif _LOCATION.match(line):
             if not batches:
                 raise PosterOutputError(f"a comment's location before any batch: {line[:60]}")
-        elif line.strip():
+        elif not line.strip():
+            continue
+        elif batches:
             raise PosterOutputError(f"unknown line: {line[:60]}")
+        else:
+            _header_line(line)
     return batches
 
 
@@ -146,7 +157,7 @@ def parse_replies_results(text: str) -> list[dict]:
 def _header_line(line: str) -> tuple[str, re.Match]:
     if m := _LABEL.match(line):
         return m[1], m
-    for kind, pattern in (("item", _ITEM), ("Skipping", _SKIPPING), ("Posting", _POSTING)):
+    for kind, pattern in (("item", _ITEM), ("Skipping", _SKIPPING), ("Posting", _POSTING), ("Nothing", _NOTHING)):
         if m := pattern.match(line):
             return kind, m
     raise PosterOutputError(f"unknown line: {line[:60]}")

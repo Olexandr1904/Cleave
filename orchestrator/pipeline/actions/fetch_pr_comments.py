@@ -22,6 +22,7 @@ from integrations.base.vcs import VCSInterface
 from orchestrator import tg_format
 from orchestrator.git_ops import git_diff_files, git_head_sha
 from orchestrator.stage_verifier import ActionResult
+from orchestrator.tg_i18n import model_text, tr
 from workspace.workspace import Stage, Workspace
 
 logger = logging.getLogger(__name__)
@@ -190,11 +191,12 @@ async def reinvestigate_pending(
                     await notifier.send_message(
                         chat_id,
                         f"{hdr}\n"
-                        f"Re-investigation failed for @{c.get('author','?')}'s comment "
-                        f"on {c.get('file','?')}:{c.get('line','?')}\n\n"
-                        f"The agent was unable to re-classify this comment after your hint. Options:\n"
-                        f"- Reply \"fix\" to send the dev-agent in anyway\n"
-                        f"- Reply \"won't fix: <reason>\" to close the comment on GitHub",
+                        + tr("Re-investigation failed for @{author}'s comment "
+                             "on {file}:{line}\n\n"
+                             "The agent was unable to re-classify this comment after your hint. Options:\n"
+                             "- Reply \"fix\" to send the dev-agent in anyway\n"
+                             "- Reply \"won't fix: <reason>\" to close the comment on GitHub",
+                             author=c.get('author', '?'), file=c.get('file', '?'), line=c.get('line', '?')),
                     )
             c["pending_reinvestigation"] = False
             c["reinvestigation_retry_count"] = 0
@@ -373,17 +375,19 @@ async def execute_review_decisions(
                 title = tg_format.read_ticket_title(workspace)
                 hdr = tg_format.tg_header("⏸", state.company_id, state.ticket_id, title)
                 lines = [hdr]
-                lines.append(f"{len(skipped_comments)} comment(s) marked Skip — still open on the PR:")
+                lines.append(tr("{count} comment(s) marked Skip — still open on the PR:",
+                                count=len(skipped_comments)))
                 for sc in skipped_comments:
-                    lines.append(f"  • @{sc.get('author','?')} on {sc.get('file','?')}:{sc.get('line','?')}")
+                    lines.append(tr("  • @{author} on {file}:{line}", author=sc.get('author', '?'),
+                                    file=sc.get('file', '?'), line=sc.get('line', '?')))
                 lines.append(sep)
-                lines.append(
+                lines.append(tr(
                     "Approve → mark DONE, leave comments open on GitHub for manual follow-up.\n"
                     "Reject → reopen for dev-agent to address the comments."
-                )
+                ))
                 buttons = [
-                    Button(label="Approve", action=f"approve:{state.ticket_id}"),
-                    Button(label="Reject", action=f"reject:{state.ticket_id}"),
+                    Button(label=tr("Approve"), action=f"approve:{state.ticket_id}"),
+                    Button(label=tr("Reject"), action=f"reject:{state.ticket_id}"),
                 ]
                 try:
                     await notifier.send_message(
@@ -469,11 +473,12 @@ async def action_fetch_pr_comments(
                         await notifier.send_message(
                             chat_id,
                             f"{hdr}\n"
-                            f"Dev-agent failed to apply the fix for comment #{cid} twice.\n\n"
-                            f"File: {entry.get('file', '?')}:{entry.get('line', '?')}\n\n"
-                            f"Options:\n"
-                            f"- Reply \"fix\" to retry once more\n"
-                            f"- Reply \"won't fix: <reason>\" to close the comment without fixing",
+                            + tr("Dev-agent failed to apply the fix for comment #{cid} twice.\n\n"
+                                 "File: {file}:{line}\n\n"
+                                 "Options:\n"
+                                 "- Reply \"fix\" to retry once more\n"
+                                 "- Reply \"won't fix: <reason>\" to close the comment without fixing",
+                                 cid=cid, file=entry.get('file', '?'), line=entry.get('line', '?')),
                         )
         # Advance the cursor so the next cycle diffs from here
         state.last_verified_sha = sha
@@ -623,18 +628,23 @@ async def action_fetch_pr_comments(
             hdr = tg_format.tg_header("🤖", state.company_id, state.ticket_id, title)
             sep = "─" * 30
             lines = [hdr]
-            lines.append(f"PR #{pr_number} — Auto-processed {len(auto_fixed) + len(auto_rejected)} comment(s):")
+            lines.append(tr("PR #{pr_number} — Auto-processed {count} comment(s):",
+                            pr_number=pr_number, count=len(auto_fixed) + len(auto_rejected)))
             lines.append(sep)
+            # The reasons are the classifier's; a comment's body is its author's.
             for af in auto_fixed:
-                lines.append(f"✅ FIX: {af.reason} ({af.file}:{af.line or '?'})")
+                lines.append(tr("✅ FIX: {reason} ({file}:{line})", reason=model_text(str(af.reason)),
+                                file=af.file, line=af.line or '?'))
             for ar in auto_rejected:
-                lines.append(f"❌ REJECT: {ar.body[:60]} — {ar.reason}")
+                lines.append(tr("❌ REJECT: {body} — {reason}", body=ar.body[:60],
+                                reason=model_text(str(ar.reason))))
             lines.append(sep)
             summary_buttons = None
             if escalated:
-                lines.append(f"Waiting for your decisions on {len(escalated)} escalated comment(s).")
+                lines.append(tr("Waiting for your decisions on {count} escalated comment(s).", count=len(escalated)))
                 summary_buttons = [
-                    Button(label=f"Show {len(escalated)} unanswered", action=f"unanswered:{state.ticket_id}"),
+                    Button(label=tr("Show {count} unanswered", count=len(escalated)),
+                           action=f"unanswered:{state.ticket_id}"),
                 ]
             await notifier.send_message(chat_id, "\n".join(lines), buttons=summary_buttons)
 

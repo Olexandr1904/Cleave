@@ -31,15 +31,13 @@ CFG = ReviewerConfig(enabled=True, base_branch="develop", process=ProcessPartCon
 DOC_LINE = f"[acme/app] reviews are off: {DOC} is not on develop."
 
 class FakeClone:
-    in_session = False
     def __init__(self, path, doc=True, fail=None):
         self.path, self.doc, self.fail = path, doc, fail
-        self.lock, self.session_lock = asyncio.Lock(), asyncio.Lock()
+        self.lock = asyncio.Lock()
     async def refresh(self):
         if self.fail: raise self.fail
         return "c" * 40
     def has_file(self, rel): return self.doc
-    def changed_git_files(self): return []
 
 class FakeReadiness:
     def __init__(self, snapshot=None, fail=None): self.snapshot, self.fail = snapshot, fail
@@ -538,33 +536,26 @@ async def test_skip_drops_deferred(tmp_path):
     [skipped] = rig.store.jobs("acme/app")
     assert (skipped.id, skipped.state, skipped.reason) == (job.id, "skipped", "skipped by operator")
 
-async def test_poll_skips_refresh_during_a_jobs_session(tmp_path):
+async def test_poll_waits_for_a_job_preparing(tmp_path):
+    """A job holds the review clone only for Prepare's git there: the poll waits for it, then refreshes and reads."""
     clone = CountingClone(tmp_path / "app")
     readiness = CountingReadiness(review_snap())
     c = ctx(tmp_path, readiness, FakeForge({1: det(1)}), clone=clone)
     rig = Rig(tmp_path, c)
-    async with clone.lock:   # a job holds the clone, in its session phase
-        clone.in_session = True
-        await rig.service.poll(c)
-    assert (clone.refreshes, readiness.boards) == (0, 1)
-    assert rig.state().status == "ok"
+    await clone.lock.acquire()   # a job's Prepare
+    asyncio.get_running_loop().call_later(0.05, clone.lock.release)
+    await asyncio.wait_for(rig.service.poll(c), 5)
+    assert (clone.refreshes, readiness.boards) == (1, 1) and rig.state().status == "ok"
 
-class PreparingClone(CountingClone):
-    """A clone a job holds outside its session phase (Prepare or cleanup); counts how often a poll looks."""
-    looks = 0
-    @property
-    def in_session(self):
-        self.looks += 1
-        return False
-
-async def test_poll_leaves_a_clone_a_job_prepares_or_cleans_up(tmp_path):
-    clone = PreparingClone(tmp_path / "app")
+async def test_poll_leaves_a_clone_held_past_its_wait(tmp_path, monkeypatch):
+    monkeypatch.setattr(service_module, "_CLONE_WAIT_SECONDS", 0.01)
+    clone = CountingClone(tmp_path / "app")
     readiness = CountingReadiness(review_snap())
     c = ctx(tmp_path, readiness, FakeForge({1: det(1)}), clone=clone)
     rig = Rig(tmp_path, c)
-    async with clone.lock:   # the job preparing it holds the clone
+    async with clone.lock:   # held past the poll's wait (a post's dry run and confirm, say)
         await run_briefly(rig.service)
-    assert (clone.refreshes, readiness.boards, clone.looks) == (0, 0, 1)   # no readiness, and no spin
+    assert (clone.refreshes, readiness.boards) == (0, 0)
     assert rig.state().last_poll_at == "" and rig.store.board("acme/app") == {}   # nothing recorded
     rig.t = T0 + timedelta(seconds=4)
     await run_briefly(rig.service)
@@ -573,26 +564,20 @@ async def test_poll_leaves_a_clone_a_job_prepares_or_cleans_up(tmp_path):
     await run_briefly(rig.service)
     assert (clone.refreshes, readiness.boards) == (1, 1) and rig.state().status == "ok"
 
-async def test_a_post_in_a_session_does_not_hold_up_other_repos(tmp_path, monkeypatch):
-    """A post reading the clone in a job's session phase holds session_lock through its runs: the poll of that
-    repo waits for it at most a bound and leaves the repo for later, and the next repo is polled all the same."""
+async def test_a_post_holding_the_clone_does_not_hold_up_other_repos(tmp_path, monkeypatch):
+    """A post holds the review clone through its runs: the poll of that repo waits for it at most a bound and
+    leaves the repo for later, and the next repo is polled all the same."""
     monkeypatch.setattr(service_module, "_CLONE_WAIT_SECONDS", 0.05)
     clone = ReviewClone(tmp_path / "app", "file:///nowhere", "develop", "tok")
-    in_session, leave, inside, done, stop = (asyncio.Event() for _ in range(5))
-    async def job():
-        async with clone.lock, clone.session_phase({}):
-            in_session.set()
-            await leave.wait()
+    inside, done, stop = (asyncio.Event() for _ in range(3))
     async def post():
-        async with clone.reader(step=0.01):
+        async with clone.reader():
             inside.set()
             await done.wait()
     readiness = CountingReadiness(review_snap())
     busy = ctx(tmp_path, readiness, FakeForge({1: det(1)}), clone=clone)
     rig = Rig(tmp_path, busy, ctx(tmp_path, EndsRound(stop, review_snap()), FakeForge({1: det(1)}), repo="web"))
-    tasks = [asyncio.create_task(job())]
-    await in_session.wait()
-    tasks.append(asyncio.create_task(post()))
+    task = asyncio.create_task(post())
     await inside.wait()
     loop = asyncio.get_running_loop()
     started = loop.time()
@@ -600,8 +585,7 @@ async def test_a_post_in_a_session_does_not_hold_up_other_repos(tmp_path, monkey
         await asyncio.wait_for(rig.service.run(stop), 5)
     finally:
         done.set()
-        leave.set()
-        await asyncio.gather(*tasks)
+        await task
     assert loop.time() - started < 1
     assert readiness.boards == 0 and rig.state("acme/app").last_poll_at == ""   # left for later
     assert rig.state("acme/web").status == "ok"

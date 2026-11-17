@@ -106,3 +106,24 @@ reviewer:
     replies_command: ["python3", "tools/threads/threads.py", "--repo", "{repo}", "post", "{pr}", "--plan", "{plan}"]
     dry_run_flag: "--dry-run"
     confirm_flag: "--yes"
+
+# Optional: the skill flow, which works a ticket in one `claude` session running the repo's own skill.
+# Validated only when ticket_flow is both; GitHub repos only.
+# ticket_flow: both            # staged (default) | both
+# skill_flow:
+#   bug_skill: fix-this        # the repo's skill for bug tickets
+#   task_skill: implement-this # the repo's skill for every other ticket
+#   bug_types: [Bug, Defect]
+#   notes_dir: "ai_instructions/{key}"
+#   worktree_dir: ".claude/worktrees/{key}"
+#   required_files: [local.properties]
+#   build_env: [JAVA_HOME, ANDROID_HOME, ANDROID_SDK_ROOT]
+#   host_notes: |
+#     No emulator on this host: skip the run-the-app step and report it as not run.
+#   gates:
+#     test: "./gradlew test"
+#     lint: "./gradlew detekt"
+#     build: "./gradlew assembleDebug"
+#   gate_rounds: 2
+#   effort: xhigh
+#   timeout_seconds: 14400

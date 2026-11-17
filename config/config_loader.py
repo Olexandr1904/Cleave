@@ -62,6 +62,7 @@ from config.schemas import (
     ReviewerConfig,
     ReviewerGlobalConfig,
     ReviewerJobConfig,
+    SkillFlowConfig,
     STATUS_COMMAND_PLACEHOLDERS,
     TelegramConfig,
     TestConfig,
@@ -72,6 +73,7 @@ from config.schemas import (
     VCSConfig,
     WorkspacesConfig,
 )
+from integrations.llm.claude_code_adapter import API_KEY_VARS
 
 ENV_VAR_PATTERN = re.compile(r"\$\{([^}]+)\}")
 
@@ -137,6 +139,15 @@ def env_var_refs(raw: Any, prefix: str = "") -> dict[str, str]:
         for index, value in enumerate(raw):
             refs.update(env_var_refs(value, f"{prefix}.{index}" if prefix else str(index)))
     return refs
+
+
+def env_var_names(raw: Any) -> set[str]:
+    """Every ${VAR} name in the raw (unresolved) YAML's string values, at any depth, not only the first of each
+    string. Never a value."""
+    if isinstance(raw, str):
+        return set(ENV_VAR_PATTERN.findall(raw))
+    values = raw.values() if isinstance(raw, dict) else raw if isinstance(raw, list) else ()
+    return {name for value in values for name in env_var_names(value)}
 
 
 def _parse_section(data: dict, section_name: str, dataclass_type: type, file_path: str) -> Any:
@@ -253,6 +264,7 @@ def load_global_config(config_dir: str) -> GlobalConfig:
         dashboard=_parse_section(data, "dashboard", DashboardConfig, file_str),
         reviewer=_parse_reviewer_global(data, file_str),
         env_refs=env_var_refs(raw_data),
+        env_vars=env_var_names(raw_data),
     )
 
 
@@ -267,17 +279,17 @@ def merge_dicts(base: dict, override: dict) -> dict:
     return result
 
 
-def _load_yaml_file(path: Path) -> tuple[dict, dict[str, str]]:
-    """Load a YAML file; return (data with env vars resolved, env refs). {} data if empty."""
+def _load_yaml_file(path: Path) -> tuple[dict, dict[str, str], set[str]]:
+    """Load a YAML file; return (data with env vars resolved, env refs, env var names). {} data if empty."""
     if not path.exists():
         raise ConfigError(f"Config file not found: {path}", file_path=str(path))
     with open(path) as f:
         raw = yaml.safe_load(f)
     if raw is None:
-        return {}, {}
+        return {}, {}, set()
     if not isinstance(raw, dict):
         raise ConfigError(f"Config must be a YAML mapping", file_path=str(path))
-    return resolve_env_vars_recursive(raw), env_var_refs(raw)
+    return resolve_env_vars_recursive(raw), env_var_refs(raw), env_var_names(raw)
 
 
 def _parse_jira_section(data: dict, file_path: str) -> JiraConfig:
@@ -473,7 +485,7 @@ def _load_project_config(project_dir: Path, global_defaults: dict) -> ProjectCon
     if not project_yaml.exists():
         return None
 
-    data, env_refs = _load_yaml_file(project_yaml)
+    data, env_refs, env_vars = _load_yaml_file(project_yaml)
     file_str = str(project_yaml)
 
     return ProjectConfig(
@@ -483,6 +495,7 @@ def _load_project_config(project_dir: Path, global_defaults: dict) -> ProjectCon
         parallelism=_parse_section(data, "parallelism", ParallelismConfig, file_str),
         defaults=_parse_defaults_section(data, file_str),
         env_refs=env_refs,
+        env_vars=env_vars,
     )
 
 
@@ -823,9 +836,97 @@ def _flag_words(command: list[str]) -> list[str]:
     return words
 
 
-def _load_repo_config(repo_path: Path, project_config: ProjectConfig, global_defaults_raw: dict) -> RepoConfig:
+_SKILL_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9_:-]*")
+_ENV_NAME = re.compile(r"[A-Z_][A-Z0-9_]*")
+_GATES = ("test", "lint", "build")
+
+
+def _repo_relative(path: str) -> bool:
+    return not Path(path).is_absolute() and ".." not in Path(path).parts
+
+
+def _parse_skill_flow(
+    data: dict, vcs: VCSConfig, config_vars: set[str], file_path: str, repo_enabled: bool,
+) -> tuple[str, SkillFlowConfig]:
+    """Parse the repo's `ticket_flow` and `skill_flow:`; the section is validated only when the flow is `both`
+    and the repo is enabled. `config_vars`: the variables the global, project and repo configs read."""
+
+    def fail(message: str, field_name: str) -> ConfigError:
+        return ConfigError(message, file_path=file_path, field=field_name)
+
+    ticket_flow = data.get("ticket_flow", "staged")
+    if ticket_flow not in ("staged", "both"):
+        raise fail(f"ticket_flow must be 'staged' or 'both' (got {ticket_flow!r})", "ticket_flow")
+    raw = _mapping(data.get("skill_flow"), "skill_flow", file_path)
+    try:
+        skill_flow = SkillFlowConfig(**raw)
+    except TypeError as e:
+        raise fail(f"Invalid fields in 'skill_flow': {e}", "skill_flow") from e
+    if ticket_flow != "both" or not repo_enabled:
+        return ticket_flow, skill_flow
+
+    if vcs.provider != "github":
+        raise fail("ticket_flow 'both' supports only GitHub repos in this version", "ticket_flow")
+    if not raw:
+        raise fail("ticket_flow 'both' needs a skill_flow section", "skill_flow")
+    for name in ("bug_skill", "task_skill"):
+        value = getattr(skill_flow, name)
+        if not isinstance(value, str) or not _SKILL_NAME.fullmatch(value):
+            raise fail(f"skill_flow.{name} must be a skill name: a letter or digit, then letters, digits, '_', ':' "
+                       f"or '-' (got {value!r})", f"skill_flow.{name}")
+    # A bare string would be matched character by character.
+    if not isinstance(skill_flow.bug_types, list) or not all(isinstance(t, str) for t in skill_flow.bug_types):
+        raise fail("skill_flow.bug_types must be a list of ticket type names", "skill_flow.bug_types")
+    for name in ("host_notes", "effort"):
+        if not isinstance(getattr(skill_flow, name), str):
+            raise fail(f"skill_flow.{name} must be a string", f"skill_flow.{name}")
+    for name in ("notes_dir", "worktree_dir"):
+        value = getattr(skill_flow, name)
+        # Each run fills {key} with its ticket's key: without it two tickets would share one directory.
+        if not (isinstance(value, str) and _repo_relative(value)
+                and set(PLACEHOLDER_PATTERN.findall(value)) == {"key"}):
+            raise fail(f"skill_flow.{name} must be a repo-relative path without '..' that holds {{key}} and no other "
+                       f"placeholder (got {value!r})", f"skill_flow.{name}")
+    # Apart, whatever the case (the host's APFS): the ticket copy in the worktree would be published, and a worktree
+    # cannot be made where the notes already are.
+    notes, worktree = (posixpath.normpath(d).casefold() for d in (skill_flow.notes_dir, skill_flow.worktree_dir))
+    if posixpath.commonpath([notes, worktree]) in (notes, worktree):
+        raise fail(f"skill_flow.notes_dir and skill_flow.worktree_dir must not be one directory or one inside the "
+                   f"other (got {skill_flow.notes_dir!r} and {skill_flow.worktree_dir!r})", "skill_flow.notes_dir")
+    files = skill_flow.required_files
+    if not isinstance(files, list) or not all(isinstance(f, str) and _repo_relative(f) for f in files):
+        raise fail("skill_flow.required_files must be a list of repo-relative paths without '..'",
+                   "skill_flow.required_files")
+    gates = skill_flow.gates
+    if not isinstance(gates, dict) or not all(k in _GATES and isinstance(v, str) for k, v in gates.items()):
+        raise fail(f"skill_flow.gates must map some of {', '.join(_GATES)} to a command string",
+                   "skill_flow.gates")
+    for name, least in (("gate_rounds", 0), ("timeout_seconds", 1)):
+        value = getattr(skill_flow, name)
+        # bool is an int subclass; `true` is never a count.
+        if not isinstance(value, int) or isinstance(value, bool) or value < least:
+            raise fail(f"skill_flow.{name} must be an integer of at least {least}", f"skill_flow.{name}")
+    if not isinstance(skill_flow.build_env, list):
+        raise fail("skill_flow.build_env must be a list of environment variable names", "skill_flow.build_env")
+    for name in skill_flow.build_env:
+        if not isinstance(name, str) or not _ENV_NAME.fullmatch(name):
+            raise fail(f"skill_flow.build_env: {name!r} is not an environment variable name", "skill_flow.build_env")
+        # The session holds no secret: a variable a config level reads one from (the forge token in the repo's,
+        # the tracker's in the project's, Telegram's in the global), or one that makes `claude` bill an API key
+        # instead of the subscription.
+        if name in config_vars:
+            raise fail(f"skill_flow.build_env must not pass {name}: Cleave's config reads a secret from it",
+                       "skill_flow.build_env")
+        if name in API_KEY_VARS:
+            raise fail(f"skill_flow.build_env must not pass {name}: with it `claude` bills an API key",
+                       "skill_flow.build_env")
+    return ticket_flow, skill_flow
+
+
+def _load_repo_config(repo_path: Path, project_config: ProjectConfig, global_defaults_raw: dict, *,
+                      global_env_vars: set[str] | None = None) -> RepoConfig:
     """Load a single repo yaml and merge with project config."""
-    data, env_refs = _load_yaml_file(repo_path)
+    data, env_refs, env_vars = _load_yaml_file(repo_path)
     file_str = str(repo_path)
 
     repo_cfg = RepoConfig(
@@ -850,6 +951,11 @@ def _load_repo_config(repo_path: Path, project_config: ProjectConfig, global_def
     )
 
     repo_cfg.reviewer = _parse_reviewer_section(data, repo_cfg.vcs, file_str, repo_cfg.repo.enabled)
+    # Every name each level's strings read, not env_refs' first one per string: a clone URL can read a user and a
+    # token.
+    config_vars = {*(global_env_vars or set()), *project_config.env_vars, *env_vars}
+    repo_cfg.ticket_flow, repo_cfg.skill_flow = _parse_skill_flow(
+        data, repo_cfg.vcs, config_vars, file_str, repo_cfg.repo.enabled)
 
     # Backward-compat: accept the old `jira_repo_label` key.
     if repo_cfg.jira_repo_label and not repo_cfg.tracker_label:
@@ -921,7 +1027,8 @@ def load_config(
                 if repo_filter and repo_id != repo_filter:
                     continue
 
-                repo_config = _load_repo_config(repo_file, project_config, global_defaults_raw)
+                repo_config = _load_repo_config(repo_file, project_config, global_defaults_raw,
+                                                global_env_vars=global_config.env_vars)
 
                 # AC5: skip disabled repos
                 if not repo_config.repo.enabled:

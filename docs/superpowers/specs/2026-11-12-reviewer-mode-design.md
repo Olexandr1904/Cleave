@@ -346,23 +346,29 @@ formats below are the reference tools' and are the contract:
 - `review_command` posts a review from a report whose chosen items are ticked `[x]`, with an event
   (`APPROVE` / `REQUEST_CHANGES` / `COMMENT`) and the per-head ledger. It splits the inline comments into batches
   (30 per review by default) and posts **one review per batch**, each carrying the event; the first carries the body.
-  - Dry run prints, in order: a header with `Event`, `Summary: yes|no`, `Inline : K comment(s)` and one line per
-    ticked item `  #NN path:line  - title`; `HEAD   : <sha>` — the head the tool itself read from the forge and will
-    post at; `Anchors: I inline, D degraded to body` (with anchor validation); `Skipping S finding(s) already posted
-    by an earlier run` (if any); `Posting P comment(s) in M review(s)`; then for each batch
+  - Dry run prints, in order: a header with `Report : <path>`, `Repo   : <owner>/<repo>`, `PR     : #<n>`,
+    `Event`, `Summary: yes|no`, `Inline : K comment(s)` and one line per ticked item `  #NN path:line  - title`
+    (the number right-aligned in two characters: `# 5`, `#12`); `HEAD   : <sha>` — the head the tool itself read
+    from the forge and will post at; `Anchors: I inline, D degraded to body` (with anchor validation); `Skipping S
+    finding(s) already posted by an earlier run` (if any); `Posting P comment(s) in M review(s)`, and `Nothing left
+    to post on this head.` when M is 0 (changed after deployment check, plan 6 Task 14); then for each batch
     `--- DRY RUN batch i/M ---` and the review payload as JSON:
     `{"commit_id", "event", "comments": [{"path", "line", "side", "body"}], "body"?}`. In the payload, `comments`
-    are the inline items (each body starts with `**<title>**`; a moved anchor ends with an italic note); items under
-    `### Findings without a diff anchor` in `body` go to the review body.
-  - The confirm run prints `Posted batch i/M: <review url>` and the `path:line` of each comment in it. It exits
-    non-zero on a failed batch; the batches before it are posted and recorded in the ledger, and a re-run skips them.
+    are the inline items (each body starts with `**<title>**`, then the item's text without its `**File:**` and
+    `**Ticket:**` lines; a moved anchor ends with an italic note); items under `### Findings without a diff anchor`
+    in `body` go to the review body.
+  - The confirm run prints the dry run's header, then `Posted batch i/M: <review url>` and the `path:line` of each
+    comment in it (changed after deployment check, plan 6 Task 14). It exits non-zero on a failed batch; the
+    batches before it are posted and recorded in the ledger, and a re-run skips them.
   - It refuses when there is neither a ticked item nor a `## Summary`.
 - `replies_command` posts the entries of a replies plan, with its own ledger. It validates the plan itself (every
   thread unresolved on this PR, `comment_id` = the thread's first comment, review ids are review bodies) and fails
   with one error line per bad entry.
   - Dry run prints a JSON list of steps `[{"step": "reply" | "comment" | "resolve", "n", "target": "path:line
     @author" | "review <id> @author", "body"}]`; replies already in the thread and review bodies already answered
-    are left out.
+    are left out. A reply's `body` is its entry's text; a comment's starts `Re: [review by <author>](<PR
+    url>#pullrequestreview-<id>)` and a blank line; a resolve posts no text, and its `body` repeats its entry's
+    (changed after deployment check, plan 6 Task 14).
   - The confirm run prints a JSON list `[{"n", "replied": url} | {"n", "commented": url} | {"n", "resolved": true}]`.
 
 The event vocabulary is Cleave's; a poster for another forge maps it to that forge's actions.

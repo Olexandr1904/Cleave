@@ -67,7 +67,6 @@ from orchestrator.reviewer.report_edit import (
     body_problems,
     drop_summary,
     ensure_base,
-    split_at_file_line,
     tick,
     write_atomic,
 )
@@ -251,13 +250,14 @@ def _not_postable(entry: dict, threads: list[dict], bodies: list[dict], me: str)
     return None
 
 
-def _check_steps(steps: list[dict], entries: list[dict], threads: dict,
-                 allowed: tuple[str, ...]) -> dict[int, list[str]] | str:
+def _check_steps(steps: list[dict], entries: list[dict], threads: dict, allowed: tuple[str, ...],
+                 pr_url: str) -> dict[int, list[str]] | str:
     """The steps the confirm run takes, by entry number, or why the dry run does not post exactly the named
     entries: a thread entry gets a reply (and a resolve when its `resolve` is true), a review entry a comment, and
     a named entry with no step is already posted. A resolve alone passes here: whether its reply is in the thread
-    is GitHub's to say, right before the confirm run. A reply or a comment carries its entry's text, a resolve
-    none; each step names its entry's thread (or path) or review body; every text passes the body check."""
+    is GitHub's to say, right before the confirm run. A reply carries its entry's text, a comment the same after a
+    line naming the review it answers (`_shown_text`); a resolve posts none, and shows none or its entry's text.
+    Each step names its entry's thread (or path) or review body; every text passes the body check."""
     by_n = {entry["n"]: entry for entry in entries}
     planned: dict[int, list[str]] = {}
     for step in steps:
@@ -268,9 +268,9 @@ def _check_steps(steps: list[dict], entries: list[dict], threads: dict,
     for step in steps:
         entry, what, body = by_n[step["n"]], f"the {step['step']} for #{step['n']}", step.get("body", "")
         if step["step"] == "resolve":
-            if _words(body):
+            if _words(body) not in ("", _words(entry["body"])):
                 return f"{what} carries a text"
-        elif _words(body) != _words(entry["body"]):
+        elif _words(body) != _words(_shown_text(step["step"], entry, threads, pr_url)):
             return f"{what} is not its planned text"
         if not _aims_at(step["target"], entry, threads):
             return f"{what} is aimed at {step['target'][:80]}"
@@ -628,7 +628,8 @@ class Posting:
             steps = parse_replies_steps(result.stdout)
         except PosterOutputError as e:
             raise _Refused(not_posted_line(number, f"the dry run's output was not understood: {e}")) from None
-        planned = _check_steps(steps, entries, prepared, ctx.allowed_links)
+        planned = _check_steps(steps, entries, prepared, ctx.allowed_links,
+                               f"https://github.com/{ctx.readiness.repo}/pull/{number}")
         if isinstance(planned, str):
             raise _Refused(not_posted_line(number, planned))
         return planned
@@ -883,6 +884,17 @@ def _wanted_steps(entry: dict) -> list[str]:
     return ["comment"]
 
 
+def _shown_text(kind: str, entry: dict, threads: dict, pr_url: str) -> str:
+    """The text the replies tool posts for an entry's reply or comment: a comment first names the review body it
+    answers, `Re: [review by <author>](<PR url>#pullrequestreview-<id>)` and a blank line, its author as Prepare's
+    snapshot (`threads`) gives it."""
+    if kind != "comment":
+        return entry["body"]
+    review = _find(_listed(threads, "review_bodies"), entry["review_id"]) or {}
+    link = f"{pr_url}#pullrequestreview-{entry['review_id']}"
+    return f"Re: [review by {review.get('author')}]({link})\n\n{entry['body']}"
+
+
 def _allowed_steps(entry: dict) -> list[list[str]]:
     """The dry run's steps for an entry, sorted: what it wants, or a resolve alone (its reply already in)."""
     wanted = _wanted_steps(entry)
@@ -1043,9 +1055,10 @@ def _body_parts(body: str) -> tuple[str, str]:
 
 
 def _item_words(item: ReportItem) -> str:
-    """The item's own text, its first `**File:**` line left out, as `_words`."""
-    before, after = split_at_file_line(item.body)
-    return _words("\n".join(before + after))
+    """The item's own text as the posting tool posts it, as `_words`: every line that starts (after its indent)
+    with `**File:**` or `**Ticket:**` left out (spec: a Ticket line is never posted)."""
+    return _words("\n".join(line for line in item.body.split("\n")
+                            if not line.lstrip().startswith(("**File:**", "**Ticket:**"))))
 
 
 def _words(text: str) -> str:

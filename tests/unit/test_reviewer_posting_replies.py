@@ -284,7 +284,8 @@ async def test_a_confirm_run_that_timed_out_is_checked_on_github(tmp_path):
     prepared = snapshot([THREAD_1, THREAD_2], [*BODIES, review_body(458, False)])
     after = snapshot([{**THREAD_1, "comments": [*THREAD_1["comments"], comment(103, ME, "Fixed.")]}, THREAD_2],
                      [review_body(456, True), review_body(457, True), review_body(458, False)])
-    dry = steps(REPLY_1, COMMENT_3, {"step": "comment", "n": 8, "target": "review 458 @octo-author", "body": "Will do."})
+    dry = steps(REPLY_1, COMMENT_3, {"step": "comment", "n": 8, "target": "review 458 @octo-author",
+                                     "body": f"Re: [review by octo-author]({PR_URL}#pullrequestreview-458)\n\nWill do."})
     rig = Rig(tmp_path, plan=plan, prepared=prepared, dry=(dry,), confirm=(CommandResult(-9, "", "", True),),
               snapshots=(prepared, after))
     assert await rig.post(ReplyCommand("post_replies", (1, 3, 8))) == PostOutcome(
@@ -418,6 +419,15 @@ STEP_MISMATCHES = {
                      "the comment for #3 is aimed at review 457 @octo-author"),
     "resolve-with-text": (steps(REPLY_1, {**RESOLVE_1, "body": "Closing."}, COMMENT_3),
                           "the resolve for #1 carries a text"),
+    # A comment names the review it answers: that review, by its author, on this PR.
+    "comment-without-its-review": (steps(REPLY_1, RESOLVE_1, {**COMMENT_3, "body": "Agreed."}),
+                                   "the comment for #3 is not its planned text"),
+    "comment-names-another-review": (steps(REPLY_1, RESOLVE_1, {**COMMENT_3, "body": COMMENT_3["body"].replace(
+        "pullrequestreview-456", "pullrequestreview-457")}), "the comment for #3 is not its planned text"),
+    "comment-names-another-author": (steps(REPLY_1, RESOLVE_1, {**COMMENT_3, "body": COMMENT_3["body"].replace(
+        "review by octo-author", "review by someone")}), "the comment for #3 is not its planned text"),
+    "comment-on-another-pr": (steps(REPLY_1, RESOLVE_1, {**COMMENT_3, "body": COMMENT_3["body"].replace(
+        "/pull/1712#", "/pull/1711#")}), "the comment for #3 is not its planned text"),
     "body-link": (steps({**REPLY_1, "body": "Fixed: https://evil.example"}, RESOLVE_1, COMMENT_3),
                   "the reply for #1 is not its planned text"),
     "exit-1": (CommandResult(1, STEPS, "T1: not an unresolved thread\n", False),

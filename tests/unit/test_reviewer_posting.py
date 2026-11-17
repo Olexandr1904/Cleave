@@ -1002,6 +1002,23 @@ def test_check_dry_run_pure():
     assert EVENT_STATE == {"APPROVE": "APPROVED", "REQUEST_CHANGES": "CHANGES_REQUESTED", "COMMENT": "COMMENTED"}
 
 
+def test_a_pre_existing_items_ticket_line_is_never_posted():
+    """The tool leaves an item's `**Ticket:**` line out of its comment, as the spec has it (deploy plan Task 14);
+    the rest of the item's text is still required."""
+    report = parse_report(REPORT.replace("**Ticket:** ACME-99\n", "**Ticket:** ACME-99\nThe cursor is never closed.\n"),
+                          HEAD)
+    comment = {"path": "app/src/main/LegacySync.kt", "line": 300, "side": "RIGHT",
+               "body": "**Cursor leak**\n\nThe cursor is never closed."}
+    text = (f"Event  : COMMENT\nSummary: yes\nInline : 1 comment(s)\n  # 6 app/src/main/LegacySync.kt:300  - Cursor leak\n"
+            f"HEAD   : {HEAD}\nPosting 1 comment(s) in 1 review(s)\n--- DRY RUN batch 1/1 ---\n"
+            + json.dumps({"commit_id": HEAD, "event": "COMMENT", "comments": [comment], "body": SUMMARY}) + "\n")
+    plan = check_dry_run(parse_review_dry_run(text), report, (6,), "COMMENT", HEAD, ALLOWED)
+    assert isinstance(plan, DryRunPlan) and plan.inline == (6,)
+    other = parse_review_dry_run(text.replace("never closed", "closed twice"))
+    assert check_dry_run(other, report, (6,), "COMMENT", HEAD, ALLOWED) == (
+        "the comment on app/src/main/LegacySync.kt:300 matches no named number")
+
+
 def check(text, report=REPORT, **kwargs):
     return check_dry_run(parse_review_dry_run(text), parse_report(report, HEAD), (1, 2, 5), "APPROVE", HEAD, ALLOWED,
                          **kwargs)

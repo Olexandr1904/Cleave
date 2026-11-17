@@ -34,9 +34,13 @@ Posting 2 comment(s) in 1 review(s)
  "body": "Two real problems in the sync path.\\n\\n### Findings without a diff anchor\\n\\n**Untranslated key?** `app/src/main/res/values/strings.xml:212`"}
 """
 DRY = SAMPLE.replace("<HEAD>", HEAD)
+# As the reference tool prints them: a resolve shows its entry's text (it posts none), and a comment names the
+# review it answers first.
+REVIEW_456 = "https://github.com/acme-org/acme-app/pull/1712#pullrequestreview-456"
 STEPS = ('[{"step": "reply", "n": 1, "target": "app/src/main/CartRepository.kt:88 @octo-author", "body": "Fixed."},'
-         ' {"step": "resolve", "n": 1, "target": "app/src/main/CartRepository.kt:88 @octo-author"},'
-         ' {"step": "comment", "n": 3, "target": "review 456 @octo-author", "body": "Agreed."}]')
+         ' {"step": "resolve", "n": 1, "target": "app/src/main/CartRepository.kt:88 @octo-author", "body": "Fixed."},'
+         ' {"step": "comment", "n": 3, "target": "review 456 @octo-author",'
+         f' "body": "Re: [review by octo-author]({REVIEW_456})\\n\\nAgreed."}}]')
 RESULTS = ('[{"n": 1, "replied": "https://github.com/acme-org/acme-app/pull/1712#discussion_r1"}, {"n": 1, "resolved": true},'
            ' {"n": 3, "commented": "https://github.com/acme-org/acme-app/pull/1712#issuecomment-2"}]')
 
@@ -272,3 +276,58 @@ def test_replies_steps_not_understood(text, why):
 def test_replies_results_not_understood(text, why):
     with pytest.raises(PosterOutputError, match=why):
         parse_replies_results(text)
+
+
+# The reference tool's real header (deploy plan Task 14): Report, Repo and PR lead it, and an item number under
+# 10 is padded with a space, not a zero.
+TOOL_HEAD = "Report : /tmp/rv/jobs/abc123/report_8f01a2b3c.md\nRepo   : acme-org/acme-app\nPR     : #1712\n"
+REAL = TOOL_HEAD + DRY.replace("  #01 ", "  # 1 ").replace("  #02 ", "  # 2 ").replace("  #05 ", "  # 5 ")
+# Every finding posted by an earlier run: the tool says so after Posting and prints no batch.
+NOTHING_LEFT = (TOOL_HEAD + "Event  : COMMENT\nSummary: no\nInline : 1 comment(s)\n"
+                "  # 1 app/src/main/CartRepository.kt:88  - NPE on an empty list\n"
+                f"HEAD   : {HEAD}\nSkipping 1 finding(s) already posted by an earlier run\n"
+                "Posting 0 comment(s) in 0 review(s)\nNothing left to post on this head.\n")
+
+
+def test_the_tools_real_header():
+    assert parse_review_dry_run(REAL) == parse_review_dry_run(DRY)
+
+
+def test_nothing_left_on_this_head():
+    dry = parse_review_dry_run(NOTHING_LEFT)
+    assert (dry.skipped, dry.comments, dry.reviews, dry.payloads) == (1, 0, 0, ())
+
+
+@pytest.mark.parametrize(
+    ("text", "why"),
+    [
+        (REAL.replace("PR     : #1712\n", "").replace("Summary: yes\n", "Summary: yes\nPR     : #1712\n"),
+         "out of order: PR"),
+        (REAL.replace("PR     : #1712", "PR     : 1712"), "PR is not understood: 1712"),
+        (REAL.replace("Repo   : acme-org/acme-app", "Repo   : acme-app"), "Repo is not understood: acme-app"),
+        (REAL.replace("Report : /tmp/rv/jobs/abc123/report_8f01a2b3c.md", "Report : "), "Report is not understood"),
+        (TOOL_HEAD + REAL, "Report line twice"),
+        (REAL.replace("  # 1 ", "  #  1 "), "unknown line:   #  1"),
+        (NOTHING_LEFT.replace("Posting 0 comment(s) in 0 review(s)\nNothing left to post on this head.\n",
+                              "Nothing left to post on this head.\nPosting 0 comment(s) in 0 review(s)\n"),
+         "out of order: Posting"),
+        (NOTHING_LEFT.replace("head.\n", "head. Done.\n"), "unknown line: Nothing left to post on this head. Done."),
+    ],
+    ids=["pr-after-summary", "pr-without-hash", "repo-without-owner", "report-empty", "report-twice",
+         "item-two-spaces", "nothing-before-posting", "nothing-trailing-text"],
+)
+def test_the_tools_lines_not_understood(text, why):
+    with pytest.raises(PosterOutputError, match=why):
+        parse_review_dry_run(text)
+
+
+def test_confirm_after_the_tools_header():
+    """The confirm run prints the dry run's header before it posts; each line must still be one it knows."""
+    header = REAL.split(BATCH)[0]
+    text = header + "Posted batch 1/1: https://x/1\n    app/src/main/CartRepository.kt:88\n"
+    assert parse_review_confirm(text) == [(1, 1, "https://x/1")]
+    assert parse_review_confirm(NOTHING_LEFT) == []
+    with pytest.raises(PosterOutputError, match="unknown line: WARNING: slow"):
+        parse_review_confirm(header + "WARNING: slow\nPosted batch 1/1: https://x/1\n")
+    with pytest.raises(PosterOutputError, match="unknown line: Event"):
+        parse_review_confirm("Posted batch 1/1: https://x/1\nEvent  : APPROVE\n")

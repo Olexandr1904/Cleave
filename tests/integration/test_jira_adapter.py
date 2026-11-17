@@ -77,6 +77,17 @@ class TestJiraGetTicket:
         assert ticket.description == "Implement login"
 
 
+def test_parse_ticket_reads_type_and_status():
+    ticket = JiraAdapter._parse_ticket({"key": "ACME-1", "fields": {
+        "summary": "s", "issuetype": {"name": "Bug"}, "status": {"name": "To Do"}}})
+    assert (ticket.issue_type, ticket.status) == ("Bug", "To Do")
+
+
+def test_parse_ticket_without_type_and_status_reads_empty():
+    ticket = JiraAdapter._parse_ticket(MOCK_ISSUE)
+    assert (ticket.issue_type, ticket.status) == ("", "")
+
+
 class TestJiraTransition:
     @respx.mock
     async def test_transition_ticket(self, adapter):

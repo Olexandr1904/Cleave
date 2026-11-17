@@ -19,6 +19,7 @@ from integrations.llm.claude_code_adapter import (
     _post_result_watchdog,
     _ProgressState,
 )
+from integrations.llm.llm_interface import LLMResponse
 
 
 def _make_streaming_proc(stdout_lines, stderr_lines, rc):
@@ -628,3 +629,35 @@ class TestIsolatedSession:
                 prompt="p", cwd="/tmp", allowed_tools=["read_file"],
             )
         assert response.cost_usd == 2.14 and response.num_turns == 31
+
+
+OK = LLMResponse(content="done", input_tokens=1, output_tokens=1)
+
+
+def adapter_with_run_cli(monkeypatch, items):
+    """An adapter whose _run_cli records its keyword arguments and returns or raises the next item."""
+    adapter = ClaudeCodeAdapter(model_provider=lambda: "claude-sonnet-4-5")
+    queue, calls = list(items), []
+
+    async def run_cli(**kwargs):
+        calls.append(kwargs)
+        item = queue.pop(0)
+        if isinstance(item, Exception):
+            raise item
+        return item
+
+    monkeypatch.setattr(adapter, "_run_cli", run_cli)
+    return adapter, calls
+
+
+async def test_resume_without_fallback_raises(monkeypatch):
+    adapter, calls = adapter_with_run_cli(monkeypatch, [RuntimeError("No conversation found")])
+    with pytest.raises(RuntimeError, match="No conversation found"):
+        await adapter.execute_in_workspace("p", "/tmp", session_id="s", resume=True, resume_fallback=False)
+    assert len(calls) == 1
+
+
+async def test_resume_falls_back_by_default(monkeypatch):
+    adapter, calls = adapter_with_run_cli(monkeypatch, [RuntimeError("No conversation found"), OK])
+    await adapter.execute_in_workspace("p", "/tmp", session_id="s", resume=True)
+    assert [c.get("resume", False) for c in calls] == [True, False]

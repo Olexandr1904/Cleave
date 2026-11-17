@@ -10,6 +10,7 @@ from typing import Any
 import httpx
 
 from integrations.base.auth_failure import auth_failure_hook
+from integrations.base.ticket_key import carries_key
 from integrations.base.vcs import PRComment, PRStatus, VCSInterface
 
 logger = logging.getLogger(__name__)
@@ -164,19 +165,18 @@ class GitHubAdapter(VCSInterface):
         logger.info("Pushed branch: %s%s", branch_name, suffix)
 
     async def open_pr(
-        self, title: str, body: str, head_branch: str, base_branch: str
+        self, title: str, body: str, head_branch: str, base_branch: str, draft: bool = False
     ) -> tuple[int, str]:
-        """Open a pull request."""
-        data = await self._request(
-            "POST",
-            f"{self._repo_path}/pulls",
-            json={
-                "title": title,
-                "body": body,
-                "head": head_branch,
-                "base": base_branch,
-            },
-        )
+        """Open a pull request, as a draft when asked."""
+        payload: dict[str, Any] = {
+            "title": title,
+            "body": body,
+            "head": head_branch,
+            "base": base_branch,
+        }
+        if draft:
+            payload["draft"] = True
+        data = await self._request("POST", f"{self._repo_path}/pulls", json=payload)
         pr_number = data["number"]
         pr_url = data["html_url"]
         logger.info("Opened PR #%d: %s", pr_number, pr_url)
@@ -195,6 +195,17 @@ class GitHubAdapter(VCSInterface):
         except Exception as e:
             logger.warning("Failed to find PR for branch %s: %s", branch, e)
         return None
+
+    async def open_prs_for_key(self, key: str) -> list[tuple[int, str, str]]:
+        """(number, title, head branch) of the open PRs whose title or head branch holds the key as a whole
+        key (carries_key), as branches are matched."""
+        data = await self._request(
+            "GET", f"{self._repo_path}/pulls", params={"state": "open", "per_page": 100},
+        )
+        return [
+            (pr["number"], pr["title"], pr["head"]["ref"]) for pr in data
+            if carries_key(pr["title"], key) or carries_key(pr["head"]["ref"], key)
+        ]
 
     async def get_pr_comments(self, pr_number: int) -> list[PRComment]:
         """Get all review comments on a PR (handles pagination)."""

@@ -35,6 +35,12 @@ MIGRATIONS: list[str] = [
     "CREATE INDEX posts_pr ON posts (scope, number); "
     "CREATE TABLE confirmations (id TEXT PRIMARY KEY, job_id TEXT NOT NULL, chat_id TEXT NOT NULL, "
     "state TEXT NOT NULL, created_at TEXT NOT NULL, data TEXT NOT NULL)",
+    "CREATE TABLE skill_runs (id TEXT PRIMARY KEY, scope TEXT NOT NULL, ticket_id TEXT NOT NULL, "
+    "state TEXT NOT NULL, retry_at TEXT NOT NULL DEFAULT '', unsent INTEGER NOT NULL DEFAULT 0, "
+    "created_at TEXT NOT NULL, updated_at TEXT NOT NULL, data TEXT NOT NULL); "
+    "CREATE INDEX skill_runs_ticket ON skill_runs (scope, ticket_id); "
+    "CREATE TABLE skill_anchors (chat_id TEXT NOT NULL, message_id INTEGER NOT NULL, run_id TEXT NOT NULL, "
+    "created_at TEXT NOT NULL, PRIMARY KEY (chat_id, message_id))",
 ]
 
 

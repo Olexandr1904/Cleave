@@ -184,6 +184,7 @@ class GlobalConfig:
     reviewer: ReviewerGlobalConfig = field(default_factory=ReviewerGlobalConfig)
     # dotted YAML path -> name of the first ${VAR} in that value (never the value)
     env_refs: dict[str, str] = field(default_factory=dict)
+    env_vars: set[str] = field(default_factory=set)   # every ${VAR} name the file reads (never a value)
 
 
 # --- Jira config (project-level) ---
@@ -372,6 +373,7 @@ class ProjectConfig:
     defaults: DefaultsConfig = field(default_factory=DefaultsConfig)
     pipeline: PipelineConfig = field(default_factory=PipelineConfig)
     env_refs: dict[str, str] = field(default_factory=dict)
+    env_vars: set[str] = field(default_factory=set)   # every ${VAR} name the file reads (never a value)
 
 
 # --- Reviewer config (repo-level) ---
@@ -431,6 +433,25 @@ class ReviewerConfig:
     poster: PosterPartConfig = field(default_factory=PosterPartConfig)
 
 
+# --- Skill flow config (repo-level) ---
+
+
+@dataclass
+class SkillFlowConfig:
+    bug_skill: str = ""
+    task_skill: str = ""
+    bug_types: list[str] = field(default_factory=lambda: ["Bug"])
+    notes_dir: str = ""        # repo-relative, holds {key}
+    worktree_dir: str = ""     # repo-relative, holds {key}
+    required_files: list[str] = field(default_factory=list)
+    build_env: list[str] = field(default_factory=list)
+    host_notes: str = ""
+    gates: dict[str, str] = field(default_factory=dict)   # keys: test, lint, build
+    gate_rounds: int = 2
+    effort: str = ""
+    timeout_seconds: int = 14400
+
+
 # --- Repo config ---
 
 
@@ -463,6 +484,8 @@ class RepoConfig:
     telegram: TelegramConfig = field(default_factory=TelegramConfig)
     defaults: DefaultsConfig = field(default_factory=DefaultsConfig)
     reviewer: ReviewerConfig = field(default_factory=ReviewerConfig)
+    ticket_flow: str = "staged"                     # "staged" | "both"
+    skill_flow: SkillFlowConfig = field(default_factory=SkillFlowConfig)
     env_refs: dict[str, str] = field(default_factory=dict)
 
 

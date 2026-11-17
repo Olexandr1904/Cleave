@@ -193,3 +193,4 @@ Secrets via `${ENV_VAR}` references resolved at load time.
 - [Implementation Plan](implementation-plan-v2.md) — phased stories with acceptance criteria
 - [Decisions](decisions/2026-04-08-architecture-decisions.md) — RFC vs Cleave resolution log
 - [Feature Tracker](features/index.md) — feature status table
+- [Skill flow](skill-flow.md) — `ticket_flow: both`: one `claude` session per ticket runs the repo's own skill and opens a draft PR `… [skill]` (operator reference; host steps in [deploy/README.md](../deploy/README.md#skill-flow-host-prerequisites))

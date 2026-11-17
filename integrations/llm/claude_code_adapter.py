@@ -231,6 +231,7 @@ class ClaudeCodeAdapter(LLMInterface):
         env: dict[str, str] | None = None,
         raw_allowed_tools: list[str] | None = None,
         extra_args: list[str] | None = None,
+        resume_fallback: bool = True,
     ) -> LLMResponse:
         """Execute a prompt with Claude Code in a specific workspace directory.
 
@@ -267,6 +268,9 @@ class ClaudeCodeAdapter(LLMInterface):
                 (e.g. "Bash(git diff:*)"), appended after the mapped
                 allowed_tools in the one --allowedTools value.
             extra_args: CLI flags inserted right after -p.
+            resume_fallback: False = a failed --resume raises instead of
+                retrying as a cold start, for a caller whose session's
+                context is the work itself.
 
         Returns:
             LLMResponse with the final text output and usage stats.
@@ -299,6 +303,8 @@ class ClaudeCodeAdapter(LLMInterface):
             # defer/auto-resume path handle it.
             raise
         except RuntimeError as e:
+            if not resume_fallback:
+                raise
             # The CLI keeps sessions in its own store: a re-created workspace
             # or an expired session makes --resume fail. Falling back to a
             # cold start costs context, not the ticket.

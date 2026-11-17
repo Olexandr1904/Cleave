@@ -152,6 +152,109 @@ A restart fails a running job with `interrupted (daemon restarted)` (a review or
 - `cleave.log`: stdout, the startup lines. The plist sets `PYTHONUNBUFFERED=1`, so they appear as they happen.
 - `cleave-error.log`: stderr: warnings, errors and crashes only (the plist sets `CLEAVE_STDERR_LEVEL=WARNING`; `cleave-daemon.log` has every line). launchd never rotates it; should it grow, empty it with the agent stopped (`: > ~/Library/Logs/cleave/cleave-error.log`).
 
+## Skill flow: host prerequisites
+
+The [skill flow](../docs/skill-flow.md) runs a repo's own skill in one `claude` session per ticket, in a long-lived checkout of the repo. Do these steps once per repo, in a Terminal on the host's desktop (Screen Sharing is fine), before you set `ticket_flow: both` on the repo and restart. None of them prints a token or asks you to type one.
+
+The checkout's path is `<the directory of reviewer.db>/skill/repos/<project_id>/<repo_id>`; with the default database that is:
+```bash
+C=~/CleaveData/reviewer/skill/repos/<project_id>/<repo_id>
+```
+With `reviewer.db_path` set, put that file's directory in place of `~/CleaveData/reviewer`. The steps below use `$C`.
+
+**1. Make the checkout by hand, as a full clone.** The daemon never clones it. A shallow clone is refused by name (`the skill checkout is a shallow clone`), so give no `--depth`. This clones through the daemon's own git environment: the token is read from `.env` inside the script and goes only into a request header, never into the clone's `.git/config` or the keychain.
+```bash
+mkdir -p "$(dirname "$C")"
+cd ~/Cleave
+(set -a; source .env; set +a; C="$C" .venv/bin/python - <<'EOF'
+import os, subprocess
+from orchestrator.reviewer.clone import git_env, github_clone_url
+subprocess.run(["git", "clone", github_clone_url("<owner>", "<repo>"), os.environ["C"]],
+               env=git_env(os.environ["<TOKEN_VAR>"]), check=True)
+EOF
+)
+git -C "$C" rev-parse --is-shallow-repository
+```
+`<TOKEN_VAR>` is the `.env` variable the repo's GitHub token names. A good result: git's `Cloning into …` and no error, then `false`.
+
+Then place the files `skill_flow.required_files` names (a local build properties file, say) in the checkout, and check that each is there:
+```bash
+ls -l "$C/local.properties"
+```
+Leave `submodule.recurse` unset in the checkout: Cleave fetches no submodules, and with `submodule.recurse=true` in the checkout's own config the move to the base branch can fail. A good result for this prints nothing (or `false`):
+```bash
+git -C "$C" config --local --get submodule.recurse
+```
+Last, trust the directory, as for the review clones: `cd "$C" && claude`, accept the workspace-trust prompt and type `/exit`.
+
+**2. The skills' plugins are installed in the host's `claude` profile, and a skill can be called by name in `-p` mode.** Install the plugins that carry the repo's skills for the host user (`claude`, then `/plugin`), then ask a `-p` session in the checkout which skills it can call:
+```bash
+cd "$C"
+claude -p --strict-mcp-config --allowedTools Skill \
+  "Without running any skill, list the names of the skills you can call with the Skill tool, one per line."
+```
+A good result lists the names `skill_flow.bug_skill` and `skill_flow.task_skill` hold, written the same way (with the plugin's prefix, `plugin:skill`, when the config names them so). This list is a stand-in for calling a skill, not a call: calling one would start its work on a ticket. The first run is the first real call.
+
+**3. The `build_env` variables are visible to the daemon under launchd.** The daemon gets only the plist's variables and `.env`, which `run.sh` exports whole; `run.sh` also sets `ANDROID_HOME` and `ANDROID_SDK_ROOT` when it finds the SDK. With the daemon running under launchd, print just those variables from its environment (put the names `build_env` lists in place of the three after `HOME`):
+```bash
+PID="$(pgrep -f 'main.py --config' | head -1)"
+ps -wwE -o command= -p "$PID" | tr ' ' '\n' | grep -E '^(HOME|JAVA_HOME|ANDROID_HOME|ANDROID_SDK_ROOT)='
+```
+A good result: one `NAME=value` line for `HOME` (it shows the environment could be read) and one for each name. A missing one goes into `.env`, followed by a restart (`launchctl kickstart -k gui/$(id -u)/com.cleave.daemon`). Otherwise every run stops with `build variable <name> is not set in the daemon's environment`.
+
+**4. A session resumed with `--resume` keeps its context, and the CLI words an unknown session as Cleave expects.** The skill flow continues one session over many turns (your replies, the commit, the gate fixes):
+```bash
+cd "$C"
+ID="$(uuidgen | tr '[:upper:]' '[:lower:]')"
+claude -p --session-id "$ID" "Remember the word copper. Answer with one word: noted."
+claude -p --resume "$ID" "Which word did I ask you to remember? Answer with that word only."
+```
+A good result: the second answer is `copper`. Then resume a session id the CLI never created, with the output options the daemon uses:
+```bash
+claude -p --resume "$(uuidgen | tr '[:upper:]' '[:lower:]')" --output-format stream-json --verbose "hello" 2>&1 \
+  | grep -i "no conversation found"
+```
+A good result: a line that holds `No conversation found`. Cleave starts a fresh session after a cut first turn only on those words; if this prints nothing, the CLI words it differently, and a run whose first turn was cut stops with `session failed` instead (Drop ends it).
+
+**5. The deny rules apply.** Start `-p` probe sessions in an environment scrubbed like the session's, with a settings file made by the daemon's own code, as the session's is. First make the file and the environment:
+```bash
+cd ~/Cleave
+S="$(mktemp -d)/settings.json"
+.venv/bin/python -c 'import json; from pathlib import Path; from orchestrator.skillflow.session import skill_settings_json; print(json.dumps(skill_settings_json([Path(".env").absolute(), Path("config-live").absolute()]), indent=2))' > "$S"
+cd "$C"
+SCRUBBED=(env -i HOME="$HOME" PATH="$PATH" USER="$USER" LANG="$LANG" TMPDIR="$TMPDIR"
+          GIT_TERMINAL_PROMPT=0 GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null)
+```
+The control, without Cleave's settings file: the same harmless command runs.
+```bash
+"${SCRUBBED[@]}" claude -p --strict-mcp-config --allowedTools Bash \
+  "Run 'gh --version' with the Bash tool. Answer 'ran' or 'refused', then its first output line."
+```
+A good result: `ran` and a `gh version …` line. Then with Cleave's settings file:
+```bash
+"${SCRUBBED[@]}" claude -p --settings "$S" --strict-mcp-config --allowedTools Bash \
+  "Run 'gh --version' with the Bash tool, then 'git ls-remote origin', one call each. For each, answer 'ran' or 'refused'."
+```
+A good result: both `refused`, and no `gh` version and no list of refs in the answer. Bash is allowed in both probes, as it is in the session, and the control ran the same `gh --version`: so the refusal comes from the deny rules, not from the model declining.
+
+**6. The host user keeps no GitHub login: not for `gh`, not for git.** The session runs as the host user with its `HOME`, so it can reach a login stored for that user, and a push made with it would skip every gate Cleave runs. The reviewer's own `gh` calls get the token in their environment, one call at a time, and Cleave's own git calls likewise.
+
+First `gh`:
+```bash
+env -u GH_TOKEN -u GITHUB_TOKEN gh auth status
+```
+A good result: `You are not logged into any GitHub hosts.`, with no keychain prompt. A listed host, or a keychain prompt, means a login is stored (`gh auth status` shows a stored token masked, never whole): deny the prompt, remove the login with `gh auth logout`, and run the check again until it prints the not-logged-in line with no prompt.
+
+Then git's own credentials for github.com: no entry in a git credentials file, and no github.com item in the login keychain (where git's `osxkeychain` helper keeps one). These print only whether an entry exists, never its secret:
+```bash
+for f in ~/.git-credentials ~/.config/git/credentials; do
+  [ -e "$f" ] && echo "$f: $(grep -c 'github\.com' "$f") github.com line(s)"
+done
+security find-internet-password -s github.com ~/Library/Keychains/login.keychain-db >/dev/null 2>&1 \
+  && echo "a github.com item is in the login keychain" || echo "no github.com item in the login keychain"
+```
+A good result: no file line (or `0 github.com line(s)`), then `no github.com item in the login keychain`. Without `-g` or `-w`, `security find-internet-password` reads only the item's attributes, not its password, and asks for nothing. To remove what it found: delete the github.com lines from that file, and the github.com item in Keychain Access (search for github.com in the login keychain); then run the check again.
+
 ---
 
 ## Dry-Run Testing (Development)

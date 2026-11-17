@@ -117,6 +117,8 @@ class JiraAdapter(TrackerInterface):
         reporter = fields.get("reporter")
         sprint_field = fields.get("sprint")
         priority = fields.get("priority")
+        issue_type = fields.get("issuetype")
+        status = fields.get("status")
 
         return TicketData(
             id=issue["key"],
@@ -145,6 +147,8 @@ class JiraAdapter(TrackerInterface):
                 for a in fields.get("attachment", [])
                 if a.get("content")
             ],
+            issue_type=issue_type.get("name", "") if issue_type else "",
+            status=status.get("name", "") if status else "",
         )
 
     async def poll_tickets(self) -> list[TicketData]:

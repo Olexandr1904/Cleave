@@ -13,6 +13,7 @@ import logging
 import os
 import sys
 from collections.abc import Awaitable, Coroutine, Mapping
+from pathlib import Path
 from typing import Callable
 from urllib.parse import urlsplit
 
@@ -22,6 +23,7 @@ from config.schemas import GlobalConfig, LoadedProject, ProjectConfig, RepoConfi
 from integrations.base.vcs import VCSInterface
 from orchestrator.reviewer.chat import ReviewerChat
 from orchestrator.reviewer.service import RepoContext, _where
+from orchestrator.skillflow.runner import SkillRepo
 
 
 def _build_tracker_for_project(cfg, project_id, on_auth_failure=None):
@@ -171,6 +173,76 @@ def _reviewer_contexts(
     return contexts
 
 
+def _skill_chat_id(repo_cfg: RepoConfig, global_chat_id: str) -> str:
+    """The chat a repo's skill runs write to: the repo's (its project's) Telegram chat, else the
+    global one; "" when there is neither."""
+    return repo_cfg.telegram.default_chat_id or global_chat_id
+
+
+def _skill_repos(
+    projects: dict[str, LoadedProject],
+    vcs_adapters: dict[str, tuple[VCSInterface, RepoConfig]],
+    skill_dir: Path,
+    *,
+    dry_run: bool,
+    telegram: bool,
+    global_chat_id: str = "",
+) -> list[SkillRepo]:
+    """One skill repo per loaded repo with ticket_flow both (GitHub only, checked at load), a forge
+    adapter and a Telegram chat.
+
+    Its checkout is at skill_dir/repos/<project>/<repo>, with the token its forge adapter was built
+    from: the checkout's redact masks only its own token. A repo without a forge token is skipped
+    with a warning; one without a chat (_skill_chat_id) with a warning and a line. A dry run gets
+    none, and nor does a daemon without Telegram: a run nobody could be told about is never made; a
+    line says the skill flow is off when a repo asked for it.
+    """
+    wanted = [(project_id, repo_id, repo_cfg) for project_id, project in projects.items()
+              for repo_id, repo_cfg in project.repos.items() if repo_cfg.ticket_flow == "both"]
+    if not wanted:
+        return []
+    if dry_run:
+        print("  Skill flow: off (dry-run)")
+        return []
+    if not telegram:
+        print("  Skill flow: off (no Telegram)")
+        return []
+
+    from orchestrator.reviewer.clone import github_clone_url
+    from orchestrator.skillflow.checkout import SkillCheckout
+
+    repos: list[SkillRepo] = []
+    for project_id, repo_id, repo_cfg in wanted:
+        if repo_id not in vcs_adapters:
+            logger.warning(
+                "Skill flow on for %s/%s, but it has no forge token; not run", project_id, repo_id,
+            )
+            continue
+        adapter, adapter_cfg = vcs_adapters[repo_id]
+        # Keyed by repo id alone: the same id in another project keeps that project's adapter, with
+        # its token.
+        if adapter_cfg is not repo_cfg:
+            logger.warning(
+                "Skill flow on for %s/%s, but another project has a repo %s too; not run",
+                project_id, repo_id, repo_id,
+            )
+            continue
+        if not _skill_chat_id(repo_cfg, global_chat_id):
+            print(f"  Skill flow: off for {project_id}/{repo_id} (no Telegram chat)")
+            logger.warning(
+                "Skill flow on for %s/%s, but it has no Telegram chat; not run",
+                project_id, repo_id,
+            )
+            continue
+        github = repo_cfg.vcs.github
+        checkout = SkillCheckout(
+            skill_dir / "repos" / project_id / repo_id, github_clone_url(github.owner, github.repo),
+            repo_cfg.vcs.default_branch, github.token,
+        )
+        repos.append(SkillRepo(project_id, repo_id, repo_cfg, checkout, adapter))
+    return repos
+
+
 def _reviewer_chat(
     notifier, global_config: GlobalConfig, projects: dict[str, LoadedProject], store=None,
 ) -> ReviewerChat | None:
@@ -273,6 +345,22 @@ def _start_reviewer(
                 coro = _when_ready(ready, stop, part.loop, wait, name=name, start=part.start)
             background[name] = (_start_background(name, coro), stop)
     return background
+
+
+def _start_skill(
+    runner, ready: asyncio.Event, wait: float = FIRST_ROUND_WAIT_SECONDS,
+) -> dict[str, tuple[asyncio.Task, asyncio.Event]]:
+    """Start the skill runner with its own stop event, for _stop_background: its start() (the runs
+    a dead process left running, interrupted) at once, its loop once `ready` is set, `wait` s at
+    most.
+
+    Nothing without a runner: no repo runs the skill flow.
+    """
+    if runner is None:
+        return {}
+    stop = asyncio.Event()
+    coro = _when_ready(ready, stop, runner.loop, wait, name="Skill runs", start=runner.start)
+    return {"Skill runs": (_start_background("Skill runs", coro), stop)}
 
 
 async def _stop_background(
@@ -732,6 +820,10 @@ def main(argv: list[str] | None = None) -> int:
     switches.add_listener(_on_switch_changed)
     print(f"  Switches: tickets={switches.get('tickets')}, reviews={switches.get('reviews')}")
 
+    # The reviewer's and the skill flow's model sessions run on the claude.ai login (the CLI), never
+    # the API key; they may read neither the repo's .env nor the config directory.
+    secret_paths = [Path(__file__).parent / ".env", Path(args.config).absolute()]
+
     # Reviewer: polls each repo with reviewer.enabled, runs its review jobs one at a time and its
     # edit and draft jobs one at a time; the replies to its messages are wired with the command
     # handler. Repos added by hot reload wait for a restart.
@@ -774,9 +866,6 @@ def main(argv: list[str] | None = None) -> int:
             reviewer_chat.send if reviewer_chat is not None else None, _pipeline_prs,
             event_bus=event_bus,
         )
-        # The model sessions run on the claude.ai login (the CLI), never the API key; they may read
-        # neither the repo's .env nor the config directory.
-        secret_paths = [Path(__file__).parent / ".env", Path(args.config).absolute()]
         jobs = global_config.reviewer.jobs
         review_jobs = JobRunner(
             reviewer_contexts, reviewer_store, switches,
@@ -800,6 +889,47 @@ def main(argv: list[str] | None = None) -> int:
         replies_read = reviewer_chat is not None and reviewer_chat.chat_id in allowed_chat_ids
         from_telegram = ", posting from Telegram" if replies_read else ""
         print(f"  Reviewer: {len(reviewer_contexts)} repo(s), jobs on{from_telegram}")
+
+    # Skill flow: with ticket_flow both, each new workspace's ticket also gets a skill run, worked
+    # one at a time in the pipeline's build slot; the replies to its messages are wired with the
+    # command handler. Repos added by hot reload wait for a restart.
+    skill_dir = reviewer_data / "skill"
+    global_chat_id = global_config.telegram.default_chat_id
+    skill_repos = _skill_repos(
+        projects, vcs_adapters, skill_dir, dry_run=args.dry_run, telegram=notifier is not None,
+        global_chat_id=global_chat_id,
+    )
+    skill_runner = None
+    skill_replies = None
+    if skill_repos:
+        from integrations.llm.claude_code_adapter import ClaudeCodeAdapter
+        from orchestrator.skillflow.chat import SkillChat
+        from orchestrator.skillflow.intake import SkillIntake
+        from orchestrator.skillflow.replies import SkillReplies
+        from orchestrator.skillflow.runner import SkillRunner
+        from orchestrator.skillflow.store import SkillStore
+
+        # One store and one chat for the runner, the intake and the replies: the compare-and-set
+        # that keeps a reply and the runner apart is a lock inside the one store object.
+        skill_store = SkillStore(connect(reviewer_db_path(global_config.reviewer)))
+        skill_chat = SkillChat(notifier, skill_store)
+        skill_runs = skill_dir / "runs"
+        skill_runner = SkillRunner(
+            skill_repos, skill_store, skill_chat, ClaudeCodeAdapter(),
+            slot=orchestrator.build_slot, switches=switches,
+            credential_failing=credential_health.failing, get_mode=mode_handler.get_mode,
+            runs_dir=skill_runs, secret_paths=secret_paths, event_bus=event_bus,
+        )
+
+        # Runs only for the repos the runner serves: a repo skipped above, or one added by hot
+        # reload, would get runs no runner takes.
+        served = frozenset(repo.scope for repo in skill_repos)
+        orchestrator.set_skill_intake(SkillIntake(
+            skill_store, skill_runs, lambda repo_cfg: _skill_chat_id(repo_cfg, global_chat_id),
+            wake=skill_runner.wake, serves=served.__contains__,
+        ))
+        skill_replies = SkillReplies(skill_store, skill_chat, skill_runner.wake)
+        print(f"  Skill flow: {len(skill_repos)} repo(s)")
 
     # Initialize command handler for Telegram free-text control
     command_handler = None
@@ -852,6 +982,7 @@ def main(argv: list[str] | None = None) -> int:
                 reviewer=reviewer_replies,
                 # Never None: with an empty allowlist the reviewer reads no chat at all.
                 reviewer_chat_ids=allowed_chat_ids,
+                skill=skill_replies,
             )
             command_handler._wake_fn = lambda: orchestrator._wake_event.set()
             notifier.set_command_handler(command_handler)
@@ -881,6 +1012,7 @@ def main(argv: list[str] | None = None) -> int:
         reviewer_tasks = _start_reviewer(
             reviewer, review_jobs, review_edits, ready=credential_health.first_round,
         )
+        skill_tasks = _start_skill(skill_runner, credential_health.first_round)
 
         # Init runtime settings table (model picker).
         import aiosqlite as _aiosqlite
@@ -1018,11 +1150,13 @@ def main(argv: list[str] | None = None) -> int:
         try:
             await orchestrator.run()
         finally:
-            # First, while Telegram can still deliver a line from a check in flight. A review job
-            # still running is cancelled: the adapter kills the CLI's process group.
+            # First, while Telegram can still deliver a line from a check in flight. A review job,
+            # or a skill run's turn or gate, still running is cancelled: its process group is
+            # killed.
             await _stop_background({
                 "Credential health": (credential_task, credential_stop),
                 **reviewer_tasks,
+                **skill_tasks,
             }, timeout=5.0)
             if tg_active:
                 # A post cut short here stays `posting`: the next start announces it.

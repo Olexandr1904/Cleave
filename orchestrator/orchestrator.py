@@ -223,9 +223,19 @@ class Orchestrator:
     _wake_event = _RuntimeAttr("_wake_event")
     _agent_semaphore = _RuntimeAttr("_agent_semaphore")
 
+    @property
+    def build_slot(self) -> asyncio.Semaphore:
+        """The runtime's build semaphore, the same object: a skill session or gate waits for the
+        slot a staged build stage holds, and the other way round."""
+        return self._ensure_runtime_for_tests()._build_semaphore
+
     def set_switches(self, switches: Any) -> None:
         """Attach the running/paused switches (reviewer mode)."""
         self._switches = switches
+
+    def set_skill_intake(self, intake) -> None:
+        """Attach the intake that makes a skill run for each new workspace (skill flow)."""
+        self._skill_intake = intake
 
     def _tickets_running(self, project_id: str, repo_id: str) -> bool:
         """True when tickets run for this repo; always True until switches are set."""
@@ -313,7 +323,7 @@ class Orchestrator:
     ) -> Workspace:
         """Forward to ingest.create_workspace_for_ticket with bound deps."""
         from orchestrator.ingest import create_workspace_for_ticket
-        return await create_workspace_for_ticket(
+        ws = await create_workspace_for_ticket(
             pt, project_id, repo_config,
             workspace_manager=self._workspace_manager,
             tracker=self.get_tracker_for_project(project_id),
@@ -321,6 +331,15 @@ class Orchestrator:
             repo_vcs=getattr(self, "_repo_vcs", {}),
             notifier=getattr(self, "_notifier", None),
         )
+        intake = getattr(self, "_skill_intake", None)
+        if intake is not None:
+            # The skill run is extra: the staged flow keeps its workspace whatever happens to it. The class name
+            # only, the message is not ours to log.
+            try:
+                intake.create(ws, pt.ticket, project_id, repo_config)
+            except Exception as e:
+                logger.warning("Skill run not created for %s: %s", pt.ticket.id, type(e).__name__)
+        return ws
 
     async def advance_workspace(
         self, workspace: Workspace, _resume_depth: int = 0,

@@ -2,9 +2,8 @@
 from __future__ import annotations
 import dataclasses
 from datetime import datetime, timezone
-from pathlib import Path
 from orchestrator.reviewer.lines import (
-    drift_line, job_deferred_line, job_failed_line, login_line, outdated_line, worktree_left_line)
+    drift_line, job_deferred_line, job_failed_line, login_line, outdated_line)
 from orchestrator.reviewer.messages import message_parts, recheck_message, review_message, split_message
 from orchestrator.reviewer.report import parse_report
 from tests.unit.test_reviewer_report import HEAD, REPORT
@@ -180,8 +179,6 @@ def test_job_lines():
     assert drift_line("acme/app", "docs/review/code-review-process.md", "Prepare") == (
         '[acme/app] The "Prepare" section of docs/review/code-review-process.md changed on the base branch:'
         " check that Cleave's Prepare still matches it.")
-    assert worktree_left_line("acme/app", 1712, Path("/data/clone/.worktrees/pr-1712"), "it has changes") == (
-        "[acme/app] #1712: worktree /data/clone/.worktrees/pr-1712 was not removed — it has changes")
 
 
 def test_outdated_line_names_the_commands_that_still_run():

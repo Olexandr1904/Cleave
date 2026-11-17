@@ -32,7 +32,6 @@ from tests.unit.test_reviewer_posting import (
     T0,
     T1,
     BusyClone,
-    ChangingClone,
     N,
     Script,
     not_shown,
@@ -45,8 +44,6 @@ CMD = ReplyCommand("post_replies", (1, 3))
 REPLY_1, RESOLVE_1, COMMENT_3 = json.loads(STEPS)
 REPLIED, _, COMMENTED = (r.get("replied") or r.get("commented") for r in json.loads(RESULTS))
 RESOLVED = " · resolved (reply not seen on GitHub: resolved threads are not listed)"
-CHANGED = ("Not posted on #1712: the review session changed the clone's git config;"
-           " posting waits until the job ends.")
 
 
 def comment(comment_id, author, body="…"):
@@ -699,40 +696,6 @@ async def test_a_job_superseded_during_the_post_condition_stays_superseded(tmp_p
         rig.job.id, "superseded", "new head", T1.isoformat())  # the post-condition's read
     assert (await rig.post()).state == "posted"
     assert rig.posts()[0].state == "posted" and rig.state() == "superseded"
-
-
-@pytest.mark.parametrize("when, runs, reads", [
-    ("before-dry-run", [], 0), ("before-threads", [False], 0), ("before-confirm", [False], 1),
-])
-async def test_git_config_changed_before_confirm_refused(tmp_path, when, runs, reads):
-    clone = ChangingClone(tmp_path / "clone", "file:///nowhere", "develop", "ghp_not_real")
-    rig = Rig(tmp_path, clone=clone)
-
-    def change(*_):
-        clone.changed = [clone.path / ".git" / "config"]
-
-    if when == "before-dry-run":
-        change()
-    elif when == "before-threads":
-        rig.poster.on_dry = change
-    else:
-        rig.readiness.on_threads = change
-    assert await rig.post() == PostOutcome("refused", CHANGED)
-    assert [confirm for _, confirm in rig.poster.calls] == runs and rig.log.count("threads") == reads
-    assert rig.posts() == []
-
-
-async def test_git_config_changed_before_the_postcondition(tmp_path):
-    clone = ChangingClone(tmp_path / "clone", "file:///nowhere", "develop", "ghp_not_real")
-    rig = Rig(tmp_path, clone=clone)
-    rig.poster.on_confirm = lambda: setattr(clone, "changed", [clone.path / ".git" / "config"])
-    why = "the review session changed the clone's git config, so the threads command was not run"
-    assert await rig.post() == PostOutcome(
-        "unverified", f"Posting on #1712 ran, but GitHub could not be read to check it ({why}). Check the PR before"
-                      f" posting again: {PR_URL}")
-    assert rig.log.count("threads") == 1  # before the confirm run only
-    [post] = rig.posts()
-    assert (post.state, post.error) == ("unverified", why)
 
 
 async def test_clone_in_use_refused(tmp_path):

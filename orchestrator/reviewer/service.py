@@ -149,7 +149,7 @@ class RepoContext:
     project_id: str
     repo_id: str
     cfg: ReviewerConfig
-    clone: Any  # refresh() -> sha, has_file(rel), path, lock, session_lock, in_session (see ReviewClone)
+    clone: Any  # refresh() -> sha, has_file(rel), path, lock, reader(), make_job_clone() (see ReviewClone)
     readiness: Any  # board(clone_dir) -> BoardSnapshot
     forge: Any  # open_prs(), details(number, updated_at), reviewed_by(number, login, updated_at)
     poster: Any = None  # review(clone_dir, values, confirm=), replies(...) (see CommandPoster)
@@ -280,28 +280,14 @@ class ReviewerService:
             return _Outcome(next_at)
 
         clone = ctx.clone
-        if not clone.lock.locked():
-            if not await _acquire(clone.lock):  # a job or a post queued first took it
-                return None
-            try:  # no job runs: refresh, then read the clone
-                await clone.refresh()
-                doc_ok, notices, snapshot = await self._read_clone(ctx)
-            finally:
-                clone.lock.release()
-        else:
-            if not await _acquire(clone.session_lock):  # a post runs in the job's session phase
-                return None
-            try:
-                if not clone.in_session:  # a job prepares or cleans up the clone
-                    return None
-                if changed := clone.changed_git_files():  # the job's restore and failure deal with it
-                    logger.warning("Reviewer poll of %s: the session changed %s; no readiness until it ends",
-                                   scope, ", ".join(map(str, changed)))
-                    return _Outcome(next_at)
-                # A job's session: the clone stays at the base the job prepared from, read as it is.
-                doc_ok, notices, snapshot = await self._read_clone(ctx)
-            finally:
-                clone.session_lock.release()
+        # A job's Prepare holds the clone for seconds, a post for its runs: wait a bound, else poll again shortly.
+        if not await _acquire(clone.lock):
+            return None
+        try:
+            await clone.refresh()
+            doc_ok, notices, snapshot = await self._read_clone(ctx)
+        finally:
+            clone.lock.release()
         doc, base = cfg.process.doc, cfg.base_branch
         open_prs = await ctx.forge.open_prs()
         details, reviewed = {}, {}

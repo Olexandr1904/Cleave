@@ -79,8 +79,6 @@ logger = logging.getLogger(__name__)
 EVENT_STATE = {"APPROVE": "APPROVED", "REQUEST_CHANGES": "CHANGES_REQUESTED", "COMMENT": "COMMENTED"}
 _MAX_PATH = 200  # characters of a payload comment's path shown in a reply
 _FINDINGS = "### Findings without a diff anchor"  # where a payload body's Summary ends and its findings start
-_CHANGED = "the review session changed the clone's git config; posting waits until the job ends"
-_CHANGED_AFTER = "the review session changed the clone's git config, so the threads command was not run"
 _REPORT_CHANGED = "The report changed while posting (an edit landed): look at it again and reply. Nothing was done."
 _PREPARED_THREADS = "threads.prepared.json"  # Prepare's threads snapshot, kept in a re-check's copy by the runner
 _NO_SNAPSHOT = "Prepare's threads snapshot is not in this job's copy: nothing posted."
@@ -387,8 +385,6 @@ class Posting:
             before_reviews = await self._read(number, ctx.forge.reviews(number))
             before = {r.id for r in before_reviews}
             self._refuse_second_approve(job, me, cmd, before_reviews)
-            if ctx.clone.changed_git_files():  # the lease checked them on entry; a session may have since
-                raise _Refused(not_posted_line(number, _CHANGED))
             self._current(job.id)
             # An edit may have landed during the dry run: the text the operator now has is not the one checked.
             self._refuse_changed(job, base.read_bytes().decode("utf-8"), items, cmd.numbers)
@@ -593,10 +589,8 @@ class Posting:
                 await lease.enter_async_context(ctx.clone.reader(wait=self._reader_wait))
             except CloneError as e:
                 raise _Refused(not_posted_line(number, str(e))) from None
-            _unchanged(ctx, number)  # before every command that runs with the token
             planned = await self._replies_dry_run(ctx, values, number, entries, prepared)
             pr = await self._pr_at_head(ctx, number, head)
-            _unchanged(ctx, number)
             before = await self._threads_before(ctx, number, head)
             # An entry the dry run leaves out is already posted only when GitHub agrees.
             by_n = {entry["n"]: entry for entry in entries}
@@ -611,7 +605,6 @@ class Posting:
             for n in sorted(planned):  # GitHub, right before the confirm run, must still allow each step
                 if (refused := _not_postable_now(by_n[n], planned[n], before, prepared, me, number)) is not None:
                     raise _Refused(refused)
-            _unchanged(ctx, number)
             self._current(job.id)
             post = self._start(job, dataclasses.replace(cmd, event=""), "replies")
             result = await ctx.poster.replies(ctx.clone.path, values, confirm=True)
@@ -675,9 +668,6 @@ class Posting:
         for read in range(self._verify_reads):
             if read:
                 await self._sleep(self._verify_wait)
-            if ctx.clone.changed_git_files():
-                failure = _CHANGED_AFTER
-                break
             try:
                 snapshot = await ctx.readiness.threads(ctx.clone.path, number)
             except ReadinessError as e:
@@ -882,13 +872,6 @@ def _write_plan(job_dir: Path, head9: str, entries: list[dict], number: int) -> 
     plan = [{key: entry[key] for key in _PLAN_KEYS if key in entry} for entry in entries]
     write_atomic(path, json.dumps(plan, indent=2) + "\n")
     return path
-
-
-def _unchanged(ctx: RepoContext, number: int) -> None:
-    """Before a command that runs with the token: the lease checked the git files on entry; a session may have
-    changed them since."""
-    if ctx.clone.changed_git_files():
-        raise _Refused(not_posted_line(number, _CHANGED))
 
 
 def _wanted_steps(entry: dict) -> list[str]:

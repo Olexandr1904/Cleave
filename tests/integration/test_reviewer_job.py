@@ -10,6 +10,7 @@ import os
 import shutil
 import subprocess
 import sys
+from pathlib import Path
 
 import respx
 
@@ -54,7 +55,8 @@ import json, os, re, sys
 from pathlib import Path
 
 prompt = sys.stdin.read()
-Path(@DUMP@).write_text(json.dumps({"argv": sys.argv, "env": dict(os.environ), "prompt": prompt}))
+Path(@DUMP@).write_text(json.dumps({"argv": sys.argv, "env": dict(os.environ), "prompt": prompt,
+                                    "cwd": os.getcwd()}))
 run_dir = Path(re.search(r"Its artifacts are in (\S+): meta\.env", prompt)[1])
 (run_dir / @REPORT_NAME@).write_text(@REPORT@, encoding="utf-8")
 (run_dir / "tg_lines.json").write_text(json.dumps({"1": @TG_LINE@}), encoding="utf-8")
@@ -216,11 +218,14 @@ async def test_review_job_end_to_end(tmp_path, monkeypatch):
     message_ids = store.run(job.id).message_ids
     assert [store.anchor("-1001", i) for i in message_ids] == [Anchor(job.id, "", 0)]   # every part a reply anchor
 
-    paths = job_paths(clone.path, cfg.process, 7, head, rv / "jobs", job.id)
+    # The session ran in a job clone of its own, never in the review clone, and the job clone is gone.
+    job_root = rv / "work" / "acme" / "app" / job.id
+    paths = job_paths(job_root / "clone", cfg.process, 7, head, rv / "jobs", job.id)
+    assert Path(call["cwd"]).resolve() == (job_root / "clone").resolve()
     rules = argv[argv.index("--allowedTools") + 1].split(",")
     assert "Bash(git diff:*)" in rules
     assert f"Edit(/{paths.run_dir}/**)" in rules
-    assert rules == allowed_tools("review", clone.path, paths, cfg.process.helper_scripts)
+    assert rules == allowed_tools("review", job_root / "clone", paths, cfg.process.helper_scripts)
     assert argv == [
         str(fake), "-p",
         "--restricted", "--settings", str(paths.job_dir / "session" / "settings.json"), "--tools", SESSION_TOOLS,
@@ -228,7 +233,8 @@ async def test_review_job_end_to_end(tmp_path, monkeypatch):
         "--effort", "xhigh", "--model", "opus", "--output-format", "stream-json", "--verbose",
         "--max-turns", "400", "--allowedTools", ",".join(rules), "--add-dir", str(paths.worktree),
     ]
-    assert not paths.worktree.exists()
+    assert not paths.worktree.exists() and not job_root.exists()
+    assert not (clone.path / "tools" / "review" / "runs").exists()   # nothing of the job in the review clone
     assert (paths.job_dir / "meta.env").read_text().startswith(f"HEAD={head}\n")
     assert (paths.job_dir / report_name).read_text(encoding="utf-8") == report_md(head)
 

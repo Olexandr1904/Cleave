@@ -7,6 +7,7 @@ import json
 import logging
 import shutil
 import stat
+from types import SimpleNamespace
 from datetime import datetime, timedelta, timezone
 
 import pytest
@@ -101,7 +102,7 @@ class Rig:
     """A runner on a real store and switches, a fixed clock, a fake clone, chat and event bus; prepare and
     run_session patched on the runner module (the fake session writes what `write` writes)."""
     def __init__(self, tmp_path, monkeypatch, repos=("app",), idle_seconds=0.01, chat=True, clone=FakeClone,
-                 ledgers_dir=None):
+                 ledgers_dir=None, max_parallel=6, min_free_bytes=0):
         conn = connect(tmp_path / "rv" / "reviewer.db")
         self.store, self.switches = ReviewerStore(conn), Switches(conn)
         self.t, self.tmp, self.forge = T0, tmp_path, FakeForge()
@@ -118,24 +119,29 @@ class Rig:
         self.runner = JobRunner(
             self.contexts, self.store, self.switches, self.failing.__contains__,
             lambda key, status: self.auth.append((key, status)), self.chat, object(), {"acme": "tracker"},
-            RunnerConfig(tmp_path / "rv" / "jobs", [tmp_path / ".env"], JOBS, ledgers_dir),
+            RunnerConfig(tmp_path / "rv" / "jobs", [tmp_path / ".env"], JOBS, ledgers_dir,
+                         max_parallel=max_parallel, min_free_bytes=min_free_bytes),
             event_bus=self, now=lambda: self.t, environ=ENV, idle_seconds=idle_seconds)
         monkeypatch.setattr(runner_module, "prepare", self._prepare)
         monkeypatch.setattr(runner_module, "run_session", self._session)
     def emit(self, event_type, message, *, project_id=None, data=None):
         self.events.append((event_type, project_id, data))
-    async def _prepare(self, ctx, job, paths, *, store, tracker, now):
-        assert ctx.clone.lock.locked() and store is self.store and tracker == "tracker" and now == self.t.isoformat()
-        await asyncio.sleep(0)  # a real prepare yields: a runner that loops on a job must not starve the clock
+    async def _prepare(self, ctx, job, paths, *, store, tracker, now, job_clone_dir):
+        assert store is self.store and tracker == "tracker" and now == self.t.isoformat()
+        assert job_clone_dir == self.root(job) / "clone"
+        async with ctx.clone.lock:   # as the real one: the review clone's lock for its own git only
+            await self._locked_part()
         self.prepares += 1
+        job_clone = FakeClone(job_clone_dir)   # made before a later failure, as the real one may be
         if self.prepare_error:
             raise self.prepare_error
         paths.run_dir.mkdir(parents=True, exist_ok=True)
         paths.replies_plan.parent.mkdir(parents=True, exist_ok=True)
-        return Prepared(PR, self.drift)
+        return Prepared(PR, self.drift, job_clone)
+    async def _locked_part(self):
+        await asyncio.sleep(0)  # a real prepare yields: a runner that loops on a job must not starve the clock
     async def _session(self, llm, **kw):
-        assert self.clone.lock.locked()
-        self.session_kw, self.paths = kw, kw["paths"]
+        self.session_kw, self.paths, self.session_clone = kw, kw["paths"], kw["clone_dir"]
         self.write(kw["paths"])
         if self.during:
             self.during(self)
@@ -147,6 +153,9 @@ class Rig:
         return got.state, got.reason
     def job_dir(self, job):
         return self.tmp / "rv" / "jobs" / job.id
+    def root(self, job):
+        """The directory the job owns while it runs (its job clone and worktree)."""
+        return self.tmp / "rv" / "work" / "acme" / job.scope.split("/")[1] / job.id
 
 async def test_review_job_done_and_message_sent(tmp_path, monkeypatch):
     rig = Rig(tmp_path, monkeypatch)
@@ -172,9 +181,9 @@ async def test_review_job_done_and_message_sent(tmp_path, monkeypatch):
     kw = rig.session_kw
     assert kw["prompt"] == review_prompt(DOC, "Prepare", 1712, rig.paths)
     assert (kw["kind"], kw["clone_dir"], kw["job_cfg"], kw["environ"]) == (
-        "review", rig.clone.path, JOBS["review"], ENV)
+        "review", rig.root(job) / "clone", JOBS["review"], ENV)
     assert (kw["helper_scripts"], kw["secret_paths"]) == (["tools/review/*.py"], [tmp_path / ".env"])
-    assert rig.clone.removed == [(rig.paths.worktree, CONFIG_TEXT)]
+    assert not rig.root(job).exists() and rig.clone.removed == []   # the job's directory went with its worktree
 
 async def test_head_moved_during_run_supersedes(tmp_path, monkeypatch):
     rig = Rig(tmp_path, monkeypatch)
@@ -351,7 +360,7 @@ async def test_prepare_outcomes(tmp_path, monkeypatch, outcome, state, lines):
     assert rig.state(job) == (state, "boom")
     assert rig.chat.texts == lines
     assert rig.session_kw is None
-    assert len(rig.clone.removed) == 1  # in `finally`, whatever prepare did
+    assert not rig.root(job).exists()  # in `finally`, whatever prepare did
 
 async def test_bad_paths_fail_the_job(tmp_path, monkeypatch):
     rig = Rig(tmp_path, monkeypatch)
@@ -394,7 +403,7 @@ async def test_session_failure_fails_job(tmp_path, monkeypatch):
     await rig.runner.run_job(job)
     assert rig.state(job) == ("failed", "exit 1: boom")
     assert rig.chat.texts == [FAILED + "exit 1: boom"]
-    assert len(rig.clone.removed) == 1
+    assert not rig.root(job).exists()
 
 @pytest.mark.parametrize("where", ["prepare", "run_session"])
 async def test_unexpected_error_fails_job(tmp_path, monkeypatch, caplog, where):
@@ -407,45 +416,32 @@ async def test_unexpected_error_fails_job(tmp_path, monkeypatch, caplog, where):
         await rig.runner.run_job(job)
     assert rig.state(job) == ("failed", "internal error: ValueError")
     assert rig.chat.texts == [FAILED + "internal error: ValueError"]
-    assert len(rig.clone.removed) == 1
+    assert not rig.root(job).exists()
     assert "ValueError at " in caplog.text and "not ours" not in caplog.text
 
-async def test_session_changing_git_config_fails_job(tmp_path, monkeypatch):
+@pytest.mark.parametrize("guarded", ["config", "info/attributes", "commondir"])
+async def test_session_changing_its_job_clones_git_files_fails_job(tmp_path, monkeypatch, guarded):
     rig = Rig(tmp_path, monkeypatch)
-    config = rig.clone.path / ".git" / "config"
     def tamper(paths):
         write_review(paths)
-        with config.open("a") as f:
+        target = rig.session_clone / ".git" / guarded
+        target.parent.mkdir(parents=True, exist_ok=True)
+        with target.open("a") as f:
             f.write('[credential]\n\thelper = "!sh evil.sh"\n')
     rig.write = tamper
     job = rig.add_job()
     await rig.runner.run_job(job)
-    reason = "the session changed the review clone's git config"
+    reason = "the session changed its job clone's git config"
     assert rig.state(job) == ("failed", reason)
-    assert config.read_text() == CONFIG_TEXT
-    assert rig.clone.removed == [(rig.paths.worktree, CONFIG_TEXT)]  # restored before the next git call
+    assert (rig.clone.path / ".git" / "config").read_text() == CONFIG_TEXT   # the review clone untouched
+    assert not rig.root(job).exists()   # the tampered job clone is gone, never used again
     assert rig.chat.texts == [FAILED + reason]
 
-async def test_git_config_restore_ignores_a_planted_spare_path(tmp_path, monkeypatch):
+async def test_cancelled_job_leaves_no_job_dir_and_stays_running(tmp_path, monkeypatch):
     rig = Rig(tmp_path, monkeypatch)
-    git_dir = rig.clone.path / ".git"
-    def tamper(paths):
-        write_review(paths)
-        (git_dir / "config.cleave").mkdir()
-        (git_dir / "config").write_text('[core]\n\thooksPath = /tmp/evil\n')
-    rig.write = tamper
-    job = rig.add_job()
-    await rig.runner.run_job(job)
-    assert rig.state(job) == ("failed", "the session changed the review clone's git config")
-    assert (git_dir / "config").read_text() == CONFIG_TEXT
-    assert sorted(p.name for p in git_dir.iterdir()) == ["config", "config.cleave"]  # no temp file left
-
-async def test_cancelled_job_restores_config_and_stays_running(tmp_path, monkeypatch):
-    rig = Rig(tmp_path, monkeypatch)
-    config, started = rig.clone.path / ".git" / "config", asyncio.Event()
+    started = asyncio.Event()
     async def hanging(llm, **kw):
         rig.paths = kw["paths"]
-        config.write_text("[core]\n\tfsmonitor = /tmp/evil\n")
         started.set()
         await asyncio.Event().wait()
     monkeypatch.setattr(runner_module, "run_session", hanging)
@@ -455,9 +451,8 @@ async def test_cancelled_job_restores_config_and_stays_running(tmp_path, monkeyp
     task.cancel()
     with pytest.raises(asyncio.CancelledError):
         await task
-    assert config.read_text() == CONFIG_TEXT
-    assert rig.clone.removed == [(rig.paths.worktree, CONFIG_TEXT)]
-    assert rig.state(job) == ("running", "") and not rig.clone.lock.locked()
+    assert not rig.root(job).exists()
+    assert rig.state(job) == ("running", "") and not rig.clone.lock.locked()   # recover() fails it at start
 
 async def test_unreadable_report_fails(tmp_path, monkeypatch):
     rig = Rig(tmp_path, monkeypatch)
@@ -577,16 +572,17 @@ async def test_symlinked_run_directory_fails(tmp_path, monkeypatch):
     assert rig.chat.texts == [FAILED + "run directory is a symlink"]
     assert list(rig.job_dir(job).iterdir()) == []
 
-async def test_worktree_left_is_reported(tmp_path, monkeypatch):
+async def test_a_job_dir_not_removed_is_noted(tmp_path, monkeypatch, caplog):
     rig = Rig(tmp_path, monkeypatch)
-    rig.clone.left = "has changes"
+    def failing_rmtree(path, *args, **kwargs):
+        raise OSError("busy")
+    monkeypatch.setattr(runner_module.shutil, "rmtree", failing_rmtree)
     job = rig.add_job()
-    await rig.runner.run_job(job)
+    with caplog.at_level(logging.WARNING, logger="orchestrator.reviewer.runner"):
+        await rig.runner.run_job(job)
     assert rig.state(job) == ("done", "")
-    line = f"[acme/app] #1712: worktree {rig.paths.worktree} was not removed — has changes"
-    assert line in rig.chat.texts
-    assert rig.store.anchor(CHAT_ID, 100 + rig.chat.texts.index(line)) == Anchor(job.id, "", 0)   # ids from 100
-    assert rig.store.run(job.id).notes == ["has changes"]
+    assert rig.store.run(job.id).notes == ["job directory not removed: OSError"]
+    assert f"Reviewer job {job.id}: its directory was not removed" in caplog.text
 
 async def test_unsent_message_is_resent(tmp_path, monkeypatch):
     rig = Rig(tmp_path, monkeypatch)
@@ -878,7 +874,7 @@ def test_runs_stored_before_the_deferral_count_load():
     assert JobRun.from_json(json.dumps({"job_id": "j1", "turns": 3})).deferrals == 0
 
 async def test_quota_gates_the_runner_with_one_line_per_streak(tmp_path, monkeypatch):
-    rig = Rig(tmp_path, monkeypatch)
+    rig = Rig(tmp_path, monkeypatch, max_parallel=1)   # one at a time: what the gate holds back shows
     numbers = (1712, 1713, 1714)
     rig.store.replace_board(SCOPE, {n: board_row(number=n) for n in numbers})
     first, second, third = (rig.add_job(number=n) for n in numbers)
@@ -1082,7 +1078,7 @@ class Step:
         self.ended.set()
 
 class SharedClone(FakeClone):
-    """One clone for a job and a poll: the poll's refresh and the job's worktree removal are steps."""
+    """One review clone for a job and a poll: the poll's refresh is a step."""
     def __init__(self, path, steps):
         super().__init__(path)
         self.steps = steps
@@ -1091,9 +1087,6 @@ class SharedClone(FakeClone):
         return "c" * 40
     def has_file(self, rel):
         return True
-    async def remove_worktree(self, path):
-        await self.steps["remove"]()
-        return await super().remove_worktree(path)
 
 class PollReadiness:
     repo = "acme-org/acme-app"
@@ -1113,18 +1106,13 @@ class PollForge:
         return False
 
 class Clash(Rig):
-    """A job and a poll on one clone, on the same store. Every step either takes on the clone is logged (the
-    config restore too); a test holds the ones whose overlap it checks."""
+    """A job and a poll on one review clone, on the same store. Every step either takes is logged; a test holds
+    the ones whose overlap it checks. The job's Prepare step is the part it takes under the clone's lock."""
     def __init__(self, tmp_path, monkeypatch):
         self.log = []
-        self.steps = {name: Step(name, self.log) for name in ("refresh", "readiness", "prepare", "session", "remove")}
+        self.steps = {name: Step(name, self.log) for name in ("refresh", "readiness", "prepare", "session")}
         self.running = asyncio.Event()
         super().__init__(tmp_path, monkeypatch, clone=lambda path: SharedClone(path, self.steps))
-        restore = runner_module._restore
-        def logged_restore(path, saved):
-            self.log.append("restore")
-            return restore(path, saved)
-        monkeypatch.setattr(runner_module, "_restore", logged_restore)
         ctx = RepoContext("acme", "app", CFG, self.clone, PollReadiness(self.steps["readiness"]), PollForge())
         self.service = ReviewerService([ctx], self.store, self.switches, lambda key: False, None,
                                        lambda project_id, repo_id: set(), now=lambda: self.t)
@@ -1133,9 +1121,8 @@ class Clash(Rig):
         super().emit(event_type, message, project_id=project_id, data=data)
         if data["state"] == "running":
             self.running.set()
-    async def _prepare(self, ctx, job, paths, **kw):
+    async def _locked_part(self):
         await self.steps["prepare"]()
-        return await super()._prepare(ctx, job, paths, **kw)
     async def _session(self, llm, **kw):
         await self.steps["session"]()
         return await super()._session(llm, **kw)
@@ -1153,21 +1140,22 @@ async def test_a_job_prepares_only_after_a_polls_refresh_and_readiness(tmp_path,
     assert rig.log[:5] == ["refresh start", "refresh end", "readiness start", "readiness end", "prepare start"]
     assert rig.state(job) == ("done", "") and rig.store.repo_state(SCOPE).status == "ok"
 
-async def test_the_board_updates_during_a_session_without_a_refresh(tmp_path, monkeypatch):
+async def test_a_poll_refreshes_during_a_session(tmp_path, monkeypatch):
     rig = Clash(tmp_path, monkeypatch)
     rig.steps["session"].hold()
     job = rig.add_job()
     run = asyncio.create_task(rig.runner.run_job(job))
     await rig.steps["session"].started.wait()
-    await asyncio.wait_for(rig.poll(), 5)
-    assert rig.log == ["prepare start", "prepare end", "session start", "readiness start", "readiness end"]
+    await asyncio.wait_for(rig.poll(), 5)   # the session runs in its job clone: the review clone is free
+    assert rig.log == ["prepare start", "prepare end", "session start", "refresh start", "refresh end",
+                       "readiness start", "readiness end"]
     state = rig.store.repo_state(SCOPE)
     assert (state.status, state.last_poll_at) == ("ok", T0.isoformat())
     rig.steps["session"].go()
     await asyncio.wait_for(run, 5)
     assert rig.state(job) == ("done", "")
 
-async def test_a_job_leaves_its_session_only_after_a_polls_readiness(tmp_path, monkeypatch):
+async def test_a_job_ends_while_a_polls_readiness_runs(tmp_path, monkeypatch):
     rig = Clash(tmp_path, monkeypatch)
     rig.steps["session"].hold()
     rig.steps["readiness"].hold()
@@ -1177,88 +1165,10 @@ async def test_a_job_leaves_its_session_only_after_a_polls_readiness(tmp_path, m
     poll = asyncio.create_task(rig.poll())
     await rig.steps["readiness"].started.wait()
     rig.steps["session"].go()
-    await rig.steps["session"].ended.wait()   # the job has gone as far as it can while the readiness runs
+    await asyncio.wait_for(run, 5)   # nothing of the job's end waits for the review clone
+    assert rig.state(job) == ("done", "") and "readiness end" not in rig.log
     rig.steps["readiness"].go()
-    await asyncio.wait_for(asyncio.gather(poll, run), 5)
-    log = rig.log
-    assert log.index("session end") < log.index("readiness end") < log.index("restore") < log.index("remove start")
-    assert rig.state(job) == ("done", "")
-
-async def test_a_poll_leaves_the_clone_alone_while_a_job_prepares_or_cleans_up(tmp_path, monkeypatch):
-    rig = Clash(tmp_path, monkeypatch)
-    rig.steps["prepare"].hold()
-    rig.steps["remove"].hold()
-    job = rig.add_job()
-    run = asyncio.create_task(rig.runner.run_job(job))
-    await rig.steps["prepare"].started.wait()
-    await asyncio.wait_for(rig.poll(), 5)   # during Prepare
-    rig.steps["prepare"].go()
-    await rig.steps["remove"].started.wait()
-    await asyncio.wait_for(rig.poll(), 5)   # during the worktree removal
-    rig.steps["remove"].go()
-    await asyncio.wait_for(run, 5)
-    assert "refresh start" not in rig.log and "readiness start" not in rig.log
-    assert rig.store.repo_state(SCOPE).last_poll_at == ""   # nothing recorded: the repo is polled again shortly
-    assert rig.state(job) == ("done", "")
-
-async def test_no_readiness_on_a_clone_whose_git_config_the_session_changed(tmp_path, monkeypatch, caplog):
-    rig = Clash(tmp_path, monkeypatch)
-    rig.steps["session"].hold()
-    config = rig.clone.path / ".git" / "config"
-    job = rig.add_job()
-    run = asyncio.create_task(rig.runner.run_job(job))
-    await rig.steps["session"].started.wait()
-    with config.open("a") as f:
-        f.write('[filter "x"]\n\tclean = sh evil.sh\n')
-    with caplog.at_level(logging.WARNING, logger="orchestrator.reviewer.service"):
-        await asyncio.wait_for(rig.poll(), 5)
-    assert "readiness start" not in rig.log
-    assert f"Reviewer poll of {SCOPE}: the session changed {config}; no readiness" in caplog.text
-    assert rig.store.repo_state(SCOPE).last_poll_at == ""
-    rig.steps["session"].go()
-    await asyncio.wait_for(run, 5)
-    assert rig.state(job) == ("failed", "the session changed the review clone's git config")
-    assert config.read_text() == CONFIG_TEXT
-
-async def test_git_attributes_the_session_created_are_removed(tmp_path, monkeypatch):
-    rig = Rig(tmp_path, monkeypatch)
-    attributes = rig.clone.path / ".git" / "info" / "attributes"
-    def plant(paths):
-        write_review(paths)
-        attributes.parent.mkdir()
-        attributes.write_text("* filter=x\n")
-    rig.write = plant
-    job = rig.add_job()
-    await rig.runner.run_job(job)
-    assert rig.state(job) == ("failed", "the session changed the review clone's git config")
-    assert not attributes.exists() and not attributes.is_symlink()
-
-async def test_git_commondir_the_session_created_is_removed(tmp_path, monkeypatch):
-    """.git/commondir sends git to another directory's config: one the session plants goes."""
-    rig = Rig(tmp_path, monkeypatch)
-    commondir = rig.clone.path / ".git" / "commondir"
-    def plant(paths):
-        write_review(paths)
-        commondir.write_text(f"{tmp_path / 'elsewhere'}\n")
-    rig.write = plant
-    job = rig.add_job()
-    await rig.runner.run_job(job)
-    assert rig.state(job) == ("failed", "the session changed the review clone's git config")
-    assert not commondir.exists() and not commondir.is_symlink()
-
-async def test_git_attributes_the_session_changed_are_written_back(tmp_path, monkeypatch):
-    rig = Rig(tmp_path, monkeypatch)
-    attributes = rig.clone.path / ".git" / "info" / "attributes"
-    attributes.parent.mkdir()
-    attributes.write_text("*.png binary\n")
-    def tamper(paths):
-        write_review(paths)
-        attributes.write_text("* filter=x\n")
-    rig.write = tamper
-    job = rig.add_job()
-    await rig.runner.run_job(job)
-    assert rig.state(job) == ("failed", "the session changed the review clone's git config")
-    assert attributes.read_text() == "*.png binary\n"
+    await asyncio.wait_for(poll, 5)
 
 @pytest.mark.parametrize("kind", ["quota", "login"])
 async def test_a_session_ending_otherwise_ends_the_streak(tmp_path, monkeypatch, kind):
@@ -1348,18 +1258,23 @@ def test_runs_stored_before_the_requeue_count_load():
 
 async def test_a_rerun_keeps_the_earlier_runs_notes_cost_and_turns(tmp_path, monkeypatch):
     rig = Rig(tmp_path, monkeypatch)
-    rig.clone.left = "has changes"
+    rmtree = runner_module.shutil.rmtree
+    def failing_rmtree(path, *args, **kwargs):
+        raise OSError("busy")
+    monkeypatch.setattr(runner_module.shutil, "rmtree", failing_rmtree)
     rig.outcome = SessionOutcome("quota", retry_at=rig.t + timedelta(hours=1), cost_usd=1.5, turns=10)
     job = rig.add_job()
     await rig.runner.run_job(job)
     assert rig.state(job)[0] == "deferred"
+    rmtree(rig.root(job))   # as the next start's recover() would
+    monkeypatch.setattr(runner_module.shutil, "rmtree", rmtree)
     rig.t += timedelta(hours=1)
-    rig.clone.left = ""
     rig.outcome = SessionOutcome("ok", cost_usd=2.0, turns=30)
     await rig.runner.run_job(rig.store.job(job.id))
     run = rig.store.run(job.id)
     assert rig.state(job) == ("done", "") and run.message_sent
-    assert (run.notes, run.cost_usd, run.turns, run.deferrals) == (["has changes"], 3.5, 40, 1)
+    assert (run.notes, run.cost_usd, run.turns, run.deferrals) == (
+        ["job directory not removed: OSError"], 3.5, 40, 1)
     assert (run.started_at, run.finished_at) == ((T0 + timedelta(hours=1)).isoformat(),) * 2
 
 # --- Plan 5: posted reports and small jobs ---
@@ -1519,3 +1434,272 @@ def test_may_still_save(state, sent, attempts, expected):
     message that is not all out and that it has not given up on."""
     job = Job("j1", SCOPE, 1712, "review", HEAD, HEAD, state, "", T0.isoformat(), T0.isoformat())
     assert may_still_save(job, JobRun("j1", message_sent=sent, send_attempts=attempts)) is expected
+
+
+# --- Parallel review jobs ---
+
+class Gate:
+    """A session per job that waits for its release; counts the sessions in flight and the most at once."""
+    def __init__(self, rig, monkeypatch):
+        self.rig, self.now, self.most, self.released = rig, 0, 0, {}
+        self.started: dict[int, asyncio.Event] = {}
+        self.outcomes: dict[int, SessionOutcome] = {}
+        self.per_pr_overlap = False
+        self.running_prs: set[int] = set()
+        monkeypatch.setattr(runner_module, "run_session", self.session)
+    def number(self, kw):
+        return int(kw["paths"].run_dir.name.removeprefix("PR_"))
+    async def session(self, llm, **kw):
+        n = self.number(kw)
+        if n in self.running_prs:
+            self.per_pr_overlap = True
+        self.running_prs.add(n)
+        self.now += 1
+        self.most = max(self.most, self.now)
+        self.started.setdefault(n, asyncio.Event()).set()
+        try:
+            await self.released.setdefault(n, asyncio.Event()).wait()
+            write_review(kw["paths"])
+            return self.outcomes.get(n, SessionOutcome("ok", cost_usd=1.0, turns=1))
+        finally:
+            self.now -= 1
+            self.running_prs.discard(n)
+    async def wait_started(self, *numbers):
+        await asyncio.wait_for(asyncio.gather(*(self.started.setdefault(n, asyncio.Event()).wait()
+                                                for n in numbers)), 5)
+    def release(self, *numbers):
+        for n in numbers:
+            self.released.setdefault(n, asyncio.Event()).set()
+
+def three_prs(rig, numbers=(1712, 1713, 1714)):
+    rig.store.replace_board(SCOPE, {n: board_row(number=n) for n in numbers})
+    return [rig.add_job(number=n) for n in numbers]
+
+async def run_loop(rig):
+    stop = asyncio.Event()
+    return stop, asyncio.create_task(rig.runner.loop(stop))
+
+async def test_jobs_of_different_prs_run_together(tmp_path, monkeypatch):
+    rig = Rig(tmp_path, monkeypatch)
+    gate = Gate(rig, monkeypatch)
+    jobs = three_prs(rig)
+    stop, loop = await run_loop(rig)
+    await gate.wait_started(1712, 1713, 1714)
+    assert gate.most == 3
+    gate.release(1712, 1713, 1714)
+    for _ in range(200):
+        if all(rig.state(j)[0] == "done" for j in jobs):
+            break
+        await asyncio.sleep(0.01)
+    stop.set()
+    await asyncio.wait_for(loop, 5)
+    assert [rig.state(j)[0] for j in jobs] == ["done"] * 3
+    assert not any(rig.root(j).exists() for j in jobs)
+
+async def test_cap_limits_jobs_in_flight(tmp_path, monkeypatch):
+    rig = Rig(tmp_path, monkeypatch, max_parallel=2)
+    gate = Gate(rig, monkeypatch)
+    jobs = three_prs(rig)
+    stop, loop = await run_loop(rig)
+    await gate.wait_started(1712, 1713)
+    await asyncio.sleep(0.1)   # several cycles: the third waits for a free place
+    assert gate.most == 2 and rig.state(jobs[2])[0] == "queued"
+    gate.release(1712)
+    await gate.wait_started(1714)
+    gate.release(1713, 1714)
+    for _ in range(200):
+        if all(rig.state(j)[0] == "done" for j in jobs):
+            break
+        await asyncio.sleep(0.01)
+    stop.set()
+    await asyncio.wait_for(loop, 5)
+    assert gate.most == 2 and [rig.state(j)[0] for j in jobs] == ["done"] * 3
+
+async def test_one_job_per_pr_at_a_time(tmp_path, monkeypatch):
+    rig = Rig(tmp_path, monkeypatch)
+    gate = Gate(rig, monkeypatch)
+    first = rig.add_job()
+    second = rig.add_job(key=HEAD + ":now")   # a second review of the same PR (Review now, say)
+    stop, loop = await run_loop(rig)
+    await gate.wait_started(1712)
+    await asyncio.sleep(0.1)
+    assert rig.state(second)[0] == "queued" and gate.most == 1
+    gate.release(1712)
+    for _ in range(300):
+        if rig.state(first)[0] != "running" and rig.state(second)[0] not in ("queued", "running"):
+            break
+        await asyncio.sleep(0.01)
+    stop.set()
+    await asyncio.wait_for(loop, 5)
+    assert not gate.per_pr_overlap
+
+@pytest.mark.parametrize("ending", ["done", "session failed", "prepare error", "unexpected"])
+async def test_job_dir_removed_whatever_the_outcome(tmp_path, monkeypatch, ending):
+    rig = Rig(tmp_path, monkeypatch)
+    if ending == "session failed":
+        rig.outcome = SessionOutcome("failed", error="exit 1")
+    elif ending == "prepare error":
+        rig.prepare_error = PrepareError("failed", "boom")
+    elif ending == "unexpected":
+        def broken(paths):
+            raise ValueError("not ours")
+        rig.write = broken
+    job = rig.add_job()
+    await rig.runner.run_job(job)
+    assert not rig.root(job).exists() and rig.root(job).parent.is_dir()
+    assert rig.job_dir(job).is_dir()   # the job's copy is kept
+
+async def test_recover_removes_leftover_job_dirs(tmp_path, monkeypatch):
+    rig = Rig(tmp_path, monkeypatch)
+    work = tmp_path / "rv" / "work"
+    leftover = work / "acme" / "app" / "dead1" / "clone" / ".git"
+    leftover.mkdir(parents=True)
+    (leftover / "objects.pack").write_bytes(b"x")
+    await rig.runner.start()   # off the event loop: a job clone can hold many files
+    assert list(work.iterdir()) == []
+
+async def test_low_disk_holds_new_jobs(tmp_path, monkeypatch, caplog):
+    rig = Rig(tmp_path, monkeypatch, min_free_bytes=5 * 1024**3)
+    free = {"bytes": 1024**3}
+    monkeypatch.setattr(runner_module.shutil, "disk_usage",
+                        lambda path: SimpleNamespace(total=0, used=0, free=free["bytes"]))
+    job = rig.add_job()
+    with caplog.at_level(logging.WARNING, logger="orchestrator.reviewer.runner"):
+        assert rig.runner.next_job() is None
+        assert rig.runner.next_job() is None
+    assert caplog.text.count("Reviewer jobs held") == 1 and rig.state(job)[0] == "queued"
+    free["bytes"] = 50 * 1024**3
+    assert rig.runner.next_job().id == job.id
+
+@pytest.mark.parametrize("kind", ["quota", "login"])
+async def test_a_wait_is_not_lifted_by_a_job_started_before_it(tmp_path, monkeypatch, kind):
+    rig = Rig(tmp_path, monkeypatch)
+    gate = Gate(rig, monkeypatch)
+    early, failing, later = three_prs(rig)
+    gate.outcomes[1713] = quota(rig) if kind == "quota" else SessionOutcome("login")
+    early_task = asyncio.create_task(rig.runner.run_job(early))
+    await gate.wait_started(1712)
+    rig.t += timedelta(minutes=1)
+    gate.release(1713)
+    await rig.runner.run_job(failing)   # the wait begins
+    assert rig.state(failing)[0] == "deferred"
+    gate.release(1712)
+    await asyncio.wait_for(early_task, 5)   # started before the wait: ends well, lifts nothing
+    assert rig.state(early)[0] == "done"
+    assert rig.runner.next_job() is None    # still waiting
+    rig.t += timedelta(hours=2)
+    gate.release(1714)
+    if kind == "login":
+        rig.failing.discard("claude_login")
+    job = rig.runner.next_job()
+    assert job is not None and job.id in (failing.id, later.id)
+
+async def test_cancelled_loop_cancels_its_jobs(tmp_path, monkeypatch):
+    rig = Rig(tmp_path, monkeypatch)
+    gate = Gate(rig, monkeypatch)
+    jobs = three_prs(rig, (1712, 1713))
+    stop, loop = await run_loop(rig)
+    await gate.wait_started(1712, 1713)
+    inner = [task for _, task in rig.runner._in_flight.values()]
+    assert len(inner) == 2
+    loop.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await loop
+    assert all(task.done() for task in inner) and rig.runner._in_flight == {}   # no job task outlives the loop
+    assert [rig.state(j)[0] for j in jobs] == ["running", "running"]   # recover() fails them at the next start
+    assert not any(rig.root(j).exists() for j in jobs)
+
+async def test_resend_skips_a_job_still_delivering(tmp_path, monkeypatch):
+    rig = Rig(tmp_path, monkeypatch)
+    job = rig.add_job()
+    rig.chat.fail = 1
+    await rig.runner.run_job(job)   # done, its message not out
+    assert rig.state(job) == ("done", "") and not rig.store.run(job.id).message_sent
+    rig.runner._in_flight[job.id] = (job, asyncio.get_running_loop().create_future())   # its task still running
+    await rig.runner.resend_unsent()
+    assert rig.chat.tries == 1   # nothing sent beside the job's own delivery
+
+async def test_jobs_hitting_the_limit_together_send_one_line(tmp_path, monkeypatch):
+    rig = Rig(tmp_path, monkeypatch)
+    jobs = three_prs(rig)
+    rig.outcome = quota(rig)
+    stop = asyncio.Event()
+    asyncio.get_running_loop().call_later(0.2, stop.set)
+    await asyncio.wait_for(rig.runner.run(stop), 5)
+    assert rig.prepares == 3   # all three started together, before any hit the limit
+    assert [rig.state(j)[0] for j in jobs] == ["deferred"] * 3
+    assert len([t for t in rig.chat.texts if "usage limit reached" in t]) == 1
+
+async def test_a_requeued_job_waits_for_an_idle_cycle(tmp_path, monkeypatch):
+    rig = Rig(tmp_path, monkeypatch, idle_seconds=3600)
+    gate = Gate(rig, monkeypatch)
+    requeued, other = three_prs(rig, (1712, 1713))
+    tries = []
+    fake = rig._prepare
+    async def prepare(ctx, job, paths, **kw):
+        if job.number == 1712:
+            tries.append(job.id)
+            raise PrepareError("requeue", "forge token failing")
+        return await fake(ctx, job, paths, **kw)
+    monkeypatch.setattr(runner_module, "prepare", prepare)
+    stop, loop = await run_loop(rig)
+    await gate.wait_started(1713)
+    gate.release(1713)   # the other job ends: the loop wakes, but no idle wait has passed
+    for _ in range(100):
+        if rig.state(other)[0] == "done":
+            break
+        await asyncio.sleep(0.01)
+    await asyncio.sleep(0.05)
+    assert tries == [requeued.id] and rig.state(requeued)[0] == "queued"   # not prepared again yet
+    stop.set()
+    await asyncio.wait_for(loop, 5)
+
+async def test_a_wait_extended_by_a_later_hit_is_not_lifted_by_a_job_started_before_it(tmp_path, monkeypatch):
+    rig = Rig(tmp_path, monkeypatch)
+    gate = Gate(rig, monkeypatch)
+    first, d, e = three_prs(rig)
+    gate.outcomes[1712] = quota(rig)
+    gate.release(1712)
+    await rig.runner.run_job(first)   # the first hit: wait until T0 + 1 h
+    rig.t += timedelta(hours=1)       # the wait over: D and E start
+    d_task, e_task = (asyncio.create_task(rig.runner.run_job(j)) for j in (rig.store.job(d.id), rig.store.job(e.id)))
+    await gate.wait_started(1713, 1714)
+    rig.t += timedelta(minutes=1)
+    gate.outcomes[1713] = quota(rig)
+    gate.release(1713)
+    await asyncio.wait_for(d_task, 5)   # a later hit: the wait runs again
+    gate.release(1714)
+    await asyncio.wait_for(e_task, 5)   # E started before that hit: it lifts nothing
+    assert rig.state(e)[0] == "done"
+    assert rig.runner.next_job() is None
+
+
+# --- Final review fixes ---
+
+async def test_a_failed_job_keeps_its_error_when_its_dir_is_not_removed(tmp_path, monkeypatch):
+    rig = Rig(tmp_path, monkeypatch)
+    rig.outcome = SessionOutcome("failed", error="exit 1: boom")
+    def failing_rmtree(path, *args, **kwargs):
+        raise OSError("busy")
+    monkeypatch.setattr(runner_module.shutil, "rmtree", failing_rmtree)
+    job = rig.add_job()
+    await rig.runner.run_job(job)
+    run = rig.store.run(job.id)
+    assert rig.state(job) == ("failed", "exit 1: boom")
+    assert (run.error, run.notes) == ("exit 1: boom", ["job directory not removed: OSError"])
+
+async def test_an_error_escaping_a_job_is_logged_and_the_job_waits_a_cycle(tmp_path, monkeypatch, caplog):
+    rig = Rig(tmp_path, monkeypatch, idle_seconds=3600)
+    job = rig.add_job()
+    calls = []
+    async def broken(j):
+        calls.append(j.id)
+        raise RuntimeError("store gone")
+    monkeypatch.setattr(rig.runner, "run_job", broken)
+    stop = asyncio.Event()
+    asyncio.get_running_loop().call_later(0.2, stop.set)
+    with caplog.at_level(logging.WARNING, logger="orchestrator.reviewer.runner"):
+        await asyncio.wait_for(rig.runner.run(stop), 5)
+    assert calls == [job.id]   # not started again at once: no idle wait has passed
+    assert f"Reviewer job {job.id} (acme/app #1712) failed: RuntimeError at " in caplog.text
+    assert "store gone" not in caplog.text

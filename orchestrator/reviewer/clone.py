@@ -13,7 +13,6 @@ from orchestrator.reviewer.commands import NO_HOST_GIT_ENV, base_env, redact, ru
 # drivers), .git/info/attributes (the files a driver applies to) and .git/commondir (which sends git to another
 # directory's config). A job saves them before its session.
 _GUARDED_GIT_FILES = ("config", "info/attributes", "commondir")
-_FREE_LOCK_WAIT = 0.01  # seconds: enough to take a lock nobody holds
 
 
 def git_env(token: str) -> dict[str, str]:
@@ -23,7 +22,7 @@ def git_env(token: str) -> dict[str, str]:
     global config are not read at all, so no askPass, helper or insteadOf from the host can apply.
     Auto maintenance stays on but runs in the foreground, so nothing touches .git after a call returns.
     Hooks and fsmonitor are off (environment config outranks .git/config); the rest of .git/config is the
-    clone's own, which a job writes back after its session.
+    clone's own, which no session ever touches (sessions run in job clones, removed after their job).
     """
     header = base64.b64encode(f"x-access-token:{token}".encode()).decode()
     return {
@@ -76,12 +75,9 @@ class CloneError(Exception):
 class ReviewClone:
     """A single-branch clone of `url` at `path`, detached at origin/<base_branch> after each refresh.
 
-    Who touches it when: a review job holds `lock` for its whole run, Prepare through cleanup; a poll holds it
-    for its refresh and readiness while no job does. In a job's session phase (session_phase()) the job runs no
-    git in the clone and its checkout stays at the base the job prepared from: a poll then runs readiness, with
-    no refresh, under `session_lock`, which the job also takes to enter and to leave that phase. While a job
-    prepares or cleans up, a poll leaves the clone alone. A post runs its poster under reader(), by the same
-    rules.
+    Who touches it when, each under `lock`: a job's Prepare for its git here (refresh, the PR head, the readiness
+    threads, its job clone), a poll for its refresh and readiness, a post for its poster runs (reader()). No
+    model session ever runs here: a job's session runs in a job clone of its own (make_job_clone()).
     """
 
     def __init__(self, path: Path, url: str, base_branch: str, token: str, timeout: float = 300.0):
@@ -91,73 +87,22 @@ class ReviewClone:
         self._token = token
         self._timeout = timeout
         self.lock = asyncio.Lock()
-        self.session_lock = asyncio.Lock()
-        # Both changed only under session_lock.
-        self.in_session = False
-        self._saved: dict[Path, bytes | None] = {}
 
     def __repr__(self) -> str:
         return f"ReviewClone(path={str(self.path)!r}, url={self.url!r})"
 
     @asynccontextmanager
-    async def session_phase(self, saved: dict[Path, bytes | None]) -> AsyncIterator[None]:
-        """A job's model session; the job holds `lock`. saved: guarded_git_files() before the session, which a
-        poll compares with before its readiness. Leaving waits for a poll's readiness in flight, so the job's
-        cleanup never overlaps it."""
-        async with self.session_lock:
-            self.in_session, self._saved = True, saved
+    async def reader(self, *, wait: float = 600.0) -> AsyncIterator[None]:
+        """A lease to run a part command from the clone while nothing moves its checkout: `lock`, waited for at
+        most `wait` (a job's Prepare or a poll holds it for seconds, a post for its runs)."""
+        try:
+            await asyncio.wait_for(self.lock.acquire(), wait)
+        except asyncio.TimeoutError:
+            raise CloneError("the review clone is in use; try again in a minute") from None
         try:
             yield
         finally:
-            try:
-                await self.session_lock.acquire()
-            finally:  # cancelled while it waits: out of the phase all the same
-                self.in_session, self._saved = False, {}
-            self.session_lock.release()
-
-    def changed_git_files(self) -> list[Path]:
-        """In a job's session phase: the guarded git files that no longer hold what the job saved."""
-        return [path for path, saved in self._saved.items() if git_file_changed(path, saved)]
-
-    @asynccontextmanager
-    async def reader(self, *, wait: float = 600.0, step: float = 2.0) -> AsyncIterator[None]:
-        """A lease to run a part command from the clone while nothing moves its checkout: `lock` when it can
-        be had within `step`, else a job's session phase under `session_lock` (the job's leaving then waits
-        for the block), checked as a poll checks it before readiness. While a job prepares or cleans up, it
-        tries again every `step` until `wait` has passed. It never waits on `lock` longer than `step`: a job
-        holds it for its whole run, and locked() reads False while a queued job is about to take it. Nor on
-        `session_lock` past `wait`: a poll's readiness holds it."""
-        busy = "the review clone is busy (a job is preparing or cleaning it up); try again in a minute"
-        loop = asyncio.get_running_loop()
-        deadline = loop.time() + wait
-        while True:
-            try:
-                await asyncio.wait_for(self.lock.acquire(), step)
-            except asyncio.TimeoutError:
-                pass
-            else:
-                try:
-                    yield
-                finally:
-                    self.lock.release()
-                return
-            left = max(deadline - loop.time(), _FREE_LOCK_WAIT)  # past the deadline: a free one is still taken
-            try:
-                await asyncio.wait_for(self.session_lock.acquire(), left)
-            except asyncio.TimeoutError:  # held all along: a poll's readiness, say
-                raise CloneError("the review clone is in use; try again in a minute") from None
-            try:
-                if self.in_session:
-                    if self.changed_git_files():
-                        raise CloneError("the review session changed the clone's git config; "
-                                         "posting waits until the job ends")
-                    yield
-                    return
-            finally:
-                self.session_lock.release()
-            if loop.time() >= deadline:
-                raise CloneError(busy)
-            await asyncio.sleep(step)
+            self.lock.release()
 
     async def refresh(self) -> str:
         """Clone or fetch the base branch, check it out detached, and return the HEAD sha."""
@@ -188,6 +133,29 @@ class ReviewClone:
         ref = f"refs/heads/pr-review/{number}"
         await self._git("fetch", ["-C", str(self.path), "fetch", "origin", f"+refs/pull/{number}/head:{ref}"])
         return (await self._git("rev-parse", ["-C", str(self.path), "rev-parse", ref])).strip()
+
+    async def make_job_clone(self, dest: Path, number: int) -> ReviewClone:
+        """A clone of this clone at dest for one job, with the local branches <base> and pr-review/<number>, its
+        origin this clone's path (no token), not yet checked out (detach_at_base() does that, without this
+        clone's lock). The caller holds `lock` and has run refresh() and fetch_pr_head(number). `--local`
+        hard-links the objects, never `--shared`: the session reads only its own directories, so objects borrowed
+        from this clone would be unreadable to its git. Nothing at dest is touched: a path that exists raises."""
+        dest = Path(dest).absolute()
+        if dest.exists() or dest.is_symlink():
+            raise CloneError(f"job clone path exists: {dest}")
+        dest.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+        await self._git("clone", ["clone", "--local", "--no-checkout", str(self.path), str(dest)])
+        job = ReviewClone(dest, str(self.path), self._base, "", self._timeout)
+        await job._git("update-ref", ["-C", str(dest), "update-ref", f"refs/heads/{self._base}",
+                                      f"refs/remotes/origin/{self._base}"])
+        await job._git("update-ref", ["-C", str(dest), "update-ref", f"refs/heads/pr-review/{number}",
+                                      f"refs/remotes/origin/pr-review/{number}"])
+        return job
+
+    async def detach_at_base(self) -> None:
+        """Check the base out detached (a job clone, after make_job_clone)."""
+        await self._git("checkout", ["-C", str(self.path), "-c", "advice.detachedHead=false",
+                                     "checkout", "--force", "--detach", f"refs/remotes/origin/{self._base}"])
 
     async def delete_branch(self, number: int) -> None:
         """Remove the local branch pr-review/<number>; one that is not there is no error. A symref there is

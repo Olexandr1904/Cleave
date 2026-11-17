@@ -166,6 +166,8 @@ class ReviewerGlobalConfig:
     db_path: str = ""
     telegram_chat_id: str = ""
     jobs: dict[str, ReviewerJobConfig] = field(default_factory=_default_reviewer_jobs)
+    # Reviews and re-checks running at once, across all repos (one per PR): a guard for the host's memory.
+    max_parallel_jobs: int = 6
 
 
 @dataclass

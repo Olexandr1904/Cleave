@@ -857,7 +857,7 @@ async def test_report_copy_problems_refused(tmp_path):
 
 class BusyClone(ReviewClone):
     @asynccontextmanager
-    async def reader(self, *, wait=600.0, step=2.0):
+    async def reader(self, *, wait=600.0):
         raise CloneError("the review clone is in use; try again in a minute")
         yield
 
@@ -867,27 +867,6 @@ async def test_clone_in_use_refused(tmp_path):
     assert await rig.post() == PostOutcome(
         "refused", "Not posted on #1712: the review clone is in use; try again in a minute.")
     assert rig.poster.calls == [] and rig.posts() == []
-
-
-class ChangingClone(ReviewClone):
-    """In a job's session phase whose git files change while the dry run runs."""
-
-    def __init__(self, *args):
-        super().__init__(*args)
-        self.changed = []
-
-    def changed_git_files(self):
-        return self.changed
-
-
-async def test_git_config_changed_before_confirm_refused(tmp_path):
-    clone = ChangingClone(tmp_path / "clone", "file:///nowhere", "develop", "ghp_not_real")
-    rig = Rig(tmp_path, clone=clone)
-    rig.poster.on_dry = lambda: setattr(clone, "changed", [clone.path / ".git" / "config"])
-    assert await rig.post() == PostOutcome(
-        "refused", "Not posted on #1712: the review session changed the clone's git config;"
-                   " posting waits until the job ends.")
-    assert rig.confirms() == [] and rig.posts() == []
 
 
 @pytest.mark.parametrize("where", ["confirm", "approve"])

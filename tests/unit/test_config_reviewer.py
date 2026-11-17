@@ -32,6 +32,17 @@ def test_reviewer_global_job_override_merges(tmp_path, monkeypatch):
     assert r.db_path == "/h/x/reviewer.db"
     assert (r.jobs["review"].model, r.jobs["review"].effort, r.jobs["review"].timeout_seconds) == ("opus", "xhigh", 7200)
 
+def test_max_parallel_jobs_defaults_to_6(tmp_path):
+    assert _global(tmp_path, "os: mac\n").reviewer.max_parallel_jobs == 6
+
+def test_max_parallel_jobs_read(tmp_path):
+    assert _global(tmp_path, "reviewer:\n  max_parallel_jobs: 2\n").reviewer.max_parallel_jobs == 2
+
+@pytest.mark.parametrize("value", ["0", "-1", "true", "two"])
+def test_max_parallel_jobs_below_one_refused(tmp_path, value):
+    with pytest.raises(ConfigError, match="reviewer.max_parallel_jobs"):
+        _global(tmp_path, f"reviewer:\n  max_parallel_jobs: {value}\n")
+
 def test_reviewer_global_unknown_job_kind_raises(tmp_path):
     with pytest.raises(ConfigError, match="reviewer.jobs"):
         _global(tmp_path, "reviewer:\n  jobs:\n    deploy:\n      model: opus\n")

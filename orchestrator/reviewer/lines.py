@@ -3,7 +3,6 @@ from __future__ import annotations
 
 from collections.abc import Iterable, Sequence
 from datetime import datetime
-from pathlib import Path
 
 from orchestrator.reviewer.board import TurnChange
 from orchestrator.reviewer.models import BoardRow
@@ -66,10 +65,6 @@ def drift_line(scope: str, doc: str, section: str) -> str:
         f'[{scope}] The "{section}" section of {doc} changed on the base branch:'
         " check that Cleave's Prepare still matches it."
     )
-
-
-def worktree_left_line(scope: str, number: int, path: Path, reason: str) -> str:
-    return f"[{scope}] #{number}: worktree {path} was not removed — {reason}"
 
 
 def outdated_line(state: str, reason: str) -> str:

@@ -1731,8 +1731,9 @@ def write_address(paths, plan=ADDRESS_PLAN):
     (paths.run_dir / "tg_lines.json").write_text(json.dumps({"1": "FIXED · a.kt:3 · null check"}))
     (paths.worktree / "a.kt").write_text("fixed\n")
 
-def address_rig(tmp_path, monkeypatch, fix=FIX):
-    """The rig with the operator's own PR on the board and capture_fix faked (FakeClone runs no git)."""
+def address_rig(tmp_path, monkeypatch, fix=FIX, clean=None):
+    """The rig with the operator's own PR on the board, and require_clean and capture_fix faked (FakeClone runs no
+    git); `clean`: the FixError require_clean raises."""
     rig = Rig(tmp_path, monkeypatch)
     rig.store.replace_board(SCOPE, {1712: dataclasses.replace(board_row(actions=("answer_threads",)), roles=["author"])})
     rig.write, rig.captured = write_address, []
@@ -1741,7 +1742,11 @@ def address_rig(tmp_path, monkeypatch, fix=FIX):
         if isinstance(fix, Exception):
             raise fix
         return fix
+    async def require_clean(worktree, **kw):
+        if clean is not None:
+            raise clean
     monkeypatch.setattr(runner_module, "capture_fix", capture)
+    monkeypatch.setattr(runner_module, "require_clean", require_clean)
     return rig
 
 async def test_address_job_keeps_plan_fix_and_sends_the_message(tmp_path, monkeypatch):
@@ -1775,6 +1780,14 @@ async def test_address_job_fails_when_the_worktree_git_pointer_changed(tmp_path,
     job = rig.add_job("address", key=f"{HEAD}:T1")
     await rig.runner.run_job(job)
     assert rig.state(job) == ("failed", runner_module._CONFIG_CHANGED) and rig.captured == []
+
+async def test_address_job_fails_before_its_session_when_prepare_left_changes(tmp_path, monkeypatch):
+    why = "Prepare left changes in the worktree: junk.txt"
+    rig = address_rig(tmp_path, monkeypatch, clean=FixError(why))
+    job = rig.add_job("address", key=f"{HEAD}:T1")
+    await rig.runner.run_job(job)
+    assert rig.state(job) == ("failed", why) and rig.session_kw is None and rig.captured == []
+    assert not rig.root(job).exists()
 
 async def test_address_job_fails_on_an_unreadable_plan_or_a_fix_error(tmp_path, monkeypatch):
     rig = address_rig(tmp_path, monkeypatch)

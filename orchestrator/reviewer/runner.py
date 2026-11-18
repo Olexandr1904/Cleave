@@ -18,7 +18,7 @@ from config.schemas import ReviewerJobConfig
 from orchestrator.reviewer.board import ADDRESS_ACTIONS, TICKET_KEY
 from orchestrator.reviewer.chat import ReviewerChat
 from orchestrator.reviewer.clone import ReviewClone, git_file_changed, guarded_git_files
-from orchestrator.reviewer.fix import PATCH_NAME, FixError, capture_fix
+from orchestrator.reviewer.fix import PATCH_NAME, FixError, capture_fix, require_clean
 from orchestrator.reviewer.jobs import REVIEW_NOW_SUFFIX
 from orchestrator.reviewer.lines import (
     drift_line,
@@ -490,6 +490,12 @@ class JobRunner:
                 self._store.save_run(run)
             if prepared.drift:  # at once: prepare has stored the new hash, a later failure must not lose it
                 await self._send_drift(ctx)
+            if job.kind == "address":
+                try:  # what the worktree holds beyond the head after the session is pushed as the fix
+                    await require_clean(paths.worktree)
+                except FixError as e:
+                    await self._fail(job, str(e))
+                    return
             outcome, changed_config = await self._session(ctx, job, paths, prepared.clone, run)
             await self._settle_outcome(ctx, job, paths, run, prepared, outcome, changed_config, started)
         finally:  # the job clone and its worktree, whatever happened: the job's copy keeps what is kept

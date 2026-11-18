@@ -1,7 +1,9 @@
 """An address job's fix: Cleave's own git turns the session's changes in the PR's worktree into one patch."""
 from __future__ import annotations
 
+import asyncio
 import fnmatch
+import os
 from pathlib import Path
 
 from orchestrator.reviewer.commands import NO_HOST_GIT_ENV, base_env, run_command, stderr_tail
@@ -29,14 +31,39 @@ async def _git(worktree: Path, args: list[str], timeout: float) -> str:
     return result.stdout
 
 
+def _nested_repo(worktree: Path) -> str | None:
+    """The first directory below the worktree with a `.git` of its own, None when there is none. Asked of the file
+    system, as git asks it: on the host's APFS `.GIT` is one too."""
+    for root, dirs, _ in os.walk(worktree):
+        for name in dirs:
+            path = os.path.join(root, name)
+            if os.path.lexists(os.path.join(path, ".git")):
+                return os.path.relpath(path, worktree)
+    return None
+
+
+async def require_clean(worktree: Path, *, timeout: float = 300.0) -> None:
+    """Before the session: the worktree holds the head and nothing else. The fix is everything that differs from
+    the head afterwards, so a file a Prepare step left there would be pushed with it; FixError names the first."""
+    status = await _git(worktree, ["status", "--porcelain", "-z", "--untracked-files=all"], timeout)
+    if changed := [entry[3:] for entry in status.split("\0") if entry]:
+        raise FixError(f"Prepare left changes in the worktree: {changed[0]}")
+
+
 async def capture_fix(worktree: Path, patch: Path, protected: list[str], *, timeout: float = 300.0) -> dict:
     """{} when the worktree is unchanged (no file written), else
     {"files": [{"path": str, "added": int, "deleted": int}], "protected": [str], "bytes": int}.
 
     Everything in the worktree is staged and written to `patch` as a binary-safe diff against the head (no
     external diff, no textconv); a binary file counts 0 added and 0 deleted lines. A patch over MAX_PATCH_BYTES
-    is deleted and raises FixError, as does a failed git command. `protected`: patterns (fnmatch) whose paths
-    are listed, since such a fix is never pushed."""
+    is deleted and raises FixError, as does a failed git command, and a worktree that holds a nested git
+    repository. `protected`: patterns (fnmatch) whose paths are listed, since such a fix is never pushed."""
+    patch.unlink(missing_ok=True)  # an earlier run's: no patch must mean no file
+    # Before any git runs here: the session can write a `.git` into a directory below the worktree. git would
+    # stage that directory as a link to a commit, and where the head has a submodule at it, git starts a git of
+    # its own inside it, under the config the session wrote there (its fsmonitor and hooks are commands).
+    if (nested := await asyncio.to_thread(_nested_repo, worktree)) is not None:
+        raise FixError(f"the fix holds a nested git repository: {nested}")
     await _git(worktree, ["add", "-A"], timeout)
     numstat = await _git(worktree, ["diff", "--cached", "--numstat", "-z", "--no-renames", "HEAD"], timeout)
     files = []

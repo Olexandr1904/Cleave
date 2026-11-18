@@ -2,7 +2,10 @@
 from __future__ import annotations
 import os, subprocess
 import pytest
-from orchestrator.reviewer.fix import MAX_PATCH_BYTES, PATCH_NAME, FixError, capture_fix, fix_summary
+from orchestrator.reviewer import fix as fix_module
+from orchestrator.reviewer.fix import (
+    MAX_PATCH_BYTES, PATCH_NAME, FixError, capture_fix, fix_summary, require_clean,
+)
 
 def git(*args, cwd=None):
     return subprocess.run(["git", *args], cwd=cwd, check=True, capture_output=True, text=True).stdout.strip()
@@ -64,6 +67,36 @@ async def test_capture_refuses_a_huge_patch(wt, tmp_path):
     with pytest.raises(FixError, match="too large"):
         await capture_fix(wt, tmp_path / "p", [])
     assert not (tmp_path / "p").exists()
+
+async def test_capture_removes_an_earlier_runs_patch(wt, tmp_path):
+    (tmp_path / "fix.patch").write_text("an earlier run's")
+    assert await capture_fix(wt, tmp_path / "fix.patch", []) == {} and not (tmp_path / "fix.patch").exists()
+
+@pytest.mark.parametrize("as_file", [False, True], ids=["directory", "gitfile"])
+async def test_capture_refuses_a_nested_git_repository_before_git_runs(wt, tmp_path, monkeypatch, as_file):
+    # A `.git` the session wrote below the worktree: git would stage a link to its commit, or run a git of its own
+    # in it under the config written there. Refused before any git runs.
+    sub = wt / "vendor" / "lib"
+    sub.mkdir(parents=True)
+    if as_file:
+        (sub / ".git").write_text("gitdir: /elsewhere\n")
+    else:
+        (sub / ".git").mkdir()
+        (sub / ".git" / "config").write_text("[core]\n\tfsmonitor = touch /tmp/ran\n")
+    (wt / "a.txt").write_text("changed\n")
+    ran = []
+    async def no_git(argv, **kw):
+        ran.append(argv)
+    monkeypatch.setattr(fix_module, "run_command", no_git)
+    with pytest.raises(FixError, match="^the fix holds a nested git repository: vendor/lib$"):
+        await capture_fix(wt, tmp_path / "p", [])
+    assert ran == [] and not (tmp_path / "p").exists()
+
+async def test_require_clean(wt):
+    await require_clean(wt)                      # the head as Prepare checks it out, its symlink a plain file
+    (wt / "junk.txt").write_text("left by a prepare step\n")
+    with pytest.raises(FixError, match="^Prepare left changes in the worktree: junk.txt$"):
+        await require_clean(wt)
 
 async def test_a_failed_git_command_is_a_fix_error(tmp_path):
     (tmp_path / "not-a-repo").mkdir()

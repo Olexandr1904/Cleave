@@ -186,7 +186,10 @@ def approve_unknown_line(number: int, head: str) -> str:
 
 
 def not_understood_line(kind: str) -> str:
-    """`kind`: the anchored job's (review or recheck)."""
+    """`kind`: the anchored job's (review, recheck or address)."""
+    if kind == "address":
+        return tr('Not understood; nothing was done. Reply like "push", "post replies 1 3", "text 2", "diff" or '
+                  '"again: …".')
     if kind == "recheck":
         return tr('Not understood; nothing was done. Reply like "post replies 1 3", "text 1" or "review again".')
     return tr('Not understood; nothing was done. Reply like "post 1 2 4 approve", "text 2", "edit 2: …",'

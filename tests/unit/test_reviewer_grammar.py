@@ -115,3 +115,47 @@ def test_retry_text_keeps_the_flags(event, flags):
     # Task 9 fix round 1: the retry of a partial post is the command it was, for the rest.
     text = retry_text((2, 5), event, **flags)
     assert parse_reply(text) == C("post", (2, 5), event, **flags)
+
+
+# --- Address jobs ---
+
+@pytest.mark.parametrize("text, command", [
+    ("push", C("push")), ("Пуш.", C("push")), ("commit and push", C("push")), ("запушь", C("push")),
+    ("закоммить и запушь", C("push")), ("diff", C("diff")), ("дифф", C("diff")), ("патч", C("diff")),
+    ("again", C("again")), ("заново: не трогай 2", C("again", instruction="не трогай 2")),
+    ("Again: leave 2 as it is", C("again", instruction="leave 2 as it is")),
+    ("переделай: shorter replies\nand no emoji", C("again", instruction="shorter replies\nand no emoji")),
+    ("заново ревью", C("review_again")),
+])
+def test_address_grammar(text, command):
+    assert parse_reply(text) == command
+
+@pytest.mark.parametrize("text", ["push 1 2", "push anyway", "diff 3", "again 2", "commit", "again:"])
+def test_address_grammar_unknown(text):
+    assert parse_reply(text) is None
+
+def test_check_command_on_an_address_message():
+    replies = [{"n": 1, "thread_id": "T1", "body": "x"}]
+    for cmd in (C("push"), C("diff"), C("again"), C("text", (1,)), C("post_replies", (1,))):
+        assert check_command(cmd, "address", None, replies, set(), set()) == cmd
+    for cmd in (C("post", (1,)), C("edit", (1,), instruction="x"), C("draft", (1,))):
+        assert check_command(cmd, "address", None, replies, set(), set()) == (
+            'This is a threads message: reply "push", "post replies 1 3", "text 2", "diff" or "again: …". '
+            "Nothing was done.")
+    assert check_command(C("post_replies", (2,)), "address", None, replies, set(), set()) == \
+        "Unknown number: 2. Nothing was done."
+    assert check_command(C("post_replies", (1,)), "address", None, replies, {1}, set()) == \
+        "#1 is already posted at this head. Nothing was done."
+    for kind in ("review", "recheck"):
+        for action in ("push", "diff", "again"):
+            assert check_command(C(action), kind, None, replies, set(), set()) == \
+                f'"{action}" works on a threads message of your own PR. Nothing was done.'
+
+def test_describe_address_commands():
+    assert [describe(C(a), HEAD) for a in ("push", "diff", "again")] == ["push", "diff", "again"]
+    assert describe(C("again", instruction="leave 2"), HEAD) == 'again: "leave 2"'
+
+def test_not_understood_on_an_address_message():
+    from orchestrator.reviewer.lines import not_understood_line
+    assert not_understood_line("address") == (
+        'Not understood; nothing was done. Reply like "push", "post replies 1 3", "text 2", "diff" or "again: …".')

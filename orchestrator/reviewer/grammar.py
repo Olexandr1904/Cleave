@@ -22,6 +22,7 @@ _EDIT = re.compile(
     r"^(edit|измени|исправь|поменяй|зміни|виправ)\s+#?([0-9]{1,9})\s*:\s*(\S.*)$",
     re.DOTALL | re.IGNORECASE,
 )
+_AGAIN = re.compile(r"^(again|redo|заново|переделай|наново)\s*(?::\s*(\S.*))?$", re.DOTALL | re.IGNORECASE)
 _NUMBER = re.compile(r"#?([0-9]{1,9})")
 
 # Phrases in normalized form (casefolded, "ё" as "е", "'" for the apostrophe), by their token.
@@ -47,6 +48,9 @@ _PHRASES = {
         "рев'ю заново",
     ),
     "skip": ("skip", "пропусти", "пропусть"),
+    # An address message's: each only as the whole reply.
+    "push": ("push", "commit and push", "пуш", "пушь", "запушь", "закоммить и запушь", "запуш"),
+    "diff": ("diff", "patch", "дифф", "диф", "патч"),
     "filler": (
         "comments", "comment", "коментарии", "комментарии", "коменты", "комменты", "коментарі",
         "коменти", "questions", "question", "вопросы", "вопрос", "питання",
@@ -69,7 +73,7 @@ _RETRY_EVENT = {"APPROVE": "approve", "REQUEST_CHANGES": "request changes"}
 
 @dataclass(frozen=True)
 class ReplyCommand:
-    action: str  # post, post_replies, text, edit, draft, review_again, skip
+    action: str  # post, post_replies, text, edit, draft, review_again, skip, push, diff, again
     numbers: tuple[int, ...] = ()
     event: str = "COMMENT"
     all_confirmed: bool = False
@@ -92,6 +96,8 @@ def parse_reply(text: str) -> ReplyCommand | None:
     text = text.strip()
     if m := _EDIT.match(text):
         return ReplyCommand("edit", (int(m[2]),), instruction=m[3])
+    if m := _AGAIN.match(text):
+        return ReplyCommand("again", instruction=m[2] or "")
     tokens = _tokens(text)
     if not tokens:
         return None
@@ -99,7 +105,7 @@ def parse_reply(text: str) -> ReplyCommand | None:
     count = Counter(kinds)
     used = set(kinds)
     numbers = tuple(n for kind, n in tokens if kind == "number")
-    if kinds in (["review_again"], ["skip"]):
+    if kinds in (["review_again"], ["skip"], ["push"], ["diff"]):
         return ReplyCommand(kinds[0])
     if used == {"text", "number"} and count["text"] == 1:
         return ReplyCommand("text", numbers)
@@ -132,8 +138,14 @@ def check_command(
     posted: set[int],
     drafted: set[int],
 ) -> ReplyCommand | str:
-    """The command with "all confirmed" expanded into numbers, or why nothing is done."""
-    recheck = kind == "recheck"
+    """The command with "all confirmed" expanded into numbers, or why nothing is done. An address message takes a
+    re-check's commands on its replies plan, and push, diff and again."""
+    if kind == "address" and cmd.action in ("post", "edit", "draft"):
+        return tr('This is a threads message: reply "push", "post replies 1 3", "text 2", "diff" or "again: …". '
+                  "Nothing was done.")
+    if kind != "address" and cmd.action in ("push", "diff", "again"):
+        return tr('"{action}" works on a threads message of your own PR. Nothing was done.', action=cmd.action)
+    recheck = kind in ("recheck", "address")
     if not recheck and cmd.action == "post_replies":
         return tr('This is a review message: "post replies" works on a re-check message. Nothing was done.')
     if recheck and cmd.action in ("post", "edit", "draft"):
@@ -201,6 +213,10 @@ def describe(cmd: ReplyCommand, head: str) -> str:
         return f'edit {numbers}: "{cmd.instruction}"'
     if cmd.action == "review_again":
         return "review again"
+    if cmd.action in ("push", "diff"):
+        return cmd.action
+    if cmd.action == "again":
+        return f'again: "{cmd.instruction}"' if cmd.instruction else "again"
     if cmd.action == "skip":
         return tr("skip this head")
     return f"{cmd.action} {numbers}"  # text, draft

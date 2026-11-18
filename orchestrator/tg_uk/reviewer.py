@@ -71,6 +71,9 @@ TEXTS: dict[str, str] = {
         'Ця задача завершилась зі станом {state}: тут діють лише "review again" і "skip". Нічого не зроблено.',
     'Not understood; nothing was done. Reply like "post replies 1 3", "text 1" or "review again".':
         'Не зрозумів; нічого не зроблено. Відповідайте, наприклад, "post replies 1 3", "text 1" або "review again".',
+    'Not understood; nothing was done. Reply like "push", "post replies 1 3", "text 2", "diff" or "again: …".':
+        'Не зрозумів; нічого не зроблено. Відповідайте, наприклад, "push", "post replies 1 3", "text 2", "diff"'
+        ' або "again: …".',
     'Not understood; nothing was done. Reply like "post 1 2 4 approve", "text 2", "edit 2: …", "draft 7" or'
     ' "review again".':
         'Не зрозумів; нічого не зроблено. Відповідайте, наприклад, "post 1 2 4 approve", "text 2", "edit 2: …",'
@@ -194,6 +197,11 @@ TEXTS: dict[str, str] = {
         'Це повідомлення рев\'ю: "post replies" працює в повідомленні повторної перевірки. Нічого не зроблено.',
     'This is a re-check message: reply "post replies 1 3". Nothing was done.':
         'Це повідомлення повторної перевірки: відповідайте "post replies 1 3". Нічого не зроблено.',
+    'This is a threads message: reply "push", "post replies 1 3", "text 2", "diff" or "again: …". Nothing was done.':
+        'Це повідомлення про треди: відповідайте "push", "post replies 1 3", "text 2", "diff" або "again: …".'
+        ' Нічого не зроблено.',
+    '"{action}" works on a threads message of your own PR. Nothing was done.':
+        '"{action}" працює в повідомленні про треди вашого PR. Нічого не зроблено.',
     'Edit one number at a time: "edit 2: …". Nothing was done.':
         'Редагуйте по одному номеру: "edit 2: …". Нічого не зроблено.',
     'Name a number: "text 2". Nothing was done.': 'Вкажіть номер: "text 2". Нічого не зроблено.',

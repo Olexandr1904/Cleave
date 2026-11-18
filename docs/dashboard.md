@@ -127,7 +127,7 @@ Above the tables, filter chips count the PRs of every repo: **all PRs**, **need 
 
 Under each repo's status line there are two tables (a table with no PR to show is left out):
 
-- **My turn** — PRs where you have a turn (review, re-check, merge, …), except the ticket pipeline's own PRs
+- **My turn** — PRs where you have a turn (review, re-check, merge, …), the ticket pipeline's own PRs included
 - **Waiting on others** — every other PR on the board, the pipeline's PRs included
 
 | Column | Shows |

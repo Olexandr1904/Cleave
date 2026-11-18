@@ -99,6 +99,8 @@ reviewer:
     prepare_steps:
       - ["python3", "tools/review/anchors.py", "{pr}", "--worktree", "{worktree}", "--base", "{merge_base}"]
     helper_scripts: ["tools/review/*.py"]            # python3 targets the model may run
+    # Threads on your own PRs: Cleave drafts the replies and a fix with this author-side document ("" = turn lines).
+    # address_doc: ".github/pr_comments/400-pr-review-workflow.mdc"
   poster:
     kind: command
     review_command: ["python3", "tools/review/post.py", "{pr}", "--repo", "{repo}", "--report", "{report}",

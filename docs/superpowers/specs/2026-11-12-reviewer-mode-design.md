@@ -56,9 +56,12 @@ headless `claude -p` runner.
 - **Building the GitLab parts.** The core and the three part contracts are shaped so a GitLab repo fits (see
   "Adding a GitLab repo later"); this version builds the GitHub forge reader and the `command` kinds only.
 - **Answering threads on the operator's own PRs.** It changes code and needs a commit and push. Reviewer mode only
-  notifies about it.
+  notifies about it. (amended by `2026-11-18-reviewer-address-design.md`: `answer_threads`, `resolve_threads` and
+  `address_review` run an address job where `process.address_doc` is set)
 - **Merging**, or any action for the author-side turns (`merge`, `fix_checks`, `resolve_conflicts`,
-  `address_review`, `request_review`, `finish_draft`, `answer_threads`). Notification only.
+  `address_review`, `request_review`, `finish_draft`, `answer_threads`). Notification only. (amended by
+  `2026-11-18-reviewer-address-design.md`: `answer_threads`, `resolve_threads` and `address_review` run an address
+  job where `process.address_doc` is set)
 - **A sharded review path for very large PRs** (the reference repo has one: a build-and-lint stage in a worktree,
   then a Claude Code Workflow script). See "Large PRs".
 - **Fixing the ticket pipeline's result quality.** A separate topic, after this ships.
@@ -487,8 +490,8 @@ https://github.com/acme-org/acme-mobile/pull/1712
 The re-check message has the same shape: one line per drafted reply (`N. исправлено / не исправлено / убедил /
 не убедил · path:line · суть`) and «пости ответы 1 3».
 
-Turn lines (one line each): «#1720: твой ход — merge», «#1718: тебе ответили в 3 тредах — обработай у себя»,
-«#1730 большой (57 файлов) — автоматически не ревьюю».
+Turn lines (one line each): «#1720: твой ход — merge», «#1718: тебе ответили в 3 тредах — обработай у себя»
+(only without `address_doc`), «#1730 большой (57 файлов) — автоматически не ревьюю».
 
 **Reply routing.** A reply to a reviewer message is looked up in reviewer's own persistent table
 `(chat_id, message_id) → job`. This lookup runs at the top of `command_handler.handle_reply`

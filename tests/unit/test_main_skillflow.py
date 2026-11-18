@@ -1,6 +1,6 @@
 """Tests for main's skill-flow wiring: one skill repo per loaded repo with ticket_flow both, the objects main builds
-around them (one store and one chat for all), the intake on the orchestrator, the replies on the command handler, and
-the runner's background task started and stopped around the daemon."""
+around them (one store and one chat for all), the intake on the orchestrator, the replies on the command handler, the
+comparison keeper and board, and the runner's and the keeper's background tasks started and stopped around the daemon."""
 from __future__ import annotations
 
 import asyncio
@@ -13,7 +13,10 @@ import pytest
 import yaml
 
 import main
+import orchestrator.reviewer.db as db_module
+import orchestrator.skillflow.board as board_module
 import orchestrator.skillflow.intake as intake_module
+import orchestrator.skillflow.keeper as keeper_module
 import orchestrator.skillflow.replies as replies_module
 import orchestrator.skillflow.runner as runner_module
 from config.schemas import GitHubConfig, GlobalConfig, LoadedProject, RepoConfig, TelegramConfig, VCSConfig
@@ -22,11 +25,18 @@ from integrations.base.tracker import TicketData
 from integrations.telegram.telegram_adapter import TelegramAdapter
 from main import _build_vcs_adapter, _skill_repos, _start_skill, _stop_background
 from orchestrator.orchestrator import Orchestrator
+from orchestrator.reviewer.db import connect
 from orchestrator.skillflow.chat import SkillChat
+from orchestrator.skillflow.compare_store import ComparisonStore
 from orchestrator.skillflow.intake import SkillIntake
+from orchestrator.skillflow.keeper import ComparisonKeeper
+from orchestrator.skillflow.replies import SkillOff, SkillReplies
+from orchestrator.skillflow.sides import Workspaces
 from orchestrator.skillflow.store import SkillStore
 from tests.unit.test_main_startup import _MINIMAL_GLOBAL_YAML
 from workspace.workspace import Stage
+
+NOW = "2026-11-17T10:00:00+00:00"
 
 
 def _initialised() -> Orchestrator:
@@ -205,18 +215,20 @@ def _repo_yaml(name: str, flow: str, token: str) -> str:
 
 
 def _run_main(tmp_path, monkeypatch, *, flow: str = "both", telegram: bool = True, dry_run: bool = False,
-              tokenless_web: bool = False):
+              tokenless_web: bool = False, language: str = ""):
     """main() from start to shutdown, over a config with one project, acme, whose repo app has `flow` as its
-    ticket_flow and whose chat is 7, and with the dashboard off. With `tokenless_web`, a second repo, web, on both but
-    with no GitHub token. With `telegram`, a bot token and 42 as the global chat (no request is made). Returns what
-    main built (the orchestrator, the runner, the intake, the replies and the command handler as "handler"; each only
-    when built) and the names it gave _stop_background."""
+    ticket_flow and whose chat is 7 (in `language`, "": global.yaml's), and with the dashboard off. With
+    `tokenless_web`, a second repo, web, on both but with no GitHub token. With `telegram`, a bot token and 42 as the
+    global chat (no request is made). Returns what main built (the orchestrator, the runner, the keeper, the board,
+    the intake, the replies and the command handler as "handler"; each only when built) and the names it gave
+    _stop_background. A second call on the same tmp_path rewrites the config and keeps reviewer.db."""
     monkeypatch.setenv("ACME_GITHUB_TOKEN", "tok-app")
     cfg = tmp_path / "config-live"
     repos_dir = cfg / "projects" / "acme" / "repos"
-    repos_dir.mkdir(parents=True)
+    repos_dir.mkdir(parents=True, exist_ok=True)
+    project_telegram = "telegram:\n  default_chat_id: '7'\n" + (f"  language: {language}\n" if language else "")
     (cfg / "projects" / "acme" / "project.yaml").write_text(
-        "project:\n  id: acme\n  name: Acme\ntelegram:\n  default_chat_id: '7'\n", encoding="utf-8")
+        "project:\n  id: acme\n  name: Acme\n" + project_telegram, encoding="utf-8")
     (repos_dir / "app.yaml").write_text(_repo_yaml("app", flow, "${ACME_GITHUB_TOKEN}"), encoding="utf-8")
     if tokenless_web:
         (repos_dir / "web.yaml").write_text(_repo_yaml("web", "both", ""), encoding="utf-8")
@@ -260,6 +272,8 @@ def _run_main(tmp_path, monkeypatch, *, flow: str = "both", telegram: bool = Tru
     monkeypatch.setenv("GRADLE_USER_HOME", str(tmp_path / "gradle"))   # main caps build memory there
     monkeypatch.setattr(main, "_stop_background", stop_background)
     monkeypatch.setattr(runner_module, "SkillRunner", recorder("runner", FakeRunner))
+    monkeypatch.setattr(keeper_module, "ComparisonKeeper", recorder("keeper", FakeRunner))
+    monkeypatch.setattr(board_module, "ComparisonBoard", recorder("board", _Built))
     monkeypatch.setattr(intake_module, "SkillIntake", recorder("intake", _Built))
     monkeypatch.setattr(replies_module, "SkillReplies", recorder("replies", _Built))
     monkeypatch.setattr(TelegramAdapter, "start_polling", no_event)
@@ -281,7 +295,7 @@ def _run_main(tmp_path, monkeypatch, *, flow: str = "both", telegram: bool = Tru
 
 
 def test_main_wires_the_skill_flow(tmp_path, monkeypatch, capsys):
-    cfg, built, stopped = _run_main(tmp_path, monkeypatch)
+    cfg, built, stopped = _run_main(tmp_path, monkeypatch, language="uk")
 
     assert "  Skill flow: 1 repo(s)\n" in capsys.readouterr().out
     orch, runner, intake, replies = built["orchestrator"], built["runner"], built["intake"], built["replies"]
@@ -303,19 +317,44 @@ def test_main_wires_the_skill_flow(tmp_path, monkeypatch, capsys):
     assert kwargs["runs_dir"] == tmp_path / "rv" / "skill" / "runs"
     assert kwargs["secret_paths"] == [Path(main.__file__).parent / ".env", cfg.absolute()]
     assert kwargs["event_bus"] is orch._events is not None
+    assert kwargs["language_of"]("acme/app") == "uk"   # the project's telegram.language
+    # The comparisons: one store on the skill store's connection, on the orchestrator, the intake, the keeper, the
+    # replies and the board.
+    comparisons = orch._comparisons
+    assert isinstance(comparisons, ComparisonStore) and comparisons._conn is store._conn
+    assert intake.kwargs["comparisons"] is comparisons
+    keeper, board = built["keeper"], built["board"]
+    k_repos, k_comparisons, k_runs, k_chat, workspaces = keeper.args
+    assert k_repos is repos and k_comparisons is comparisons and k_runs is store and k_chat is chat
+    assert isinstance(workspaces, Workspaces) and workspaces._active == orch.get_active_workspaces
+    tracker = MagicMock()
+    orch.register_tracker("acme", tracker)
+    assert keeper.kwargs["tracker_for"]("acme") is tracker   # by project id, as the keeper asks
+    assert keeper.kwargs["event_bus"] is orch._events
+    assert keeper.kwargs["language_of"]("acme/app") == "uk"
+    ComparisonKeeper(*keeper.args, **keeper.kwargs)   # the real keeper takes what main gave it
+    assert board.args == (comparisons, store, workspaces)
     # The intake: on the orchestrator, writing to the runs directory, waking the runner, telling the repo's chat.
     assert orch._skill_intake is intake
     _, runs_dir, chat_id_for = intake.args
-    assert runs_dir == kwargs["runs_dir"] and set(intake.kwargs) == {"wake", "serves"}
+    assert runs_dir == kwargs["runs_dir"] and set(intake.kwargs) == {"wake", "serves", "comparisons"}
     assert intake.kwargs["wake"] == runner.wake
     assert intake.kwargs["serves"]("acme/app") and not intake.kwargs["serves"]("acme/web")   # only the runner's repos
     assert chat_id_for(orch._projects["acme"].repos["app"]) == "7"   # the repo's chat
     assert chat_id_for(RepoConfig()) == "42"                           # else the global one
-    # The replies: on the command handler, waking the runner.
+    # The replies: on the command handler, waking the runner and the keeper; a known scope's language, else the
+    # chat's.
     assert replies.args[2] == runner.wake and built["handler"]._skill is replies
-    # The runner recovered at once, looped once the first credential round was done and stopped by its event.
-    assert stopped == ["Credential health", "Skill runs"]
+    assert replies.kwargs["comparisons"] is comparisons and replies.kwargs["wake_keeper"] == keeper.wake
+    language_of = replies.kwargs["language_of"]
+    assert language_of("acme/app", "42") == "uk"
+    assert language_of("", "7") == "uk" and language_of("", "42") == "en"
+    SkillReplies(*replies.args, **replies.kwargs)
+    # The runner recovered at once, looped once the first credential round was done and stopped by its event; the
+    # keeper, with nothing to recover, only looped.
+    assert stopped == ["Credential health", "Skill runs", "Comparisons"]
     assert runner.started == 1 and [s.is_set() for s in runner.stops] == [True]
+    assert keeper.started == 0 and [s.is_set() for s in keeper.stops] == [True]
 
 
 def _workspace(tmp_path, repo_id: str):
@@ -323,7 +362,8 @@ def _workspace(tmp_path, repo_id: str):
     meta.mkdir(parents=True)
     (meta / "ticket.md").write_text("# ACME-1")
     return SimpleNamespace(meta_dir=meta, state=SimpleNamespace(
-        repo_id=repo_id, branch=f"feature/ACME-1-{repo_id}", model="sonnet", current_state=Stage.ANALYSIS))
+        repo_id=repo_id, branch=f"feature/ACME-1-{repo_id}", model="sonnet", current_state=Stage.ANALYSIS,
+        workspace_root=str(meta.parent), started_at=NOW))
 
 
 def test_the_intake_main_builds_refuses_a_repo_it_skipped(tmp_path, monkeypatch, caplog):
@@ -342,6 +382,7 @@ def test_the_intake_main_builds_refuses_a_repo_it_skipped(tmp_path, monkeypatch,
     assert store.runs_for_ticket("acme/web", "ACME-1") == []
     run = intake.create(_workspace(tmp_path, "app"), ticket, "acme", repos["app"])
     assert (run.scope, run.chat_id) == ("acme/app", "7")
+    assert orch._comparisons.for_run(run.id) is not None   # and its comparison
 
 
 def test_main_builds_nothing_without_a_both_repo(tmp_path, monkeypatch, capsys):
@@ -367,3 +408,76 @@ def test_main_skill_flow_off(tmp_path, monkeypatch, capsys, telegram, dry_run, l
     if telegram:
         assert built["handler"]._skill is None
     assert stopped == ["Credential health"]
+
+
+class MainRig:
+    """main() run on one tmp_path, so every run reads and writes the same reviewer.db: `store` is a SkillStore on it,
+    for what an earlier daemon left there."""
+
+    def __init__(self, tmp_path, monkeypatch):
+        self._tmp_path, self._monkeypatch = tmp_path, monkeypatch
+        self.store = SkillStore(connect(tmp_path / "rv" / "reviewer.db"))
+        self.stopped: list[str] = []
+        self.language = ""   # acme's telegram.language for the next run
+
+    def wired(self, both=()) -> SimpleNamespace:
+        """main() with the repo app on ticket_flow both when it is in `both`, else staged; what it built."""
+        _, built, self.stopped = _run_main(self._tmp_path, self._monkeypatch,
+                                           flow="both" if "app" in both else "staged", language=self.language)
+        return SimpleNamespace(orchestrator=built["orchestrator"], command_handler=built["handler"], built=built)
+
+    def start(self) -> list[str]:
+        """The names of the background tasks main stopped, with app on both."""
+        self.wired(both=["app"])
+        return self.stopped
+
+
+@pytest.fixture
+def main_rig(tmp_path, monkeypatch):
+    return MainRig(tmp_path, monkeypatch)
+
+
+def test_keeper_starts_and_stops_with_the_runner(main_rig):
+    tasks = main_rig.start()
+    assert {"Skill runs", "Comparisons"} <= set(tasks)
+
+
+def test_comparisons_are_set_only_with_skill_repos(main_rig):
+    assert getattr(main_rig.wired(both=[]).orchestrator, "_comparisons", None) is None
+    assert main_rig.wired(both=["app"]).orchestrator._comparisons is not None
+
+
+def test_skill_off_with_old_anchors(main_rig):
+    main_rig.store.add_anchor("-100", 5, "run1", NOW)
+    handler = main_rig.wired(both=[]).command_handler
+    assert isinstance(handler._skill, SkillOff)
+    # On the daemon's own store, answering in the chat's language.
+    assert handler._skill.is_anchor("-100", 5) and not handler._skill.is_anchor("-100", 6)
+    main_rig.language = "uk"
+    off = main_rig.wired(both=[]).command_handler._skill
+    assert off._language_of("7") == "uk" and off._language_of("42") == "en"   # acme's chat; the global one
+
+
+def test_no_skill_off_on_a_daemon_that_never_used_it(main_rig):
+    assert main_rig.wired(both=[]).command_handler._skill is None
+
+
+# --- the code-review fix wave ---
+
+@pytest.mark.parametrize("flow, telegram, opened", [
+    ("staged", False, 2),   # the switches' and the reviewer store's: no skill connection
+    ("both", False, 2),     # skill flow off (no Telegram): no skill repos
+    ("staged", True, 3),    # the skill connection, for the has_anchors check
+    ("both", True, 3),      # the skill connection, for the skill repos
+])
+def test_the_skill_connection_is_opened_only_where_it_is_used(tmp_path, monkeypatch, flow, telegram, opened):
+    calls = []
+    real = db_module.connect
+
+    def counting(*args, **kwargs):
+        calls.append(args)
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(db_module, "connect", counting)
+    _run_main(tmp_path, monkeypatch, flow=flow, telegram=telegram)
+    assert len(calls) == opened

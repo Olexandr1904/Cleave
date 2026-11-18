@@ -6,6 +6,7 @@ import { renderBoard } from './board.js';
 import { renderDetail } from './detail.js';
 import { renderEventsHtml } from './events.js';
 import { renderReviews } from './reviews.js';
+import { renderComparison } from './comparison.js';
 import { setMode, showConfirmDialog } from './actions.js';
 
 const state = {
@@ -55,6 +56,18 @@ function showReviews(fromHash) {
   if (!fromHash) setHash('#/reviews');
 }
 
+function showComparison(fromHash) {
+  state.view = 'comparison';
+  state.ticketId = null;
+  document.getElementById('view-title').textContent = 'Comparison';
+  document.getElementById('toolbar-eventlog-controls').style.display = 'none';
+  showBoardControls(false);
+  updateActiveNav('nav-comparison');
+  scheduleAutoRefresh();
+  renderComparison();
+  if (!fromHash) setHash('#/comparison');
+}
+
 function showEventLog(fromHash) {
   state.view = 'eventlog';
   state.ticketId = null;
@@ -92,11 +105,12 @@ function showDetail(ticketId, fromHash) {
 
 function routeFromHash() {
   const h = location.hash || '#/board';
-  const m = h.match(/^#\/(board|reviews|eventlog|settings|ticket)(?:\/(.+))?$/);
+  const m = h.match(/^#\/(board|reviews|comparison|eventlog|settings|ticket)(?:\/(.+))?$/);
   if (!m) { showBoard(null, true); return; }
   const [, view, arg] = m;
   if (view === 'board') showBoard(arg || null, true);
   else if (view === 'reviews') showReviews(true);
+  else if (view === 'comparison') showComparison(true);
   else if (view === 'eventlog') showEventLog(true);
   else if (view === 'settings') showSettings(true);
   else if (view === 'ticket' && arg) showDetail(arg, true);
@@ -251,6 +265,7 @@ function scheduleAutoRefresh() {
     state.timer = setInterval(() => {
       if (state.view === 'board') doRenderBoard();
       else if (state.view === 'reviews') renderReviews();
+      else if (state.view === 'comparison') renderComparison();
       else if (state.view === 'eventlog') doRenderEventLog();
       updateDaemonStatus();
     }, 30000);
@@ -262,6 +277,7 @@ async function init() {
   // Bind nav
   document.getElementById('nav-board').addEventListener('click', () => showBoard(null));
   document.getElementById('nav-reviews').addEventListener('click', () => showReviews());
+  document.getElementById('nav-comparison').addEventListener('click', () => showComparison());
   document.getElementById('nav-eventlog').addEventListener('click', () => showEventLog());
   document.getElementById('nav-settings').addEventListener('click', () => showSettings());
 
@@ -289,6 +305,7 @@ async function init() {
   document.getElementById('toolbar-refresh-btn').addEventListener('click', () => {
     if (state.view === 'board') doRenderBoard();
     else if (state.view === 'reviews') renderReviews();
+    else if (state.view === 'comparison') renderComparison();
     else if (state.view === 'eventlog') doRenderEventLog();
     else if (state.view === 'detail') renderDetail(state.ticketId, (pid) => showBoard(pid));
   });

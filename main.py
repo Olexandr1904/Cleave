@@ -926,17 +926,33 @@ def main(argv: list[str] | None = None) -> int:
     )
     skill_runner = None
     skill_replies = None
+    comparison_keeper = None
+    comparison_board = None
+    from orchestrator.skillflow.chat import SkillChat
+    from orchestrator.skillflow.store import SkillStore
+
+    def _scope_language(scope: str) -> str:
+        """The Telegram language of a scope ("<project>/<repo>"): its project's."""
+        return _language_of(scope.split("/", 1)[0])
+
     if skill_repos:
         from integrations.llm.claude_code_adapter import ClaudeCodeAdapter
-        from orchestrator.skillflow.chat import SkillChat
+        from orchestrator.skillflow.board import ComparisonBoard
+        from orchestrator.skillflow.compare_store import ComparisonStore
         from orchestrator.skillflow.intake import SkillIntake
+        from orchestrator.skillflow.keeper import ComparisonKeeper
         from orchestrator.skillflow.replies import SkillReplies
         from orchestrator.skillflow.runner import SkillRunner
-        from orchestrator.skillflow.store import SkillStore
+        from orchestrator.skillflow.sides import Workspaces
 
         # One store and one chat for the runner, the intake and the replies: the compare-and-set
-        # that keeps a reply and the runner apart is a lock inside the one store object.
-        skill_store = SkillStore(connect(reviewer_db_path(global_config.reviewer)))
+        # that keeps a reply and the runner apart is a lock inside the one store object. Likewise
+        # one comparison store for the intake, the keeper, the replies and the board. One connection
+        # for the skill runs and the comparisons: the skill store's and the comparison store's locks
+        # each guard only their own writers.
+        skill_conn = connect(reviewer_db_path(global_config.reviewer))
+        skill_store = SkillStore(skill_conn)
+        comparisons = ComparisonStore(skill_conn)
         skill_chat = SkillChat(notifier, skill_store)
         skill_runs = skill_dir / "runs"
         skill_runner = SkillRunner(
@@ -944,17 +960,45 @@ def main(argv: list[str] | None = None) -> int:
             slot=orchestrator.build_slot, switches=switches,
             credential_failing=credential_health.failing, get_mode=mode_handler.get_mode,
             runs_dir=skill_runs, secret_paths=secret_paths, event_bus=event_bus,
+            language_of=_scope_language,
         )
+        # Only here: on a daemon that serves no repo on both, no workspace is compared.
+        orchestrator.set_comparisons(comparisons)
+        workspaces = Workspaces(orchestrator.get_active_workspaces)
+        comparison_keeper = ComparisonKeeper(
+            skill_repos, comparisons, skill_store, skill_chat, workspaces,
+            tracker_for=orchestrator.get_tracker_for_project, language_of=_scope_language,
+            event_bus=event_bus,
+        )
+        comparison_board = ComparisonBoard(comparisons, skill_store, workspaces)
 
         # Runs only for the repos the runner serves: a repo skipped above, or one added by hot
         # reload, would get runs no runner takes.
         served = frozenset(repo.scope for repo in skill_repos)
         orchestrator.set_skill_intake(SkillIntake(
             skill_store, skill_runs, lambda repo_cfg: _skill_chat_id(repo_cfg, global_chat_id),
-            wake=skill_runner.wake, serves=served.__contains__,
+            wake=skill_runner.wake, serves=served.__contains__, comparisons=comparisons,
         ))
-        skill_replies = SkillReplies(skill_store, skill_chat, skill_runner.wake)
+        skill_replies = SkillReplies(
+            skill_store, skill_chat, skill_runner.wake, comparisons=comparisons,
+            wake_keeper=comparison_keeper.wake,
+            # An answer about no known run or comparison is in the chat's language.
+            language_of=lambda scope, chat_id: (
+                _scope_language(scope) if scope else chat_language(global_config, projects, chat_id)
+            ),
+        )
         print(f"  Skill flow: {len(skill_repos)} repo(s)")
+    elif notifier is not None:
+        from orchestrator.skillflow.replies import SkillOff
+
+        # A reply to a message an earlier daemon's skill runs or comparisons sent is answered
+        # "the skill flow is off" rather than read as a command.
+        off_store = SkillStore(connect(reviewer_db_path(global_config.reviewer)))
+        if off_store.has_anchors():
+            skill_replies = SkillOff(
+                off_store, SkillChat(notifier, off_store),
+                language_of=lambda chat_id: chat_language(global_config, projects, chat_id),
+            )
 
     # Initialize command handler for Telegram free-text control
     command_handler = None
@@ -1041,6 +1085,12 @@ def main(argv: list[str] | None = None) -> int:
             reviewer, review_jobs, review_edits, ready=credential_health.first_round,
         )
         skill_tasks = _start_skill(skill_runner, credential_health.first_round)
+        if comparison_keeper is not None:
+            # No first-round wait: the keeper calls no CLI.
+            keeper_stop = asyncio.Event()
+            skill_tasks["Comparisons"] = (
+                _start_background("Comparisons", comparison_keeper.loop(keeper_stop)), keeper_stop,
+            )
 
         # Init runtime settings table (model picker).
         import aiosqlite as _aiosqlite
@@ -1135,6 +1185,7 @@ def main(argv: list[str] | None = None) -> int:
                 switches=switches,
                 credential_health=credential_health,
                 reviewer=reviewer,
+                comparisons=comparison_board,
             )
             config = uvicorn.Config(
                 app, host=dash_config.host, port=dash_config.port,

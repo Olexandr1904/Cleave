@@ -14,7 +14,7 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse
 
 from orchestrator.constants import REPORT_BA, REPORT_DEV, REPORT_QA, REPORT_SCOPE_GUARD
-from workspace.workspace import Stage
+from workspace.workspace import Stage, archive_workspace
 
 from config.host_os import terminal_launch_command
 
@@ -378,10 +378,7 @@ def build_action_routes(
         if ws.state.current_state not in (Stage.FAILED, Stage.DONE, Stage.DEFERRED):
             return _error(f"Cannot archive: state is {ws.state.current_state}")
 
-        # DEFERRED -> ARCHIVED is not a valid direct transition; hop via FAILED.
-        if ws.state.current_state == Stage.DEFERRED:
-            ws.transition(Stage.FAILED)
-        ws.transition(Stage.ARCHIVED)
+        archive_workspace(ws)
 
         if event_bus:
             event_bus.emit(

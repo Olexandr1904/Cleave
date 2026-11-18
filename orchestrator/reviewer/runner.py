@@ -18,6 +18,7 @@ from config.schemas import ReviewerJobConfig
 from orchestrator.reviewer.board import ADDRESS_ACTIONS, TICKET_KEY
 from orchestrator.reviewer.chat import ReviewerChat
 from orchestrator.reviewer.clone import ReviewClone, git_file_changed, guarded_git_files
+from orchestrator.reviewer.fix import PATCH_NAME, FixError, capture_fix
 from orchestrator.reviewer.jobs import REVIEW_NOW_SUFFIX
 from orchestrator.reviewer.lines import (
     drift_line,
@@ -25,7 +26,6 @@ from orchestrator.reviewer.lines import (
     job_failed_line,
     login_line,
 )
-from orchestrator.reviewer.fix import PATCH_NAME, FixError, capture_fix
 from orchestrator.reviewer.messages import (
     MESSAGE_LIMIT,
     address_message,

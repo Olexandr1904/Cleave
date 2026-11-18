@@ -33,8 +33,13 @@ async def handle_action_stage(
     advance_to_stage_fn: Callable[[Workspace, str], None],
     on_ticket_done_fn: Callable[[Workspace], Awaitable[None]],
     build_gate_summary_fn: Callable[[Workspace, str], tuple[str, list[Button]]],
+    is_compared: Callable[[Workspace], bool] = lambda ws: False,
 ) -> None:
-    """Execute an action stage with capture → execute → verify → transition."""
+    """Execute an action stage with capture → execute → verify → transition.
+
+    `is_compared(ws)`: the ticket is compared with the skill flow, so its PR message says Cleave
+    answers no review comments and asks for no Review Complete.
+    """
     action = stage_def.action
     state = workspace.state
 
@@ -160,6 +165,16 @@ async def handle_action_stage(
             pr_url = result.metadata["pr_url"]
             title = tg_format.read_ticket_title(workspace)
             hdr = tg_format.tg_header("🔗", state.company_id, state.ticket_id, title)
+            if is_compared(workspace):
+                # Nothing waits for a reply to it: the verdict comes from the comparison's own message.
+                await notifier.send_message(
+                    chat_id,
+                    f"{hdr}\n"
+                    + tr("Draft PR opened: {pr_url}\n\n"
+                         "This ticket is compared with the skill flow: Cleave answers no review comments on it, "
+                         "and makes the tracker writes once you pick the better PR.", pr_url=pr_url),
+                )
+                return
             msg = (
                 f"{hdr}\n"
                 + tr("PR opened: {pr_url}\n\n"

@@ -201,8 +201,13 @@ async def action_push_and_open_pr(
     chat_id: str,
     tracker: TrackerInterface | None,
     event_bus: Any | None,
+    *,
+    compared: bool = False,
 ) -> ActionResult:
-    """Push branch and open PR. Returns ActionResult — caller transitions."""
+    """Push branch and open PR. Returns ActionResult — caller transitions.
+
+    `compared`: the PR is opened as create_pr opens a compared ticket's (a `[staged]` draft, no tracker write).
+    """
     state = workspace.state
 
     # If PR already exists (from a previous cycle), just push new commits (no squash)
@@ -291,7 +296,7 @@ async def action_push_and_open_pr(
     # Squash commits into one clean commit before the first PR
     squash_feature_commits(workspace, repo_config)
 
-    result = await create_pr(workspace, vcs, tracker, repo_config, event_bus=event_bus)
+    result = await create_pr(workspace, vcs, tracker, repo_config, event_bus=event_bus, compared=compared)
     if result.success:
         return ActionResult(
             success=True, next_state=Stage.PR_REVIEW, error="",

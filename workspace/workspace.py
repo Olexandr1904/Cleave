@@ -250,6 +250,14 @@ class Workspace:
         return count
 
 
+def archive_workspace(ws: Workspace) -> None:
+    """Archive a FAILED, DONE or DEFERRED workspace; any other state raises InvalidTransitionError."""
+    # DEFERRED -> ARCHIVED is not a valid direct transition; hop via FAILED.
+    if ws.state.current_state == Stage.DEFERRED:
+        ws.transition(Stage.FAILED)
+    ws.transition(Stage.ARCHIVED)
+
+
 @dataclass
 class AdminWorkspaceState:
     """State for admin (non-ticket) workspaces."""

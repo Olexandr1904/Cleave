@@ -412,11 +412,16 @@ async def action_fetch_pr_comments(
     notifier: NotifierInterface | None,
     agent_runtime: Any,
     event_bus: Any | None = None,
+    compared: bool = False,
 ) -> ActionResult:
     """PR review comment resolution flow.
 
     Uses resolution_report as the single source of truth for comment
     decisions and verification state.
+
+    `compared` (the ticket is compared with the skill flow): skipped, so
+    the draft PR waits for the operator's verdict and no comment on it is
+    answered, nor the ticket finished.
 
     `get_vcs` / `get_chat_id` are zero-arg thunks the orchestrator shim
     passes in so test fixtures that mock the Orchestrator don't have to
@@ -425,6 +430,9 @@ async def action_fetch_pr_comments(
     """
     from orchestrator.comment_classifier import classify_comments
     from orchestrator.resolution_report import read_entries, add_entry, update_entry
+
+    if compared:
+        return ActionResult(success=False, next_state="", error="", metadata={}, skipped=True)
 
     state = workspace.state
     pr_number = state.pr_number

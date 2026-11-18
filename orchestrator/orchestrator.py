@@ -22,6 +22,7 @@ from orchestrator.pipeline.actions.fetch_pr_comments import action_fetch_pr_comm
 from orchestrator.pipeline.actions.finalize import action_finalize
 from orchestrator.pipeline.actions.push_and_open_pr import action_push_and_open_pr
 from orchestrator.runtime import Runtime
+from orchestrator.switches import scope_of
 from orchestrator.tg_i18n import project_language, telegram_language
 from orchestrator.ticket_prioritizer import PrioritizedTicket
 from orchestrator.workflow_router import WorkflowDefinition
@@ -237,6 +238,30 @@ class Orchestrator:
     def set_skill_intake(self, intake) -> None:
         """Attach the intake that makes a skill run for each new workspace (skill flow)."""
         self._skill_intake = intake
+
+    def set_comparisons(self, comparisons) -> None:
+        """Attach the ComparisonStore that says which tickets are compared with the skill flow."""
+        self._comparisons = comparisons
+
+    def _is_compared(self, workspace: Workspace) -> bool:
+        """True when the workspace's repo is on ticket_flow "both" and a comparison row exists for this
+        workspace that is not closed. A store error propagates: the stage fails rather than open a non-draft
+        PR or answer review comments on a compared ticket. A project or repo Cleave no longer knows is not
+        compared."""
+        comparisons = getattr(self, "_comparisons", None)
+        state = workspace.state
+        # The workspace's own project, not _get_repo_config's first project with this repo id: two projects
+        # may share a repo id, and the scope looked up below is this project's.
+        project = self._projects.get(state.company_id)
+        repo_config = project.repos.get(state.repo_id) if project is not None else None
+        if comparisons is None or repo_config is None or repo_config.ticket_flow != "both":
+            return False
+        found = comparisons.for_workspace(
+            scope_of(state.company_id, state.repo_id), state.ticket_id, state.started_at,
+        )
+        # After the verdict, a workspace taken up again (a dashboard Rerun keeps started_at) is the staged
+        # flow's own: a stuck verdict still holds it.
+        return found is not None and found.state != "closed"
 
     def _tickets_running(self, project_id: str, repo_id: str) -> bool:
         """True when tickets run for this repo; always True until switches are set."""
@@ -519,7 +544,7 @@ class Orchestrator:
             vcs, repo_config = self._get_vcs_for_workspace(ws)
             return await action_push_and_open_pr(
                 ws, vcs, repo_config, notifier, self._get_chat_id(ws),
-                tracker, event_bus,
+                tracker, event_bus, compared=self._is_compared(ws),
             )
 
         async def _fetch(ws, sd):
@@ -531,6 +556,7 @@ class Orchestrator:
                 notifier=notifier,
                 agent_runtime=getattr(self, "_agent_runtime", None),
                 event_bus=event_bus,
+                compared=self._is_compared(ws),
             )
 
         async def _finalize(ws):
@@ -550,6 +576,7 @@ class Orchestrator:
             advance_to_stage_fn=lambda ws, sid: advance_to_stage(ws, sid, event_bus=event_bus),
             on_ticket_done_fn=self._on_ticket_done,
             build_gate_summary_fn=build_gate_summary,
+            is_compared=self._is_compared,
         )
 
     def shutdown(self) -> None:

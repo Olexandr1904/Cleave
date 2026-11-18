@@ -118,6 +118,10 @@ TEXTS: dict[str, str] = {
         "з'являться коментарі рев'ю, Cleave надсилатиме їх по одному на ваше рішення («Виправити» або «Не "
         "виправляти»). Щоб додати контекст, дайте відповідь на будь-яке з цих повідомлень.\n\nКоли закінчите: "
         "натисніть «Рев'ю завершено» або дайте відповідь на це повідомлення.",
+    "Draft PR opened: {pr_url}\n\nThis ticket is compared with the skill flow: Cleave answers no review comments on "
+    "it, and makes the tracker writes once you pick the better PR.":
+        "Чернетку PR відкрито: {pr_url}\n\nЦей тікет порівнюється зі skill flow: Cleave не відповідає на коментарі "
+        "рев'ю до нього, а записи в трекер зробить, щойно ви оберете кращий PR.",
 
     # orchestrator/pipeline/agent_stage.py
     "Android SDK not installed — build not verified": "Android SDK не встановлено — збірку не перевірено",

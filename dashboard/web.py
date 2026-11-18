@@ -514,7 +514,7 @@ def create_app(
 
     if reviewer is not None:
         from dashboard.reviews_api import build_review_routes
-        routes.extend(build_review_routes(reviewer))
+        routes.extend(build_review_routes(reviewer, lambda: projects or {}))
 
     if comparisons is not None:
         from dashboard.comparisons_api import build_comparison_routes

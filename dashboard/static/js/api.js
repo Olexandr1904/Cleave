@@ -141,3 +141,7 @@ export async function reviewNow(scope, number) {
 export async function skipReview(scope, number) {
   return postReviewAction('/api/reviews/skip', scope, number);
 }
+
+export async function fixNow(scope, number) {
+  return postReviewAction('/api/reviews/fix-now', scope, number);
+}

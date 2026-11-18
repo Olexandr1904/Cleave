@@ -1,7 +1,8 @@
-"""Dashboard routes for the Reviews tab: the board, a PR's detail, Review now and Skip. Nothing here
-posts."""
+"""Dashboard routes for the Reviews tab: the board, a PR's detail, Review now, Skip and Fix now. Nothing here
+posts: Fix now only queues an address job, whose result is pushed and posted from Telegram."""
 from __future__ import annotations
 
+from collections.abc import Callable
 from typing import Any
 from urllib.parse import urlsplit
 
@@ -31,10 +32,20 @@ def _pr(row: BoardRow, repo: dict) -> dict:
         "last_change": row.last_change,
         "skipped": row.number in repo["skipped"],  # the current head is skipped
         "large": row.number in repo["large"],  # not reviewed automatically
+        "review": repo["reviews"].get(row.number),  # the newest review, whatever job is newer
+        "can_fix": row.number in repo["fixable"],  # Fix now applies
     }
 
 
-def _repo(repo: dict) -> dict:
+def _jira_url(projects: dict, project_id: str) -> str:
+    """The base URL of the project's Jira, "" when it tracks tickets elsewhere (as web.py's ticket links)."""
+    tracker = getattr(getattr(projects.get(project_id), "config", None), "tracker", None)
+    if getattr(tracker, "provider", None) != "jira":
+        return ""
+    return (getattr(getattr(tracker, "jira", None), "url", "") or "").rstrip("/")
+
+
+def _repo(repo: dict, projects: dict) -> dict:
     my_turn, waiting = [], []
     for row in sorted(repo["rows"], key=lambda r: r.number, reverse=True):
         group = my_turn if row.my_turns else waiting
@@ -42,6 +53,7 @@ def _repo(repo: dict) -> dict:
     return {
         "scope": repo["scope"], "status": repo["status"], "reason": repo["reason"],
         "last_poll_at": repo["last_poll_at"], "next_poll_at": repo["next_poll_at"],
+        "me": repo["me"], "jira_url": _jira_url(projects, repo["project_id"]),
         "my_turn": my_turn, "waiting": waiting,
     }
 
@@ -78,9 +90,10 @@ async def _target(request: Request) -> tuple[str, int] | JSONResponse:
     return scope, number
 
 
-def build_review_routes(service: Any) -> list[Route]:
+def build_review_routes(service: Any, get_projects: Callable[[], dict] = dict) -> list[Route]:
     async def get_reviews(request: Request) -> JSONResponse:
-        return JSONResponse({"repos": [_repo(r) for r in service.overview()]})
+        projects = get_projects()
+        return JSONResponse({"repos": [_repo(r, projects) for r in service.overview()]})
 
     async def get_pr(request: Request) -> JSONResponse:
         scope = request.query_params.get("scope")
@@ -117,9 +130,22 @@ def build_review_routes(service: Any) -> list[Route]:
             return JSONResponse({"error": str(e)}, status_code=404)
         return JSONResponse({"ok": True})
 
+    async def post_fix_now(request: Request) -> JSONResponse:
+        target = await _target(request)
+        if isinstance(target, JSONResponse):
+            return target
+        try:
+            job = service.address_now(*target)
+        except LookupError as e:
+            return JSONResponse({"error": str(e)}, status_code=404)
+        except ValueError as e:  # already queued, or not fixable
+            return JSONResponse({"error": str(e)}, status_code=409)
+        return JSONResponse({"job": _job(job)})
+
     return [
         Route("/api/reviews", get_reviews, methods=["GET"]),
         Route("/api/reviews/pr", get_pr, methods=["GET"]),
         Route("/api/reviews/review-now", post_review_now, methods=["POST"]),
         Route("/api/reviews/skip", post_skip, methods=["POST"]),
+        Route("/api/reviews/fix-now", post_fix_now, methods=["POST"]),
     ]

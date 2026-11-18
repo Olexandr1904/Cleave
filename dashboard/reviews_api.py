@@ -37,7 +37,7 @@ def _pr(row: BoardRow, repo: dict) -> dict:
 def _repo(repo: dict) -> dict:
     my_turn, waiting = [], []
     for row in sorted(repo["rows"], key=lambda r: r.number, reverse=True):
-        group = my_turn if row.my_turns and not row.pipeline else waiting
+        group = my_turn if row.my_turns else waiting
         group.append(_pr(row, repo))
     return {
         "scope": repo["scope"], "status": repo["status"], "reason": repo["reason"],

@@ -108,7 +108,7 @@ The same pill panel as the Board's [Tickets switch panel](#tickets-switch-panel)
 
 ### Repo status
 
-Each repo has a header `<project>/<repo> · <status>`; for every status but `ok`, the line under it gives the reason:
+Each repo has a status line above the board: `<project>/<repo>`, its status when it is not `ok`, `synced <time> ago` (the last poll) and its jobs (`no jobs running`, or `1 running · 2 queued`); for every status but `ok`, the line under it gives the reason:
 
 | Status | Meaning |
 |---|---|
@@ -121,24 +121,39 @@ Each repo has a header `<project>/<repo> · <status>`; for every status but `ok`
 
 Each repo is polled every `reviewer.poll_interval_seconds` (default 300, at least 60). A failed poll keeps the last board and backs off: the next try comes after twice the poll interval, the delay doubles after each further failure up to 1 hour (never less than the poll interval), and the first poll that succeeds resets it.
 
-### My turn / Waiting on others
+### Board
 
-Above the tables, filter chips count the PRs of every repo: **all PRs**, **need you** (your turn, and the PR's latest job is not queued or running), **my turn**, **waiting on others**, and **in the job queue** (PRs whose latest job is queued or running; not a filter). Click a chip to show only those PRs; the active chip is highlighted. The search box keeps the PRs whose number, title or ticket key contains the text.
+The PRs of every repo with reviews are on one board of four columns, by whose move it is:
 
-Under each repo's status line there are two tables (a table with no PR to show is left out):
-
-- **My turn** — PRs where you have a turn (review, re-check, merge, …), the ticket pipeline's own PRs included
-- **Waiting on others** — every other PR on the board, the pipeline's PRs included
-
-| Column | Shows |
+| Column | A PR is in it when |
 |---|---|
-| **Pull request** | `#<number>` (links to GitHub), the title and the flags `pipeline`, `large` (at least `reviewer.max_files_auto` changed files) and `draft`; under it the ticket key, your roles and the number of changed files |
-| **Turn** | Your turns as chips (review blue, recheck purple, merge green, others grey); in Waiting on others, the other side's `login: action` |
-| **Job** | The state of the PR's latest review or re-check (an edit or a draft job is never the row's job): `Report ready` (`Replies ready` for a re-check), `Queued`, `Running`, `Deferred`, `Failed`, `Skipped`, `Superseded`, `Stale`, `Cancelled` or `Posted`; `Skipped` also when the PR has no job and you skipped its current head. A second line adds: for a finished review, one square per finding colored by kind (critical red, major orange, minor yellow, question blue, pre-existing purple), `<n> confirmed · <n> questions` and `sent to Telegram` or `not delivered yet`; for a running job, the minutes since it started; for a deferred one, its next try (local time); for a failed one, the reason; for a large PR with no job, `<n> files · no automatic review` |
-| **Last change** | When the PR last changed (hidden while the side panel is open on a screen narrower than 1280 px) |
-| (buttons) | The row buttons below, shown while the pointer is on the row, the row has the keyboard focus or is open, and always on touch screens |
+| **To review** | one of your turns is `review` or `recheck` |
+| **To fix** | else you have any other turn but `merge` (`resolve_conflicts`, `request_review`, `answer_threads`, `resolve_threads`, `address_review`, `finish_draft`, `fix_checks`, or any new action) |
+| **With others** | you have no turn: someone else has, or nobody |
+| **To merge** | else your only turn is `merge` |
 
-Click a row (outside its links and buttons) to open the PR in the [side panel](#pr-detail-view); the open row is highlighted. Keyboard: `j` / `k` move the row focus, `Enter` opens the focused row, `Esc` closes the panel and `/` goes to the search box. No key queues a review.
+Each column lists its PRs the longest unchanged first; an empty one shows a dashed `Nothing to review`, `Nothing to fix`, `Nobody else's move` or `Nothing to merge`. The ticket pipeline's own PRs are on the board too.
+
+With more than one repo, chips above the board (`All`, then each repo with its number of PRs) show one repo's PRs only; the choice is in the address (`#/reviews/<project>/<repo>`), and an address naming a repo without reviews shows them all. Each card then names its repo.
+
+Four tiles count the PRs the repo chips show (the search does not change them):
+
+| Tile | Value | Under it |
+|---|---|---|
+| **Need you** | the PRs in To review, To fix and To merge | how many in each: `2 to fix · 1 to merge` |
+| **Critical in your PRs** | the critical findings of the reviews of your own PRs (self-reviews) at their current head, `done` or `posted`; red above 0 | the PRs with the most: `self-reviews: 15 in #1712 · 4 in #1715`, or `no self-reviews` |
+| **Waiting on others** | the PRs in With others | who holds them: `all on <login>`, or `<login> 3 · <login> 1` |
+| **Longest wait** | how long the oldest PR in With others has been unchanged | its number and what it waits for: `#1708 · re-check` |
+
+A card shows, top to bottom:
+
+- `YOUR PR` or `REVIEWING`, `#<number>` (links to GitHub), the ticket key (links to `<jira url>/browse/<key>` when the repo's project tracks tickets in Jira, else plain text) and the flags `large` (at least `reviewer.max_files_auto` changed files), `draft` and `pipeline`
+- the PR's title as it is, without a leading ticket key; at most two lines, the whole title in its tooltip
+- for a PR whose newest review is `done` or `posted`: on your own PR `self-review · <when>`; a bar of its critical, major, minor and question findings, on a scale shared by the whole board (15 critical draws longer than 4); the counts in words (`15 critical · 3 minor · 7 questions`; critical red, major orange, minor yellow, question blue, each beside its word) and `posted`, `report in Telegram` or `not delivered yet`. A review of an older commit is dimmed and says `on an older commit`. Pre-existing findings and the dropped candidates are in the [side panel](#pr-detail-view)
+- while a job is queued, running, deferred or failed, a line saying so: `Cleave review running · 12 min`, `Claude fixing · 8 min`, `Cleave re-check deferred · next try 14:20`, `Cleave review failed: <reason>`; `skipped` when you skipped the current head
+- whose move it is (your avatar, or the logins holding it; GitHub pictures, the login's initials when one does not load), what to do in words (`resolve conflicts, request review`, `octo-reviewer: answer threads`, `post the review from Telegram`, `fix ready: push from Telegram`) and how long the PR has been unchanged (amber from 2 days)
+
+Click a card (outside its links and buttons) to open the PR in the [side panel](#pr-detail-view); the open card is outlined. Keyboard: `j` / `k` move the card focus (down a column, then the next), `Enter` opens the focused card, `Esc` closes the panel and `/` goes to the search box, which hides the cards whose number, title or ticket key do not contain the text (the column counts follow). No key queues a job.
 
 A review is queued automatically when your turn is a review, the head has been quiet for `reviewer.quiet_minutes` (default 30), the head is not skipped, reviews are running and the process document is on the base branch. A PR with at least `reviewer.max_files_auto` (default 40) changed files is not reviewed automatically: Telegram gets a line instead.
 
@@ -154,15 +169,17 @@ The job runner starts queued jobs as they become runnable, up to `reviewer.max_p
 
 A job whose PR moved on meanwhile ends `superseded` (a new head, or a newer job), `stale` (the PR or your turn is gone) or `skipped` (you skipped that head while it ran), and nothing is sent for it.
 
-Row buttons:
+Card buttons, shown while the pointer is on the card, the card has the keyboard focus or its panel is open, and always on touch screens. A card of your own PR has none but **Fix now**; its **Self-review** is in the [side panel](#pr-detail-view). `#<number>` opens the PR on GitHub.
 
 | Button | When it appears | What it does |
 |---|---|---|
-| **Review now** (**Review anyway** on a large PR) | Every row; while a review at the current head is queued, running or deferred, a disabled **Queued**, **Running** or **Deferred** in its place (**Deferred** names its next try: `Deferred; retries at HH:MM`, or `Deferred; retries automatically` without one) | Queues a review at the PR's current head, whatever the quiet window, the PR's size, a skip or the reviews switch. Refused with `already queued` when a review at that head is queued, running or deferred |
+| **Review now** (**Review anyway** on a large PR) | A PR you do not author, with no report of its current head; while a review at the current head is queued, running or deferred, a disabled **Queued**, **Running** or **Deferred** in its place (**Deferred** names its next try: `Deferred; retries at HH:MM`, or `Deferred; retries automatically` without one) | Queues a review at the PR's current head, whatever the quiet window, the PR's size, a skip or the reviews switch. Refused with `already queued` when a review at that head is queued, running or deferred |
+| **Review again…** | In place of Review now when the PR's newest review is of its current head and `done`, `posted` or `stale` | Asks first (`Review #1720 again at the same commit?`, with when the last one finished, how long it took and its cost), since the new review replaces that report; then as Review now |
 | **Skip** | Your turn is a review and the current head is not skipped yet, or a review is queued or deferred at it (**Review now** after a skip) | Skips this head: its queued or deferred review is dropped and none is queued for it again. A new push makes a new head, reviewed as usual |
-| **GitHub ↗** | Every row | Opens the PR on GitHub in a new tab |
+| **Fix now** | Your own PR in a repo with `reviewer.process.address_doc`, one of your turns is `answer_threads`, `resolve_threads` or `address_review`, no ticket workspace holds the PR and no skill-flow comparison holds it; while its address job is queued, running or deferred, a disabled **Queued**, **Fixing** or **Deferred** | Queues its address job (the threads message of your own PR, see [replying to reviewer messages](telegram.md#replying-to-reviewer-messages)) at once instead of after the quiet window (`POST /api/reviews/fix-now`). The result comes to Telegram as usual; `push` and `post replies …` there act on it |
+| **Fix again…** | In place of Fix now when the PR's newest address job is `done`, `posted` or `stale` | Asks first: the fix ready since then is replaced (push it from Telegram first to keep it); then as Fix now |
 
-While **Review now** or **Skip** runs, the button reads `Queuing…` or `Skipping…`; then a line at the bottom of the screen says what happened (`Queued a review of #1712 at 26c4929c5`, `Skipped this head of #1712 (26c4929c5)`) or why it failed (`Review now of #1720 failed: no PR #1720 on the acme/app board` when the PR left the board after the last refresh).
+While a button runs, it reads `Queuing…` or `Skipping…`; then a line at the bottom of the screen says what happened (`Queued a review of #1712 at 26c4929c5`, `Queued a fix of #1712 at 26c4929c5`, `Skipped this head of #1712 (26c4929c5)`) or why it failed (`Review now of #1720 failed: no PR #1720 on the acme/app board` when the PR left the board after the last refresh, `Fix now of #1720 failed: not fixable: no thread turn`).
 
 Polls, new turns and job changes are also recorded in the [Event Log](#event-log-view) as `reviewer_poll`, `reviewer_poll_failed`, `reviewer_turn` and `reviewer_job` events (not in its type filter yet).
 

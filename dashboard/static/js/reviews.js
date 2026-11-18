@@ -1,10 +1,15 @@
-// reviews.js — Reviews tab: per repo, the PRs where it is my turn and the ones waiting on others, in two
-// tables with filter chips and a search; a row opens the PR in a side panel (report, replies, posts, jobs).
-// Read-only plus Review now, Skip and the reviews switches: nothing is posted from the dashboard.
+// reviews.js — Reviews tab: one board of the repos with reviews, in four columns (To review · To fix · With others ·
+// To merge) under a status line per repo, a repo filter, four tiles and a search; a card opens the PR in a side
+// panel (report, replies, posts, jobs). Read-only plus Review now, Skip, Fix now and the reviews switches: nothing
+// is posted from the dashboard. The board's model (columns, tiles, cards, buttons) is reviews-board.js.
 
-import { loadReviewDetail, loadReviews, reviewNow, skipReview } from './api.js';
+import { fixNow, loadReviewDetail, loadReviews, reviewNow, skipReview } from './api.js';
+import { showConfirmDialog } from './actions.js';
 import { renderSwitchPanel } from './switches.js';
 import { esc, fmtIso, timeAgo } from './helpers.js';
+import {
+  COLUMNS, againConfirm, boardColumns, boardTiles, cardHtml, findingsScale, repoFilterOf,
+} from './reviews-board.js';
 
 const JOB_LABEL = {
   queued: 'Queued', running: 'Running', done: 'Report ready', posted: 'Posted', failed: 'Failed',
@@ -27,15 +32,25 @@ const NUMBER_STATE = {
   posted: 'Landed on GitHub', ticked: 'Named in a post that did not land: see Posts', open: 'Not posted',
 };
 const GITHUB = 'https://github.com/';  // a post's link gets an href only to GitHub
-const TABLES = [['mine', 'My turn', 'my_turn'], ['waiting', 'Waiting on others', 'waiting']];
+const TILES = [
+  ['needYou', 'Need you'], ['critical', 'Critical in your PRs'], ['waiting', 'Waiting on others'],
+  ['longest', 'Longest wait'],
+];
+// What each card or panel button calls; the "…again" ones ask first (againConfirm).
+const CALLS = {
+  'review-now': reviewNow, 'review-again': reviewNow, 'self-review': reviewNow, 'self-review-again': reviewNow,
+  'fix-now': fixNow, 'fix-again': fixNow, skip: skipReview,
+};
 
 const VIEW_HTML = `<div class="reviews-view">
   <div class="reviews-main">
     <div id="switch-panel-container"></div>
-    <div class="reviews-bar" hidden>
-      <div class="reviews-chips"></div>
+    <div class="reviews-top" hidden>
+      <div class="reviews-status-lines"></div>
       <input class="reviews-search" name="reviews-search" type="search" placeholder="Search #, title, ticket" aria-label="Search PRs">
     </div>
+    <nav class="reviews-repos" aria-label="Repos"></nav>
+    <div class="reviews-tiles"></div>
     <div class="reviews-list"><div class="state-msg">Loading…</div></div>
     <div class="reviews-hint"><kbd>j</kbd> <kbd>k</kbd> move · <kbd>Enter</kbd> open · <kbd>Esc</kbd> close ·
       <kbd>/</kbd> search</div>
@@ -47,9 +62,9 @@ const VIEW_HTML = `<div class="reviews-view">
 const PHONE = window.matchMedia('(max-width: 760px)');
 
 let repos = [];         // the last /api/reviews answer
-let filter = 'all';     // the active chip
+let repoScope = null;   // the repo the hash names (#/reviews/<scope>); null: every repo
 let openPr = null;      // {scope, number} of the PR in the side panel; null while it is closed
-let focusKey = null;    // the row the j/k focus is on, as rowKey()
+let focusKey = null;    // the card the j/k focus is on, as rowKey()
 let panelOpen = {};     // the open PR's <details> as the operator left them, by data-key
 let listLoads = 0;      // a newer load makes an older one's answer stale
 let panelLoads = 0;
@@ -58,9 +73,9 @@ let statusTimer = null;
 const rowKey = (scope, number) => `${scope}#${number}`;
 const isQueued = job => job != null && (job.state === 'queued' || job.state === 'running');
 
-function minutesSince(iso) {
-  const t = Date.parse(iso);
-  return isNaN(t) ? null : Math.max(0, Math.floor((Date.now() - t) / 60000));
+// The repo filter, from the router (#/reviews/<scope>); an unknown scope shows every repo.
+export function setReviewsRepo(scope) {
+  repoScope = scope || null;
 }
 
 function localTime(iso) {
@@ -68,33 +83,12 @@ function localTime(iso) {
   return isNaN(d) ? '' : d.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit', hour12: false });
 }
 
-function timeUntil(iso) {
-  const t = Date.parse(iso);
-  if (isNaN(t)) return '';
-  const min = Math.max(0, Math.round((t - Date.now()) / 60000));
-  return min < 60 ? `${min}m` : `${Math.floor(min / 60)}h`;
-}
+// ── Board ──
 
-// ── List ──
+const prsOf = repo => [...repo.my_turn, ...repo.waiting];
 
-function matches(pr, group, query) {
-  const shown = filter === 'all' || filter === group || (filter === 'attention' && group === 'mine' && !isQueued(pr.job));
-  return shown && (!query || `#${pr.number} ${pr.title} ${pr.ticket_key}`.toLowerCase().includes(query));
-}
-
-function chipsHtml() {
-  const mine = repos.flatMap(r => r.my_turn);
-  const waiting = repos.flatMap(r => r.waiting);
-  const counts = {
-    all: mine.length + waiting.length, attention: mine.filter(pr => !isQueued(pr.job)).length,
-    mine: mine.length, waiting: waiting.length,
-  };
-  const chip = (key, label) => `<button class="reviews-chip" data-review-filter="${key}" data-fk="chip:${key}"
-    aria-pressed="${filter === key}"><b>${counts[key]}</b> ${label}</button>`;
-  const queue = [...mine, ...waiting].filter(pr => isQueued(pr.job)).length;
-  return chip('all', 'all PRs') + chip('attention', 'need you') + chip('mine', 'my turn')
-    + chip('waiting', 'waiting on others')
-    + `<span class="reviews-chip static"><b>${queue}</b> in the job queue</span>`;
+function matches(pr, query) {
+  return `#${pr.number} ${pr.title} ${pr.ticket_key}`.toLowerCase().includes(query);
 }
 
 function flagsHtml(pr) {
@@ -105,13 +99,6 @@ function flagsHtml(pr) {
 function turnChips(pr) {
   return pr.my_turns.map(action =>
     `<span class="reviews-turn ${TURN_CLASS[action] || ''}">${esc(action)}</span>`).join('');
-}
-
-function turnHtml(pr, group) {
-  const others = group === 'waiting' && pr.other_turns.length
-    ? `<span class="reviews-sub">${pr.other_turns.map(t => `${esc(t.login)}: ${esc(t.action)}`).join(', ')}</span>`
-    : '';
-  return `<div class="reviews-turns">${turnChips(pr)}${others}</div>`;
 }
 
 function stateDot(state, label) {
@@ -128,37 +115,11 @@ function stateHtml(pr) {
   return pr.skipped ? stateDot('skipped', 'Skipped') : '<span class="reviews-state is-none">—</span>';
 }
 
-// "1 critical, 2 questions, …": what the colored squares say, for a label and a tooltip.
+// "1 critical, 2 questions, …": what the report's meter says, for its label.
 function findingsText(counts) {
   return Object.keys(KIND_NAME).filter(kind => counts[kind]).map(kind => `${counts[kind]} ${
     kind === 'question' && counts[kind] !== 1 ? 'questions' : KIND_NAME[kind].toLowerCase()}`).join(', ')
     || 'no findings';
-}
-
-function findingsBar(findings) {
-  const squares = Object.keys(KIND_NAME).map(kind =>
-    `<i class="kind-${kind}" title="${KIND_NAME[kind]}"></i>`.repeat(findings[kind])).join('');
-  const label = findingsText(findings);
-  return `<span class="reviews-fbar" role="img" aria-label="${label}" title="${label}">${squares}</span>`;
-}
-
-function jobSubHtml(pr) {
-  const job = pr.job;
-  // At most two lines; the whole text in its tooltip. `text` is escaped already.
-  const sub = text => `<span class="reviews-sub reviews-clamp" title="${text}">${text}</span>`;
-  if (!job) return pr.large ? sub(`${esc(pr.changed_files)} files · no automatic review`) : '';
-  if (job.state === 'running') {
-    const min = minutesSince(job.started_at);
-    return min == null ? '' : sub(`${min} min`);
-  }
-  if (job.state === 'deferred') return job.retry_at ? sub(`next try ${esc(localTime(job.retry_at))}`) : '';
-  if (job.state === 'failed') return job.reason ? sub(esc(job.reason)) : '';
-  if (job.state !== 'done' && job.state !== 'posted') return '';
-  const sent = job.message_sent ? 'sent to Telegram' : 'not delivered yet';
-  const f = job.findings;
-  if (!f) return sub(sent);
-  return `<span class="reviews-findings">${findingsBar(f)}${sub(
-    `${f.critical + f.major + f.minor} confirmed · ${f.question} questions · ${sent}`)}</span>`;
 }
 
 function actionsHtml(scope, pr, where) {
@@ -184,50 +145,62 @@ function actionsHtml(scope, pr, where) {
       aria-label="Open #${esc(pr.number)} on GitHub">GitHub ↗</a>`;
 }
 
-function rowHtml(scope, pr, group) {
-  const key = rowKey(scope, pr.number);
-  const sub = [pr.ticket_key && `<span class="reviews-mono">${esc(pr.ticket_key)}</span>`,
-    esc(pr.roles.join(', ')), `${esc(pr.changed_files)} files`].filter(Boolean).join(' · ');
-  return `<tr tabindex="0" data-review-row="${esc(key)}" data-fk="row:${esc(key)}"
-      data-scope="${esc(scope)}" data-number="${esc(pr.number)}">
-    <td><div class="reviews-pr">
-      <div class="reviews-pr-line"><a class="reviews-num" href="${esc(pr.url)}" target="_blank" rel="noopener"
-        data-fk="num:row:${esc(key)}">#${esc(pr.number)}</a><span class="reviews-title">${esc(pr.title)}</span>${flagsHtml(pr)}</div>
-      <div class="reviews-sub">${sub}</div>
-    </div></td>
-    <td>${turnHtml(pr, group)}</td>
-    <td><div class="reviews-job">${stateHtml(pr)}${jobSubHtml(pr)}</div></td>
-    <td class="reviews-when">${esc(timeAgo(pr.last_change))}</td>
-    <td><div class="reviews-actions">${actionsHtml(scope, pr, 'row')}</div></td>
-  </tr>`;
-}
-
-function repoLineHtml(repo) {
-  const polled = repo.last_poll_at ? ` · polled ${esc(timeAgo(repo.last_poll_at))}` : '';
-  const next = repo.next_poll_at ? ` · next in ${esc(timeUntil(repo.next_poll_at))}` : '';
+// One line per repo: its state, when it was last read, its jobs; a reason under it when it is not ok.
+function statusLineHtml(repo) {
+  const prs = prsOf(repo);
+  const running = prs.filter(pr => pr.job?.state === 'running').length;
+  const queued = prs.filter(pr => pr.job?.state === 'queued').length;
+  const jobs = running || queued
+    ? [running && `${running} running`, queued && `${queued} queued`].filter(Boolean).join(' · ') : 'no jobs running';
+  const parts = [esc(repo.scope), repo.status === 'ok' ? '' : esc(repo.status),
+    repo.last_poll_at ? `synced ${esc(timeAgo(repo.last_poll_at))}` : '', jobs].filter(Boolean).join(' · ');
   const reason = repo.status === 'ok' || !repo.reason ? ''
     : repo.status === 'doc_missing' ? `reviews are off: ${repo.reason}` : repo.reason;
-  return `<div class="reviews-repo-line"><span class="reviews-dot status-${esc(repo.status)}"></span>${
-    esc(repo.scope)} · ${esc(repo.status)}${polled}${next}</div>
+  return `<div class="reviews-repo-line"><span class="reviews-dot status-${esc(repo.status)}"></span><span>${parts}</span></div>
     ${reason ? `<div class="reviews-reason">${esc(reason)}</div>` : ''}`;
 }
 
-function repoHtml(repo, query) {
-  const tables = TABLES.map(([group, title, field]) => {
-    const prs = repo[field].filter(pr => matches(pr, group, query));
-    if (!prs.length) return '';
-    return `<h3 class="reviews-group-title">${title} <span>${prs.length}</span></h3>
-      <div class="reviews-table-wrap"><table class="reviews-table">
-        <thead><tr><th>Pull request</th><th>Turn</th><th>Job</th><th class="reviews-when">Last change</th>
-          <th><span class="reviews-sr">Actions</span></th></tr></thead>
-        <tbody>${prs.map(pr => rowHtml(repo.scope, pr, group)).join('')}</tbody>
-      </table></div>`;
-  }).join('');
-  const empty = repo.my_turn.length + repo.waiting.length ? 'No PR matches.' : 'No open PRs on the board.';
-  return `<section class="reviews-repo">${repoLineHtml(repo)}${tables || `<div class="reviews-empty">${empty}</div>`}</section>`;
+// With more than one repo: All, then each repo with its number of PRs. A chip is a link: the router sets the filter.
+function repoChipsHtml() {
+  if (repos.length < 2) return '';
+  const active = repoFilterOf(repoScope, repos);
+  const chip = (scope, label, count) => `<a class="reviews-repo-chip" href="#/reviews${scope ? `/${esc(scope)}` : ''}"
+    aria-current="${active === scope ? 'page' : 'false'}" data-fk="repo:${esc(scope || 'all')}">${esc(label)} <b>${count}</b></a>`;
+  return chip(null, 'All', repos.reduce((n, r) => n + prsOf(r).length, 0))
+    + repos.map(r => chip(r.scope, r.scope.split('/').pop(), prsOf(r).length)).join('');
 }
 
-// The open row and the j/k row as classes; a row that left the list keeps neither.
+function tilesHtml(tiles) {
+  return TILES.map(([key, label]) => {
+    const t = tiles[key];
+    return `<div class="reviews-tile${t.alert ? ' is-alert' : ''}"><div class="reviews-tile-label">${label}</div>
+      <div class="reviews-tile-value">${esc(t.value)}</div><div class="reviews-tile-sub">${esc(t.sub) || '&nbsp;'}</div></div>`;
+  }).join('');
+}
+
+// The four columns of the shown repos' PRs; search hides the cards that do not match.
+function boardHtml(shown, query, now) {
+  const repoOf = new Map();
+  for (const repo of shown) for (const pr of prsOf(repo)) repoOf.set(pr, repo);
+  const all = [...repoOf.keys()];
+  const cols = boardColumns(query ? all.filter(pr => matches(pr, query)) : all);
+  const scale = findingsScale(all);
+  const card = pr => {
+    const repo = repoOf.get(pr);
+    return cardHtml(repo.scope, pr, {
+      me: repo.me, jiraUrl: repo.jira_url, repoLabel: repos.length > 1 ? repo.scope.split('/').pop() : '', scale, now,
+    });
+  };
+  return `<div class="reviews-board">${COLUMNS.map(c => `<section class="reviews-col is-${c.key}" aria-label="${c.title}">
+    <header class="reviews-col-head"><span class="reviews-col-dot"></span><h3>${c.title}</h3>
+      <span class="reviews-col-count">${cols[c.key].length}</span></header>
+    <div class="reviews-col-hint">${c.hint}</div>
+    ${cols[c.key].length ? cols[c.key].map(card).join('')
+    : `<div class="reviews-col-empty">${esc(query ? 'No PR matches' : c.empty)}</div>`}
+  </section>`).join('')}</div>`;
+}
+
+// The open card and the j/k card as classes; a card that left the board keeps neither.
 function markRows(view) {
   const open = openPr && rowKey(openPr.scope, openPr.number);
   view.querySelectorAll('[data-review-row]').forEach(row => {
@@ -246,12 +219,16 @@ function redraw(el, html) {
 }
 
 function paintList(view) {
-  const bar = view.querySelector('.reviews-bar');
-  bar.hidden = !repos.length;
-  redraw(view.querySelector('.reviews-chips'), chipsHtml());
+  view.querySelector('.reviews-top').hidden = !repos.length;
+  redraw(view.querySelector('.reviews-status-lines'), repos.map(statusLineHtml).join(''));
+  redraw(view.querySelector('.reviews-repos'), repoChipsHtml());
+  const active = repoFilterOf(repoScope, repos);
+  const shown = active ? repos.filter(r => r.scope === active) : repos;
+  const now = Date.now();
+  view.querySelector('.reviews-tiles').innerHTML = repos.length ? tilesHtml(boardTiles(shown.flatMap(prsOf), now)) : '';
   const query = view.querySelector('.reviews-search').value.trim().toLowerCase();
   redraw(view.querySelector('.reviews-list'), repos.length
-    ? repos.map(repo => repoHtml(repo, query)).join('')
+    ? boardHtml(shown, query, now)
     : '<div class="state-msg">No repo has reviews enabled.</div>');
   markRows(view);
 }
@@ -576,23 +553,22 @@ function showStatus(view, text, failed) {
   statusTimer = setTimeout(() => { status.textContent = ''; }, failed ? 10000 : 6000);
 }
 
-async function runAction(view, btn) {
+// What a button queued: "a review", "a self-review" or "a fix".
+const queuedWhat = action => (action.startsWith('fix') ? 'a fix' : action.startsWith('self') ? 'a self-review' : 'a review');
+
+// `inPanel` is asked at the click: a refresh while a confirmation is open replaces the button.
+async function runAction(view, btn, inPanel) {
   const { reviewAction, scope, number } = btn.dataset;
   const skip = reviewAction === 'skip';
-  const name = btn.textContent.trim();
+  const name = btn.textContent.trim().replace(/…$/, '');
   const pr = findPr({ scope, number: Number(number) });
-  const inPanel = btn.closest('.review-panel') !== null;  // asked now: the redraw replaces the button
   btn.disabled = true;
   btn.textContent = skip ? 'Skipping…' : 'Queuing…';
   let text, failed = false;
   try {
-    if (skip) {
-      await skipReview(scope, Number(number));
-      text = `Skipped this head of #${number}${pr ? ` (${pr.head})` : ''}`;
-    } else {
-      const { job } = await reviewNow(scope, Number(number));
-      text = `Queued a review of #${number} at ${job.head}`;
-    }
+    const answer = await CALLS[reviewAction](scope, Number(number));
+    text = skip ? `Skipped this head of #${number}${pr ? ` (${pr.head})` : ''}`
+      : `Queued ${queuedWhat(reviewAction)} of #${number} at ${answer.job.head}`;
   } catch (err) {
     text = `${name} of #${number} failed: ${err.message}`;
     failed = true;
@@ -609,15 +585,17 @@ async function runAction(view, btn) {
 }
 
 function onClick(view, e) {
-  const chip = e.target.closest('[data-review-filter]');
-  if (chip) {
-    filter = chip.dataset.reviewFilter;
-    paintList(view);
-    return;
-  }
   const action = e.target.closest('[data-review-action]');
   if (action) {
-    runAction(view, action);
+    const kind = action.dataset.reviewAction;
+    const inPanel = action.closest('.review-panel') !== null;
+    const pr = findPr({ scope: action.dataset.scope, number: Number(action.dataset.number) });
+    if (kind.endsWith('-again') && pr) {  // it replaces a report or a fix of the same commit: ask first
+      const ask = againConfirm(pr, kind);
+      showConfirmDialog(ask.title, ask.bodyHtml, ask.label, () => runAction(view, action, inPanel));
+    } else {
+      runAction(view, action, inPanel);  // a PR that left the board: the server answers why
+    }
     return;
   }
   if (e.target.closest('[data-review-close]')) {
@@ -684,11 +662,14 @@ function mount(content) {
   content.innerHTML = VIEW_HTML;
   const view = content.querySelector('.reviews-view');
   repos = [];
-  filter = 'all';
   openPr = null;
   focusKey = null;
   panelOpen = {};
   view.addEventListener('click', e => onClick(view, e));
+  // An avatar's GitHub picture that does not load leaves its initials (an error does not bubble: capture it).
+  view.addEventListener('error', e => {
+    if (e.target instanceof HTMLImageElement && e.target.closest('.reviews-avatar')) e.target.remove();
+  }, true);
   view.addEventListener('focusin', e => {
     const row = e.target.closest('[data-review-row]');
     if (row && row.dataset.reviewRow !== focusKey) {

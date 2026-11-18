@@ -218,3 +218,10 @@ test('cardHtml: links to GitHub and Jira, the title without its key, every value
   const evil = B.cardHtml('acme/app', pr(20, { title: '<script>x</script>', ticket_key: '' }), VIEW);
   assert.ok(evil.includes('&lt;script&gt;') && !evil.includes('<script>'));
 });
+
+test('repoFilterOf: a listed scope filters; an unknown or no scope shows every repo', () => {
+  const repos = [{ scope: 'acme/app' }, { scope: 'acme/web' }];
+  assert.equal(B.repoFilterOf('acme/app', repos), 'acme/app');
+  assert.equal(B.repoFilterOf('old/repo', repos), null);
+  assert.equal(B.repoFilterOf(null, repos), null);
+});

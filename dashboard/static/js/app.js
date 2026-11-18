@@ -5,7 +5,7 @@ import { esc, stateBadgeHtml } from './helpers.js';
 import { renderBoard } from './board.js';
 import { renderDetail } from './detail.js';
 import { renderEventsHtml } from './events.js';
-import { renderReviews } from './reviews.js';
+import { renderReviews, setReviewsRepo } from './reviews.js';
 import { renderComparison } from './comparison.js';
 import { setMode, showConfirmDialog } from './actions.js';
 
@@ -44,7 +44,8 @@ function showBoard(projectId, fromHash) {
   if (!fromHash) setHash(projectId ? `#/board/${projectId}` : '#/board');
 }
 
-function showReviews(fromHash) {
+// `repo`: the scope the hash names (#/reviews/<scope>) to show that repo's PRs only; none, every repo.
+function showReviews(fromHash, repo = null) {
   state.view = 'reviews';
   state.ticketId = null;
   document.getElementById('view-title').textContent = 'Reviews';
@@ -52,8 +53,9 @@ function showReviews(fromHash) {
   showBoardControls(false);
   updateActiveNav('nav-reviews');
   scheduleAutoRefresh();
+  setReviewsRepo(repo);
   renderReviews();
-  if (!fromHash) setHash('#/reviews');
+  if (!fromHash) setHash(repo ? `#/reviews/${repo}` : '#/reviews');
 }
 
 function showComparison(fromHash) {
@@ -109,7 +111,7 @@ function routeFromHash() {
   if (!m) { showBoard(null, true); return; }
   const [, view, arg] = m;
   if (view === 'board') showBoard(arg || null, true);
-  else if (view === 'reviews') showReviews(true);
+  else if (view === 'reviews') showReviews(true, arg || null);
   else if (view === 'comparison') showComparison(true);
   else if (view === 'eventlog') showEventLog(true);
   else if (view === 'settings') showSettings(true);

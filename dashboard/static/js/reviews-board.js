@@ -29,6 +29,9 @@ const KINDS = [
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 
 export const actionWords = action => WORDS[action] ?? String(action).replaceAll('_', ' ');
+
+// The repo the hash names (#/reviews/<scope>) when it is listed; else null: every repo.
+export const repoFilterOf = (scope, repos) => (scope && repos.some(r => r.scope === scope) ? scope : null);
 export const isMine = pr => pr.roles.includes('author');
 
 export function columnOf(pr) {

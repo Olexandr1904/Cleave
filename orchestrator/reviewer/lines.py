@@ -103,6 +103,12 @@ def recheck_body_problem_line(number: int, problem: str) -> str:
               " answer that thread on GitHub yourself.", number=number, problem=detail(problem))
 
 
+def address_body_problem_line(number: int, problem: str) -> str:
+    """An address message takes no "edit": a new run rewrites the reply."""
+    return tr('#{number}: its text {problem}: nothing posted. Reply "again: …" to have it rewritten.', number=number,
+              problem=detail(problem))
+
+
 def not_posted_line(number: int, why: str) -> str:
     return tr("Not posted on #{number}: {why}.", number=number, why=detail(why))
 

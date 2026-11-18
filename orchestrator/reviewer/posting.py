@@ -34,6 +34,7 @@ from orchestrator.reviewer.fix import PATCH_NAME
 from orchestrator.reviewer.forge_github import ForgeError
 from orchestrator.reviewer.grammar import ReplyCommand, check_command, retry_text
 from orchestrator.reviewer.lines import (
+    address_body_problem_line,
     already_approved_line,
     already_reviewed_line,
     approve_unknown_line,
@@ -578,21 +579,36 @@ class Posting:
         # 2. GitHub's head.
         await self._pr_at_head(ctx, number, head)
         # 3. The plan checked against Prepare's snapshot of this PR at this head, never the copy's threads.json,
-        # which the session may have rewritten; then the named replies' text.
+        # which the session may have rewritten; then the named replies' text. An address job Cleave pushed for
+        # was prepared at the head before its push.
+        address = job.kind == "address"
+        push = self._store.push_of(job) if address else None
         prepared = _prepared_threads(run.job_dir, number)
-        if (other := _other_pr(prepared, number, head)) is not None:
+        if (other := _other_pr(prepared, number, push.head_sha if push else head)) is not None:
             raise _Refused(not_posted_line(number, f"Prepare's threads snapshot is of {other}"))
         valid, invalid = validate_plan(run.replies, prepared, me)
         if (bad := next((n for n in cmd.numbers if n in invalid), None)) is not None:
             raise _Refused(tr("#{n} cannot be posted: {why}. Nothing was done.", n=bad, why=detail(invalid[bad])))
         entries = [valid[n] for n in cmd.numbers]
+        fix_shas: dict[int, str] = {}
+        if address:
+            # A reply that reports a fix names the job's head: the pushed commit, or the head the fix was already
+            # on when the job changed no code. Cleave writes the SHA; the model's entry never carries one.
+            unpushed = next((e["n"] for e in entries if e.get("fixed") is True), None) if run.fix and not push else None
+            if unpushed is not None:
+                raise _Refused(tr('#{n} reports a fix that is not pushed: reply "push" first. Nothing was done.',
+                                  n=unpushed))
+            entries = [{**e, "body": e["body"].replace("{fix_sha}", head[:9])} if e.get("fixed") is True else e
+                       for e in entries]
+            fix_shas = {e["n"]: head for e in entries if e.get("fixed") is True}
         for entry in entries:
             if problems := body_problems(entry["body"], ctx.allowed_links):
-                raise _Refused(recheck_body_problem_line(entry["n"], problems[0]))
+                line = address_body_problem_line if address else recheck_body_problem_line
+                raise _Refused(line(entry["n"], problems[0]))
         # 4. A plan of exactly the named entries.
         job_dir = Path(run.job_dir)
         head9 = head[:9]
-        plan = _write_plan(job_dir, head9, entries, number)
+        plan = _write_plan(job_dir, head9, entries, number, fix_shas)
         values = placeholder_values(REPLIES_PLACEHOLDERS, repo=ctx.readiness.repo, pr=str(number), head9=head9,
                                     plan=str(plan), job_dir=str(job_dir))
         # 5-8 in one lease, the post-condition included: the threads command runs from the clone too.
@@ -969,15 +985,19 @@ def _prepared_threads(job_dir: str, number: int) -> dict:
         raise _Refused(not_posted_line(number, N_("Prepare's threads snapshot in this job's copy is unreadable"))) from None
 
 
-def _write_plan(job_dir: Path, head9: str, entries: list[dict], number: int) -> Path:
-    """`job_dir/posting/replies_<head9>.json`: the named entries with their known keys only. The replies tool
-    keeps its own ledger beside it."""
+def _write_plan(job_dir: Path, head9: str, entries: list[dict], number: int,
+                fix_shas: dict[int, str] | None = None) -> Path:
+    """`job_dir/posting/replies_<head9>.json`: the named entries with their known keys only, and `fix_sha` from
+    Cleave (`fix_shas`, by number) on an address job's replies that report a fix. The replies tool keeps its own
+    ledger beside it."""
     posting = job_dir / "posting"
     if posting.is_symlink() or (posting.exists() and not posting.is_dir()):
         raise _Refused(not_posted_line(number, N_("the job copy's posting directory is not Cleave's")))
     _make_dirs(posting)
     path = posting / f"replies_{head9}.json"
-    plan = [{key: entry[key] for key in _PLAN_KEYS if key in entry} for entry in entries]
+    fix_shas = fix_shas or {}
+    plan = [{**{key: entry[key] for key in _PLAN_KEYS if key in entry},
+             **({"fix_sha": fix_shas[entry["n"]]} if entry["n"] in fix_shas else {})} for entry in entries]
     write_atomic(path, json.dumps(plan, indent=2) + "\n")
     return path
 

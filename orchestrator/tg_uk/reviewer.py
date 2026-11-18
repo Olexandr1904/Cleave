@@ -95,6 +95,10 @@ TEXTS: dict[str, str] = {
         "#{number}: його текст {problem}: нічого не опубліковано. Відповідь повторної перевірки тут не редагується:"
         " дайте відповідь у цьому треді на GitHub самі.",
     "Not posted on #{number}: {why}.": "Не опубліковано в #{number}: {why}.",
+    '#{number}: its text {problem}: nothing posted. Reply "again: …" to have it rewritten.':
+        '#{number}: його текст {problem}: нічого не опубліковано. Відповідайте "again: …", щоб його переписали.',
+    '#{n} reports a fix that is not pushed: reply "push" first. Nothing was done.':
+        '#{n} повідомляє про виправлення, яке не запушено: спершу відповідайте "push". Нічого не зроблено.',
     "Nothing left to post on #{number} at {head}: what you named is already posted.":
         "У #{number} на {head} публікувати нічого: усе, що ви назвали, вже опубліковано.",
     'The Summary already landed at #{number} at {head}: add "no summary". Nothing was done.':

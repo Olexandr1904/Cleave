@@ -139,18 +139,24 @@ class Rig:
 
     def __init__(self, tmp_path, *, plan=PLAN, dry=(STEPS,), confirm=(RESULTS,), heads=(HEAD,),
                  snapshots=(PREPARED, AFTER), prepared=PREPARED, pr_state="open", dry_wait=0.0, clone=None,
-                 store=None, posting=None, log=None):
+                 store=None, posting=None, log=None, kind="recheck", fix=None, push=None):
         self.log, self.waits = [] if log is None else log, []
         self.store = store or ReviewerStore(connect(tmp_path / "rv" / "reviewer.db"))
         self.store.save_repo_state(RepoState(SCOPE, first_poll_done=True, me=ME))
-        self.job = self.store.add_job(SCOPE, N, "recheck", HEAD, f"recheck:{HEAD}", T0.isoformat())
+        key = f"recheck:{HEAD}" if kind == "recheck" else f"{HEAD}:T1"
+        self.job = self.store.add_job(SCOPE, N, kind, HEAD, key, T0.isoformat())
         self.store.set_job_state(self.job.id, "done", "", T0.isoformat())
         self.job_dir = tmp_path / "rv" / "jobs" / self.job.id
         self.job_dir.mkdir(parents=True)
         if prepared is not None:
             (self.job_dir / "threads.prepared.json").write_text(json.dumps(prepared), encoding="utf-8")
         self.store.save_run(JobRun(self.job.id, started_at=T0.isoformat(), job_dir=str(self.job_dir), url=PR_URL,
-                                   replies=plan))
+                                   replies=plan, fix=fix or {}))
+        if push is not None:   # an address job's fix pushed as `push`: the job moved to it
+            self.store.save_post(Post("push-1", self.job.id, SCOPE, N, HEAD, "push", "posted", T0.isoformat(),
+                                      T0.isoformat(), sha=push))
+            self.store.rehead_job(self.job.id, push, f"{push}:T1", T0.isoformat())
+            self.job = self.store.job(self.job.id)
         self.clone = clone or ReviewClone(tmp_path / "clone", "file:///nowhere", "develop", "ghp_not_real")
         self.poster = Poster(self.log, dry, confirm, dry_wait)
         self.readiness = Readiness(self.log, self.clone, snapshots)
@@ -746,3 +752,93 @@ async def test_cancelled_post_is_left_to_recover(tmp_path):
     assert not rig.clone.lock.locked()  # the lease was let go
     [recovered] = rig.posting.recover()
     assert (recovered.id, recovered.state) == (post.id, "interrupted")
+
+
+# --- Address jobs ---
+
+FIXED_PLAN = [{"n": 1, "thread_id": "T1", "comment_id": 101, "body": "Fixed in {fix_sha}: null check.",
+               "resolve": True, "fixed": True},
+              {"n": 2, "thread_id": "T2", "body": "Intended.", "resolve": False}]
+FIX = {"files": [{"path": "a", "added": 1, "deleted": 0}], "protected": [], "bytes": 10}
+MY_T2 = thread("T2", ME, comment(201, AUTHOR))
+PREPARED_A = snapshot([THREAD_1, MY_T2], BODIES)   # Prepare's, at HEAD: both threads wait on me
+T1_GONE = snapshot([MY_T2], BODIES)
+TARGET = "app/src/main/CartRepository.kt:88 @octo-author"
+
+
+def at(snap, head):
+    return {**snap, "head_sha": head}
+
+
+def fixed_steps(sha9):
+    body = f"Fixed in {sha9}: null check."
+    return steps({"step": "reply", "n": 1, "target": TARGET, "body": body},
+                 {"step": "resolve", "n": 1, "target": TARGET, "body": body})
+
+
+FIXED_RESULTS = json.dumps([{"n": 1, "replied": REPLIED}, {"n": 1, "resolved": True}])
+
+
+def address(tmp_path, **kw):
+    return Rig(tmp_path, kind="address", **{"plan": FIXED_PLAN, "prepared": PREPARED_A, **kw})
+
+
+async def test_fixed_reply_is_refused_before_the_push(tmp_path):
+    rig = address(tmp_path, fix=FIX)
+    out = await rig.post(ReplyCommand("post_replies", (1,)))
+    assert out.text == '#1 reports a fix that is not pushed: reply "push" first. Nothing was done.'
+    assert out.state == "refused" and rig.confirms() == [] and rig.poster.calls == []
+
+
+async def test_unfixed_reply_posts_before_the_push(tmp_path):
+    after = snapshot([THREAD_1, thread("T2", AUTHOR, comment(201, AUTHOR), comment(202, ME, "Intended."))], BODIES)
+    rig = address(tmp_path, fix=FIX, snapshots=(PREPARED_A, after),
+                  dry=(steps({"step": "reply", "n": 2, "target": "T2 @octo-author", "body": "Intended."}),),
+                  confirm=(json.dumps([{"n": 2, "replied": REPLIED}]),))
+    out = await rig.post(ReplyCommand("post_replies", (2,)))
+    assert out.state == "posted"
+    assert rig.poster.plans == [[{"n": 2, "thread_id": "T2", "body": "Intended.", "resolve": False}]] * 2
+
+
+async def test_fixed_reply_posts_after_the_push(tmp_path):
+    new9 = NEW_HEAD[:9]
+    rig = address(tmp_path, fix=FIX, push=NEW_HEAD, heads=(NEW_HEAD,),
+                  snapshots=(at(PREPARED_A, NEW_HEAD), at(T1_GONE, NEW_HEAD)), dry=(fixed_steps(new9),),
+                  confirm=(FIXED_RESULTS,))
+    out = await rig.post(ReplyCommand("post_replies", (1,)))
+    assert out == PostOutcome("posted", f"Posted replies on #1712:\n1: replied {REPLIED}{RESOLVED}")
+    written = json.loads((rig.job_dir / "posting" / f"replies_{new9}.json").read_text())
+    assert written == [{"n": 1, "thread_id": "T1", "comment_id": 101, "body": f"Fixed in {new9}: null check.",
+                        "resolve": True, "fix_sha": NEW_HEAD}]
+    assert rig.poster.plans == [written] * 2
+    assert rig.store.posted_replies(rig.job) == {1}   # Prepare's snapshot (at HEAD) was accepted
+
+
+async def test_fixed_reply_without_a_patch_uses_the_jobs_head(tmp_path):
+    rig = address(tmp_path, snapshots=(PREPARED_A, T1_GONE), dry=(fixed_steps(HEAD[:9]),), confirm=(FIXED_RESULTS,))
+    assert (await rig.post(ReplyCommand("post_replies", (1,)))).state == "posted"
+    assert rig.poster.plans[0][0]["fix_sha"] == HEAD
+    assert rig.poster.plans[0][0]["body"] == f"Fixed in {HEAD[:9]}: null check."
+
+
+async def test_a_model_written_fix_sha_is_still_refused(tmp_path):
+    plan = [{**FIXED_PLAN[0], "fix_sha": "abc"}, FIXED_PLAN[1]]
+    rig = Rig(tmp_path, kind="address", plan=plan, prepared=PREPARED_A)
+    assert await rig.post(ReplyCommand("post_replies", (1,))) == PostOutcome(
+        "refused", "#1 cannot be posted: carries fix_sha. Nothing was done.")
+    assert rig.poster.calls == []
+
+
+async def test_an_address_reply_with_a_body_problem_asks_for_a_new_run(tmp_path):
+    plan = [FIXED_PLAN[0], {**FIXED_PLAN[1], "body": "Intended, ask @someone."}]
+    rig = Rig(tmp_path, kind="address", plan=plan, prepared=PREPARED_A)
+    out = await rig.post(ReplyCommand("post_replies", (2,)))
+    assert out.state == "refused" and out.text.startswith("#2: its text ")
+    assert out.text.endswith(': nothing posted. Reply "again: …" to have it rewritten.')
+    assert rig.poster.calls == []
+
+
+async def test_an_address_snapshot_of_another_head_is_refused(tmp_path):
+    rig = address(tmp_path, push=NEW_HEAD, fix=FIX, prepared=at(PREPARED_A, NEW_HEAD), heads=(NEW_HEAD,))
+    out = await rig.post(ReplyCommand("post_replies", (2,)))
+    assert out.text == f"Not posted on #1712: Prepare's threads snapshot is of #1712 at {NEW_HEAD[:9]}."

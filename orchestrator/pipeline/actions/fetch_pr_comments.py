@@ -100,6 +100,23 @@ def build_public_reply(*, reason: str = "") -> str:
     return "Will fix — addressing this in the next commit on this branch."
 
 
+def hand_over_to_reviewer(workspace: Workspace) -> ActionResult:
+    """Hand the PR to reviewer mode: drop open escalations, finish the stage."""
+    state = workspace.state
+    dropped = sum(
+        1 for c in (state.pending_review_comments or [])
+        if c.get("decision") is None
+    )
+    state.pending_review_comments = None
+    state.human_input_reply = None
+    workspace.save_state()
+    entry = "PR handed over to reviewer mode"
+    if dropped:
+        entry += f" ({dropped} undecided comment(s) dropped)"
+    _log_pipeline(workspace, entry)
+    return ActionResult(success=True, next_state=Stage.DONE, error="", metadata={})
+
+
 async def send_escalated_comment_tg(
     workspace: Workspace, cc: Any, pr_number: int,
     *,

@@ -153,6 +153,18 @@ class TestActionFetchPrComments:
 
         ws.transition.assert_not_called()
 
+    def test_hand_over_drops_pending_escalations(self):
+        from orchestrator.pipeline.actions.fetch_pr_comments import hand_over_to_reviewer
+        ws = _fake_workspace(state=Stage.PR_REVIEW, pr_number=10)
+        ws.state.pending_review_comments = [{"comment_id": 1, "decision": None}, {"comment_id": 2, "decision": "fix"}]
+        ws.state.human_input_reply = "reviewed"
+        with patch("orchestrator.pipeline.actions.fetch_pr_comments._log_pipeline") as log:
+            result = hand_over_to_reviewer(ws)
+        assert (result.success, result.next_state, result.skipped) == (True, Stage.DONE, False)
+        assert ws.state.pending_review_comments is None and ws.state.human_input_reply is None
+        ws.save_state.assert_called_once()
+        log.assert_called_once_with(ws, "PR handed over to reviewer mode (1 undecided comment(s) dropped)")
+
 
 class TestActionFinalize:
     @pytest.mark.asyncio
@@ -221,6 +233,79 @@ class TestHandleActionStage:
             project_id="test-co", ticket_id="T-1",
             data={"stage": "push", "pr_url": "https://github.com/x/1", "pr_number": 42},
         )
+
+    @pytest.mark.asyncio
+    async def test_pr_review_hands_over_in_a_reviewer_repo(self):
+        from orchestrator.orchestrator import Orchestrator
+        orch = self._make_orchestrator()
+        orch._reviewed_repos = frozenset({"test-co/test-repo"})
+        orch._on_ticket_done = AsyncMock()
+        ws = _fake_workspace(state=Stage.PR_REVIEW, pr_number=10)
+        fetch_mock = AsyncMock()
+        with patch("orchestrator.pipeline.action_stage.stage_verifier") as sv, \
+             patch("orchestrator.pipeline.action_stage.should_approval_gate", return_value=False), \
+             patch("orchestrator.pipeline.actions.fetch_pr_comments._log_pipeline"), \
+             patch("orchestrator.orchestrator.action_fetch_pr_comments", new=fetch_mock):
+            sv.capture_stage_start = MagicMock(return_value=None)
+            sv.verify = MagicMock(return_value=SimpleNamespace(ok=True, stage_id="pr_review", reason=""))
+            await Orchestrator._handle_action_stage(orch, ws, "pr_review", self._make_stage_def("fetch_pr_comments"))
+        fetch_mock.assert_not_awaited()
+        ws.transition.assert_called_with(Stage.DONE)
+        orch._on_ticket_done.assert_awaited_once_with(ws)
+
+    @pytest.mark.asyncio
+    async def test_fetch_runs_for_an_unknown_scope(self):
+        from orchestrator.orchestrator import Orchestrator
+        orch = self._make_orchestrator()
+        orch._reviewed_repos = frozenset({"other/repo"})
+        orch._on_ticket_done = AsyncMock()
+        ws = _fake_workspace(state=Stage.PR_REVIEW, pr_number=10)
+        fetch_mock = AsyncMock(return_value=ActionResult(
+            success=False, next_state="", error="", metadata={}, skipped=True,
+        ))
+        with patch("orchestrator.pipeline.action_stage.stage_verifier") as sv, \
+             patch("orchestrator.pipeline.action_stage.rollback_iteration"), \
+             patch("orchestrator.orchestrator.action_fetch_pr_comments", new=fetch_mock):
+            sv.capture_stage_start = MagicMock(return_value=None)
+            await Orchestrator._handle_action_stage(orch, ws, "pr_review", self._make_stage_def("fetch_pr_comments"))
+        fetch_mock.assert_awaited_once()
+        ws.transition.assert_not_called()
+
+    async def _run_push(self, reviewed_repos):
+        from orchestrator.orchestrator import Orchestrator
+        orch = self._make_orchestrator()
+        orch._notifier = AsyncMock()
+        orch._get_chat_id = MagicMock(return_value="chat-1")
+        if reviewed_repos is not None:
+            orch._reviewed_repos = reviewed_repos
+        ws = _fake_workspace()
+        push_mock = AsyncMock(return_value=ActionResult(
+            success=True, next_state=Stage.PR_REVIEW, error="",
+            metadata={"pr_url": "https://github.com/x/1", "pr_number": 42},
+        ))
+        with patch("orchestrator.pipeline.action_stage.stage_verifier") as sv, \
+             patch("orchestrator.pipeline.action_stage.should_approval_gate", return_value=False), \
+             patch("orchestrator.pipeline.action_stage.tg_format.read_ticket_title", return_value="Title"), \
+             patch("orchestrator.orchestrator.action_push_and_open_pr", new=push_mock):
+            sv.capture_stage_start = MagicMock(return_value="abc123")
+            sv.verify = MagicMock(return_value=SimpleNamespace(ok=True, stage_id="push", reason=""))
+            await Orchestrator._handle_action_stage(orch, ws, "push", self._make_stage_def("push_and_open_pr"))
+        return orch, ws
+
+    @pytest.mark.asyncio
+    async def test_push_sends_no_review_complete_message_in_a_reviewer_repo(self):
+        orch, ws = await self._run_push(frozenset({"test-co/test-repo"}))
+        assert orch._notifier.send_message.await_count == 0
+        ws.transition.assert_called_with(Stage.PR_REVIEW)
+
+    @pytest.mark.asyncio
+    async def test_push_still_sends_review_complete_elsewhere(self):
+        from integrations.base.notifier import Button
+        orch, ws = await self._run_push(None)
+        orch._notifier.send_message.assert_awaited_once()
+        call = orch._notifier.send_message.await_args
+        assert "tap Review Complete" in call.args[1]
+        assert call.kwargs["buttons"] == [Button(label="Review Complete", action="reviewed:T-1")]
 
     @pytest.mark.asyncio
     async def test_push_failure_escalates_not_failed(self):

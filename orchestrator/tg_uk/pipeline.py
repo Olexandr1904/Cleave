@@ -131,6 +131,8 @@ TEXTS: dict[str, str] = {
     "PR ready for human merge: {pr_url}": "PR готовий до ручного мерджу: {pr_url}",
     "Pipeline complete.\n\nPR ready for merge: {pr_url}\n\nTicket moved to review status.":
         "Pipeline завершено.\n\nPR готовий до мерджу: {pr_url}\n\nТікет переведено в статус рев'ю.",
+    "PR opened: {pr_url}\n\nReviewer mode takes it from here: its turns and review threads come to the reviewer chat.\n\nTicket moved to review status.":
+        "PR відкрито: {pr_url}\n\nДалі ним займається режим рев'юера: його черги й треди рев'ю приходять у чат рев'юера.\n\nТікет переведено в статус рев'ю.",
 
     # orchestrator/pipeline/actions/push_and_open_pr.py, fetch_pr_comments.py
     "Dev-agent failed to apply the fix for comment #{cid} twice.\n\nFile: {file}:{line}\n\nOptions:\n- Reply "

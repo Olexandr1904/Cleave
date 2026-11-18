@@ -33,6 +33,7 @@ async def handle_action_stage(
     advance_to_stage_fn: Callable[[Workspace, str], None],
     on_ticket_done_fn: Callable[[Workspace], Awaitable[None]],
     build_gate_summary_fn: Callable[[Workspace, str], tuple[str, list[Button]]],
+    reviewer_owns: bool = False,
 ) -> None:
     """Execute an action stage with capture → execute → verify → transition."""
     action = stage_def.action
@@ -154,7 +155,8 @@ async def handle_action_stage(
     )
 
     # Notify when PR is created — user needs to review and reply
-    if action == "push_and_open_pr" and result.metadata.get("pr_url") and notifier:
+    if (action == "push_and_open_pr" and result.metadata.get("pr_url") and notifier
+            and not reviewer_owns):
         chat_id = get_chat_id()
         if chat_id:
             pr_url = result.metadata["pr_url"]

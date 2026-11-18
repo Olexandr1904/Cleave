@@ -56,6 +56,7 @@ async def on_ticket_done(
     chat_id: str,
     tracker: TrackerInterface | None,
     in_review_status: str,
+    handed_over: bool = False,
 ) -> None:
     """Handle ticket completion: TG notification + Jira status transition."""
     state = workspace.state
@@ -65,12 +66,16 @@ async def on_ticket_done(
         if chat_id:
             title = tg_format.read_ticket_title(workspace)
             hdr = tg_format.tg_header("✅", state.company_id, state.ticket_id, title)
-            await notifier.send_message(chat_id, (
-                f"{hdr}\n"
-                + tr("Pipeline complete.\n\n"
-                     "PR ready for merge: {pr_url}\n\n"
-                     "Ticket moved to review status.", pr_url=state.pr_url or tr("N/A"))
-            ))
+            if handed_over:
+                body = tr("PR opened: {pr_url}\n\n"
+                          "Reviewer mode takes it from here: its turns and review threads "
+                          "come to the reviewer chat.\n\n"
+                          "Ticket moved to review status.", pr_url=state.pr_url or tr("N/A"))
+            else:
+                body = tr("Pipeline complete.\n\n"
+                          "PR ready for merge: {pr_url}\n\n"
+                          "Ticket moved to review status.", pr_url=state.pr_url or tr("N/A"))
+            await notifier.send_message(chat_id, f"{hdr}\n" + body)
 
     # Transition tracker ticket to in-review status (Jira: "In Review",
     # Trello: a list-name match). Fuzzy keywords are pipeline policy and

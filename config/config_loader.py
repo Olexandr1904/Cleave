@@ -726,7 +726,7 @@ def _parse_reviewer_section(
     for part_name, name, value in required:
         if not value:
             raise fail(f"reviewer.{part_name}.{name} is required", f"reviewer.{part_name}.{name}")
-    for name in ("doc", "run_dir", "replies_plan", "worktree_dir"):
+    for name in ("doc", "run_dir", "replies_plan", "worktree_dir", "address_doc"):
         if not isinstance(getattr(process, name), str):
             raise fail(f"reviewer.process.{name} must be a string", f"reviewer.process.{name}")
 
@@ -746,8 +746,9 @@ def _parse_reviewer_section(
     for i, step in enumerate(process.prepare_steps):
         commands[f"reviewer.process.prepare_steps.{i}"] = check_command(step, f"reviewer.process.prepare_steps.{i}")
     check_command(process.helper_scripts, "reviewer.process.helper_scripts")
+    check_command(process.address_protected, "reviewer.process.address_protected")
 
-    for name in ("doc", "run_dir", "replies_plan"):
+    for name in ("doc", "run_dir", "replies_plan", "address_doc"):
         value = getattr(process, name)
         if Path(value).is_absolute() or ".." in Path(value).parts:
             raise fail(f"reviewer.process.{name} must be repo-relative", f"reviewer.process.{name}")

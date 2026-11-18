@@ -69,6 +69,9 @@ class PRFull:
     deletions: int
     changed_files: int
     closed_at: str = ""  # "" while open
+    author: str = ""
+    head_ref: str = ""  # the PR branch's name
+    head_repo: str = ""  # the PR branch's repo, owner/name; "" when it is gone
 
 
 @dataclass(frozen=True)
@@ -184,6 +187,9 @@ class JobRun:
     # fixed before its first part goes out so every part comes from them. "": a run from before languages (English).
     language: str = ""
     translations: dict = field(default_factory=dict)
+    # An address job's patch (fix.patch in its copy): {"files": [{"path", "added", "deleted"}], "protected":
+    # [path], "bytes"}; {} when the session changed no code.
+    fix: dict = field(default_factory=dict)
 
     def to_json(self) -> str:
         return json.dumps(dataclasses.asdict(self))
@@ -209,8 +215,8 @@ class Post:
     job_id: str
     scope: str
     number: int
-    head_sha: str
-    kind: str  # review, approve, replies
+    head_sha: str  # a push's: the head before it
+    kind: str  # review, approve, replies, push
     state: str  # posting, posted, partial, failed, unverified, interrupted
     created_at: str
     updated_at: str = ""
@@ -225,6 +231,7 @@ class Post:
     review_ids: list[int] = field(default_factory=list)
     urls: list[str] = field(default_factory=list)
     error: str = ""
+    sha: str = ""  # a push's new commit
 
     def to_json(self) -> str:
         return json.dumps(dataclasses.asdict(self))

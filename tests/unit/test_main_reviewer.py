@@ -137,6 +137,7 @@ def test_contexts_have_poster(tmp_path):
     assert ctx.poster._cfg is app.reviewer.poster
     assert "tok" not in repr(ctx.poster)
     assert ctx.allowed_links == ("https://github.com/acme-org/", "https://acme.atlassian.net/")
+    assert ctx.commit_author == ("Cleave Bot", "cleave@pipeline.local")
 
 
 def test_reviewer_contexts_skip_a_repo_without_a_forge_token(tmp_path, caplog):

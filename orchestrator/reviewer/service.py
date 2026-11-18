@@ -155,6 +155,7 @@ class RepoContext:
     forge: Any  # open_prs(), details(number, updated_at), reviewed_by(number, login, updated_at)
     poster: Any = None  # review(clone_dir, values, confirm=), replies(...) (see CommandPoster)
     allowed_links: tuple[str, ...] = ()  # lowercase link prefixes a posted body may use
+    commit_author: tuple[str, str] = ("", "")  # name, email of an address job's pushed commit
 
     @property
     def scope(self) -> str:

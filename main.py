@@ -174,6 +174,7 @@ def _reviewer_contexts(
                     cfg.poster, repo=f"{github.owner}/{github.repo}", token=github.token,
                 ),
                 allowed_links=_allowed_links(repo_cfg, project.config),
+                commit_author=(repo_cfg.git.commit_author_name, repo_cfg.git.commit_author_email),
             ))
     return contexts
 

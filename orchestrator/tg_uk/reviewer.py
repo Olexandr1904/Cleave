@@ -191,6 +191,36 @@ TEXTS: dict[str, str] = {
     ' "anyway": what landed is skipped.':
         '[{scope}] #{number}: публікацію перервав перезапуск. Перевірте PR, потім знову відповідайте "post …" з'
         ' "anyway": те, що вже пройшло, буде пропущено.',
+    '[{scope}] #{number}: a push was interrupted by a restart. Check the PR\'s commits, then reply "push" again if'
+    ' the fix is not there.':
+        '[{scope}] #{number}: пуш перервав перезапуск. Перевірте коміти PR, потім знову відповідайте "push", якщо'
+        ' виправлення там немає.',
+
+    # lines.py and posting.py: the push of an address job's fix
+    "This job changed no code: nothing to push.": "Ця задача не змінила коду: пушити нічого.",
+    "The fix touches protected files ({paths}): Cleave does not push it. Nothing was done.":
+        "Виправлення зачіпає захищені файли ({paths}): Cleave його не пушить. Нічого не зроблено.",
+    "Already pushed as {sha}. Nothing was done.": "Уже запушено як {sha}. Нічого не зроблено.",
+    'A ticket of the pipeline still holds #{number}\'s branch and may overwrite it: nothing pushed. Reply "push"'
+    ' again when the ticket is done.':
+        'Тікет пайплайна ще тримає гілку #{number} і може її перезаписати: нічого не запушено. Відповідайте "push"'
+        ' знову, коли тікет буде завершено.',
+    "the patch is not in this job's copy": "патча немає в копії цієї задачі",
+    'Head moved ({old} → {new}): nothing pushed. Reply "again" for a new run on the new head.':
+        'Коміт змінився ({old} → {new}): нічого не запушено. Відповідайте "again" для нового запуску на новому'
+        ' коміті.',
+    "The PR's branch is in a fork ({repo}): Cleave does not push there. Nothing was done.":
+        "Гілка PR у форку ({repo}): Cleave туди не пушить. Нічого не зроблено.",
+    "Cleave does not push to the branch {branch}. Nothing was done.":
+        "Cleave не пушить у гілку {branch}. Нічого не зроблено.",
+    "The push to #{number} ran, but GitHub does not show {sha} as the head. Check the PR's commits before pushing"
+    " again: {url}":
+        "Пуш у #{number} виконано, але GitHub не показує {sha} як останній коміт. Перевірте коміти PR, перш ніж"
+        " пушити знову: {url}",
+    "Not pushed to #{number}: {why}.": "Не запушено в #{number}: {why}.",
+    "Pushed {sha} to #{number}: {url}": "Запушено {sha} у #{number}: {url}",
+    'Reply "post replies {numbers}" to answer the fixed threads.':
+        'Відповідайте "post replies {numbers}", щоб відповісти у виправлених тредах.',
 
     # grammar.py: check_command's answers and describe()
     'This is a review message: "post replies" works on a re-check message. Nothing was done.':

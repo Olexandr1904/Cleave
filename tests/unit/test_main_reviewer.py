@@ -507,6 +507,7 @@ def test_main_wires_replies_with_telegram(tmp_path, monkeypatch, capsys):
     assert (chat.chat_id, chat.store) == ("42", store)
     assert isinstance(posting, Posting) and posting._store is store
     assert posting._ledgers_dir == runner.args[8].ledgers_dir == tmp_path / "rv" / "ledgers"
+    assert posting._work_dir == runner.args[8].work_root == tmp_path / "rv" / "work"   # a push's worktree
     assert isinstance(parser, ReplyParser) and type(parser._llm).__name__ == "ClaudeCodeAdapter"
     assert parser._job_cfg == ReviewerJobConfig("sonnet", "", 60)   # reviewer.jobs.command
     assert parser._work_dir == tmp_path / "rv" / "command"

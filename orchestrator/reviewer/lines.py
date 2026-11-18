@@ -107,6 +107,18 @@ def not_posted_line(number: int, why: str) -> str:
     return tr("Not posted on #{number}: {why}.", number=number, why=detail(why))
 
 
+def not_pushed_line(number: int, why: str) -> str:
+    return tr("Not pushed to #{number}: {why}.", number=number, why=detail(why))
+
+
+def pushed_line(number: int, sha: str, url: str, fixed: Sequence[int]) -> str:
+    """`fixed`: the numbers of the replies that report the fix and are not posted yet."""
+    text = tr("Pushed {sha} to #{number}: {url}", sha=sha[:9], number=number, url=url)
+    if fixed:
+        text += "\n" + tr('Reply "post replies {numbers}" to answer the fixed threads.', numbers=_spaced(fixed))
+    return text
+
+
 def nothing_left_line(number: int, head: str) -> str:
     return tr("Nothing left to post on #{number} at {head}: what you named is already posted.", number=number,
               head=head[:9])
@@ -197,8 +209,11 @@ def not_understood_line(kind: str) -> str:
 
 
 def interrupted_line(scope: str, number: int, kind: str = "review", numbers: Sequence[int] = ()) -> str:
-    """`kind`: the Post's (review, approve or replies); `numbers`: the ones it named. A re-check's replies take no
-    "anyway": only those GitHub does not show are named again."""
+    """`kind`: the Post's (review, approve, replies or push); `numbers`: the ones it named. A re-check's replies take
+    no "anyway": only those GitHub does not show are named again."""
+    if kind == "push":
+        return tr('[{scope}] #{number}: a push was interrupted by a restart. Check the PR\'s commits, then reply'
+                  ' "push" again if the fix is not there.', scope=scope, number=number)
     if kind == "replies":
         named = f" {_spaced(numbers)}" if numbers else ""
         return tr('[{scope}] #{number}: a post of replies{named} was interrupted by a restart. Check the PR, then'

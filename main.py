@@ -1026,7 +1026,7 @@ def main(argv: list[str] | None = None) -> int:
             # review they answer that reviewer mode is off.
             reviewer_replies = ReviewerReplies(
                 reviewer_contexts, reviewer_store, reviewer, reviewer_chat,
-                Posting(reviewer_store, ledgers_dir=reviewer_data / "ledgers"),
+                Posting(reviewer_store, ledgers_dir=reviewer_data / "ledgers", work_dir=reviewer_data / "work"),
                 review_edits, reply_parser, credential_failing=credential_health.failing,
                 language_of=_language_of,
             )

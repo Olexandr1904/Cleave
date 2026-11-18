@@ -85,7 +85,8 @@ def plan_jobs(
 
     A job matched by more than one rule gets one state change: the first rule in that order wins. A job in
     `posting` (the ids of the jobs with a Post `posting`) is left to its post by the gone-turn rule: the post
-    itself takes the turn away. A PR in `held` (see held_prs) gets no review, no re-check and no address job.
+    itself takes the turn away; and while an address job has one, no address job is queued for its PR. A PR in
+    `held` (see held_prs) gets no review, no re-check and no address job.
     `answered(job)`: the thread ids of an address job's replies that landed.
     """
     plan = Plan([], [], [], [])
@@ -146,10 +147,12 @@ def plan_jobs(
             # of the turn is one of its threads whose reply has not landed.
             covered = any(j.head_sha == head and (j.state in _PENDING or (
                 j.state in ("done", "posted") and current <= _threads_of(j) - answered(j))) for j in addresses)
+            # A post under way: a push moves its job to the new head only once GitHub shows that head.
+            busy = any(j.id in posting for j in addresses)
             failures = sum(j.state == "failed" for j in same_key)
             settled = datetime.fromisoformat(row.thread_turns_change or row.last_change)
             if (reviews_running and now - settled >= quiet
-                    and not (covered or revived or failures >= _MAX_FAILURES)):
+                    and not (covered or revived or busy or failures >= _MAX_FAILURES)):
                 for j in addresses:
                     if j.state in _RECHECK_SUPERSEDED:
                         states.setdefault(j.id, ("superseded", "new threads"))

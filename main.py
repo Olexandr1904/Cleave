@@ -111,6 +111,11 @@ def _allowed_links(repo_cfg: RepoConfig, project_cfg: ProjectConfig) -> tuple[st
     return tuple(link.lower() for link in links)
 
 
+def _reviewed_scopes(contexts: list[RepoContext]) -> frozenset[str]:
+    """The scope of every repo reviewer mode owns."""
+    return frozenset(ctx.scope for ctx in contexts)
+
+
 def _reviewer_contexts(
     global_config: GlobalConfig,
     projects: dict[str, LoadedProject],
@@ -777,6 +782,7 @@ def main(argv: list[str] | None = None) -> int:
     reviewer_contexts = _reviewer_contexts(
         global_config, projects, _auth_reporter, dry_run=args.dry_run,
     )
+    orchestrator.set_reviewed_repos(_reviewed_scopes(reviewer_contexts))
     if reviewer_contexts:
         from integrations.llm.claude_code_adapter import ClaudeCodeAdapter
         from orchestrator.reviewer.reply_llm import ReplyParser

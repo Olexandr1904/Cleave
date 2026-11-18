@@ -228,6 +228,11 @@ class Orchestrator:
         """Attach the running/paused switches (reviewer mode)."""
         self._switches = switches
 
+    def set_reviewed_repos(self, scopes: frozenset[str]) -> None:
+        """The repos whose PRs reviewer mode handles: there the ticket pipeline hands a PR over
+        instead of running its own PR flow."""
+        self._reviewed_repos = scopes
+
     def _tickets_running(self, project_id: str, repo_id: str) -> bool:
         """True when tickets run for this repo; always True until switches are set."""
         switches = getattr(self, "_switches", None)

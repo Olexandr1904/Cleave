@@ -315,3 +315,10 @@ class TestHandleActionStage:
             project_id="test-co", ticket_id="T-1",
             data={"gate": "PR_REVIEW"},
         )
+
+
+def test_set_reviewed_repos():
+    from orchestrator.orchestrator import Orchestrator
+    orch = SimpleNamespace()
+    Orchestrator.set_reviewed_repos(orch, frozenset({"test-co/test-repo"}))
+    assert orch._reviewed_repos == frozenset({"test-co/test-repo"})

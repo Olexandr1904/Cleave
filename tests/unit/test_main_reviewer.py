@@ -6,6 +6,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
+from types import SimpleNamespace
 from pathlib import Path
 
 import pytest
@@ -36,6 +37,7 @@ from main import (
     _allowed_chat_ids,
     _allowed_links,
     _reviewer_chat,
+    _reviewed_scopes,
     _reviewer_contexts,
     _start_background,
     _start_reviewer,
@@ -83,6 +85,29 @@ def test_reviewer_contexts(tmp_path):
     assert ctx.readiness.repo == "acme-org/acme-app"
     assert ctx.forge._adapter._repo_path == "/repos/acme-org/acme-app"
     assert "tok" not in repr(ctx)
+
+
+def test_reviewed_scopes(tmp_path):
+    app, web = _repo("acme-app", reviews=True), _repo("acme-web", reviews=False)
+    projects = {"acme": LoadedProject(repos={"app": app, "web": web})}
+    on_auth_failure, _ = _reporters()
+
+    contexts = _reviewer_contexts(_global(tmp_path), projects, on_auth_failure)
+
+    assert _reviewed_scopes(contexts) == frozenset(ctx.scope for ctx in contexts) != frozenset()
+
+
+def test_reviewed_scopes_empty_in_a_dry_run(tmp_path):
+    on = {"acme": LoadedProject(repos={"app": _repo("acme-app", reviews=True)})}
+    on_auth_failure, _ = _reporters()
+
+    assert _reviewed_scopes(_reviewer_contexts(_global(tmp_path), on, on_auth_failure, dry_run=True)) == frozenset()
+
+
+def test_reviewed_scopes_ignore_the_switch(tmp_path):
+    # _reviewed_scopes takes contexts only: no Switches argument exists to consult
+    import inspect
+    assert list(inspect.signature(_reviewed_scopes).parameters) == ["contexts"]
 
 
 def _jira(url: str) -> ProjectConfig:
@@ -433,7 +458,7 @@ def _run_main(tmp_path, monkeypatch, contexts, telegram_events=None, *, default_
 
 
 def test_main_builds_the_runner_with_reviewer_contexts(tmp_path, monkeypatch, capsys):
-    ctx = object()
+    ctx = SimpleNamespace(scope="acme/app")
     cfg, built, stopped = _run_main(tmp_path, monkeypatch, [ctx])
 
     assert "  Reviewer: 1 repo(s), jobs on\n" in capsys.readouterr().out   # no Telegram: no posting from it
@@ -463,7 +488,7 @@ def test_main_builds_the_runner_with_reviewer_contexts(tmp_path, monkeypatch, ca
 
 
 def test_main_wires_replies_with_telegram(tmp_path, monkeypatch, capsys):
-    ctx = object()
+    ctx = SimpleNamespace(scope="acme/app")
     events: list[str] = []
     _, built, stopped = _run_main(tmp_path, monkeypatch, [ctx], telegram_events=events)
 
@@ -523,7 +548,7 @@ REPLIES_RUN = [("is_anchor", "42", 100), ("handle_reply", "42", 100, "post 1")]
 ])
 def test_reviewer_path_needs_an_allowed_chat(tmp_path, monkeypatch, capsys, default_chat, posting, handled, calls):
     events: list[str] = []
-    _, built, _ = _run_main(tmp_path, monkeypatch, [object()], telegram_events=events, default_chat=default_chat,
+    _, built, _ = _run_main(tmp_path, monkeypatch, [SimpleNamespace(scope="acme/app")], telegram_events=events, default_chat=default_chat,
                             reviewer_chat="42")
 
     out = capsys.readouterr().out
@@ -539,7 +564,7 @@ def test_reviewer_path_needs_an_allowed_chat(tmp_path, monkeypatch, capsys, defa
 def test_empty_allowlist_locks_the_bot(tmp_path, monkeypatch):
     """No default or project chat: the bot accepts no message from any chat (docs/telegram.md, Allowlist)."""
     events: list[str] = []
-    _, built, _ = _run_main(tmp_path, monkeypatch, [object()], telegram_events=events, default_chat="",
+    _, built, _ = _run_main(tmp_path, monkeypatch, [SimpleNamespace(scope="acme/app")], telegram_events=events, default_chat="",
                             reviewer_chat="42")
     handler = built["handler"]
     assert handler._allowed_chat_ids == set()
@@ -569,7 +594,7 @@ def test_main_gives_the_reviewer_chat_the_store(tmp_path, monkeypatch):
     with_telegram = GlobalConfig(reviewer=ReviewerGlobalConfig(telegram_chat_id="42"))
     monkeypatch.setattr(main, "_reviewer_chat", lambda notifier, global_config, projects, **kwargs:
                         real(_Notifier(), with_telegram, projects, **kwargs))   # no Telegram configured
-    _, built, _ = _run_main(tmp_path, monkeypatch, [object()])
+    _, built, _ = _run_main(tmp_path, monkeypatch, [SimpleNamespace(scope="acme/app")])
     service, runner = built["service"], built["runner"]
     chat = runner.args[5]
     assert chat.store is service.args[1] is runner.args[1]

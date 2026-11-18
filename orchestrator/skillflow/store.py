@@ -112,6 +112,9 @@ class SkillStore:
         ).fetchone()
         return None if found is None else found[0]
 
+    def has_anchors(self) -> bool:
+        return self._conn.execute("SELECT 1 FROM skill_anchors LIMIT 1").fetchone() is not None
+
     def _select(self, where: str, args: tuple) -> list[SkillRun]:
         # Oldest first; rowid breaks ties between runs created at the same `now`.
         sql = f"{_SELECT} {where} ORDER BY created_at, rowid"

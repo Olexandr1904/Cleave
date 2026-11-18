@@ -50,12 +50,13 @@ class Rig:
     """The real SkillReplies, store and chat over a fake notifier, at `now`. `answers` are the texts sent through
     SkillChat.answer (the replies), `woken` the calls of wake."""
 
-    def __init__(self, tmp_path):
+    def __init__(self, tmp_path, language_of=None):
         self.store = SkillStore(connect(tmp_path / "reviewer.db"))
         self.notifier = FakeNotifier()
         self.chat = SkillChat(self.notifier, self.store, now=lambda: T0)
         self.now, self.woken, self.message_id, self._next_id = T0, 0, 0, 100
-        self.replies = SkillReplies(self.store, self.chat, self._wake, now=lambda: self.now)
+        extra = {} if language_of is None else {"language_of": language_of}
+        self.replies = SkillReplies(self.store, self.chat, self._wake, now=lambda: self.now, **extra)
 
     def _wake(self):
         self.woken += 1
@@ -538,3 +539,25 @@ def test_is_anchor(rig, monkeypatch):
     monkeypatch.setattr(rig.store, "anchor", boom)
     with pytest.raises(sqlite3.OperationalError):    # the command handler answers it
         rig.replies.is_anchor(CHAT, rig.message_id)
+
+
+# --- the language ---
+
+async def test_answers_follow_the_runs_language(tmp_path):
+    asked = []
+    rig = Rig(tmp_path, language_of=lambda scope, chat_id: asked.append((scope, chat_id)) or "uk")
+    run = rig.parked("waiting")
+    await rig.replies.handle_callback("sk_drop", run.id, CHAT, rig.message_id)
+    assert rig.store.run(run.id).state == "dropped"
+    assert rig.answers[-1].startswith("ACME-1 · ") and "Dropped" not in rig.answers[-1]
+    assert asked == [("acme/app", CHAT)]
+    rig.store.add_anchor(CHAT, 7, "", NOW)     # an answer about no run
+    await rig.replies.handle_reply(CHAT, 7, "hello")
+    assert "Reply to a skill run's own message" not in rig.answers[-1] and asked[-1] == ("", CHAT)
+
+async def test_a_too_old_reply_is_answered_in_the_runs_language(tmp_path):
+    rig = Rig(tmp_path, language_of=lambda scope, chat_id: "uk")
+    run = rig.parked("waiting")
+    await rig.replies.handle_reply(CHAT, rig.message_id, "ok", sent_at=T0 - timedelta(hours=1))
+    assert rig.store.run(run.id).state == "waiting"
+    assert "09:00 UTC" in rig.answers[-1] and "more than 15 minutes old" not in rig.answers[-1]

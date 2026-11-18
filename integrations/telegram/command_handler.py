@@ -23,6 +23,7 @@ from integrations.telegram.switch_commands import (
 from orchestrator import tg_format
 from orchestrator.constants import REPORT_BA, REPORT_DEV, REPORT_QA, REPORT_SCOPE_GUARD
 from orchestrator.reviewer.grammar import parse_reply
+from orchestrator.skillflow.replies import SKILL_OFF
 from orchestrator.switches import GLOBAL, switch_scopes
 from orchestrator.tg_i18n import ENGLISH, N_, detail, telegram_language, tr
 from workspace.workspace import Stage
@@ -59,8 +60,7 @@ def _ensure_msg_ids(c: dict) -> list[int]:
 _REVIEW_STORE_UNREAD = N_("Reply not handled: the reviewer's store could not be read; nothing was done.")
 _REVIEWER_OFF = N_("Reviewer mode is off on this daemon: nothing was done.")
 _REVIEWER_NOT_A_REPLY = N_("Reply to the reviewer's message to act on it; nothing was done.")
-_SKILL_STORE_UNREAD = "Reply not handled: the skill-run store could not be read; nothing was done."
-_SKILL_OFF = "The skill flow is off on this daemon; nothing was done."
+_SKILL_STORE_UNREAD = N_("Reply not handled: the skill-run store could not be read; nothing was done.")
 
 _FIX_TOKENS = ("fix it", "fix", "fxi", "fifx", "fixx", "fx", "fi", "yes")
 _WONT_FIX_TOKENS = (
@@ -676,7 +676,8 @@ class CommandHandler:
                 logger.warning("Skill-run reply anchor not looked up: %s", type(e).__name__)
                 if not await self._pipeline_reply(reply_to_msg_id, text, chat_id):
                     # A dead end, best effort: a reply to it is the skill flow's too; the store may be what failed.
-                    await self._skill.answer(chat_id, reply_to_msg_id, _SKILL_STORE_UNREAD)
+                    with telegram_language(self._chat_language(chat_id)):
+                        await self._skill.answer(chat_id, reply_to_msg_id, tr(_SKILL_STORE_UNREAD))
                 return True
             if skill_anchored:
                 await self._skill.handle_reply(chat_id, reply_to_msg_id, text, sent_at=sent_at)
@@ -1010,7 +1011,8 @@ class CommandHandler:
         if action.startswith("sk_"):
             if self._skill is None:
                 try:
-                    await self._notifier.send_message(chat_id, _SKILL_OFF, reply_to_message_id=message_id)
+                    with telegram_language(self._chat_language(chat_id)):
+                        await self._notifier.send_message(chat_id, tr(SKILL_OFF), reply_to_message_id=message_id)
                 except Exception as e:  # the class only: a Telegram error's text can hold the bot token
                     logger.warning("Skill-flow-off answer not sent: %s", type(e).__name__)
             else:

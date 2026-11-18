@@ -9,7 +9,7 @@ import httpx
 import pytest
 
 from integrations.llm.claude_code_adapter import QuotaExhaustedError
-from orchestrator.skillflow import runner as runner_module
+from orchestrator.skillflow import publish as publish_module
 from orchestrator.skillflow.checkout import CheckoutError, SkillCheckout
 from orchestrator.skillflow.prompts import CUT_PREFIX
 from orchestrator.skillflow.runner import SkillRepo
@@ -172,7 +172,7 @@ async def test_a_reply_while_the_stop_goes_out_is_kept(tmp_path, setup, phase):
 
 async def test_the_branch_is_kept_when_the_gates_break(tmp_path, monkeypatch):
     rig = ready(tmp_path)
-    monkeypatch.setattr(runner_module, "run_gates", raising(RuntimeError("boom")))
+    monkeypatch.setattr(publish_module, "run_gates", raising(RuntimeError("boom")))
     run = await rig.go()
     assert (run.state, run.reason, run.branch) == ("failed", "internal error: RuntimeError", "ACME-1-fix")
     assert not rig.slot.locked()
@@ -180,7 +180,7 @@ async def test_the_branch_is_kept_when_the_gates_break(tmp_path, monkeypatch):
 async def test_the_branch_of_a_fix_is_kept_before_the_gates_run_again(tmp_path, monkeypatch):
     rig = ready(tmp_path, texts=[FIXED, "Committed.", "Fixed on a new branch."], gates={"test": "false"})
     rig.checkout.states = [("ACME-1-fix", ""), ("ACME-1-fix-2", "")]
-    real, gate_runs = runner_module.run_gates, []
+    real, gate_runs = publish_module.run_gates, []
 
     async def gates(*args, **kwargs):            # the second run of the gates breaks
         gate_runs.append(1)
@@ -188,13 +188,13 @@ async def test_the_branch_of_a_fix_is_kept_before_the_gates_run_again(tmp_path, 
             raise RuntimeError("boom")
         return await real(*args, **kwargs)
 
-    monkeypatch.setattr(runner_module, "run_gates", gates)
+    monkeypatch.setattr(publish_module, "run_gates", gates)
     run = await rig.go()
     assert (run.state, run.branch) == ("failed", "ACME-1-fix-2")
 
 async def test_the_pr_is_kept_when_its_message_cannot_be_built(tmp_path, monkeypatch):
     rig = ready(tmp_path)
-    monkeypatch.setattr(runner_module, "pr_message", boom)
+    monkeypatch.setattr(publish_module, "pr_message", boom)
     run = await rig.go()
     assert (run.state, run.pr_number, run.pr_url) == ("failed", 5, PR_URL)
 
@@ -636,7 +636,7 @@ async def test_another_branch_on_the_forge_is_refused_after_the_runs_own_push(tm
 
 async def test_a_commit_made_while_the_gates_run_is_gated_before_it_is_pushed(tmp_path, monkeypatch):
     rig = ready(tmp_path, gates=COUNTED)
-    real = runner_module.run_gates
+    real = publish_module.run_gates
 
     async def moving(*args, **kwargs):
         results = await real(*args, **kwargs)
@@ -644,14 +644,14 @@ async def test_a_commit_made_while_the_gates_run_is_gated_before_it_is_pushed(tm
             rig.checkout.sha = "c" * 40                  # a commit made while the first gates ran
         return results
 
-    monkeypatch.setattr(runner_module, "run_gates", moving)
+    monkeypatch.setattr(publish_module, "run_gates", moving)
     run = await rig.go()
     assert (run.state, run.gated_sha, gate_runs(rig), pushes(rig)) == ("pr_open", "c" * 40, 2, 1)
     before_push = rig.checkout.calls[:rig.checkout.calls.index(("push", "ACME-1-fix"))]
     assert before_push.count("changed_files") == 2
 
 async def test_real_git_a_gate_that_keeps_committing_stops_the_run(tmp_path):
-    assert runner_module.MAX_REGATES == 2
+    assert publish_module.MAX_REGATES == 2
     rig, co, bare = real_rig(tmp_path, [FIXED, "Committed."], gates={"test": "git commit -q --allow-empty -m gate"})
     wt = co.worktree("worktrees/ACME-1")
 
@@ -790,3 +790,24 @@ async def test_a_summary_that_fits_the_title_is_not_cut(tmp_path):
     rig = ready(tmp_path); _with_summary(rig, summary)
     await rig.go()
     assert rig.vcs.opened[0][0] == f"ACME-1: {summary} [skill]"
+
+
+# --- plan 2, Task 10: the comparison's released winner ---
+
+def run_in(rig, state, **changes):
+    """The rig's queued ACME-1 run, claimed into `state` with `changes`."""
+    run = rig.store.in_states(("queued",))[0]
+    return rig.store.claim(run.id, ("queued",), NOW, state, **changes)
+
+async def test_a_released_winner_loses_its_worktree(tmp_path):
+    rig = Rig(tmp_path)
+    run = run_in(rig, "pr_open", released=True)
+    await rig.runner.sweep_dropped()
+    assert ("remove_worktree", rig.worktree) in rig.checkout.calls and rig.store.run(run.id).cleaned is True
+    assert rig.store.run(run.id).state == "pr_open"
+
+async def test_an_unreleased_open_pr_keeps_its_worktree(tmp_path):
+    rig = Rig(tmp_path)
+    run_in(rig, "pr_open")
+    await rig.runner.sweep_dropped()
+    assert not any(c[0] == "remove_worktree" for c in rig.checkout.calls if isinstance(c, tuple))

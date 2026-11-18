@@ -7,9 +7,9 @@ texts in double quotes, emoji and numbers (tests/unit/test_tg_i18n.py).
 """
 from __future__ import annotations
 
-from orchestrator.tg_uk import commands, pipeline, reviewer
+from orchestrator.tg_uk import commands, pipeline, reviewer, skillflow
 
-_AREAS = (reviewer, pipeline, commands)
+_AREAS = (reviewer, pipeline, commands, skillflow)
 
 
 def _merged(name: str) -> dict:

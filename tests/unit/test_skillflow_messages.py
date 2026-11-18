@@ -10,6 +10,8 @@ from orchestrator.skillflow.messages import (
 )
 from orchestrator.skillflow.models import SkillRun
 from orchestrator.skillflow.status import read_turn_end
+from orchestrator.tg_i18n import telegram_language
+from orchestrator.tg_uk import TEXTS
 
 NOW = "2026-11-16T10:00:00+00:00"
 RUN = SkillRun("r1", "acme/app", "ACME-1", "waiting", "", NOW, NOW, skill="fix-this", chat_id="-100",
@@ -122,3 +124,31 @@ def test_the_skills_text_cannot_break_a_builder(text):
         message = build(RUN, text, NOTES)
         assert message.splitlines()[-2:] == [f"Notes: {NOTES}", build(RUN, "t", NOTES).splitlines()[-1]]
         assert (text[:100] in message) and (CUT in message) == (len(text) > 9000)
+
+
+# --- the language ---
+
+@pytest.fixture
+def run():
+    return replace(RUN)
+
+
+@pytest.fixture
+def catalogue_uk():
+    # The real catalogue: the tests check that the skill flow's own lines are in it.
+    return TEXTS
+
+
+def test_waiting_message_in_ukrainian_keeps_the_skills_text(run, tmp_path, catalogue_uk):
+    with telegram_language("uk"):
+        text = waiting_message(run, "Which screen? Яке поле?", tmp_path)
+    assert "Which screen? Яке поле?" in text and "Reply to answer" not in text
+
+def test_cleave_stop_keeps_its_reason(run, catalogue_uk):
+    run.reason = "push failed: [rejected] fetch first"
+    with telegram_language("uk"):
+        assert "push failed: [rejected] fetch first" in cleave_stop_message(run)
+
+def test_buttons_are_translated(catalogue_uk):
+    with telegram_language("uk"):
+        assert [b.label for b in parked_buttons("r1")] != ["Approve", "Drop"]

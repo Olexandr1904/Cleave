@@ -644,3 +644,24 @@ async def test_a_message_that_fails_on_a_later_part_goes_on_where_it_stopped(tmp
     assert len(texts) == 3 and texts.count(texts[0]) == 1 and rig.notifier.sent[-1].buttons
     got = rig.store.run(run.id)
     assert (got.unsent, got.ask_message_ids) == (0, [500, 501, 502])
+
+
+# --- the language ---
+
+async def test_runner_messages_follow_the_language(tmp_path):
+    rig = Rig(tmp_path, mode="manual", texts=["Which screen?"], language_of=lambda scope: "uk")
+    await rig.go()
+    sent = rig.notifier.sent[-1]
+    assert "Which screen?" in sent.text and "Reply to answer, or tap Approve to say ok." not in sent.text
+    assert [b.label for b in sent.buttons] != ["Approve", "Drop"]
+
+async def test_a_message_recover_queued_goes_out_in_the_runs_language(tmp_path):
+    asked = []
+    rig = Rig(tmp_path, language_of=lambda scope: asked.append(scope) or "uk")
+    [run] = rig.store.runs_for_ticket("acme/app", "ACME-1")
+    rig.store.claim(run.id, ("queued",), NOW, "running")
+    rig.runner.recover()
+    await rig.runner.flush_outbox()     # the loop's flush, outside any job
+    sent = rig.notifier.sent[-1]
+    assert "interrupted by a restart" not in sent.text and [b.label for b in sent.buttons] != ["Approve", "Drop"]
+    assert set(asked) == {"acme/app"}

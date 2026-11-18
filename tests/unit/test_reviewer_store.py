@@ -24,7 +24,7 @@ def store(tmp_path):
 
 def test_migrations_applied(tmp_path):
     conn = connect(tmp_path / "r.db")
-    assert conn.execute("PRAGMA user_version").fetchone()[0] == len(MIGRATIONS) == 5
+    assert conn.execute("PRAGMA user_version").fetchone()[0] == len(MIGRATIONS) == 6
 
 def test_board_roundtrip_and_replace(store):
     store.replace_board("acme/app", {1712: row(), 1720: row(1720)})

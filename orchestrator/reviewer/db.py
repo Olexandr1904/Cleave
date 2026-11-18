@@ -41,6 +41,11 @@ MIGRATIONS: list[str] = [
     "CREATE INDEX skill_runs_ticket ON skill_runs (scope, ticket_id); "
     "CREATE TABLE skill_anchors (chat_id TEXT NOT NULL, message_id INTEGER NOT NULL, run_id TEXT NOT NULL, "
     "created_at TEXT NOT NULL, PRIMARY KEY (chat_id, message_id))",
+    "CREATE TABLE comparisons (id TEXT PRIMARY KEY, scope TEXT NOT NULL, ticket_id TEXT NOT NULL, "
+    "run_id TEXT NOT NULL, state TEXT NOT NULL, unsent INTEGER NOT NULL DEFAULT 0, "
+    "created_at TEXT NOT NULL, updated_at TEXT NOT NULL, data TEXT NOT NULL); "
+    "CREATE INDEX comparisons_ticket ON comparisons (scope, ticket_id); "
+    "CREATE INDEX comparisons_run ON comparisons (run_id)",
 ]
 
 

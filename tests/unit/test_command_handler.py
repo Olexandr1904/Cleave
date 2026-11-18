@@ -1179,3 +1179,23 @@ async def test_the_skill_flow_off_answer_that_cannot_be_sent_is_logged(handler, 
     with caplog.at_level(logging.WARNING, logger="integrations.telegram.command_handler"):
         await handler.handle_callback("sk_ok", "r1", "-100", 7)     # does not raise
     assert "RuntimeError" in caplog.text and "not-a-real-token" not in caplog.text
+
+
+async def test_the_skill_flows_own_answers_follow_the_chats_language(mock_intent_parser, mock_notifier,
+                                                                     mock_mode_handler):
+    asked = []
+
+    def chat_language(chat_id):
+        asked.append(chat_id)
+        return "uk"
+
+    off = _RecordingHandler(intent_parser=mock_intent_parser, notifier=mock_notifier, mode_handler=mock_mode_handler,
+                            active_workspaces_fn=lambda: [], allowed_chat_ids={"-100"}, chat_language=chat_language)
+    await off.handle_callback("sk_ok", "r1", "-100", 7)
+    assert "skill flow is off" not in off.sent[-1] and asked == ["-100"]
+    skill = _FakeSkill(lookup_error=sqlite3.OperationalError("locked"), notifier=mock_notifier)
+    on = _RecordingHandler(intent_parser=mock_intent_parser, notifier=mock_notifier, mode_handler=mock_mode_handler,
+                           active_workspaces_fn=lambda: [], allowed_chat_ids={"-100"}, skill=skill,
+                           chat_language=chat_language)
+    assert await on.handle_reply(7, "ok", "-100") is True
+    assert skill.answers[-1][2] != SKILL_STORE_UNREAD and "skill-run store could not be read" not in on.sent[-1]

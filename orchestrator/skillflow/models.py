@@ -60,7 +60,9 @@ class SkillRun:
     tokens_out: int = 0
     turn_count: int = 0
     started_at: str = ""
-    cleaned: bool = False           # a dropped run's worktree was removed, or the refusal reported
+    cleaned: bool = False           # a dropped or released run's worktree was removed, or the refusal reported
+    # The comparison has its verdict: the worktree is no longer kept for it (the sweep removes it).
+    released: bool = False
     # {"text": str, "buttons": bool, "ids": [int]}: `ids` (only once a part went out and a later one failed) are
     # the parts already sent, which the next send leaves out.
     outbox: list[dict] = field(default_factory=list)

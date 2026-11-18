@@ -15,11 +15,11 @@ from orchestrator.reviewer.clone import CloneError, ReviewClone
 from orchestrator.reviewer.db import connect
 from orchestrator.reviewer.forge_github import ForgeError
 from orchestrator.reviewer.models import (
-    Anchor, BoardSnapshot, JobRun, Post, PRDetails, RepoState, SnapshotPR, Turn,
+    Anchor, BoardRow, BoardSnapshot, JobRun, Post, PRDetails, RepoState, SnapshotPR, Turn,
 )
 from orchestrator.reviewer.readiness import ReadinessError
 from orchestrator.reviewer.report import parse_report
-from orchestrator.reviewer.service import RepoContext, ReviewerService
+from orchestrator.reviewer.service import RepoContext, ReviewerService, _why_not_fixable
 from orchestrator.reviewer.store import ReviewerStore
 from orchestrator.switches import Switches
 from tests.unit.test_reviewer_report import HEAD as RHEAD, REPORT
@@ -1086,4 +1086,104 @@ async def test_address_again_needs_an_address_turn(tmp_path):
     await rig.service.poll(c)
     with pytest.raises(LookupError, match="no address turn"):
         rig.service.address_again("acme/app", 1, "")
+    assert rig.store.jobs("acme/app") == []
+
+
+# --- The Reviews board: the newest review, the login, Fix now ---
+
+REVIEW_INFO_KEYS = {"id", "state", "head", "started_at", "finished_at", "duration_s", "cost_usd",
+                    "message_sent", "findings"}
+
+
+async def test_overview_carries_me_project_and_the_newest_review(tmp_path):
+    c = ctx(tmp_path, FakeReadiness(review_snap()), FakeForge({1: det(1, head=RHEAD)}))
+    rig = Rig(tmp_path, c)
+    await rig.service.poll(c)
+    review = finished_job(rig, tmp_path, "done", started_at=T0.isoformat(),
+                          finished_at=(T0 + timedelta(seconds=3610)).isoformat(), cost_usd=28.93)
+    rig.store.add_job("acme/app", 1, "recheck", RHEAD, f"{RHEAD}:T1", (T0 + timedelta(minutes=5)).isoformat())
+    [repo] = rig.service.overview()
+    assert (repo["me"], repo["project_id"]) == ("octo", "acme")
+    info = repo["reviews"][1]
+    assert set(info) == REVIEW_INFO_KEYS
+    assert (info["id"], info["state"], info["head"], info["duration_s"], info["cost_usd"]) == (
+        review.id, "done", RHEAD[:9], 3610, 28.93)
+    assert repo["jobs"][1].kind == "recheck"   # the row's job is still the newest of any kind
+
+
+async def test_overview_has_no_review_for_a_pr_without_one(tmp_path):
+    c = ctx(tmp_path, *review_pr())
+    rig = Rig(tmp_path, c)
+    await rig.service.poll(c)
+    assert rig.service.overview()[0]["reviews"] == {}
+
+
+def fix_row(**changes):
+    row = BoardRow(number=1, title="Fix 1 ACME-1", url="u1", author="octo", roles=["author"], head_sha=A,
+                   head_first_seen_at=T0.isoformat(), draft=False, changed_files=3,
+                   my_turns=[{"action": "answer_threads", "threads": ["T1"]}], other_turns=[],
+                   threads_truncated=False, pipeline=False, ticket_key="ACME-1",
+                   updated_at=T0.isoformat(), last_change=T0.isoformat())
+    return dataclasses.replace(row, **changes)
+
+
+@pytest.mark.parametrize("cfg, changes, held, why", [
+    (ADDR_CFG, {}, frozenset(), ""),
+    (ADDR_CFG, {"my_turns": [{"action": "resolve_threads", "threads": ["T1"]}]}, frozenset(), ""),
+    (ADDR_CFG, {"my_turns": [{"action": "address_review", "threads": []}]}, frozenset(), ""),
+    (CFG, {}, frozenset(), "no address_doc"),
+    (ADDR_CFG, {"roles": ["reviewer"]}, frozenset(), "not your PR"),
+    (ADDR_CFG, {"my_turns": [{"action": "request_review", "threads": []}]}, frozenset(), "no thread turn"),
+    (ADDR_CFG, {"pipeline": True}, frozenset(), "a ticket workspace holds it"),
+    (ADDR_CFG, {}, frozenset({1}), "held by a comparison"),
+])
+def test_why_not_fixable(cfg, changes, held, why):
+    assert _why_not_fixable(cfg, fix_row(**changes), held) == why
+
+
+def address_ctx(tmp_path, cfg):
+    turns = [Turn("octo", "answer_threads", ("T2",)), Turn("octo", "resolve_threads", ("T1",))]
+    return RepoContext("acme", "app", cfg, FakeClone(tmp_path / "app"),
+                       FakeReadiness(snap(spr(1, turns, author="octo"))),
+                       FakeForge({1: det(1, author="octo", requested=())}))
+
+
+@pytest.mark.parametrize("cfg, fixable", [(ADDR_CFG, {1}), (CFG, set())])
+async def test_overview_fixable_follows_the_rule(tmp_path, cfg, fixable):
+    c = address_ctx(tmp_path, cfg)
+    rig = Rig(tmp_path, c)
+    await rig.service.poll(c)
+    assert rig.service.overview()[0]["fixable"] == fixable
+
+
+async def test_address_now_queues_without_an_instruction(tmp_path):
+    c = address_ctx(tmp_path, ADDR_CFG)
+    rig = Rig(tmp_path, c)
+    await rig.service.poll(c)
+    now = T0.isoformat()
+    done = rig.store.add_job("acme/app", 1, "address", A, f"{A}:T1", now)
+    rig.store.set_job_state(done.id, "done", "", now)
+    failed = rig.store.add_job("acme/app", 1, "address", A, f"{A}:T2", now)
+    rig.store.set_job_state(failed.id, "failed", "boom", now)
+    new = rig.service.address_now("acme/app", 1)
+    assert (rig.store.job(done.id).state, rig.store.job(done.id).reason) == ("superseded", "new address")
+    assert rig.store.job(failed.id).state == "failed"
+    assert (new.kind, new.head_sha, new.key, new.state) == ("address", A, f"{A}:T1,T2", "queued")
+    assert rig.store.run(new.id) is None   # no instruction
+
+
+async def test_address_now_refuses(tmp_path):
+    c = address_ctx(tmp_path / "addr", ADDR_CFG)
+    rig = Rig(tmp_path / "addr", c)
+    await rig.service.poll(c)
+    rig.service.address_now("acme/app", 1)
+    with pytest.raises(ValueError, match="already queued"):
+        rig.service.address_now("acme/app", 1)
+    with pytest.raises(LookupError):
+        rig.service.address_now("acme/app", 99)
+    plain = address_ctx(tmp_path / "plain", CFG)
+    rig = Rig(tmp_path / "plain", plain)
+    await rig.service.poll(plain)
+    with pytest.raises(ValueError, match="not fixable: no address_doc"):
+        rig.service.address_now("acme/app", 1)
     assert rig.store.jobs("acme/app") == []

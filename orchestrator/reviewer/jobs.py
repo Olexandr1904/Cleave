@@ -73,8 +73,6 @@ def plan_jobs(
     states: dict[str, tuple[str, str]] = {}  # job id -> (state, reason)
     quiet = timedelta(minutes=cfg.quiet_minutes)
     for number, row in update.rows.items():
-        if row.pipeline:
-            continue
         jobs = jobs_by_pr.get(number, [])
         head = row.head_sha
         review_settled = True  # the re-check waits while this head's review is still to come
@@ -129,6 +127,6 @@ def plan_jobs(
     if not first_poll:
         for change in update.new_turns:
             row = update.rows.get(change.number)
-            if change.action not in JOB_ACTIONS and row is not None and not row.pipeline:
+            if change.action not in JOB_ACTIONS and row is not None:
                 plan.lines.append(turn_line(scope, row, change))
     return plan

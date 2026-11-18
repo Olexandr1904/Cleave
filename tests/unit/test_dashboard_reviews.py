@@ -116,9 +116,9 @@ def test_get_reviews_groups_and_trims(client):
         "scope": "acme/app", "status": "ok", "reason": "",
         "last_poll_at": STAMP, "next_poll_at": "2026-11-12T10:05:00+00:00",
     }
-    assert [p["number"] for p in repo["my_turn"]] == [1]
-    assert [p["number"] for p in repo["waiting"]] == [3, 2]
-    pr = repo["my_turn"][0]
+    assert [p["number"] for p in repo["my_turn"]] == [2, 1]
+    assert [p["number"] for p in repo["waiting"]] == [3]
+    pr = repo["my_turn"][1]
     assert set(pr) == PR_KEYS
     assert pr["head"] == HEAD[:9] and len(pr["head"]) == 9
     assert pr["job"] == {"id": "j1", "kind": "review", "state": "queued", "head": HEAD[:9], **QUEUED_INFO}
@@ -126,9 +126,10 @@ def test_get_reviews_groups_and_trims(client):
     assert pr["my_turns"] == ["review"]
     assert pr["other_turns"] == [{"login": "dev", "action": "address_review"}]
     assert (pr["ticket_key"], pr["roles"], pr["pipeline"]) == ("ACME-1", ["reviewer"], False)
-    assert repo["waiting"][1]["pipeline"] is True
+    assert repo["my_turn"][0]["pipeline"] is True
     assert repo["waiting"][0]["job"] is None
-    assert [(p["number"], p["large"]) for p in repo["waiting"]] == [(3, True), (2, False)]
+    assert [(p["number"], p["large"]) for p in repo["waiting"]] == [(3, True)]
+    assert repo["my_turn"][0]["large"] is False
     assert pr["large"] is False
 
 

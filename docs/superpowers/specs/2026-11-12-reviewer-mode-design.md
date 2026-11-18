@@ -442,9 +442,8 @@ resolved thread is gone from the unresolved list, each review-body answer is mar
 - **First poll** (empty board): author-side turns that already exist are recorded as the baseline without a Telegram
   line; `review` and `recheck` turns are queued as on any later poll.
 - **The ticket pipeline's own PRs** (a PR number that an active ticket workspace's `state.json` records as its
-  `pr_number`) show on the board labelled «конвейер» and produce no turn lines: the pipeline's own PR review stage
-  already handles their threads. Once the ticket is DONE the pipeline stops watching the PR, so it becomes an
-  ordinary PR of the operator's: turn lines resume (operator's decision, 2026-11-13). They use the same token, so they look like the operator's PRs.
+  `pr_number`) show on the board labelled `pipeline` and are handled like any other PR of the operator's: the
+  pipeline hands a PR over right after opening it (see `2026-11-18-reviewer-owns-prs-design.md`).
 - **A turn that disappears** while its job is queued or its report is unposted (for example the operator reviewed
   the PR from the laptop) cancels the queued job and marks the report stale; a reply to it then answers «устарело».
 
@@ -701,7 +700,7 @@ anything naming the reference repo's specifics stays in the host's private notes
     PR; never a Cleave-owned replacement prompt.
 13. Agents run in the foreground (parallel within one message), never as background tasks.
 14. First poll: author-side turns are a silent baseline; review and re-check turns are queued as usual.
-15. The ticket pipeline's own PRs are labelled on the board and get no turn lines.
+15. The ticket pipeline's own PRs are labelled on the board and get jobs and turn lines like any other.
 16. Posting refuses when the operator already submitted a review after the report, and every post is verified on the
     forge afterwards.
 17. The three parts sit on a per-forge reader; this version builds the GitHub reader and the `command` kinds, and

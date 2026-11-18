@@ -18,10 +18,14 @@ from integrations.base.tracker import TrackerInterface
 from integrations.base.vcs import VCSInterface
 from integrations.telegram.handlers.mode import ModeHandler
 from orchestrator.agent_runtime import AgentRuntime
-from orchestrator.pipeline.actions.fetch_pr_comments import action_fetch_pr_comments
+from orchestrator.pipeline.actions.fetch_pr_comments import (
+    action_fetch_pr_comments,
+    hand_over_to_reviewer,
+)
 from orchestrator.pipeline.actions.finalize import action_finalize
 from orchestrator.pipeline.actions.push_and_open_pr import action_push_and_open_pr
 from orchestrator.runtime import Runtime
+from orchestrator.switches import scope_of
 from orchestrator.tg_i18n import project_language, telegram_language
 from orchestrator.ticket_prioritizer import PrioritizedTicket
 from orchestrator.workflow_router import WorkflowDefinition
@@ -57,6 +61,12 @@ class _RuntimeAttr:
             setattr(runtime, self._name, value)
         else:
             instance.__dict__[self._name] = value
+
+
+def _reviewer_owns(orch: Any, workspace: Workspace) -> bool:
+    """True when reviewer mode is on for the workspace's repo (the PR is handed over)."""
+    scope = scope_of(workspace.state.company_id, workspace.state.repo_id)
+    return scope in getattr(orch, "_reviewed_repos", frozenset())
 
 
 class Orchestrator:
@@ -238,6 +248,11 @@ class Orchestrator:
         """Attach the intake that makes a skill run for each new workspace (skill flow)."""
         self._skill_intake = intake
 
+    def set_reviewed_repos(self, scopes: frozenset[str]) -> None:
+        """The repos whose PRs reviewer mode handles: there the ticket pipeline hands a PR over
+        instead of running its own PR flow."""
+        self._reviewed_repos = scopes
+
     def _tickets_running(self, project_id: str, repo_id: str) -> bool:
         """True when tickets run for this repo; always True until switches are set."""
         switches = getattr(self, "_switches", None)
@@ -394,6 +409,7 @@ class Orchestrator:
             self._get_chat_id(workspace),
             self.get_tracker_for_workspace(workspace),
             in_review_status,
+            handed_over=_reviewer_owns(self, workspace),
         )
 
     async def _handle_agent_stage(
@@ -522,7 +538,11 @@ class Orchestrator:
                 tracker, event_bus,
             )
 
+        owns = _reviewer_owns(self, workspace)
+
         async def _fetch(ws, sd):
+            if owns:
+                return hand_over_to_reviewer(ws)
             return await action_fetch_pr_comments(
                 ws, sd,
                 get_vcs=lambda: self._get_vcs_for_workspace(ws),
@@ -550,6 +570,7 @@ class Orchestrator:
             advance_to_stage_fn=lambda ws, sid: advance_to_stage(ws, sid, event_bus=event_bus),
             on_ticket_done_fn=self._on_ticket_done,
             build_gate_summary_fn=build_gate_summary,
+            reviewer_owns=owns,
         )
 
     def shutdown(self) -> None:

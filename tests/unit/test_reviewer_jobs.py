@@ -63,7 +63,8 @@ def test_turn_lines_and_first_poll_baseline():
         "[acme/app] #1: your turn — merge · https://github.com/acme-org/acme-app/pull/1",
         "[acme/app] #1: replies in 3 thread(s) — handle them locally · https://github.com/acme-org/acme-app/pull/1"]
     assert plan([r], new=new, first=True).lines == []
-    assert plan([row(actions=(("merge", ()),), pipeline=True)], new=new[:1]).lines == []
+    assert plan([row(actions=(("merge", ()),), pipeline=True)], new=new[:1]).lines == [
+        "[acme/app] #1: your turn — merge · https://github.com/acme-org/acme-app/pull/1"]
 
 def test_first_poll_baseline():
     p = plan([row(), row(2, actions=(("merge", ()),))], new=[TurnChange(1, "review", ()), TurnChange(2, "merge", ())],
@@ -148,9 +149,9 @@ def test_turn_back_restores_stale_report():
     assert p.states == [("r", "done", "turn back")] and p.queue == []
 
 
-def test_pipeline_row_and_done_job_wait_for_new_review():
+def test_pipeline_row_is_planned_like_any_other():
     p = plan([row(pipeline=True)], {1: [job(head=B, state="queued")]})
-    assert p.queue == [] and p.states == []
+    assert p.queue == [(1, "review", A, A)] and p.states == [("j1", "superseded", "new head")]
     assert plan([row(head=B, seen=RECENT)], {1: [job(head=A, state="done")]}).states == []
 
 

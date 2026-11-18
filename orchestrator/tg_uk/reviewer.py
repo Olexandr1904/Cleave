@@ -255,6 +255,13 @@ TEXTS: dict[str, str] = {
     "A review of #{number} at this head is already queued.": "Рев'ю #{number} на цьому коміті вже в черзі.",
     "#{number} is not on the board any more; nothing was done.": "#{number} уже немає на дошці; нічого не зроблено.",
     "Queued a review of #{number} at {head}.": "Рев'ю #{number} на {head} поставлено в чергу.",
+    "Checking before pushing.": "Перевіряю перед пушем.",
+    "This job changed no code: there is no patch.": "Ця задача не змінила коду: патча немає.",
+    "Patch cut: the dashboard shows all of it.": "Патч обрізано: на дашборді він повністю.",
+    "A run on #{number} is already queued.": "Запуск для #{number} уже в черзі.",
+    "#{number} has no threads waiting on you any more; nothing was done.":
+        "У #{number} більше немає тредів, що чекають на вас; нічого не зроблено.",
+    "Queued a new run on #{number} at {head}.": "Новий запуск для #{number} на {head} поставлено в чергу.",
     "Skipped #{number} at {head}: no automatic review of this head.":
         "Пропущено #{number} на {head}: автоматичного рев'ю цього коміту не буде.",
     "Internal error ({name}); nothing was done.": "Внутрішня помилка ({name}); нічого не зроблено.",

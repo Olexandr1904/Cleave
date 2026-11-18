@@ -66,6 +66,9 @@ class FakePosting:
     async def post_replies(self, ctx, job, cmd):
         return self._post("post_replies", ctx, job, cmd)
 
+    async def push_fix(self, ctx, job):
+        return self._post("push_fix", ctx, job, None)
+
     def _post(self, name, ctx, job, cmd):
         self.calls.append((name, ctx.scope, job.id, cmd))
         if self.error is not None:
@@ -112,6 +115,15 @@ class FakeService:
         if self.skip_error is not None:
             raise self.skip_error
 
+    def address_again(self, scope, number, instruction):
+        self.calls.append(("address_again", scope, number, instruction))
+        if self.again_error is not None:
+            raise self.again_error
+        return Job("j-again", scope, number, "address", HEAD, f"{HEAD}:T1", "queued", "", T1.isoformat(),
+                   T1.isoformat())
+
+    again_error = None
+
 
 class Rig:
     """A done review job of PR 1712 at HEAD in a real store (its run with plan 4's report, started at T0), its
@@ -135,8 +147,8 @@ class Rig:
                                credential_failing=self.failing.__contains__, now=lambda: self.clock[0])
 
     def add_job(self, kind, message_id, scope=SCOPE):
-        job = self.store.add_job(scope, N, kind, HEAD, HEAD if kind == "review" else f"recheck:{HEAD}",
-                                 T0.isoformat())
+        key = {"review": HEAD, "address": f"{HEAD}:T1"}.get(kind, f"recheck:{HEAD}")
+        job = self.store.add_job(scope, N, kind, HEAD, key, T0.isoformat())
         self.store.set_job_state(job.id, "done", "", T0.isoformat())
         job_dir = self.tmp / "rv" / "jobs" / job.id
         job_dir.mkdir(parents=True)
@@ -593,3 +605,102 @@ async def test_handle_reply_never_raises(tmp_path):
     await rig.reply("review again")
     assert rig.chat.sent[-1] == ("Internal error (RuntimeError); nothing was done.", rig.at(100))
     assert not any("ghp_not_real" in text for text in rig.texts())
+
+
+# --- Address jobs ---
+
+PATCH = "diff --git a/a.kt b/a.kt\n--- a/a.kt\n+++ b/a.kt\n@@ -1 +1 @@\n-old\n+new"
+
+def address_rig(tmp_path, patch=PATCH, **kw):
+    """The rig plus a done address job of PR 1712 at HEAD, its message anchored at (CHAT, 200), its copy holding
+    `patch` as fix.patch (None: the session changed no code)."""
+    rig = Rig(tmp_path, **kw)
+    rig.review, rig.job = rig.job, rig.add_job("address", 200)
+    run = rig.store.run(rig.job.id)
+    if patch is not None:
+        (tmp_path / "rv" / "jobs" / rig.job.id / "fix.patch").write_text(patch, encoding="utf-8")
+        run.fix = {"files": [{"path": "a.kt", "added": 1, "deleted": 1}], "protected": [], "bytes": len(patch)}
+        rig.store.save_run(run)
+    return rig
+
+async def test_diff_sends_the_patch(tmp_path):
+    rig = address_rig(tmp_path)
+    await rig.reply("diff", 200)
+    assert rig.chat.sent == [(PATCH, rig.at(200))]
+
+async def test_diff_is_cut_after_three_parts(tmp_path):
+    patch = "".join(f"+line {i:04d} " + "x" * 88 + "\n" for i in range(200))   # 20 000 characters
+    rig = address_rig(tmp_path, patch=patch)
+    await rig.reply("патч", 200)
+    assert len(rig.chat.sent) == 3 and all(len(text) <= MESSAGE_LIMIT for text in rig.texts())
+    assert rig.texts()[0].startswith("+line 0000 ")
+    assert rig.last().endswith("\nPatch cut: the dashboard shows all of it.")
+
+async def test_diff_without_a_patch(tmp_path):
+    rig = address_rig(tmp_path, patch=None)
+    await rig.reply("diff", 200)
+    assert rig.chat.sent == [("This job changed no code: there is no patch.", rig.at(200))]
+
+async def test_text_shows_an_address_reply(tmp_path):
+    rig = address_rig(tmp_path)
+    await rig.reply("text 1", 200)
+    assert rig.last() == "#1 · reply in thread T1, then resolve it\n\nFixed."
+
+async def test_again_queues_with_the_instruction(tmp_path):
+    rig = address_rig(tmp_path)
+    await rig.reply("again: leave 2 as it is", 200)
+    assert rig.service.calls == [("address_again", SCOPE, N, "leave 2 as it is")]
+    assert rig.chat.sent == [(f"Queued a new run on #{N} at {HEAD[:9]}.", rig.at(200))]
+
+async def test_again_answers_why_nothing_was_queued(tmp_path):
+    rig = address_rig(tmp_path)
+    for error, text in ((ValueError("already queued"), f"A run on #{N} is already queued."),
+                        (LookupError("no address turn"),
+                         f"#{N} has no threads waiting on you any more; nothing was done.")):
+        rig.service.again_error = error
+        await rig.reply("заново", 200)
+        assert rig.last() == text
+    rig = address_rig(tmp_path / "login", failing=("claude_login",))
+    await rig.reply("again", 200)
+    assert rig.last() == "claude is not logged in on the host: nothing was started." and rig.service.calls == []
+
+async def test_push_runs_the_push_and_answers_its_outcome(tmp_path):
+    rig = address_rig(tmp_path)
+    rig.posting.outcome = PostOutcome("posted", "Pushed …")
+    await rig.reply("push", 200)
+    assert rig.posting.calls == [("push_fix", SCOPE, rig.job.id, None)]
+    assert rig.chat.sent == [("Checking before pushing.", rig.at(200)), ("Pushed …", rig.at(200))]
+
+async def test_push_refused_while_the_forge_token_fails(tmp_path):
+    rig = address_rig(tmp_path, failing=("forge:acme/app",))
+    await rig.reply("push", 200)
+    assert rig.chat.sent == [("The forge token is failing (see the dashboard): nothing posted.", rig.at(200))]
+    assert rig.posting.calls == []
+
+async def test_free_text_on_an_address_message_is_not_parsed_by_the_model(tmp_path):
+    rig = address_rig(tmp_path, parser=(ReplyCommand("push"),))
+    await rig.reply("давай пуш уже", 200)
+    assert rig.chat.sent == [(not_understood_line("address"), rig.at(200))]
+    assert rig.parser.calls == [] and rig.posting.calls == []
+
+async def test_again_works_on_a_failed_address_job_and_not_on_a_review(tmp_path):
+    rig = address_rig(tmp_path)
+    rig.store.set_job_state(rig.job.id, "failed", "the session failed", T1.isoformat())
+    await rig.reply("again", 200)
+    assert rig.service.calls == [("address_again", SCOPE, N, "")]
+    rig.store.set_job_state(rig.job.id, "superseded", "new address", T1.isoformat())
+    await rig.reply("again", 200)
+    assert rig.last() == "Outdated: there is a newer review. Nothing was done." and len(rig.service.calls) == 1
+    await rig.reply("again", 100)   # the review's message
+    assert rig.chat.sent[-1] == ('"again" works on a threads message of your own PR. Nothing was done.',
+                                 rig.at(100, rig.review))
+    for text in ("push", "diff"):
+        await rig.reply(text, 100)
+        assert rig.last() == f'"{text}" works on a threads message of your own PR. Nothing was done.'
+    assert len(rig.service.calls) == 1 and rig.posting.calls == []
+
+async def test_push_and_diff_need_a_done_address_job(tmp_path):
+    rig = address_rig(tmp_path)
+    rig.store.set_job_state(rig.job.id, "failed", "the session failed", T1.isoformat())
+    await rig.reply("push", 200)
+    assert rig.posting.calls == [] and rig.last().startswith("This job ended failed")

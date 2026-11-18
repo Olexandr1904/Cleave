@@ -1026,3 +1026,32 @@ async def test_poll_queues_an_address_job_on_the_operators_pr(tmp_path):
     assert [(j.kind, j.key) for j in rig.store.jobs("acme/app")] == [("address", f"{A}:T1,T2")]
     await rig.service.poll(c)
     assert len(rig.store.jobs("acme/app")) == 1
+
+async def test_address_again_supersedes_and_queues_with_the_instruction(tmp_path):
+    turns = [Turn("octo", "answer_threads", ("T2",)), Turn("octo", "resolve_threads", ("T1",))]
+    c = RepoContext("acme", "app", ADDR_CFG, FakeClone(tmp_path / "app"),
+                    FakeReadiness(snap(spr(1, turns, author="octo"))), FakeForge({1: det(1, author="octo", requested=())}))
+    rig = Rig(tmp_path, c)
+    await rig.service.poll(c)   # the board row
+    now = T0.isoformat()
+    done = rig.store.add_job("acme/app", 1, "address", A, f"{A}:T1", now)
+    rig.store.set_job_state(done.id, "done", "", now)
+    failed = rig.store.add_job("acme/app", 1, "address", A, f"{A}:T2", now)
+    rig.store.set_job_state(failed.id, "failed", "boom", now)
+    new = rig.service.address_again("acme/app", 1, "leave 2 as it is")
+    assert (rig.store.job(done.id).state, rig.store.job(done.id).reason) == ("superseded", "new address")
+    assert rig.store.job(failed.id).state == "failed"
+    assert (new.kind, new.head_sha, new.key, new.state) == ("address", A, f"{A}:T1,T2", "queued")
+    assert rig.store.run(new.id).request == {"instruction": "leave 2 as it is"}
+    with pytest.raises(ValueError, match="already queued"):
+        rig.service.address_again("acme/app", 1, "")
+    with pytest.raises(LookupError):
+        rig.service.address_again("acme/app", 99, "")
+
+async def test_address_again_needs_an_address_turn(tmp_path):
+    c = ctx(tmp_path, *review_pr())
+    rig = Rig(tmp_path, c)
+    await rig.service.poll(c)
+    with pytest.raises(LookupError, match="no address turn"):
+        rig.service.address_again("acme/app", 1, "")
+    assert rig.store.jobs("acme/app") == []

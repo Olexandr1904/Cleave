@@ -2,8 +2,9 @@
 
 A reply the grammar knows word for word is checked and runs at once. Any other reply to a review or a re-check goes
 to the LLM fallback: its command is checked like the grammar's, echoed with Yes / No buttons, and runs only after
-Yes, within CONFIRM_TTL. Every command runs against the job as the store has it at that moment, and a post goes
-through Posting, the only module that posts. Every answer is a reply to the anchored message, anchored as it is.
+Yes, within CONFIRM_TTL; an address message takes exact replies only. Every command runs against the job as the store
+has it at that moment, and a post or a push goes through Posting, the only module that posts. Every answer is a reply
+to the anchored message, anchored as it is.
 """
 from __future__ import annotations
 
@@ -12,13 +13,15 @@ import logging
 from collections.abc import Awaitable, Callable, Coroutine
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from typing import Any
 
 from integrations.base.notifier import Button
 from orchestrator.reviewer.chat import ReviewerChat
+from orchestrator.reviewer.fix import PATCH_NAME
 from orchestrator.reviewer.grammar import ReplyCommand, check_command, describe, parse_reply
 from orchestrator.reviewer.lines import github_note, interrupted_line, not_understood_line, outdated_line
-from orchestrator.reviewer.messages import MESSAGE_LIMIT, message_parts
+from orchestrator.reviewer.messages import MESSAGE_LIMIT, message_parts, split_message
 from orchestrator.reviewer.models import POSTABLE_STATES, Anchor, Confirmation, Job, JobRun
 from orchestrator.reviewer.posting import Posting
 from orchestrator.reviewer.reply_llm import ReplyParser, reply_context
@@ -259,7 +262,7 @@ class ReviewerReplies:
             await self._answer(to, self._pr_action(checked.action, job.scope, job.number))
         elif checked.action == "text":
             run = self._store.run(job.id)
-            if job.kind == "recheck":
+            if job.kind in ("recheck", "address"):
                 texts = {entry["n"]: _reply_text(entry) for entry in run.replies}
             else:
                 texts = {item.number: item_text(item) for item in _report(run).items}
@@ -268,6 +271,13 @@ class ReviewerReplies:
                 self._track(to, self._answer_each(to, answers))
             else:
                 await self._answer_each(to, answers)
+        elif checked.action == "diff":
+            await self._answer_each(to, _patch_parts(self._store.run(job.id)))
+        elif checked.action == "again":
+            if self._credential_failing("claude_login"):
+                await self._answer(to, tr(_NO_LOGIN))
+            else:
+                await self._answer(to, self._address_again(job, checked.instruction))
         elif checked.action in ("edit", "draft"):
             if self._credential_failing("claude_login"):
                 await self._answer(to, tr(_NO_LOGIN))
@@ -281,8 +291,12 @@ class ReviewerReplies:
                                           n=n))
         elif self._credential_failing(f"forge:{job.scope}"):
             await self._answer(to, tr(_FORGE_FAILING))
-        else:  # post, post_replies
-            await self._answer(to, tr("Checking before posting: {command}.", command=describe(checked, job.head_sha)))
+        else:  # post, post_replies, push
+            if checked.action == "push":
+                await self._answer(to, tr("Checking before pushing."))
+            else:
+                await self._answer(to, tr("Checking before posting: {command}.",
+                                          command=describe(checked, job.head_sha)))
             self._track(to, self._post(ctx, job, checked, to))
 
     async def _answer_each(self, to: _To, texts: list[str]) -> None:
@@ -290,12 +304,20 @@ class ReviewerReplies:
             await self._answer(to, text)
 
     async def _post(self, ctx: RepoContext, job: Job, cmd: ReplyCommand, to: _To) -> None:
-        post = self._posting.post_review if cmd.action == "post" else self._posting.post_replies
-        await self._answer(to, (await post(ctx, job, cmd)).text)
+        if cmd.action == "push":
+            outcome = await self._posting.push_fix(ctx, job)
+        else:
+            post = self._posting.post_review if cmd.action == "post" else self._posting.post_replies
+            outcome = await post(ctx, job, cmd)
+        await self._answer(to, outcome.text)
 
     def _check(self, job: Job, cmd: ReplyCommand) -> ReplyCommand | str:
         """The command as it runs against the job ("all confirmed" expanded), or why nothing is done."""
         if cmd.action in _PR_ACTIONS:
+            return outdated_line(job.state, job.reason) if job.state in _OUTDATED else cmd
+        if cmd.action == "again":  # as "review again": a failed address job's line takes it too
+            if job.kind != "address":
+                return check_command(cmd, job.kind, None, [], set(), set())
             return outdated_line(job.state, job.reason) if job.state in _OUTDATED else cmd
         if job.state not in POSTABLE_STATES:
             return outdated_line(job.state, job.reason)
@@ -315,6 +337,15 @@ class ReviewerReplies:
         except LookupError:
             return tr("#{number} is not on the board any more; nothing was done.", number=number)
         return tr("Queued a review of #{number} at {head}.", number=number, head=job.head_sha[:9])
+
+    def _address_again(self, job: Job, instruction: str) -> str:
+        try:
+            new = self._service.address_again(job.scope, job.number, instruction)
+        except ValueError:
+            return tr("A run on #{number} is already queued.", number=job.number)
+        except LookupError:
+            return tr("#{number} has no threads waiting on you any more; nothing was done.", number=job.number)
+        return tr("Queued a new run on #{number} at {head}.", number=job.number, head=new.head_sha[:9])
 
     def _skip(self, scope: str, number: int) -> str:
         try:
@@ -395,6 +426,20 @@ def _reply_text(entry: dict) -> str:
     else:
         target = tr("names no single thread or review: it cannot be posted")
     return f"#{entry['n']} · {target}\n\n{model_text(entry['body'])}"
+
+
+def _patch_parts(run: JobRun) -> list[str]:
+    """An address job's patch as "diff" sends it: at most _MAX_PARTS parts, the last one ending with a note when it
+    is cut; one line when the job's copy holds no patch."""
+    patch = Path(run.job_dir) / PATCH_NAME
+    if not run.job_dir or not patch.is_file() or patch.is_symlink():
+        return [tr("This job changed no code: there is no patch.")]
+    parts = split_message(patch.read_text(encoding="utf-8", errors="replace"), MESSAGE_LIMIT)
+    if len(parts) <= _MAX_PARTS:
+        return parts
+    note = tr("Patch cut: the dashboard shows all of it.")
+    last = split_message(parts[_MAX_PARTS - 1], MESSAGE_LIMIT - len(note) - 1)[0]
+    return [*parts[:_MAX_PARTS - 1], f"{last}\n{note}"]
 
 
 def _report(run: JobRun) -> Report | None:

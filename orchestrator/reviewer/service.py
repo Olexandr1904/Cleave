@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Any
 
 from config.schemas import ReviewerConfig
-from orchestrator.reviewer.board import build_board
+from orchestrator.reviewer.board import ADDRESS_ACTIONS, build_board
 from orchestrator.reviewer.clone import CloneError
 from orchestrator.reviewer.forge_github import ForgeError
 from orchestrator.reviewer.jobs import REVIEW_NOW_SUFFIX, Notice, held_prs, plan_jobs
@@ -440,6 +440,27 @@ class ReviewerService:
         # Its key marks it, so the runner settles it without a review turn; at its head it is a review all
         # the same.
         return self._store.add_job(scope, number, "review", head, f"{head}{REVIEW_NOW_SUFFIX}", stamp)
+
+    def address_again(self, scope: str, number: int, instruction: str) -> Job:
+        """Queue an address job at the row's head with the operator's instruction ("again: …"), keyed as plan_jobs
+        keys one; the PR's address jobs done, posted or stale are superseded. LookupError: the row is gone or holds
+        no address turn; ValueError: an address job of the PR is pending."""
+        row = self._row(scope, number)
+        mine = [t for t in row.my_turns if t["action"] in ADDRESS_ACTIONS]
+        if not mine:
+            raise LookupError("no address turn")
+        addresses = [j for j in self._store.jobs(scope, number) if j.kind == "address"]
+        if any(j.state in ("queued", "running", "deferred") for j in addresses):
+            raise ValueError("already queued")
+        stamp = self._now().isoformat()
+        for job in addresses:
+            if job.state in ("done", "posted", "stale"):
+                self._store.set_job_state(job.id, "superseded", "new address", stamp)
+        threads = sorted({tid for t in mine for tid in t["threads"]})
+        job = self._store.add_job(scope, number, "address", row.head_sha, f"{row.head_sha}:{','.join(threads)}",
+                                  stamp)
+        self._store.save_run(JobRun(job.id, request={"instruction": instruction}))
+        return job
 
     def skip(self, scope: str, number: int) -> None:
         """Skip the row's head: its queued and deferred reviews are dropped and none is queued for

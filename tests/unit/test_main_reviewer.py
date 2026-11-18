@@ -6,8 +6,8 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
-from types import SimpleNamespace
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 import respx
@@ -36,8 +36,8 @@ from integrations.telegram.telegram_adapter import TelegramAdapter
 from main import (
     _allowed_chat_ids,
     _allowed_links,
-    _reviewer_chat,
     _reviewed_scopes,
+    _reviewer_chat,
     _reviewer_contexts,
     _start_background,
     _start_reviewer,
@@ -94,7 +94,7 @@ def test_reviewed_scopes(tmp_path):
 
     contexts = _reviewer_contexts(_global(tmp_path), projects, on_auth_failure)
 
-    assert _reviewed_scopes(contexts) == frozenset(ctx.scope for ctx in contexts) != frozenset()
+    assert _reviewed_scopes(contexts) == frozenset({"acme/app"})   # the web repo, reviews off, is left out
 
 
 def test_reviewed_scopes_empty_in_a_dry_run(tmp_path):
@@ -607,6 +607,22 @@ def test_main_builds_no_runner_without_reviewer_contexts(tmp_path, monkeypatch, 
     assert built == {}
     assert stopped == ["Credential health"]
     assert "Reviewer:" not in capsys.readouterr().out
+
+
+def test_main_hands_the_orchestrator_the_reviewed_scopes(tmp_path, monkeypatch):
+    handed = []
+    monkeypatch.setattr(Orchestrator, "set_reviewed_repos", lambda self, scopes: handed.append(scopes))
+    _run_main(tmp_path, monkeypatch, [SimpleNamespace(scope="acme/app")])
+
+    assert handed == [frozenset({"acme/app"})]
+
+
+def test_main_hands_the_orchestrator_no_scopes_without_reviewer_contexts(tmp_path, monkeypatch):
+    handed = []
+    monkeypatch.setattr(Orchestrator, "set_reviewed_repos", lambda self, scopes: handed.append(scopes))
+    _run_main(tmp_path, monkeypatch, [])
+
+    assert handed == [frozenset()]
 
 
 async def _forever():

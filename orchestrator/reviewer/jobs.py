@@ -79,6 +79,7 @@ def plan_jobs(
     posting: frozenset[str] = frozenset(),
     held: frozenset[int] = frozenset(),
     answered: Callable[[Job], frozenset[str]] = lambda job: frozenset(),
+    pushed_from: Callable[[Job], str] = lambda job: "",
 ) -> Plan:
     """Rules in order: review (new head, turn back), re-check (turn back, new threads), address (turn back, new
     threads or head), gone turns, turn lines.
@@ -87,7 +88,8 @@ def plan_jobs(
     `posting` (the ids of the jobs with a Post `posting`) is left to its post by the gone-turn rule: the post
     itself takes the turn away; and while an address job has one, no address job is queued for its PR. A PR in
     `held` (see held_prs) gets no review, no re-check and no address job.
-    `answered(job)`: the thread ids of an address job's replies that landed.
+    `answered(job)`: the thread ids of an address job's replies that landed. `pushed_from(job)`: the head its
+    landed push started from, "" without one.
     """
     plan = Plan([], [], [], [])
     states: dict[str, tuple[str, str]] = {}  # job id -> (state, reason)
@@ -144,8 +146,10 @@ def plan_jobs(
             same_key = [j for j in addresses if j.key == key]
             revived = _turn_back(same_key, states)
             # A job at this head covers the turn while it is pending, and once done or posted while every thread
-            # of the turn is one of its threads whose reply has not landed.
-            covered = any(j.head_sha == head and (j.state in _PENDING or (
+            # of the turn is one of its threads whose reply has not landed. A job Cleave pushed for is at the new
+            # head: it covers the head it was pushed from too, which the row shows until the board catches up with
+            # GitHub (else this poll would queue a job at the old head and supersede the pushed one).
+            covered = any((j.head_sha == head or pushed_from(j) == head) and (j.state in _PENDING or (
                 j.state in ("done", "posted") and current <= _threads_of(j) - answered(j))) for j in addresses)
             # A post under way: a push moves its job to the new head only once GitHub shows that head.
             busy = any(j.id in posting for j in addresses)

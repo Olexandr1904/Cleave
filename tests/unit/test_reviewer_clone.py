@@ -513,6 +513,18 @@ async def test_push_patch_refuses_a_non_fast_forward(tmp_path, pr7):
         await push(clone, tmp_path, head, patch)
     assert git("rev-parse", "feature/pr7", cwd=bare) == moved
 
+async def test_push_patch_refuses_a_branch_set_back(tmp_path, pr7):
+    # The branch was reset to the head's parent, GitHub's pull ref not yet: a plain push would fast-forward it and
+    # bring the dropped commit back. The push expects the branch at the job's head and is refused.
+    bare, _, head = pr7
+    patch = pr_branch_and_patch(tmp_path, bare, head)
+    parent = git("rev-parse", f"{head}^", cwd=bare)
+    git("update-ref", "refs/heads/feature/pr7", parent, cwd=bare)
+    clone = await refreshed(tmp_path, bare)
+    with pytest.raises(CloneError, match="^git push failed: "):
+        await push(clone, tmp_path, head, patch)
+    assert git("rev-parse", "feature/pr7", cwd=bare) == parent
+
 async def test_push_patch_never_forces(tmp_path, pr7, monkeypatch):
     bare, _, head = pr7
     patch = pr_branch_and_patch(tmp_path, bare, head)
@@ -525,6 +537,8 @@ async def test_push_patch_never_forces(tmp_path, pr7, monkeypatch):
     await push(clone, tmp_path, head, patch)
     pushes = [argv for argv in argvs if "push" in argv]
     assert len(pushes) == 1 and pushes[0][-1] == f"{git('rev-parse', 'feature/pr7', cwd=bare)}^{{commit}}:refs/heads/feature/pr7"
+    # The one lease names the branch and the head it must be at; never a bare one, which trusts a tracking ref.
+    assert [arg for arg in pushes[0] if arg.startswith("--force")] == [f"--force-with-lease=refs/heads/feature/pr7:{head}"]
     for argv in argvs:
         assert not {"--force", "-f", "--force-with-lease", "--mirror"} & set(argv)
     assert not any(arg.startswith("+") for arg in pushes[0])

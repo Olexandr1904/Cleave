@@ -141,6 +141,10 @@ async def test_push_without_a_ticket_key_and_with_the_fixed_reply_posted(tmp_pat
     assert rig.clone.pushed[0]["message"] == "fix: address review comments on #1712"
 
 
+async def test_push_takes_the_repo_named_in_another_case(tmp_path):
+    rig = Rig(tmp_path, pr(head_repo="Acme-Org/Acme-App"), pr(NEW))     # GitHub's spelling, not the config's
+    assert (await rig.push()).state == "posted" and len(rig.clone.pushed) == 1
+
 async def test_second_push_is_refused(rig):
     await rig.push()
     out = await rig.push()

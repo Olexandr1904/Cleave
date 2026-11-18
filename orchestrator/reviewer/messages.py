@@ -119,7 +119,7 @@ def address_message(
         lines.append(tr("Protected files in the fix ({paths}): Cleave will not push it.",
                         paths=_cut(", ".join(fix["protected"]))))
     lines.append("")
-    commands = ['"push"'] if fix else []
+    commands = ['"push"'] if fix and not fix.get("protected") else []
     if replies:
         for entry in replies:
             gist = tg_lines.get(entry["n"]) or entry["body"].strip().partition("\n")[0]

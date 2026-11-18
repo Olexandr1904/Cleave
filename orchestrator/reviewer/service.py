@@ -337,7 +337,7 @@ class ReviewerService:
                          lambda number, head: self._store.is_skipped(scope, number, head),
                          cfg, running, now, not state.first_poll_done, posting=posting,
                          held=held_prs(update.rows, self._compared_tickets(scope)),
-                         answered=self._answered_threads)
+                         answered=self._answered_threads, pushed_from=self._pushed_from)
 
         # Store changes first, sends after: a failed or slow send never loses a store change.
         by_id = {job.id: job for job in jobs}
@@ -377,6 +377,11 @@ class ReviewerService:
         posted = self._store.posted_replies(job)
         return frozenset(e["thread_id"] for e in run.replies
                          if e.get("n") in posted and isinstance(e.get("thread_id"), str))
+
+    def _pushed_from(self, job: Job) -> str:
+        """The head the job's landed push started from, "" without one (plan_jobs's `pushed_from`)."""
+        push = self._store.push_of(job)
+        return push.head_sha if push else ""
 
     async def _read_clone(self, ctx: RepoContext) -> tuple[bool, list[Notice], BoardSnapshot]:
         """Whether the process doc is on the base (and its notice), then the readiness snapshot; the caller

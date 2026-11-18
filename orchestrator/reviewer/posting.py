@@ -796,7 +796,7 @@ class Posting:
         if pr.head_sha != job.head_sha:
             raise _Refused(tr('Head moved ({old} → {new}): nothing pushed. Reply "again" for a new run on the new '
                               "head.", old=job.head_sha[:9], new=pr.head_sha[:9]))
-        if pr.head_repo != ctx.readiness.repo:
+        if pr.head_repo.lower() != ctx.readiness.repo.lower():  # GitHub's owner and repo names ignore case
             raise _Refused(tr("The PR's branch is in a fork ({repo}): Cleave does not push there. Nothing was done.",
                               repo=pr.head_repo[:_MAX_PATH] or "?"))
         branch = pr.head_ref

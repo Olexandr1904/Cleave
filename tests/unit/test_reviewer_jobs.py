@@ -22,9 +22,10 @@ def job(kind="review", head=A, state="queued", key=None, jid="j1"):
     return Job(jid, "acme/app", 1, kind, head, key or head, state, "", OLD, OLD)
 
 def plan(rows, jobs=None, new=(), gone=(), running=True, first=False, skipped=lambda n, h: False, posting=frozenset(),
-         held=frozenset(), cfg=CFG, answered=lambda j: frozenset()):
+         held=frozenset(), cfg=CFG, answered=lambda j: frozenset(), pushed_from=lambda j: ""):
     return plan_jobs("acme/app", BoardUpdate({r.number: r for r in rows}, list(new), list(gone)), jobs or {},
-                     skipped, cfg, running, NOW, first, posting=posting, held=held, answered=answered)
+                     skipped, cfg, running, NOW, first, posting=posting, held=held, answered=answered,
+                     pushed_from=pushed_from)
 
 def test_review_queued_after_quiet_window():
     assert plan([row()]).queue == [(1, "review", A, A)]
@@ -292,6 +293,17 @@ def test_address_not_queued_while_a_job_covers_the_turn():
     new_thread = author_row(actions=(("answer_threads", ("T9",)),))
     assert plan([new_thread], {1: [done]}, cfg=ADDR).queue == [(1, "address", A, f"{A}:T9")]
     assert plan([author_row(head=B)], {1: [done]}, cfg=ADDR).queue == [(1, "address", B, f"{B}:T1,T2")]
+
+def test_address_not_queued_while_the_board_is_behind_a_push():
+    """After "push" the job is at the new head B. A poll that still shows the old head A (GitHub's list lags) must
+    not queue a job at A and supersede the pushed one."""
+    pushed = job("address", head=B, key=f"{B}:T1,T2", state="done")
+    behind = plan([author_row()], {1: [pushed]}, cfg=ADDR, pushed_from=lambda j: A)
+    assert behind.queue == [] and behind.states == []
+    caught_up = plan([author_row(head=B)], {1: [pushed]}, cfg=ADDR, pushed_from=lambda j: A)
+    assert caught_up.queue == [] and caught_up.states == []
+    other = plan([author_row()], {1: [pushed]}, cfg=ADDR)      # a job at B that was not pushed from A
+    assert other.queue == [(1, "address", A, f"{A}:T1,T2")]
 
 def test_address_not_queued_while_one_is_pending_at_the_head():
     """Spec, "No new job while one covers the turn": a pending job at this head blocks a new one, whatever its

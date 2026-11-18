@@ -200,7 +200,8 @@ class ReviewClone:
     async def push_patch(self, *, number: int, head: str, branch: str, patch: Path, message: str,
                          author: tuple[str, str], worktree: Path) -> str:
         """Commit `patch` on the PR's head in a worktree at `worktree` and push it to `branch`; the new sha.
-        The caller holds `lock`. Never forces: a branch that moved makes the push fail. The worktree is left at
+        The caller holds `lock`. The push lands only while the branch is exactly at `head`: a branch that moved,
+        forward or back, makes it fail, and nothing on the branch is ever replaced. The worktree is left at
         `worktree`: the caller removes its directory."""
         if await self.fetch_pr_head(number) != head:
             raise CloneError("head moved")
@@ -214,8 +215,11 @@ class ReviewClone:
         if not _FULL_SHA.fullmatch(sha):
             raise CloneError(f"the new commit is not a full id: {sha[:40]!r}")
         # The peeled id, never a name: git matches a push source against ref names before object ids. No + and no
-        # --force: a branch that moved since `head` rejects the push.
-        await self._git("push", ["-C", str(self.path), "push", "--no-signed", "--recurse-submodules=no", "origin",
+        # --force. The lease names the head it expects, so it only ever refuses more than a plain push: the new
+        # commit is that head's child, a fast-forward from it, and a branch set back to an ancestor of the head
+        # (which a plain push would fast-forward too) is refused as one that moved on is.
+        await self._git("push", ["-C", str(self.path), "push", "--no-signed", "--recurse-submodules=no",
+                                 f"--force-with-lease=refs/heads/{branch}:{head}", "origin",
                                  f"{sha}^{{commit}}:refs/heads/{branch}"])
         return sha
 

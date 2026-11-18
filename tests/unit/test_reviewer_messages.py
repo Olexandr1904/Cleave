@@ -207,5 +207,6 @@ Reply to this message: "push" · "post replies 1 2" · "text 1" · "diff" · "ag
     assert 'Reply to this message: "post replies 1 2" · "text 1" · "again: …"' in none
     guarded = address_message("acme/app", 1712, "t", URL, "8" * 40, replies, {}, {**fix, "protected": [".github/ci.yml"]})
     assert guarded.splitlines()[2] == "Protected files in the fix (.github/ci.yml): Cleave will not push it."
+    assert '"push"' not in guarded and '"diff"' in guarded     # no push is offered for a fix Cleave refuses to push
     empty = address_message("acme/app", 1712, "t", URL, "8" * 40, [], {}, fix)
     assert "No replies drafted." in empty and 'Reply to this message: "push" · "diff" · "again: …"' in empty

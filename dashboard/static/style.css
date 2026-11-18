@@ -1131,11 +1131,10 @@
 .reviews-empty { color: #6e7681; font-size: 12px; margin-bottom: 8px; }
 .reviews-error { color: #f85149; }
 .reviews-hint { color: #6e7681; font-size: 11px; margin-top: 4px; }
-.reviews-hint kbd, .reviews-mono, .review-panel code {
+.reviews-hint kbd, .review-panel code {
   font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace; font-size: 11px;
 }
 .reviews-hint kbd { border: 1px solid #30363d; border-bottom-width: 2px; border-radius: 4px; padding: 0 4px; }
-.reviews-mono { color: #8b949e; }
 .reviews-sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
 
 /* The panel's tables (replies, fix, jobs) scroll sideways inside their frame */
@@ -1249,14 +1248,6 @@ span.reviews-ticket { color: #6e7681; }
 .reviews-num:hover { text-decoration: underline; }
 .reviews-flag { font-size: 11px; padding: 0 6px; border-radius: 4px; border: 1px solid #30363d; color: #8b949e; }
 .reviews-sub { color: #8b949e; font-size: 12px; }
-.reviews-turns { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
-.reviews-turn {
-  display: inline-flex; padding: 1px 8px; border-radius: 999px; font-size: 12px; white-space: nowrap;
-  border: 1px solid #30363d; color: #8b949e;
-}
-.reviews-turn.turn-review { color: #58a6ff; border-color: #1f6feb; }
-.reviews-turn.turn-recheck { color: #d2a8ff; border-color: #8957e5; }
-.reviews-turn.turn-merge { color: #56d364; border-color: #2ea043; }
 .reviews-state { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; font-weight: 600; color: #8b949e; white-space: nowrap; }
 .reviews-state.is-none { font-weight: 400; }
 .reviews-dot { width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0; background: #8b949e; }
@@ -1301,6 +1292,9 @@ span.reviews-ticket { color: #6e7681; }
   padding: 12px 16px; background: #161b22; border-bottom: 1px solid #30363d;
 }
 .review-panel-row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+/* The header speaks the card's language: who moves, what to do, the job line */
+.review-panel-move { color: #c9d1d9; font-size: 12px; }
+.review-panel-head .reviews-jobline { margin-top: 0; }
 .review-panel-title { display: flex; flex-wrap: wrap; align-items: baseline; gap: 8px; color: #e6edf3; font-size: 15px; font-weight: 600; }
 .review-spacer { flex: 1; }
 .review-sec { display: flex; flex-direction: column; gap: 10px; padding: 12px 16px; border-bottom: 1px solid #30363d; }

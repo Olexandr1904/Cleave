@@ -8,14 +8,10 @@ import { showConfirmDialog } from './actions.js';
 import { renderSwitchPanel } from './switches.js';
 import { esc, fmtIso, timeAgo } from './helpers.js';
 import {
-  COLUMNS, againConfirm, boardColumns, boardTiles, cardHtml, findingsScale, repoFilterOf,
+  COLUMNS, againConfirm, avatarsHtml, boardColumns, boardTiles, buttonsHtml, cardHtml, cardTitle, columnOf,
+  findingsScale, jobLineHtml, moveText, repoFilterOf, ticketLinkHtml,
 } from './reviews-board.js';
 
-const JOB_LABEL = {
-  queued: 'Queued', running: 'Running', done: 'Report ready', posted: 'Posted', failed: 'Failed',
-  deferred: 'Deferred', superseded: 'Superseded', skipped: 'Skipped', stale: 'Stale', cancelled: 'Cancelled',
-};
-const TURN_CLASS = { review: 'turn-review', recheck: 'turn-recheck', merge: 'turn-merge' };
 // The board's names for the report's finding kinds (orchestrator/reviewer/service.py's _FINDING_KINDS).
 const KIND_OF = {
   red: 'critical', orange: 'major', yellow: 'minor', question: 'question', preexisting: 'preexisting',
@@ -71,7 +67,6 @@ let panelLoads = 0;
 let statusTimer = null;
 
 const rowKey = (scope, number) => `${scope}#${number}`;
-const isQueued = job => job != null && (job.state === 'queued' || job.state === 'running');
 
 // The repo filter, from the router (#/reviews/<scope>); an unknown scope shows every repo.
 export function setReviewsRepo(scope) {
@@ -91,28 +86,8 @@ function matches(pr, query) {
   return `#${pr.number} ${pr.title} ${pr.ticket_key}`.toLowerCase().includes(query);
 }
 
-function flagsHtml(pr) {
-  return [pr.pipeline && 'pipeline', pr.large && 'large', pr.draft && 'draft'].filter(Boolean)
-    .map(flag => `<span class="reviews-flag">${flag}</span>`).join('');
-}
-
-function turnChips(pr) {
-  return pr.my_turns.map(action =>
-    `<span class="reviews-turn ${TURN_CLASS[action] || ''}">${esc(action)}</span>`).join('');
-}
-
 function stateDot(state, label) {
   return `<span class="reviews-state is-${esc(state)}"><span class="reviews-dot"></span>${esc(label)}</span>`;
-}
-
-function stateHtml(pr) {
-  const job = pr.job;
-  if (job) {
-    const ready = { recheck: 'Replies ready', address: job.fix ? 'Fix ready' : 'Replies ready' }[job.kind];
-    const label = job.state === 'done' && ready ? ready : JOB_LABEL[job.state] || job.state;
-    return stateDot(job.state, label);
-  }
-  return pr.skipped ? stateDot('skipped', 'Skipped') : '<span class="reviews-state is-none">—</span>';
 }
 
 // "1 critical, 2 questions, …": what the report's meter says, for its label.
@@ -120,29 +95,6 @@ function findingsText(counts) {
   return Object.keys(KIND_NAME).filter(kind => counts[kind]).map(kind => `${counts[kind]} ${
     kind === 'question' && counts[kind] !== 1 ? 'questions' : KIND_NAME[kind].toLowerCase()}`).join(', ')
     || 'no findings';
-}
-
-function actionsHtml(scope, pr, where) {
-  const target = `data-scope="${esc(scope)}" data-number="${esc(pr.number)}"`;
-  const fk = action => `data-fk="${where}:${action}:${esc(rowKey(scope, pr.number))}"`;
-  // A skipped head can still have a queued or deferred review (Review now after Skip): Skip drops it.
-  const pendingHere = pr.job && pr.job.kind === 'review'
-    && (pr.job.state === 'queued' || pr.job.state === 'deferred') && pr.job.head === pr.head;
-  const skip = pr.my_turns.includes('review') && (!pr.skipped || pendingHere)
-    ? `<button class="reviews-btn" data-review-action="skip" ${target} ${fk('skip')} title="Skip this head">Skip</button>`
-    : '';
-  // Review now would be refused while a review of this head is queued, running or deferred.
-  const atHead = pr.job && pr.job.kind === 'review' && pr.job.head === pr.head;
-  const deferred = atHead && pr.job.state === 'deferred';
-  const title = !deferred ? `A review of this head is ${esc(pr.job?.state)}`
-    : pr.job.retry_at ? `Deferred; retries at ${esc(localTime(pr.job.retry_at))}` : 'Deferred; retries automatically';
-  const now = atHead && (isQueued(pr.job) || deferred)
-    ? `<button class="reviews-btn" disabled title="${title}">${JOB_LABEL[pr.job.state]}</button>`
-    : `<button class="reviews-btn primary" data-review-action="review-now" ${target} ${fk('now')}>${
-      pr.large ? 'Review anyway' : 'Review now'}</button>`;
-  return `${now}${skip}
-    <a class="reviews-btn ghost" href="${esc(pr.url)}" target="_blank" rel="noopener" ${fk('github')}
-      aria-label="Open #${esc(pr.number)} on GitHub">GitHub ↗</a>`;
 }
 
 // One line per repo: its state, when it was last read, its jobs; a reason under it when it is not ok.
@@ -247,17 +199,22 @@ function panelHeadHtml(target, pr) {
       <span class="reviews-sub" id="review-panel-title">${esc(target.scope)} #${esc(target.number)} · not on the board</span>
     </div></div>`;
   }
+  // The card's language: the moves in words and the job line, never a turn code or a green "Report ready".
+  const repo = repos.find(r => r.scope === target.scope);
+  const move = moveText(pr, columnOf(pr), repo?.me);
+  const flags = [pr.large && 'large', pr.draft && 'draft', pr.pipeline && 'pipeline'].filter(Boolean)
+    .map(flag => `<span class="reviews-flag">${flag}</span>`).join('');
   return `<div class="review-panel-head">
     <div class="review-panel-row">${back}
-      <span class="reviews-sub">${esc(target.scope)}</span>
       <a class="reviews-num" href="${esc(pr.url)}" target="_blank" rel="noopener"
-        data-fk="num:panel:${esc(rowKey(target.scope, pr.number))}">#${esc(pr.number)}</a>
-      ${pr.ticket_key ? `<span class="reviews-mono">${esc(pr.ticket_key)}</span>` : ''}
-      <span class="reviews-sub">head <code>${esc(pr.head)}</code> · ${esc(pr.changed_files)} files</span>
+        data-fk="num:panel:${esc(rowKey(target.scope, pr.number))}" aria-label="Open #${esc(pr.number)} on GitHub">#${esc(pr.number)}</a>
+      ${ticketLinkHtml(pr.ticket_key, repo?.jira_url, 'panel')}
+      <span class="reviews-sub">${esc(pr.changed_files)} files</span>${flags}
     </div>
-    <h3 class="review-panel-title" id="review-panel-title">${esc(pr.title)}${flagsHtml(pr)}</h3>
-    <div class="review-panel-row">${turnChips(pr)}${stateHtml(pr)}<span class="review-spacer"></span>
-      <div class="reviews-actions">${actionsHtml(target.scope, pr, 'panel')}</div></div>
+    <h3 class="review-panel-title" id="review-panel-title">${esc(cardTitle(pr.title, pr.ticket_key))}</h3>
+    <div class="review-panel-row">${avatarsHtml(move.logins, pr.url)}<span class="review-panel-move">${esc(move.text)}</span>
+      ${jobLineHtml(pr, Date.now())}<span class="review-spacer"></span>
+      <div class="reviews-actions">${buttonsHtml(target.scope, pr, 'panel')}</div></div>
   </div>`;
 }
 

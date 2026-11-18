@@ -8,6 +8,8 @@
 
 **Tech Stack:** Python 3, asyncio, git CLI, SQLite (`reviewer.db`), `claude -p` through `ClaudeCodeAdapter` (always faked in tests), pytest + pytest-asyncio, Starlette dashboard with plain JS.
 
+**Status:** implemented on the branch `reviewer-address`. The review after it changed five things, which the spec now states and this plan's task text does not: the push names the head it expects (`--force-with-lease=refs/heads/<branch>:<head>`, Task 8); the worktree must be clean before the session and a nested git repository in the fix fails the job (Tasks 4, 5); the repo name of the PR's branch is compared without case (Task 9); a fix with protected files offers no "push" in its message (Task 5); a pushed job also covers the head it was pushed from, for a poll that runs while the board is behind GitHub (Task 2, `plan_jobs(pushed_from=)`).
+
 **Spec:** `docs/superpowers/specs/2026-11-18-reviewer-address-design.md` (amends `docs/superpowers/specs/2026-11-12-reviewer-mode-design.md`; read "Security", "Part 2" and "Posting" there before Tasks 3, 4, 8, 9).
 
 ## Global Constraints

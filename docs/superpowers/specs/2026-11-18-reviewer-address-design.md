@@ -51,12 +51,14 @@ today's behaviour (a turn line).
 
 - a commit reaches GitHub that the operator did not ask for with "push", or reaches a branch whose head is
   not the head the job ran on;
-- Cleave ever force-pushes, or pushes to the repo's base branch;
+- a push of Cleave's replaces or drops a commit of a branch (a forced push), or reaches the repo's base
+  branch;
 - a fix is pushed to a branch a ticket workspace still holds (the ticket pipeline force-pushes it);
 - the session reaches the forge token, the network, or a write outside its run directory, the replies
   plan's directory and the worktree;
 - a `fix_sha` the model wrote reaches the poster;
-- Cleave's own git runs under a git config or a worktree `.git` pointer the session changed.
+- Cleave's own git runs under a git config or a worktree `.git` pointer the session changed, or in a
+  worktree where the session left a `.git` of its own.
 
 ## The job
 
@@ -79,7 +81,9 @@ When none of the three actions is left, a queued or deferred job is cancelled an
 for them, these three actions send no turn line in such a repo.
 
 **Prepare** is the existing one (job clone at the base, worktree at the head, `threads.json`, …). It also
-fails the job when `address_doc` is not on the base branch.
+fails the job when `address_doc` is not on the base branch. Before the session the worktree must hold the
+head and nothing else: the fix is everything that differs from the head afterwards, so a file a Prepare
+step left there fails the job (`Prepare left changes in the worktree: <path>`).
 
 **Session.** Prompt: follow `address_doc` for this PR; the threads are in `threads.json`; the PR branch is
 checked out at the worktree — make every fix there and commit nothing; nothing can be built or tested;
@@ -105,6 +109,13 @@ directory is archived; the plan is parsed; Cleave's git stages everything in the
 the job's copy with a per-file `+/−` list. No change → no patch. A patch over 1 MB fails the job. Files
 matching `process.address_protected` (default `.github/**`) are listed as protected: such a patch is
 never pushed.
+
+Before Cleave's git runs in the worktree, a directory below it with a `.git` of its own fails the job
+(`the fix holds a nested git repository: <path>`). The session can write such a `.git`; git would stage
+the directory as a link to a commit, and where the head has a submodule at that path git starts a git of
+its own inside it, under the config the session wrote there (a `core.fsmonitor` or a hook there is a
+command run outside the sandbox). The check asks the file system, as git does, so a `.GIT` on the
+host's APFS is found too.
 
 **A fixed reply with no patch** is valid: the fix is already on the branch (an earlier push, the
 operator's own commit). Its SHA is the job's head.
@@ -136,6 +147,8 @@ until the verdict, as for reviews: no address job, and their address actions sen
 Accepted: the flag is as fresh as the last board poll, so a ticket brought back between a poll and "push"
 is not seen. A rerun from the dashboard is not this case: it clears the workspace's PR number, and the
 first push of a branch is not forced (`orchestrator/pr_creation.py`), so it cannot remove a commit.
+
+"again" is the operator's own request: it runs while the flag is set, and its "push" waits like any other.
 
 ## The message
 
@@ -179,11 +192,17 @@ Cleave's code, under the posting lock and a lease of the review clone:
 3. A `push` post is recorded as under way.
 4. In a fresh worktree of the review clone at the head: `git apply --index --binary` the patch, commit as
    the repo's `git.commit_author_*` with the message `fix(<TICKET>): address review comments on #<n>`
-   (`fix: …` without a ticket key), then `git push origin <sha>:refs/heads/<branch>` — no force. The
-   worktree's directory is removed whatever happened.
+   (`fix: …` without a ticket key), then
+   `git push --force-with-lease=refs/heads/<branch>:<head> origin <sha>:refs/heads/<branch>`. No `--force`
+   and no `+`: the lease names the head the branch must be at, and the new commit is that head's child, so
+   the push lands only as a fast-forward from exactly that head. A branch that moved on, or that was set
+   back to an ancestor of the head (which a plain push would fast-forward), refuses it. The worktree's
+   directory is removed whatever happened.
 5. GitHub is read again: its head must be the new SHA (else the post is `unverified`).
 6. The job moves to the new head (`head_sha` and the head part of its key), so the board's next poll
    finds the same job at the same key and queues nothing. The post keeps the old head and the new SHA.
+   GitHub's list of PRs can lag the push, so a poll may still show the row at the old head: the pushed
+   job covers that head too (the head its landed push started from), and nothing is queued or superseded.
 7. Answer: `Pushed <sha9> to #<n>: <commit url>` and the reply that posts the fixed threads.
 
 A restart during a push leaves the post `interrupted`: its line asks to check the PR's commits. If the
@@ -225,12 +244,15 @@ file list, the patch text and the pushed SHA. No button pushes or posts.
    document, the worktree and the instruction.
 5. A changed worktree `.git` pointer fails the job.
 6. `capture_fix` on a real git worktree: a modified and a new file give a patch that `git apply --index`
-   reproduces; no change gives no patch; a protected path is listed; hooks planted in the clone do not run.
+   reproduces; no change gives no patch (and removes an earlier one); a protected path is listed; hooks
+   planted in the clone do not run; a nested git repository is refused; a worktree that is not clean
+   before the session fails the job.
 7. A plan with `fix_sha`, or `fixed` without `{fix_sha}`, fails the job.
 8. Grammar: `push`, `diff`, `again`, `again: …` and their Russian/Ukrainian words; refused on review and
    re-check messages.
 9. `push_patch` on a real origin: the branch gets one commit with the patch and the configured author; a
-   moved head and a non-fast-forward are refused; nothing is ever pushed with `--force`.
+   moved head, a non-fast-forward and a branch set back to an ancestor of the head are refused; no
+   `--force`, `+` refspec or bare `--force-with-lease` is ever passed.
 10. `push_fix`: refusals (no patch, protected, fork, base branch, odd branch name, already pushed, head
     moved, a ticket workspace holds the PR); success records the post, moves the job to the new head, and a board poll at the new head
     queues nothing.

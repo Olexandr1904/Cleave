@@ -4,6 +4,8 @@ With `ticket_flow: both` on a repo, every ticket the ticket pipeline takes for t
 
 The pipeline's six agents are "the staged flow"; this one is "the skill flow". Cleave is the conveyor around the skill: it copies the ticket in, relays the session's messages, runs its own gates, pushes, and opens the PR. How to fix or implement is the skill's: Cleave's prompts name the skill, its arguments and facts about the host, nothing else.
 
+The two flows of a ticket are then compared: the staged flow's PR is a draft too, titled `… [staged]`, and once both sides are at rest you pick the better one in Telegram. Your verdict makes the forge and tracker writes. See [The comparison](#the-comparison).
+
 Before the first run, do the one-time host steps in [deploy/README.md](../deploy/README.md#skill-flow-host-prerequisites).
 
 ---
@@ -15,7 +17,7 @@ A run is created when the staged flow creates a workspace for a ticket of a repo
 - the workspace resumes a PR the ticket already has (it starts at PR review);
 - the ticket already has a run that has not ended: one in any state but `dropped` or `failed` (a `pr_open` or `no_change` run counts as not ended).
 
-The run takes a copy of the workspace's ticket files (ticket, parent, comments, attachments) as they are at that moment, before the staged agents add their own; symbolic links are left out. Both flows start from the same input.
+The run takes a copy of the workspace's ticket files (ticket, parent, comments, attachments) as they are at that moment, before the staged agents add their own; symbolic links are left out. Both flows start from the same input. The run's comparison with the staged workspace is stored with it; when that cannot be stored, the run fails (`comparison not stored: …`) and the ticket is not compared.
 
 - **Skill:** `bug_skill` when the ticket's issue type is one of `bug_types` (any case), else `task_skill`. Only the Jira adapter fills in the issue type: a ticket from another tracker always gets `task_skill`.
 - **Model:** the one the ticket's workspace resolved to, so both flows work with the same model.
@@ -66,7 +68,7 @@ skill_flow:
 
 | Field | Default | Meaning |
 |---|---|---|
-| `ticket_flow` | `staged` | `staged`: only the staged flow. `both`: the skill flow too. `both` works on GitHub repos only and needs a `skill_flow` section. |
+| `ticket_flow` | `staged` | `staged`: only the staged flow. `both`: the skill flow too, and the comparison of the two. `both` works on GitHub repos only and needs a `skill_flow` section. |
 | `bug_skill`, `task_skill` | — | The skill names the session calls with the Skill tool. A letter or digit, then letters, digits, `_`, `:` or `-` (`plugin:skill` works). |
 | `bug_types` | `[Bug]` | The issue types that get `bug_skill`. A list. |
 | `notes_dir` | — | The skill's notes directory for a ticket, relative to the checkout. Must hold `{key}` (the ticket key) and no other placeholder, no `..`. Cleave writes the ticket's files to `<notes_dir>/ticket/` and reads the PR description from `<notes_dir>/PR_DESCRIPTION.md`. |
@@ -117,7 +119,7 @@ At start the runner waits for the first round of credential checks (two minutes 
 | `no_change` | The skill finished with nothing to change. Final, unless you reply. |
 | `pr_open` | The draft PR is open. Final. |
 | `failed` | An error in Cleave itself. Final. |
-| `dropped` | You dropped it. Final. |
+| `dropped` | You dropped it, or a comparison verdict other than skill ended it (`comparison verdict: staged`). Final. |
 
 A run moves through four steps: work, commit, gates, push. It parks in the step it stopped at, and Approve continues it from there.
 
@@ -155,7 +157,9 @@ After a cut first turn, with a reply since or with nothing, when the CLI knows n
 
 ### Messages
 
-Every message starts with the ticket and the skill, `ACME-1 · skill run (fix-this)`. The skill's own text is relayed unchanged, in the language the skill writes, up to 9 000 characters; a longer text is cut, with a closing line that points to the notes directory. The session is asked to write `REPORT.md` there when the work is finished or stopped for good: in the first prompt in manual mode, and in every message that resumes its work (your reply, Approve, "Continue where you stopped."), all but the bare "Continue where you stopped." after a cut first turn. Cleave writes no `REPORT.md` and does not check that one is there. Cleave's own lines are English. A long message goes out in several parts.
+Every message starts with the ticket and the skill, `ACME-1 · skill run (fix-this)`. The skill's own text is relayed unchanged, in the language the skill writes, up to 9 000 characters; a longer text is cut, with a closing line that points to the notes directory. The session is asked to write `REPORT.md` there when the work is finished or stopped for good: in the first prompt in manual mode, and in every message that resumes its work (your reply, Approve, "Continue where you stopped."), all but the bare "Continue where you stopped." after a cut first turn. Cleave writes no `REPORT.md` and does not check that one is there. A long message goes out in several parts.
+
+**Language.** Cleave's own lines, in a run's messages, the comparison's, the answers to your replies and taps, and the button labels, follow the project's `telegram.language` (`en` or `uk`; `global.yaml`'s when the project sets none; see [telegram.md](telegram.md#language)). An answer about no run or comparison Cleave knows follows the chat's language. What Cleave did not write is sent as it is, never translated: the skill's own text and status line, a run's outcome, and every reason (git, forge and gate output, why a run or a verdict stopped). In Ukrainian the two sides keep their names `staged` and `skill`, as in the config. The tables below give the English. Text written to GitHub and the tracker, the stored texts and the dashboard stay English.
 
 | When | Message | Buttons |
 |---|---|---|
@@ -184,6 +188,8 @@ Reply to one of the run's messages (a Telegram reply, in one of the bot's allowe
   - `Dropped. Nothing was pushed.`: no push was started.
 
 Approve and Drop count only on the run's newest message with buttons (any of its parts), and not while a newer one is still waiting to go out. A reply older than 15 minutes, by Telegram's time (one sent while the daemon was down, say), runs nothing. A tap has no age limit.
+
+Once the run's comparison has a verdict (being carried out, stuck or closed), a text reply, Approve or Drop on any of the run's messages is answered `This run's comparison has its verdict; nothing was done.`: the verdict ends the run.
 
 What each state takes:
 
@@ -217,13 +223,127 @@ After a result with a change, Cleave asks the session to commit by the repo's co
 5. **The push** sends that commit itself, the one the gates passed, to the branch of the same name on GitHub, not the branch by name: a commit made on the branch after the compare stays in the checkout. A commit that is not on the branch's history is refused before anything reaches GitHub (`push failed: the commit … is not on <branch>`). It never forces: a branch there with other history rejects it, and the run stops with git's reason. The base branch is never pushed.
 6. **The pull request**: the branch's open PR when there is one, else a new **draft** PR against the base branch, titled `ACME-1: <ticket title> [skill]`, with the description as its body (Cleave's token masked; at most 60 000 characters). GitHub takes a title of at most 256 characters: a longer ticket title is cut to fit, ending with `…` before ` [skill]`. The run ends as `pr_open`. When the push landed but the PR could not be opened, Approve pushes again (nothing new goes up) and opens it.
 
+## The comparison
+
+Every skill run on a repo with `ticket_flow: both` has a comparison with the staged workspace it was made for. When both sides are at rest, Cleave sends one Telegram message that shows both and asks which is better. Your tap is the verdict, and the verdict makes the forge and tracker writes. A ticket with no skill run (see [When a run is created](#when-a-run-is-created)) has no comparison and is worked by the staged flow as on any other repo.
+
+### The staged flow on a compared ticket
+
+Only a ticket that has a comparison is affected. For it the staged flow changes in three places:
+
+- **The PR is a draft**, titled `ACME-1: <ticket title> [staged]`, cut to GitHub's 256 characters as the skill flow's title is.
+- **No tracker writes at push time.** The move to In Review and the `PR opened: <url>` comment are held: the verdict makes them for the winning PR.
+- **PR review answers no comments and offers no "Review Complete".** The PR message says `Draft PR opened: <url>`, that Cleave answers no review comments on it, and that it makes the tracker writes once you pick the better PR. The workspace then stays in PR review until the verdict.
+
+### At rest
+
+A side is at rest when nothing more happens on it without you:
+
+| Side | At rest in |
+|---|---|
+| Staged | `PR_REVIEW`, `BLOCKED`, `FAILED`, `DONE`, `ARCHIVED`; also a workspace that is gone (removed, or its state cannot be read), shown as `gone` with no PR |
+| Skill | `pr_open`, `stopped`, `no_change`, `failed`, `dropped`; also a run that is not found (`gone`) |
+
+A skill run that is `waiting`, `interrupted` or `deferred` is not at rest: it waits for you or goes on by itself.
+
+Cleave's comparison keeper looks at every open comparison every 30 seconds, and at once after a tap. It runs in its own task, so the build slot a skill turn holds does not hold it back, and it starts with the daemon, without waiting for the first credential round: it calls no `claude`.
+
+### The comparison message
+
+```
+ACME-1 · comparison: Fix login
+Staged: PR #12 https://github.com/acme-org/acme-app/pull/12 · PR_REVIEW · 2 h 10 min · 1200000 in / 40000 out tokens
+Skill (fix-this): no PR · no_change: no app fix needed · 1 h 05 min · 800000 in / 30000 out tokens
+Tap the better side. A reply to this message is kept as the verdict's note.
+```
+
+Each side shows its PR and its state, or, for a side without a PR, `no PR`, its state and its outcome when it has one (the skill run's outcome or reason, the staged workspace's error); then the time from intake until it came to rest; and the tokens it used: the session's usage for the skill flow, the sum the staged agents logged for the staged flow.
+
+| Button | Offered |
+|---|---|
+| Staged | when the staged side has a PR |
+| Skill | when the skill side has a PR |
+| Neither | always |
+
+A tap is taken only:
+
+- on the comparison's newest message, any of its parts (`That is not the comparison's newest message; nothing was done. Use the newest one.`), and not while a newer one is still waiting to go out (`The comparison's newest message has not gone out yet; nothing was done. Wait for it.`);
+- in the comparison's own chat: from any other chat the answer is `This comparison is not known; nothing was done.`;
+- while the comparison is open: a second tap is answered `The verdict is being carried out; nothing was done.`, one while the verdict is stuck `The verdict (skill) is stuck; nothing was done. The Retry button on its newest message continues it.`, and one after the verdict `The comparison has its verdict (skill); nothing was done.`;
+- for a side that has a PR (`That side has no PR; nothing was done.`). Neither is always taken.
+
+A tap has no age limit. A tap that is taken is answered with what follows: `ACME-1 · Verdict: skill. Cleave marks PR #13 ready and makes the tracker writes for it, and closes PR #12.`, or `ACME-1 · Verdict: neither. Both PRs stay drafts; both sides end.`
+
+### A side that moves on
+
+You can still work either side while the message stands: reply to the skill run's stop, answer the staged flow's escalation. When a side leaves rest, the standing message's buttons are refused from then on, and once both sides are at rest again a new comparison message comes. When both stay at rest but one of them changed (a run that stopped again for another reason, say), the new message comes at once.
+
+When a side moved on after your tap but before the verdict's first step, the verdict is undone and nothing is written: `ACME-1 · comparison: the skill side moved on after your verdict; nothing was done. A new message comes when both sides are at rest.`
+
+### The note
+
+A reply to any of the comparison's messages is kept as the verdict's note, shown on the dashboard. It is taken at any age, in any state of the comparison, an OK word too, and changes nothing else. A second reply is added to the note. The answer is `ACME-1 · Kept as the comparison's note.`
+
+### What a verdict does
+
+The verdict runs in steps, in this order. Each step is recorded once it is done, so a Retry or a restart goes on from the step that did not finish. The winner is the side you tapped; the loser is the other side.
+
+1. **Ready.** The winner's PR is marked ready for review.
+2. **Title.** The ` [skill]` or ` [staged]` mark is taken off the end of the winner's title.
+3. **Comment.** When the loser's PR is still open, it gets the comment `Closed by Cleave: the comparison of the two flows chose the skill flow's PR #13.` A PR already closed gets none.
+4. **Close.** The loser's PR is closed, when it is still open. A side without a PR has nothing to close.
+5. **Tracker.** The writes the staged flow held, for the winner's PR: the move to In Review and the `PR opened: <url>` comment. They are made once: a failed write is a line in the closing message (`Tracker: move to In Review failed: TimeoutError`), never a stuck verdict, and it is never tried again. Make that write by hand. A project with no tracker gets the line `Tracker: none configured.`
+6. **Skill run.** When the skill side wins, its run stays `pr_open` and is released: its worktree is removed. A winning run that is not `pr_open` (one that failed after its PR was opened, say) is left as it is, worktree and all: `Skill run: failed; left as it is.` Otherwise the run ends as `dropped` (`comparison verdict: staged`) and its worktree is removed as a dropped run's. A run you set working again just before the verdict (`running`, `gates`) makes this step wait until the run parks: that wait is not a stuck verdict.
+7. **Staged workspace.** It ends, whichever side wins: a workspace in PR review goes to `DONE`, one in `BLOCKED` or `FAILED` is archived (`BLOCKED` through `FAILED`), one already `DONE` or `ARCHIVED` stays as it is. The line is `Staged workspace: <state>`. A workspace that is gone is the line `Staged workspace: not found.` One that moved on (`DEFERRED`, or working again) is left as it is, never archived under you, and the line names the error's class (`Staged workspace: InvalidTransitionError`).
+
+The staged flow's own end of a ticket does not run: its `PR ready for merge` notice is never sent, and the verdict's closing message takes its place:
+
+```
+ACME-1 · verdict: skill
+Ready for review: PR #13 https://github.com/acme-org/acme-app/pull/13
+Closed: PR #12
+Tracker: the "PR opened" comment and the move to review are made.
+Skill run: kept; its worktree is removed.
+Staged workspace: DONE
+```
+
+**Neither** makes no forge and no tracker write: both PRs stay open as drafts (`Both PRs stay drafts.`), the skill run is dropped and the staged workspace ends, as above.
+
+Removing a worktree at the verdict follows the rule for a dropped run's: never forced, only when no other run of the ticket that has not ended works there; when git refuses, the worktree stays and you get the `worktree left at` line. The staged workspace's directory is not removed. The age cleanup deletes only `ARCHIVED` workspaces, so one the verdict ended as `DONE` stays on disk until you archive it from the dashboard.
+
+### A stuck verdict and Retry
+
+A forge write that fails (a GitHub error, a timeout, a refusal) stops the verdict on its step, as `stuck`:
+
+```
+ACME-1 · verdict skill not finished: commenting on PR #12 failed: GitHub POST /repos/acme-org/acme-app/issues/12/comments → 502: bad gateway
+Retry continues from that step.
+```
+
+with a Retry button. The reason is GitHub's text as it is, with the token masked, cut to 300 characters. Retry is taken only on that newest message, in the comparison's chat, and goes on from the failed step: no step that finished runs again. An error in Cleave itself stops the verdict the same way, with the error's class as the reason. The answer to Retry is `ACME-1 · Retrying the verdict from the step that failed.` Retry is the only way on from a stuck verdict: when a step keeps failing (a winner PR you closed by hand, say), fix its cause on GitHub first.
+
+A restart in the middle of a verdict does not stop it: the next start goes on from its next step. Only the step in flight at the restart can run again. Marking ready, the title and closing are safe to repeat; the loser comment and the tracker writes can then be made twice. The loser comment can also be posted twice without a restart: it goes through the GitHub adapter's retries, so a timeout after GitHub stored the comment posts it again.
+
+### Turning it off
+
+`ticket_flow` is read at start. Set a repo back to `staged`, or start the daemon without the repo served, only when every comparison of the repo has its verdict:
+
+- a comparison of a repo that is not served waits as it is, and is carried on once the repo is served again;
+- a staged workspace whose repo is no longer on `both` is not compared any more: it goes back to the staged flow's own PR review, on its draft `[staged]` PR, with the tracker writes still not made, and its review comments are answered;
+- when the daemon serves no skill repo at all (every `both` repo skipped at start, a dry run, or no Telegram), no ticket is compared: the staged workspace of a repo still on `both` goes back to the staged flow's own PR review in the same way, and only the comparison itself waits.
+
+### The dashboard
+
+The **Comparison** section (`#/comparison`) shows the tally at the top: Skill, Staged, Neither and Undecided. A comparison counts for its verdict from your tap on, also while the verdict is carried out or stuck; Undecided counts the open ones. Below it, one row per comparison, the newest first: the ticket and its title, each side (state, PR, time, tokens), the verdict (or the state while it is open, being carried out or stuck, with the reason when stuck) and the note. An open comparison's sides are read live; once it has a verdict, the row shows the sides as you decided on them. The section shows the newest 200 comparisons; the tally counts every comparison. A side that cannot be read is shown as `gone`. With the toolbar's auto-refresh on (the default) it refreshes every 30 seconds; else use Refresh. It is read-only: the verdict is a Telegram tap. On a daemon that serves no skill repo the section has no data behind it and shows `No comparisons yet.`, even when the database holds comparisons from an earlier start.
+
 ## Where things live on the host
 
 Everything is under the directory of `reviewer.db`: `~/CleaveData/reviewer/` by default, or the directory of `reviewer.db_path` when that is set.
 
 ```
 ~/CleaveData/reviewer/
-  reviewer.db                          the runs (table skill_runs) and their Telegram messages (skill_anchors)
+  reviewer.db                          the runs (table skill_runs), the comparisons (comparisons) and the
+                                       Telegram messages of both (skill_anchors)
   skill/
     repos/acme/app/                    the skill checkout, made by hand
       ai_instructions/ACME-1/          notes_dir: ticket/, the skill's notes, REPORT.md, PR_DESCRIPTION.md
@@ -238,7 +358,7 @@ Everything is under the directory of `reviewer.db`: `~/CleaveData/reviewer/` by 
 
 The courier is a small bare repository of Cleave's own, next to the checkout. It borrows the checkout's objects and is made anew once per prepare and once per push. Both go through it, so the git calls that carry the token never read the checkout's own `.git/config`, which the session can write. Cleave removes and remakes only a courier it made (it holds a `cleave-courier` file); anything else at that path stops the run until you remove it.
 
-To list the runs and why each parked (there is no dashboard view yet):
+To list the runs and why each parked (the dashboard shows the comparisons, not the runs):
 
 ```bash
 sqlite3 -readonly ~/CleaveData/reviewer/reviewer.db \
@@ -251,6 +371,8 @@ A restart parks a run that is working; to restart while none is, this count prin
 sqlite3 -readonly ~/CleaveData/reviewer/reviewer.db "SELECT count(*) FROM skill_runs WHERE state IN ('running', 'gates')"
 ```
 
+A restart does not stop a verdict: the next start carries out a `deciding` comparison from its next step.
+
 ## Security
 
 - The session's environment holds no GitHub, tracker, Telegram or Claude API token. Cleave does every network write itself, the push and the PR, and the fetch too. The token reaches git only through the environment of Cleave's own two network git calls, never through a config file.
@@ -262,10 +384,16 @@ sqlite3 -readonly ~/CleaveData/reviewer/reviewer.db "SELECT count(*) FROM skill_
   - a later session in the same checkout loads whatever the checkout's own Claude Code settings (`.claude/settings.json`) hold, hooks included.
 - The PR description and the commits are the session's, published under the account of the repo's token.
 
-## Not built yet, and known limits
+## Known limits
 
-- **The comparison (plan 2).** With `both`, the staged flow works the ticket as before: its own PR (not a draft), its tracker writes, its PR review. The skill run's draft PR stands next to it. There is no verdict button, no tally and no dashboard section yet; compare the two PRs by hand.
-- **Worktrees.** Only a dropped run's worktree is removed, never forced, and only when no other run of the ticket that has not ended works there; when git refuses (changes, untracked files) it stays and you get a line. The worktree of a run that ends any other way stays in the checkout until you remove it (`git -C <checkout> worktree remove <path>`).
-- **A dropped run's local branch stays in the checkout.** Removing the worktree does not delete its branch.
+- **No run, no comparison.** A ticket of a `both` repo that gets no skill run (the repo is not served, the workspace resumes a PR, or an older run of the ticket has not ended) is not compared: the staged flow works it as on a `staged` repo, with a ready PR, its tracker writes and its PR review.
+- **Turning `both` off with open comparisons.** A staged workspace of an open comparison goes back to the staged flow's own PR review, on its draft `[staged]` PR, with no tracker writes made, and the comparison waits until the repo is served again. Give every open comparison its verdict first (see [Turning it off](#turning-it-off)).
+- **A restart in the middle of a multi-part message** can send the parts already out again, for a comparison's messages as for a run's.
+- **The token figures of the two sides** come from the same counter: both take the CLI's usage through the same adapter, whose input figure is the input tokens plus the cache reads plus the cache writes (`integrations/llm/claude_code_adapter.py`), so they are comparable. The staged side's figure is the sum of the `input_tokens=` and `output_tokens=` lines in its agents' own logs (`<agent>.log`; the `-tools.log` and `.events.log` files are not read); a run on the host confirms the staged agents write those lines.
+- **`reviewed` on a compared ticket.** `reviewed ACME-1`, a tap on an old "Review Complete" button or a reply to an earlier escalation message of a compared ticket is still answered `Got it. Fetching PR comments now.`, but nothing is fetched: the reply is stored and takes effect only if the workspace goes back to the staged flow's own PR review (`both` turned off).
+- **A staged workspace taken up again while its verdict was stuck** (you re-ran it from the dashboard, say) stays running after the verdict, whose line reads `Staged workspace: InvalidTransitionError`. While the verdict is stuck it stays compared: its review comments are not answered and it offers no "Review Complete". Once the verdict closes, it goes back to the staged flow's own behaviour, as on a `staged` repo: a ready PR, its tracker writes and its PR review. The same holds for a workspace re-run after its verdict closed. Archive it from the dashboard if you do not want that.
+- **A `both` repo skipped at start while another repo is served.** Its open comparisons' staged workspaces stay parked as compared until the repo is served again; only a warning at start says so.
+- **Worktrees.** Only the worktree of a dropped run, or of the skill run a verdict chose (released), is removed, never forced, and only when no other run of the ticket that has not ended works there; when git refuses (changes, untracked files) it stays and you get a line. The worktree of a run that ends any other way stays in the checkout until you remove it (`git -C <checkout> worktree remove <path>`).
+- **A dropped or released run's local branch stays in the checkout.** Removing the worktree does not delete its branch.
 - **Other open PRs.** The open PRs that carry the ticket key, listed in the host notes, are read from one page of 100 open PRs.
-- **Switched off.** When the daemon serves no repo (none on `both`, every `both` repo skipped at start, or a dry run), a reply to an old skill-run message is not known as one: it is read like any other message, and an "ok" can approve a ticket's gate. Do not reply to old skill-run messages then. A tap on an old Approve or Drop is answered "The skill flow is off on this daemon; nothing was done."
+- **Switched off.** When the daemon serves no repo (none on `both`, every `both` repo skipped at start, or a dry run) but Telegram is on, a reply to an old skill-run or comparison message, and a tap on one of their buttons, is answered `The skill flow is off on this daemon; nothing was done.` in the chat's language, and is never read as a command. This holds once the daemon's database has any skill-run or comparison message; a daemon that never sent one reads every reply as before.

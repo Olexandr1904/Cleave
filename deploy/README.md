@@ -257,6 +257,13 @@ security find-internet-password -s github.com ~/Library/Keychains/login.keychain
 ```
 A good result: no file line (or `0 github.com line(s)`), then `no github.com item in the login keychain`. Without `-g` or `-w`, `security find-internet-password` reads only the item's attributes, not its password, and asks for nothing. To remove what it found: delete the github.com lines from that file, and the github.com item in Keychain Access (search for github.com in the login keychain); then run the check again.
 
+**7. The repo takes draft PRs, and the token can carry out a verdict.** With `both`, both flows open draft PRs, and a [comparison verdict](../docs/skill-flow.md#what-a-verdict-does) marks one ready, edits its title, comments on the other and closes it. Two things on GitHub's side:
+
+- The repo's GitHub plan must accept draft PRs. A private repo on the Free plan does not: both flows then fail to open their PR (the skill run stops with `pull request not opened: …`, and the staged flow's push stage reports GitHub's refusal).
+- The repo's token must be able to mark a PR ready for review (a GraphQL call, `markPullRequestReadyForReview`), edit a PR's title, comment on a PR and close one: write access to the repo's pull requests (for a fine-grained token, **Pull requests: Read and write**; for a classic one, the `repo` scope).
+
+There is no dry check for either: the first compared ticket on the host is the check. A good result: both PRs open as drafts, the comparison message comes, and a tap gives a closing message that lists `Ready for review: PR #…` and `Closed: PR #…`, with no `not finished` message. A verdict stuck on `marking PR #… ready`, `retitling PR #…`, `commenting on PR #…` or `closing PR #…` names GitHub's answer: fix the token's rights, then tap Retry.
+
 ---
 
 ## Dry-Run Testing (Development)

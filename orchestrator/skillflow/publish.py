@@ -8,7 +8,7 @@ from typing import TYPE_CHECKING
 
 import httpx
 
-from orchestrator.pr_creation import pr_title
+from orchestrator.pr_creation import SKILL_MARK, pr_title
 from orchestrator.quality_gates import GateResult
 from orchestrator.skillflow.checkout import CheckoutError
 from orchestrator.skillflow.gates import failing, gate_commands, run_gates
@@ -139,7 +139,7 @@ class PublishSteps:
         await self._park(run, "pr_open", "", lambda r: pr_message(r, gates))
 
     async def _open_pr(self, repo: SkillRepo, run: SkillRun) -> tuple[int, str]:
-        title = pr_title(run.ticket_id, run.summary, " [skill]")
+        title = pr_title(run.ticket_id, run.summary, SKILL_MARK)
         body = repo.checkout.redact(self._description(repo, run))[:DESCRIPTION_LIMIT]
         try:
             return await repo.vcs.open_pr(title, body, run.branch, repo.checkout.base_branch, draft=True)

@@ -52,6 +52,11 @@ class ComparisonStore:
     def in_states(self, states: tuple[str, ...]) -> list[Comparison]:
         return self._select(f"WHERE state IN ({', '.join('?' * len(states))}) {_OLDEST_FIRST}", states)
 
+    def open_tickets(self, scope: str) -> frozenset[str]:
+        """The tickets of the scope's comparisons not closed yet: their PRs wait for the verdict."""
+        rows = self._conn.execute("SELECT ticket_id FROM comparisons WHERE scope = ? AND state != 'closed'", (scope,))
+        return frozenset(ticket for (ticket,) in rows)
+
     def unsent(self) -> list[Comparison]:
         return self._select(f"WHERE unsent > 0 {_OLDEST_FIRST}", ())
 

@@ -82,3 +82,15 @@ def test_released_defaults_false_for_stored_runs(tmp_path):
     runs = SkillStore(connect(tmp_path / "reviewer.db"))
     run = runs.add_run("acme/app", "ACME-1", NOW)
     assert runs.run(run.id).released is False
+
+
+def test_open_tickets_are_the_scopes_comparisons_not_closed(tmp_path):
+    store = ComparisonStore(connect(tmp_path / "reviewer.db"))
+    now = "2026-11-18T10:00:00+00:00"
+    for ticket, state in (("ACME-1", "open"), ("ACME-2", "deciding"), ("ACME-3", "stuck"), ("ACME-4", "closed")):
+        c = store.add("acme/app", ticket, f"run-{ticket}", now)
+        if state != "open":
+            store.claim(c.id, ("open",), now, state, verdict="neither")
+    store.add("acme/web", "ACME-5", "run-5", now)
+    assert store.open_tickets("acme/app") == frozenset({"ACME-1", "ACME-2", "ACME-3"})
+    assert store.open_tickets("acme/none") == frozenset()

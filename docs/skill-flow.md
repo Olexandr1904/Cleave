@@ -235,6 +235,8 @@ Only a ticket that has a comparison is affected. For it the staged flow changes 
 - **No tracker writes at push time.** The move to In Review and the `PR opened: <url>` comment are held: the verdict makes them for the winning PR.
 - **PR review answers no comments and offers no "Review Complete".** The PR message says `Draft PR opened: <url>`, that Cleave answers no review comments on it, and that it makes the tracker writes once you pick the better PR. The workspace then stays in PR review until the verdict.
 
+On a repo where reviewer mode is on, the comparison comes first until the verdict: the staged PR is not handed over to reviewer mode (the workspace stays in PR review, the held tracker writes stay held, and the `Draft PR opened` message is sent), and reviewer mode makes no review or re-check job for either PR, the `… [staged]` one or the `… [skill]` one. It still shows them on its board. Once the verdict closes the comparison, the winner is retitled without its mark and is a PR like any other for reviewer mode.
+
 ### At rest
 
 A side is at rest when nothing more happens on it without you:

@@ -34,6 +34,7 @@ async def handle_action_stage(
     on_ticket_done_fn: Callable[[Workspace], Awaitable[None]],
     build_gate_summary_fn: Callable[[Workspace, str], tuple[str, list[Button]]],
     is_compared: Callable[[Workspace], bool] = lambda ws: False,
+    reviewer_owns: bool = False,
 ) -> None:
     """Execute an action stage with capture → execute → verify → transition.
 
@@ -160,12 +161,14 @@ async def handle_action_stage(
 
     # Notify when PR is created — user needs to review and reply
     if action == "push_and_open_pr" and result.metadata.get("pr_url") and notifier:
-        chat_id = get_chat_id()
+        compared = is_compared(workspace)
+        # A compared ticket is not handed over to reviewer mode before the verdict, so it gets its message.
+        chat_id = get_chat_id() if compared or not reviewer_owns else None
         if chat_id:
             pr_url = result.metadata["pr_url"]
             title = tg_format.read_ticket_title(workspace)
             hdr = tg_format.tg_header("🔗", state.company_id, state.ticket_id, title)
-            if is_compared(workspace):
+            if compared:
                 # Nothing waits for a reply to it: the verdict comes from the comparison's own message.
                 await notifier.send_message(
                     chat_id,

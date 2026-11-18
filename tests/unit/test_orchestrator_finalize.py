@@ -81,3 +81,25 @@ async def test_done_sends_completion_message(monkeypatch) -> None:
     # With empty target_status, transition lookups are skipped entirely.
     tracker.list_transitions.assert_not_awaited()
     tracker.transition_ticket.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_handed_over_text(monkeypatch) -> None:
+    notifier = AsyncMock()
+    monkeypatch.setattr("orchestrator.tg_format.read_ticket_title", lambda w: "Sample title")
+    await on_ticket_done(_ws(), notifier, "chat-1", AsyncMock(), "", handed_over=True)
+    text = notifier.send_message.await_args.args[1]
+    assert text.endswith(
+        "PR opened: https://g/pr/42\n\nReviewer mode takes it from here: its turns and review threads come to "
+        "the reviewer chat.\n\nTicket moved to review status.")
+    assert "ready for merge" not in text
+
+
+@pytest.mark.asyncio
+async def test_not_handed_over_text_is_unchanged(monkeypatch) -> None:
+    notifier = AsyncMock()
+    monkeypatch.setattr("orchestrator.tg_format.read_ticket_title", lambda w: "Sample title")
+    await on_ticket_done(_ws(), notifier, "chat-1", AsyncMock(), "")
+    text = notifier.send_message.await_args.args[1]
+    assert text.endswith(
+        "Pipeline complete.\n\nPR ready for merge: https://g/pr/42\n\nTicket moved to review status.")

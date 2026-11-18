@@ -18,7 +18,10 @@ from integrations.base.tracker import TrackerInterface
 from integrations.base.vcs import VCSInterface
 from integrations.telegram.handlers.mode import ModeHandler
 from orchestrator.agent_runtime import AgentRuntime
-from orchestrator.pipeline.actions.fetch_pr_comments import action_fetch_pr_comments
+from orchestrator.pipeline.actions.fetch_pr_comments import (
+    action_fetch_pr_comments,
+    hand_over_to_reviewer,
+)
 from orchestrator.pipeline.actions.finalize import action_finalize
 from orchestrator.pipeline.actions.push_and_open_pr import action_push_and_open_pr
 from orchestrator.runtime import Runtime
@@ -58,6 +61,12 @@ class _RuntimeAttr:
             setattr(runtime, self._name, value)
         else:
             instance.__dict__[self._name] = value
+
+
+def _reviewer_owns(orch: Any, workspace: Workspace) -> bool:
+    """True when reviewer mode is on for the workspace's repo (the PR is handed over)."""
+    scope = scope_of(workspace.state.company_id, workspace.state.repo_id)
+    return scope in getattr(orch, "_reviewed_repos", frozenset())
 
 
 class Orchestrator:
@@ -263,6 +272,17 @@ class Orchestrator:
         # flow's own: a stuck verdict still holds it.
         return found is not None and found.state != "closed"
 
+    def compared_tickets(self, scope: str) -> frozenset[str]:
+        """The scope's tickets whose comparison is not closed (none on a daemon that serves no repo on both):
+        reviewer mode leaves their two PRs alone until the verdict."""
+        comparisons = getattr(self, "_comparisons", None)
+        return comparisons.open_tickets(scope) if comparisons is not None else frozenset()
+
+    def set_reviewed_repos(self, scopes: frozenset[str]) -> None:
+        """The repos whose PRs reviewer mode handles: there the ticket pipeline hands a PR over
+        instead of running its own PR flow."""
+        self._reviewed_repos = scopes
+
     def _tickets_running(self, project_id: str, repo_id: str) -> bool:
         """True when tickets run for this repo; always True until switches are set."""
         switches = getattr(self, "_switches", None)
@@ -419,6 +439,7 @@ class Orchestrator:
             self._get_chat_id(workspace),
             self.get_tracker_for_workspace(workspace),
             in_review_status,
+            handed_over=_reviewer_owns(self, workspace),
         )
 
     async def _handle_agent_stage(
@@ -547,7 +568,13 @@ class Orchestrator:
                 tracker, event_bus, compared=self._is_compared(ws),
             )
 
+        owns = _reviewer_owns(self, workspace)
+
         async def _fetch(ws, sd):
+            compared = self._is_compared(ws)
+            # A compared ticket stays parked until the verdict, also where reviewer mode owns the repo's PRs.
+            if owns and not compared:
+                return hand_over_to_reviewer(ws)
             return await action_fetch_pr_comments(
                 ws, sd,
                 get_vcs=lambda: self._get_vcs_for_workspace(ws),
@@ -556,7 +583,7 @@ class Orchestrator:
                 notifier=notifier,
                 agent_runtime=getattr(self, "_agent_runtime", None),
                 event_bus=event_bus,
-                compared=self._is_compared(ws),
+                compared=compared,
             )
 
         async def _finalize(ws):
@@ -577,6 +604,7 @@ class Orchestrator:
             on_ticket_done_fn=self._on_ticket_done,
             build_gate_summary_fn=build_gate_summary,
             is_compared=self._is_compared,
+            reviewer_owns=owns,
         )
 
     def shutdown(self) -> None:

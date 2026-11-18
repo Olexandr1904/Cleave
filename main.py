@@ -113,6 +113,11 @@ def _allowed_links(repo_cfg: RepoConfig, project_cfg: ProjectConfig) -> tuple[st
     return tuple(link.lower() for link in links)
 
 
+def _reviewed_scopes(contexts: list[RepoContext]) -> frozenset[str]:
+    """The scope of every repo reviewer mode owns."""
+    return frozenset(ctx.scope for ctx in contexts)
+
+
 def _reviewer_contexts(
     global_config: GlobalConfig,
     projects: dict[str, LoadedProject],
@@ -869,6 +874,7 @@ def main(argv: list[str] | None = None) -> int:
     reviewer_contexts = _reviewer_contexts(
         global_config, projects, _auth_reporter, dry_run=args.dry_run,
     )
+    orchestrator.set_reviewed_repos(_reviewed_scopes(reviewer_contexts))
     if reviewer_contexts:
         from integrations.llm.claude_code_adapter import ClaudeCodeAdapter
         from orchestrator.reviewer.reply_llm import ReplyParser
@@ -887,6 +893,8 @@ def main(argv: list[str] | None = None) -> int:
             reviewer_contexts, reviewer_store, switches, credential_health.failing,
             reviewer_chat.send if reviewer_chat is not None else None, _pipeline_prs,
             event_bus=event_bus, language_of=_language_of,
+            # Read on each poll: the comparison store is attached to the orchestrator further down.
+            compared_tickets=orchestrator.compared_tickets,
         )
         jobs = global_config.reviewer.jobs
         review_jobs = JobRunner(

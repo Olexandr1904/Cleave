@@ -4,7 +4,7 @@ import dataclasses
 from datetime import datetime, timezone
 from config.schemas import ReviewerConfig
 from orchestrator.reviewer.board import BoardUpdate, TurnChange
-from orchestrator.reviewer.jobs import Notice, plan_jobs
+from orchestrator.reviewer.jobs import Notice, held_prs, plan_jobs
 from orchestrator.reviewer.lines import doc_missing_line, poll_failed_line, readiness_failed_line
 from orchestrator.reviewer.models import BoardRow, Job
 
@@ -13,17 +13,18 @@ OLD, RECENT = "2026-11-20T11:00:00+00:00", "2026-11-20T11:50:00+00:00"
 A, B = "a" * 40, "b" * 40
 CFG = ReviewerConfig(enabled=True, quiet_minutes=30, max_files_auto=40)
 
-def row(n=1, actions=(("review", ()),), head=A, seen=OLD, files=14, pipeline=False):
-    return BoardRow(n, "t", f"https://github.com/acme-org/acme-app/pull/{n}", "octo-author", ["reviewer"], head, seen,
-                    False, files, [{"action": a, "threads": list(t)} for a, t in actions], [], False, pipeline, "",
+def row(n=1, actions=(("review", ()),), head=A, seen=OLD, files=14, pipeline=False, title="t", ticket=""):
+    return BoardRow(n, title, f"https://github.com/acme-org/acme-app/pull/{n}", "octo-author", ["reviewer"], head, seen,
+                    False, files, [{"action": a, "threads": list(t)} for a, t in actions], [], False, pipeline, ticket,
                     "t", OLD)
 
 def job(kind="review", head=A, state="queued", key=None, jid="j1"):
     return Job(jid, "acme/app", 1, kind, head, key or head, state, "", OLD, OLD)
 
-def plan(rows, jobs=None, new=(), gone=(), running=True, first=False, skipped=lambda n, h: False, posting=frozenset()):
+def plan(rows, jobs=None, new=(), gone=(), running=True, first=False, skipped=lambda n, h: False, posting=frozenset(),
+         held=frozenset()):
     return plan_jobs("acme/app", BoardUpdate({r.number: r for r in rows}, list(new), list(gone)), jobs or {},
-                     skipped, CFG, running, NOW, first, posting=posting)
+                     skipped, CFG, running, NOW, first, posting=posting, held=held)
 
 def test_review_queued_after_quiet_window():
     assert plan([row()]).queue == [(1, "review", A, A)]
@@ -63,7 +64,8 @@ def test_turn_lines_and_first_poll_baseline():
         "[acme/app] #1: your turn — merge · https://github.com/acme-org/acme-app/pull/1",
         "[acme/app] #1: replies in 3 thread(s) — handle them locally · https://github.com/acme-org/acme-app/pull/1"]
     assert plan([r], new=new, first=True).lines == []
-    assert plan([row(actions=(("merge", ()),), pipeline=True)], new=new[:1]).lines == []
+    assert plan([row(actions=(("merge", ()),), pipeline=True)], new=new[:1]).lines == [
+        "[acme/app] #1: your turn — merge · https://github.com/acme-org/acme-app/pull/1"]
 
 def test_first_poll_baseline():
     p = plan([row(), row(2, actions=(("merge", ()),))], new=[TurnChange(1, "review", ()), TurnChange(2, "merge", ())],
@@ -148,9 +150,9 @@ def test_turn_back_restores_stale_report():
     assert p.states == [("r", "done", "turn back")] and p.queue == []
 
 
-def test_pipeline_row_and_done_job_wait_for_new_review():
+def test_pipeline_row_is_planned_like_any_other():
     p = plan([row(pipeline=True)], {1: [job(head=B, state="queued")]})
-    assert p.queue == [] and p.states == []
+    assert p.queue == [(1, "review", A, A)] and p.states == [("j1", "superseded", "new head")]
     assert plan([row(head=B, seen=RECENT)], {1: [job(head=A, state="done")]}).states == []
 
 
@@ -231,3 +233,19 @@ def test_a_post_under_way_keeps_its_job_from_going_stale():
         ("d", "stale", "turn gone"), ("q", "cancelled", "turn gone"), ("r", "stale", "turn gone")]
     assert plan([row(head=B)], {1: [job(state="queued", jid="d")]}, posting=frozenset({"d"})).states == [
         ("d", "superseded", "new head")]
+
+
+def test_a_held_pr_gets_no_review_and_no_recheck():
+    rows = [row(1), row(2, actions=(("recheck", ("T1",)),)), row(3)]
+    assert plan(rows, held=frozenset({1, 2})).queue == [(3, "review", A, A)]
+
+
+def test_held_prs_are_the_compared_tickets_marked_prs():
+    rows = {r.number: r for r in [
+        row(1, title="ACME-1: Fix login [staged]", ticket="ACME-1"),
+        row(2, title="ACME-1: Fix login [skill]", ticket="ACME-1"),
+        row(3, title="ACME-1: Fix login", ticket="ACME-1"),          # the winner, retitled, or a person's PR
+        row(4, title="ACME-2: Other [skill]", ticket="ACME-2"),      # a ticket not compared now
+    ]}
+    assert held_prs(rows, frozenset({"ACME-1"})) == frozenset({1, 2})
+    assert held_prs(rows, frozenset()) == frozenset()

@@ -14,7 +14,7 @@ from config.schemas import ReviewerConfig
 from orchestrator.reviewer.board import build_board
 from orchestrator.reviewer.clone import CloneError
 from orchestrator.reviewer.forge_github import ForgeError
-from orchestrator.reviewer.jobs import REVIEW_NOW_SUFFIX, Notice, plan_jobs
+from orchestrator.reviewer.jobs import REVIEW_NOW_SUFFIX, Notice, held_prs, plan_jobs
 from orchestrator.reviewer.lines import doc_missing_line, poll_failed_line, readiness_failed_line
 from orchestrator.reviewer.models import BoardRow, BoardSnapshot, Job, JobRun, Post, RepoState
 from orchestrator.reviewer.readiness import ReadinessError
@@ -186,6 +186,7 @@ class ReviewerService:
         now: Callable[[], datetime] = utcnow,
         max_backoff_seconds: int = 3600,
         language_of: Callable[[str], str] = lambda project_id: ENGLISH,
+        compared_tickets: Callable[[str], frozenset[str]] = lambda scope: frozenset(),
     ) -> None:
         # The Telegram language of a project id: a repo's lines take its project's.
         self._language_of = language_of
@@ -195,6 +196,8 @@ class ReviewerService:
         self._credential_failing = credential_failing
         self._send_line = send_line
         self._pipeline_prs = pipeline_prs
+        # The tickets of a scope compared with the skill flow: their two PRs get no job until the verdict.
+        self._compared_tickets = compared_tickets
         self._event_bus = event_bus
         self._now = now
         self._max_backoff = max_backoff_seconds
@@ -316,7 +319,8 @@ class ReviewerService:
         posting = frozenset(post.job_id for post in self._store.posts_in_state("posting"))
         plan = plan_jobs(scope, update, jobs_by_pr,
                          lambda number, head: self._store.is_skipped(scope, number, head),
-                         cfg, running, now, not state.first_poll_done, posting=posting)
+                         cfg, running, now, not state.first_poll_done, posting=posting,
+                         held=held_prs(update.rows, self._compared_tickets(scope)))
 
         # Store changes first, sends after: a failed or slow send never loses a store change.
         by_id = {job.id: job for job in jobs}

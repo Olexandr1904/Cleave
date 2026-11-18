@@ -14,7 +14,9 @@ from workspace.workspace import Workspace
 
 logger = logging.getLogger(__name__)
 
-STAGED_MARK = " [staged]"             # ends a compared ticket's PR title, as " [skill]" ends the skill flow's
+STAGED_MARK = " [staged]"             # ends a compared ticket's PR title, as SKILL_MARK ends the skill flow's
+SKILL_MARK = " [skill]"
+COMPARED_MARKS = (STAGED_MARK, SKILL_MARK)
 TITLE_LIMIT = 256                     # characters of the PR title: GitHub refuses a longer one
 
 

@@ -116,7 +116,7 @@ class ActionStageRig:
         self.ws = ws
         self.notifier = FakeNotifier()
 
-    async def push(self, compared):
+    async def push(self, compared, reviewer_owns=False):
         async def push_and_open_pr(_ws):
             return ActionResult(success=True, next_state=Stage.PR_REVIEW, error="",
                                 metadata={"pr_url": "u", "pr_number": 7})
@@ -136,7 +136,7 @@ class ActionStageRig:
             dry_run=False, event_bus=None,
             action_push_and_open_pr=push_and_open_pr, action_fetch_pr_comments=unused, action_finalize=unused,
             advance_to_stage_fn=unused, on_ticket_done_fn=unused, build_gate_summary_fn=unused,
-            is_compared=is_compared,
+            is_compared=is_compared, reviewer_owns=reviewer_owns,
         )
 
 
@@ -164,6 +164,9 @@ class CountingComparisons:
 
     def claim(self, *args, **kwargs):
         return self._store.claim(*args, **kwargs)
+
+    def open_tickets(self, scope):
+        return self._store.open_tickets(scope)
 
 
 @pytest.fixture
@@ -300,6 +303,7 @@ def wired(orch_with, monkeypatch):
     monkeypatch.setattr(action_stage, "handle_action_stage", handle)
     monkeypatch.setattr(orchestrator_module, "action_push_and_open_pr", push)
     monkeypatch.setattr(orchestrator_module, "action_fetch_pr_comments", fetch)
+    monkeypatch.setattr(orchestrator_module, "hand_over_to_reviewer", lambda ws: seen["fetch"].append("handed over"))
 
     async def run(ws):
         stage_def = SimpleNamespace(action="push_and_open_pr")
@@ -333,3 +337,29 @@ async def test_a_workspace_is_compared_only_until_its_verdict_closes(orch_with, 
     assert orch_with._is_compared(ws) is compared
     seen = await wired(ws)
     assert seen["push"] == [compared] and seen["fetch"] == [compared]
+
+
+# --- reviewer mode owns the repo's PRs (merged from master) ---
+
+@pytest.mark.parametrize("row, fetched", [(True, [True]), (False, ["handed over"])])
+async def test_a_compared_ticket_is_not_handed_over_to_reviewer_mode(orch_with, comparisons, wired, row, fetched):
+    orch_with.set_reviewed_repos(frozenset({"acme/app"}))
+    if row:
+        comparisons.add("acme/app", "ACME-1", "run1", NOW, workspace_started_at="T0")
+    seen = await wired(orch_with.workspace("ACME-1", started_at="T0"))
+    assert seen["fetch"] == fetched
+    assert seen["handle"]["reviewer_owns"] is True
+
+
+@pytest.mark.parametrize("compared, sent", [(True, True), (False, False)])
+async def test_a_compared_pr_message_is_sent_where_reviewer_mode_owns_the_prs(rig_action_stage, compared, sent):
+    await rig_action_stage.push(compared=compared, reviewer_owns=True)
+    texts = [text for text, _buttons in rig_action_stage.notifier.sent]
+    assert any("Draft PR opened: u" in t for t in texts) is sent
+    assert not any("Review Complete" in t for t in texts)
+
+
+def test_compared_tickets_are_the_open_comparisons_ones(orch_with, comparisons):
+    comparisons.add("acme/app", "ACME-1", "run1", NOW, workspace_started_at="T0")
+    assert orch_with.compared_tickets("acme/app") == frozenset({"ACME-1"})
+    assert OrchWith(None).compared_tickets("acme/app") == frozenset()

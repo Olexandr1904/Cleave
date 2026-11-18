@@ -13,6 +13,7 @@ from typing import Any
 from config.schemas import ReviewerConfig
 from orchestrator.reviewer.board import ADDRESS_ACTIONS, build_board
 from orchestrator.reviewer.clone import CloneError
+from orchestrator.reviewer.fix import PATCH_NAME
 from orchestrator.reviewer.forge_github import ForgeError
 from orchestrator.reviewer.jobs import REVIEW_NOW_SUFFIX, Notice, held_prs, plan_jobs
 from orchestrator.reviewer.lines import doc_missing_line, poll_failed_line, readiness_failed_line
@@ -72,8 +73,8 @@ def _report_file(job: Job, run: JobRun | None) -> Path | None:
 
 
 def _has_plan(job: Job, run: JobRun | None) -> bool:
-    """Whether a re-check run drafted a replies plan: its copy holds one, and it did not fail reading it. A
-    run superseded or cancelled at Prepare, or deferred, has none."""
+    """Whether a re-check or an address run drafted a replies plan: its copy holds one, and it did not fail reading
+    it. A run superseded or cancelled at Prepare, or deferred, has none."""
     return (run is not None and job.state != "failed" and bool(run.job_dir)
             and (Path(run.job_dir) / "replies_plan.json").is_file())
 
@@ -142,7 +143,21 @@ def _job_info(job: Job, run: JobRun | None) -> dict:
     return {
         "retry_at": job.retry_at, "started_at": run.started_at, "reason": job.reason,
         "message_sent": run.message_sent, "findings": _findings(job, run),
+        "fix": bool(run.fix),  # an address job's patch: Fix ready rather than Replies ready
     }
+
+
+def _patch_text(run: JobRun) -> str | None:
+    """An address job's patch from its copy, at most _MAX_REPORT_TEXT characters; None without one."""
+    path = Path(run.job_dir) / PATCH_NAME
+    if not run.job_dir or path.is_symlink() or not path.is_file():
+        return None
+    try:
+        with path.open(encoding="utf-8", errors="replace") as f:
+            return f.read(_MAX_REPORT_TEXT)
+    except OSError as e:  # the file list still shows
+        logger.warning("Reviewer patch %s not read: %s", path, type(e).__name__)
+        return None
 
 
 @dataclass
@@ -480,15 +495,15 @@ class ReviewerService:
         return row
 
     def overview(self) -> list[dict]:
-        """Per repo: its state, its board rows, the latest review or re-check of each PR (an edit or a draft is
-        never the row's job) with what the board shows of it (job_info, for the PRs on the board only), the PRs
-        whose current head is skipped and the PRs too large to review automatically."""
+        """Per repo: its state, its board rows, the latest review, re-check or address job of each PR (an edit or a
+        draft is never the row's job) with what the board shows of it (job_info, for the PRs on the board only), the
+        PRs whose current head is skipped and the PRs too large to review automatically."""
         repos = []
         for ctx in self._repos:
             state = self._store.repo_state(ctx.scope)
             latest: dict[int, Job] = {}
             for job in self._store.jobs(ctx.scope):  # newest first
-                if job.kind in ("review", "recheck"):
+                if job.kind in ("review", "recheck", "address"):
                     latest.setdefault(job.number, job)
             rows = list(self._store.board(ctx.scope).values())
             repos.append({
@@ -505,8 +520,8 @@ class ReviewerService:
 
     def detail(self, scope: str, number: int) -> dict:
         """One PR: its board row, its jobs (newest first), the newest review report and the replies
-        of the newest re-check that drafted a plan, each number's state (posted, ticked or open) and the
-        PR's posts (newest first). Read-only."""
+        of the newest re-check or address job that drafted a plan (an address job's fix, patch and pushed commit
+        too), each number's state (posted, ticked or open) and the PR's posts (newest first). Read-only."""
         row = self._store.board(scope).get(number)
         jobs = self._store.jobs(scope, number)
         if row is None and not jobs:
@@ -524,9 +539,11 @@ class ReviewerService:
                 except OSError as e:  # the parsed report still shows
                     logger.warning("Reviewer report %s not read: %s", path, type(e).__name__)
                 break
-        recheck = next(
-            (j for j in jobs if j.kind == "recheck" and _has_plan(j, runs[j.id])), None
+        recheck = next(  # a re-check or an address job
+            (j for j in jobs if j.kind in ("recheck", "address") and _has_plan(j, runs[j.id])), None
         )
+        address = recheck is not None and recheck.kind == "address"
+        pushed = self._store.push_of(recheck) if address else None
         posts = self._store.posts(scope, number)
         number_states, reply_states = {}, {}
         if report_job is not None and report_run.report:
@@ -552,4 +569,7 @@ class ReviewerService:
             "number_states": number_states,
             "reply_states": reply_states,
             "posts": [_post_detail(p) for p in posts],
+            "fix": (runs[recheck.id].fix or None) if address else None,
+            "fix_patch": _patch_text(runs[recheck.id]) if address else None,
+            "pushed_sha": pushed.sha if pushed else None,
         }

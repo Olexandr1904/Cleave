@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import re
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -13,6 +14,7 @@ from orchestrator.reviewer.commands import NO_HOST_GIT_ENV, base_env, redact, ru
 # drivers), .git/info/attributes (the files a driver applies to) and .git/commondir (which sends git to another
 # directory's config). A job saves them before its session.
 _GUARDED_GIT_FILES = ("config", "info/attributes", "commondir")
+_FULL_SHA = re.compile(r"[0-9a-f]{40}")
 
 
 def git_env(token: str) -> dict[str, str]:
@@ -76,8 +78,9 @@ class ReviewClone:
     """A single-branch clone of `url` at `path`, detached at origin/<base_branch> after each refresh.
 
     Who touches it when, each under `lock`: a job's Prepare for its git here (refresh, the PR head, the readiness
-    threads, its job clone), a poll for its refresh and readiness, a post for its poster runs (reader()). No
-    model session ever runs here: a job's session runs in a job clone of its own (make_job_clone()).
+    threads, its job clone), a poll for its refresh and readiness, a post for its poster runs or its push of an
+    address job's fix (reader()). No model session ever runs here: a job's session runs in a job clone of its own
+    (make_job_clone()).
     """
 
     def __init__(self, path: Path, url: str, base_branch: str, token: str, timeout: float = 300.0):
@@ -193,6 +196,28 @@ class ReviewClone:
         except CloneError as e:
             return str(e)
         return ""
+
+    async def push_patch(self, *, number: int, head: str, branch: str, patch: Path, message: str,
+                         author: tuple[str, str], worktree: Path) -> str:
+        """Commit `patch` on the PR's head in a worktree at `worktree` and push it to `branch`; the new sha.
+        The caller holds `lock`. Never forces: a branch that moved makes the push fail. The worktree is left at
+        `worktree`: the caller removes its directory."""
+        if await self.fetch_pr_head(number) != head:
+            raise CloneError("head moved")
+        await self.add_worktree(worktree, head)
+        wt = ["-C", str(worktree), "-c", "core.symlinks=false"]
+        await self._git("apply", [*wt, "apply", "--index", "--binary", str(patch)])
+        name, email = author
+        await self._git("commit", [*wt, "-c", f"user.name={name}", "-c", f"user.email={email}",
+                                   "commit", "--no-verify", "-m", message])
+        sha = (await self._git("rev-parse", ["-C", str(worktree), "rev-parse", "HEAD"])).strip()
+        if not _FULL_SHA.fullmatch(sha):
+            raise CloneError(f"the new commit is not a full id: {sha[:40]!r}")
+        # The peeled id, never a name: git matches a push source against ref names before object ids. No + and no
+        # --force: a branch that moved since `head` rejects the push.
+        await self._git("push", ["-C", str(self.path), "push", "--no-signed", "--recurse-submodules=no", "origin",
+                                 f"{sha}^{{commit}}:refs/heads/{branch}"])
+        return sha
 
     async def _has_worktree(self, path: Path) -> bool:
         out = await self._git("worktree list", ["-C", str(self.path), "worktree", "list", "--porcelain"])

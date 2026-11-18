@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from collections.abc import Callable
+from dataclasses import dataclass
 from typing import Any
 
 import httpx
@@ -19,6 +20,16 @@ MAX_RETRIES = 3
 RETRY_BACKOFF = [1, 2, 4]
 TIMEOUT = 30
 SUBPROCESS_TIMEOUT = 300
+
+
+@dataclass(frozen=True)
+class PRInfo:
+    number: int
+    title: str
+    state: str  # "open" | "closed" (GitHub's; a merged PR is "closed")
+    draft: bool
+    node_id: str
+    url: str
 
 
 class GitHubAdapter(VCSInterface):
@@ -348,6 +359,46 @@ class GitHubAdapter(VCSInterface):
             json={"state": "closed"},
         )
         logger.info("Closed PR #%d", pr_number)
+
+    async def pr_info(self, pr_number: int) -> PRInfo:
+        """Read a PR's number, title, state, draft flag, node id and URL."""
+        data = await self._request("GET", f"{self._repo_path}/pulls/{pr_number}")
+        return PRInfo(
+            number=data["number"], title=data["title"], state=data["state"],
+            draft=data["draft"], node_id=data["node_id"], url=data["html_url"],
+        )
+
+    async def mark_ready(self, pr_number: int) -> None:
+        """Mark a draft PR ready for review; a PR that is not a draft is left alone."""
+        info = await self.pr_info(pr_number)
+        if not info.draft:
+            return
+        mutation = """
+        mutation($id: ID!) {
+          markPullRequestReadyForReview(input: {pullRequestId: $id}) {
+            pullRequest { isDraft }
+          }
+        }
+        """
+        result = await self._graphql_request(mutation, {"id": info.node_id})
+        # GraphQL reports failures with HTTP 200; checked here, not in _graphql_request, so
+        # resolve_comment keeps its behaviour. The message may reach the operator: cut it.
+        if result.get("errors"):
+            message = str(result["errors"][0].get("message", ""))[:300]
+            raise RuntimeError(f"GitHub could not mark PR #{pr_number} ready: {message}")
+        logger.info("Marked PR #%d ready for review", pr_number)
+
+    async def set_title(self, pr_number: int, title: str) -> None:
+        """Retitle a PR."""
+        await self._request(
+            "PATCH", f"{self._repo_path}/pulls/{pr_number}", json={"title": title},
+        )
+
+    async def comment_on_pr(self, pr_number: int, body: str) -> None:
+        """Post a conversation comment on a PR."""
+        await self._request(
+            "POST", f"{self._repo_path}/issues/{pr_number}/comments", json={"body": body},
+        )
 
     async def close(self) -> None:
         """Close the HTTP client."""

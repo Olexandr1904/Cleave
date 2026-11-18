@@ -1,5 +1,5 @@
-"""The model session: the isolated `claude -p` run of a review or re-check — its prompt, Cleave's own settings
-file, the exact tool allowlist, the scrubbed environment, and the outcome."""
+"""The model session: the isolated `claude -p` run of a review, re-check or address job — its prompt, Cleave's own
+settings file, the exact tool allowlist, the scrubbed environment, and the outcome."""
 from __future__ import annotations
 
 import json
@@ -106,13 +106,17 @@ def _rule_path(path: Path) -> str:
 
 
 def _writable_dirs(kind: str, paths: JobPaths) -> list[Path]:
-    """Where the session writes: the run directory, and for a re-check the replies plan's directory."""
+    """Where the session writes: the run directory, for a re-check and an address job the replies plan's
+    directory, and for an address job the PR's worktree (its fix)."""
+    if kind == "address":
+        return [paths.run_dir, paths.replies_plan.parent, paths.worktree]
     return [paths.run_dir, *([paths.replies_plan.parent] if kind == "recheck" else [])]
 
 
 def allowed_tools(kind: str, clone_dir: Path, paths: JobPaths, helper_scripts: list[str]) -> list[str]:
     """The whole --allowedTools list: read tools, agents, the code-review skill, read-only git, python3 of the
-    repo's helper scripts, and writes only under the run directory (and the replies plan's for a re-check)."""
+    repo's helper scripts, and writes only under the run directory (and the replies plan's for a re-check, and
+    also the worktree for an address job)."""
     root = clone_dir.resolve()
     untrusted = (paths.run_dir, paths.replies_plan.parent, paths.worktree)
     tools = ["Read", "Grep", "Glob", "Agent", "Skill(code-review)", "Skill(code-review *)"]
@@ -141,11 +145,18 @@ def _secret_rules(paths: list[Path]) -> list[str]:
 def settings_json(secret_paths: list[Path], clone_dir: Path, paths: JobPaths, kind: str) -> dict:
     """Cleave's own settings file for the session. The Bash sandbox bounds every command at the OS level: no
     secret reads, no reads outside the working directories, no writes to the clone or the worktree, no network,
-    and no command outside it. The deny rules also refuse network and ref-moving commands and credential reads."""
+    and no command outside it. The deny rules also refuse network and ref-moving commands and credential reads.
+    An address job may write the worktree, never its `.git` pointer (which names the git directory Cleave's own
+    git uses there after the session)."""
     secrets = _secret_rules(secret_paths)
+    if kind == "address":
+        pointer = _rule_path(paths.worktree / ".git")
+        deny_write, deny_edit = [f"{_rule_path(clone_dir.resolve())}/**", pointer], [f"Edit({pointer})"]
+    else:
+        deny_write, deny_edit = [f"{_rule_path(d)}/**" for d in (clone_dir.resolve(), paths.worktree)], []
     return {
         "permissions": {
-            "deny": [*_DENY, *(f"Read({s})" for s in secrets)],
+            "deny": [*_DENY, *(f"Read({s})" for s in secrets), *deny_edit],
             "blockReadsOutsideWorkingDirectories": True,
         },
         "sandbox": {
@@ -159,7 +170,7 @@ def settings_json(secret_paths: list[Path], clone_dir: Path, paths: JobPaths, ki
                 # ~/.gitconfig: the read block re-opens it to git; the session's git ignores it anyway.
                 "denyRead": [*secrets, "~/.git-credentials", "~/.gitconfig"],
                 # The clone is the cwd and the worktree an added directory: both writable by default.
-                "denyWrite": [f"{_rule_path(d)}/**" for d in (clone_dir.resolve(), paths.worktree)],
+                "denyWrite": deny_write,
                 # denyWrite on the clone overrides this for sandboxed (Bash) commands: only the Write and Edit
                 # tools, under their Edit(...) rules, write the run directory.
                 "allowWrite": [f"{_rule_path(d)}/**" for d in _writable_dirs(kind, paths)],
@@ -203,6 +214,28 @@ def recheck_prompt(doc: str, recheck_section: str, number: int, paths: JobPaths,
         "Do not show, ask or post anything.\n"
         f"{_AGENTS_AND_BASH}"
         f"{_DATA}"
+    )
+
+
+def address_prompt(doc: str, number: int, paths: JobPaths, me: str, instruction: str) -> str:
+    return (
+        f"{_PREAMBLE}\n"
+        f"Follow {doc} (in the current directory, the repo's base branch) for PR #{number}, whose author is {me}.\n"
+        f"Its step that fetches the threads is done: they are in {paths.run_dir}/threads.json. Its step that picks "
+        f"where to fix is done: the PR branch is checked out at {paths.worktree}. Make every fix there with the "
+        "Write and Edit tools and commit nothing. You cannot delete or rename a file, and nothing can be built or "
+        "tested here (no build tool, no network): skip those steps and never say a test ran.\n"
+        "\n"
+        "Do not show, ask or post anything. Instead of the document's steps that show results and post, write the "
+        f"replies plan to {paths.replies_plan}: a JSON list with one entry per thread or review body that waits on "
+        f"{me} — n (1, 2, …), thread_id or review_id, body (English), resolve — and \"fixed\": true on every entry "
+        "whose reply reports a fix, with the literal text {fix_sha} in its body where the commit SHA goes. Never "
+        "put fix_sha in an entry.\n"
+        f"Also write {paths.run_dir}/tg_lines.json: a JSON object mapping every entry's n to one English line: "
+        "the document's verdict · path:line · gist.\n"
+        f"{_AGENTS_AND_BASH}"
+        + (f"The operator's instruction for this run: {instruction}\n" if instruction else "")
+        + f"{_DATA}"
     )
 
 

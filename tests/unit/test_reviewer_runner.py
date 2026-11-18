@@ -912,6 +912,11 @@ async def test_review_now_is_delivered_without_a_review_turn(tmp_path, monkeypat
     await rig.runner.run_job(job)
     assert rig.state(job) == ("done", "") and rig.chat.texts == [task4_review()]
 
+def test_settle_address_needs_one_of_its_turns():
+    j = Job("a1", SCOPE, 1712, "address", HEAD, f"{HEAD}:T1", "running", "", "t", "t")
+    assert settle(j, board_row(actions=("resolve_threads",)), [j]) == ("done", "")
+    assert settle(j, board_row(actions=("merge",)), [j]) == ("stale", "turn gone")
+
 def test_settle_review_now_and_skip():
     stamp = T0.isoformat()
     now = Job("j1", SCOPE, 1712, "review", HEAD, f"{HEAD}:now", "running", "", stamp, stamp)

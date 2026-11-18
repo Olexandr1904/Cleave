@@ -1,4 +1,4 @@
-"""From a board update: the review and re-check jobs to queue or retire, and the lines to send."""
+"""From a board update: the review, re-check and address jobs to queue or retire, and the lines to send."""
 from __future__ import annotations
 
 from collections.abc import Callable
@@ -7,7 +7,7 @@ from datetime import datetime, timedelta
 
 from config.schemas import ReviewerConfig
 from orchestrator.pr_creation import COMPARED_MARKS
-from orchestrator.reviewer.board import JOB_ACTIONS, BoardUpdate
+from orchestrator.reviewer.board import ADDRESS_ACTIONS, BoardUpdate, job_kind
 from orchestrator.reviewer.lines import large_line, turn_line
 from orchestrator.reviewer.models import BoardRow, Job
 
@@ -15,6 +15,7 @@ _GONE_STATES = {"queued": "cancelled", "deferred": "cancelled", "done": "stale"}
 # A new re-check supersedes the PR's older re-checks in these states: a reply plan read from older threads
 # must not stay postable.
 _RECHECK_SUPERSEDED = ("queued", "deferred", "done", "posted")
+_PENDING = ("queued", "running", "deferred")
 _MAX_FAILURES = 2  # spec, Failure handling: two failures at one head stop auto-retries
 # The key of a review the operator asked for ("Review now") ends with it; an automatic review's key is its head.
 REVIEW_NOW_SUFFIX = ":now"
@@ -44,12 +45,19 @@ def _blocked(same: list[Job]) -> bool:
                for j in same)
 
 
-def _turn_back(same: list[Job], states: dict[str, tuple[str, str]]) -> None:
-    """A turn that comes back makes the newest report current again, when it went stale."""
+def _turn_back(same: list[Job], states: dict[str, tuple[str, str]]) -> bool:
+    """A turn that comes back makes the newest report current again, when it went stale; whether it did."""
     if same and not any(j.state in ("queued", "running", "deferred", "done") for j in same):
         newest = max(same, key=lambda j: j.created_at)
         if newest.state == "stale":
             states.setdefault(newest.id, ("done", "turn back"))
+            return True
+    return False
+
+
+def _threads_of(job: Job) -> set[str]:
+    """The thread ids an address job's key names (after its head)."""
+    return {t for t in job.key.partition(":")[2].split(",") if t}
 
 
 def held_prs(rows: dict[int, BoardRow], compared_tickets: frozenset[str]) -> frozenset[int]:
@@ -70,13 +78,15 @@ def plan_jobs(
     first_poll: bool,
     posting: frozenset[str] = frozenset(),
     held: frozenset[int] = frozenset(),
+    answered: Callable[[Job], frozenset[str]] = lambda job: frozenset(),
 ) -> Plan:
-    """Rules in order: review (new head, turn back), re-check (turn back, new threads), gone turns,
-    turn lines.
+    """Rules in order: review (new head, turn back), re-check (turn back, new threads), address (turn back, new
+    threads or head), gone turns, turn lines.
 
     A job matched by more than one rule gets one state change: the first rule in that order wins. A job in
     `posting` (the ids of the jobs with a Post `posting`) is left to its post by the gone-turn rule: the post
-    itself takes the turn away. A PR in `held` (see held_prs) gets no review and no re-check job.
+    itself takes the turn away. A PR in `held` (see held_prs) gets no review, no re-check and no address job.
+    `answered(job)`: the thread ids of an address job's replies that landed.
     """
     plan = Plan([], [], [], [])
     states: dict[str, tuple[str, str]] = {}  # job id -> (state, reason)
@@ -124,11 +134,35 @@ def plan_jobs(
                     if j.state in _RECHECK_SUPERSEDED:
                         states.setdefault(j.id, ("superseded", "new threads"))
                 plan.queue.append((number, "recheck", head, key))
+        # Address: the operator's own PR, and no ticket workspace holds it (its push would overwrite a fix).
+        mine = [t for t in row.my_turns if t["action"] in ADDRESS_ACTIONS]
+        if cfg.process.address_doc and not row.pipeline and "author" in row.roles and mine:
+            addresses = [j for j in jobs if j.kind == "address"]
+            current = {tid for t in mine for tid in t["threads"]}
+            key = f"{head}:{','.join(sorted(current))}"
+            same_key = [j for j in addresses if j.key == key]
+            revived = _turn_back(same_key, states)
+            # A job at this head covers the turn while it is pending, and once done or posted while every thread
+            # of the turn is one of its threads whose reply has not landed.
+            covered = any(j.head_sha == head and (j.state in _PENDING or (
+                j.state in ("done", "posted") and current <= _threads_of(j) - answered(j))) for j in addresses)
+            failures = sum(j.state == "failed" for j in same_key)
+            settled = datetime.fromisoformat(row.thread_turns_change or row.last_change)
+            if (reviews_running and now - settled >= quiet
+                    and not (covered or revived or failures >= _MAX_FAILURES)):
+                for j in addresses:
+                    if j.state in _RECHECK_SUPERSEDED:
+                        states.setdefault(j.id, ("superseded", "new threads"))
+                plan.queue.append((number, "address", head, key))
     for change in update.gone_turns:
-        if change.action not in JOB_ACTIONS:
+        kind = job_kind(change.action, True)
+        if kind is None:
             continue
+        gone_row = update.rows.get(change.number)
+        if kind == "address" and gone_row is not None and ADDRESS_ACTIONS & set(gone_row.my_actions):
+            continue  # another of the three actions is left: the job keeps its turn
         for j in jobs_by_pr.get(change.number, []):
-            if j.kind != change.action or j.state not in _GONE_STATES or j.id in posting:
+            if j.kind != kind or j.state not in _GONE_STATES or j.id in posting:
                 continue
             state = _GONE_STATES[j.state]
             if state == "cancelled" and j.key.endswith(REVIEW_NOW_SUFFIX):
@@ -138,6 +172,12 @@ def plan_jobs(
     if not first_poll:
         for change in update.new_turns:
             row = update.rows.get(change.number)
-            if change.action not in JOB_ACTIONS and row is not None:
+            if row is None:
+                continue
+            # An address turn the rule above does not take (a ticket workspace holds the row, it is held, or the
+            # PR is not mine) keeps its line, as in a repo without address_doc.
+            address = (bool(cfg.process.address_doc) and not row.pipeline and "author" in row.roles
+                       and change.number not in held)
+            if job_kind(change.action, address) is None:
                 plan.lines.append(turn_line(scope, row, change))
     return plan

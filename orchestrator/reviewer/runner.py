@@ -15,7 +15,7 @@ from pathlib import Path
 from typing import Any
 
 from config.schemas import ReviewerJobConfig
-from orchestrator.reviewer.board import TICKET_KEY
+from orchestrator.reviewer.board import ADDRESS_ACTIONS, TICKET_KEY
 from orchestrator.reviewer.chat import ReviewerChat
 from orchestrator.reviewer.clone import ReviewClone, git_file_changed, guarded_git_files
 from orchestrator.reviewer.jobs import REVIEW_NOW_SUFFIX
@@ -105,7 +105,11 @@ def settle(job: Job, row: BoardRow | None, jobs: list[Job], skipped: bool = Fals
     if skipped:
         return "skipped", "skipped by operator"
     review_now = job.kind == "review" and job.key.endswith(REVIEW_NOW_SUFFIX)
-    if job.kind not in row.my_actions and not review_now:
+    if job.kind == "address":
+        has_turn = bool(ADDRESS_ACTIONS & set(row.my_actions))
+    else:
+        has_turn = job.kind in row.my_actions or review_now
+    if not has_turn:
         return "stale", N_("turn gone")
     if any(j.kind == job.kind and j.state in _NEWER_STATES for j in _created_after(job, jobs)):
         return "superseded", "newer job"

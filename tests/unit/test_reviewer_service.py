@@ -997,3 +997,32 @@ async def test_report_text_prefers_base(tmp_path):
     base.write_text(edited)
     d = rig.service.detail("acme/app", 1)
     assert (d["report_job"], d["report_text"]) == (job.id, edited)
+
+
+# --- Address jobs ---
+
+ADDR_CFG = dataclasses.replace(CFG, process=ProcessPartConfig(doc=DOC, address_doc="docs/threads.md"))
+
+async def test_answered_threads_are_the_threads_of_the_landed_replies(tmp_path):
+    rig = Rig(tmp_path)
+    replies = [{"n": 1, "thread_id": "T1", "body": "x"}, {"n": 2, "thread_id": "T2", "body": "y"},
+               {"n": 3, "review_id": 7, "body": "z"}]
+    job = finished_job(rig, tmp_path, "posted", kind="address", replies=replies)
+    post(rig, "p1", job, "posted", kind="replies", numbers=[1, 3],
+         landed=[{"n": 1, "path": "", "line": None, "title": "", "where": "reply"},
+                 {"n": 3, "path": "", "line": None, "title": "", "where": "comment"}])
+    assert rig.service._answered_threads(job) == frozenset({"T1"})
+    assert rig.service._answered_threads(rig.store.add_job("acme/app", 1, "address", A, f"{A}:", T0.isoformat())) \
+        == frozenset()
+
+async def test_poll_queues_an_address_job_on_the_operators_pr(tmp_path):
+    mine = snap(spr(1, [Turn("octo", "answer_threads", ("T2", "T1"))], author="octo"))
+    c = RepoContext("acme", "app", ADDR_CFG, FakeClone(tmp_path / "app"), FakeReadiness(mine),
+                    FakeForge({1: det(1, author="octo", requested=())}))
+    rig = Rig(tmp_path, c)
+    await rig.service.poll(c)
+    rig.t = T0 + timedelta(minutes=31)
+    await rig.service.poll(c)
+    assert [(j.kind, j.key) for j in rig.store.jobs("acme/app")] == [("address", f"{A}:T1,T2")]
+    await rig.service.poll(c)
+    assert len(rig.store.jobs("acme/app")) == 1

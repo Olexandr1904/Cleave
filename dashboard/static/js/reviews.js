@@ -121,7 +121,8 @@ function stateDot(state, label) {
 function stateHtml(pr) {
   const job = pr.job;
   if (job) {
-    const label = job.state === 'done' && job.kind === 'recheck' ? 'Replies ready' : JOB_LABEL[job.state] || job.state;
+    const ready = { recheck: 'Replies ready', address: job.fix ? 'Fix ready' : 'Replies ready' }[job.kind];
+    const label = job.state === 'done' && ready ? ready : JOB_LABEL[job.state] || job.state;
     return stateDot(job.state, label);
   }
   return pr.skipped ? stateDot('skipped', 'Skipped') : '<span class="reviews-state is-none">—</span>';
@@ -380,6 +381,24 @@ function repliesHtml(detail) {
     <thead><tr><th>N</th><th>State</th><th>Target</th><th>Body</th></tr></thead><tbody>${rows}</tbody></table></div>`);
 }
 
+// An address job's fix: its files, the protected ones, whether it was pushed, and the patch. Pushing is done by
+// replying "push" in Telegram.
+function fixHtml(detail) {
+  const fix = detail.fix;
+  if (!fix) return '';
+  const rows = fix.files.map(f => `<tr><td><code>${esc(f.path)}</code></td><td>+${esc(f.added)}</td>
+    <td>−${esc(f.deleted)}</td></tr>`).join('');
+  const pushed = detail.pushed_sha
+    ? `Pushed <code>${esc(detail.pushed_sha.slice(0, 9))}</code>` : 'Not pushed: reply "push" in Telegram.';
+  const guarded = fix.protected.length
+    ? `<div class="review-body">Protected files, never pushed: ${esc(fix.protected.join(', '))}</div>` : '';
+  const patch = detail.fix_patch == null ? '' : details('patch', false, 'Patch',
+    `<pre class="report-content">${esc(detail.fix_patch)}</pre>`, 'review-raw');
+  return section('Fix', fix.files.length, `<div class="reviews-sub">${pushed} · not built or tested by Cleave</div>
+    ${guarded}<div class="reviews-table-wrap"><table class="review-jobs">
+    <thead><tr><th>File</th><th>Added</th><th>Deleted</th></tr></thead><tbody>${rows}</tbody></table></div>${patch}`);
+}
+
 // A link the post stored: an href only to GitHub, anything else as text; named by its anchor
 // (pullrequestreview-…, discussion_r…).
 function postLinkHtml(post, url, i) {
@@ -425,7 +444,7 @@ function noReportText(pr, jobs) {
     if (pr && pr.large) return `No report: ${pr.changed_files} files, so no automatic review.`;
     return pr && pr.skipped ? 'No report: this head is skipped.' : 'No report yet.';
   }
-  const what = job.kind === 'recheck' ? 're-check' : 'review';
+  const what = { recheck: 're-check', address: 'run on your threads' }[job.kind] || 'review';
   if (job.state === 'queued') return `No report yet: the ${what} is queued.`;
   if (job.state === 'running') return `No report yet: the ${what} is running.`;
   if (job.state === 'deferred') return `No report yet: deferred until ${localTime(job.retry_at)}.`;
@@ -468,9 +487,9 @@ function jobsHtml(jobs) {
 
 function panelBodyHtml(pr, detail) {
   const at = id => detail.jobs.findIndex(j => j.id === id);
-  // A re-check newer than the report shows its replies instead of the findings.
+  // A re-check (or an address job, with its fix) newer than the report shows its replies instead of the findings.
   const replies = detail.replies_job && (!detail.report_job || at(detail.replies_job) < at(detail.report_job));
-  const main = replies ? repliesHtml(detail)
+  const main = replies ? repliesHtml(detail) + fixHtml(detail)
     : detail.report_job ? reportHtml(detail)
       : section('', null, `<div class="review-empty">${esc(noReportText(pr, detail.jobs))}</div>`);
   const raw = detail.report_text == null ? '' : section('', null, details('raw', false,

@@ -641,7 +641,7 @@ async def test_poll_records_me(tmp_path):
 # --- Plan 4: the PR detail view ---
 
 DETAIL_KEYS = {"row", "jobs", "report_job", "report", "replies_job", "replies", "tg_lines",
-               "report_text", "number_states", "reply_states", "posts"}
+               "report_text", "number_states", "reply_states", "posts", "fix", "fix_patch", "pushed_sha"}
 JOB_KEYS = {"id", "kind", "state", "reason", "head", "created_at", "updated_at", "retry_at",
             "started_at", "finished_at", "duration_s", "cost_usd", "turns", "message_ids", "message_sent",
             "notes"}
@@ -835,11 +835,11 @@ async def test_overview_job_info(tmp_path):
     assert repo["job_info"][1] == {
         "retry_at": "", "started_at": T0.isoformat(), "reason": "", "message_sent": True,
         "findings": {"critical": 1, "major": 1, "minor": 1, "question": 2, "preexisting": 1,
-                     "dropped": 3},
+                     "dropped": 3}, "fix": False,
     }
     assert repo["job_info"][2] == {
         "retry_at": retry, "started_at": "", "reason": "usage limit reached", "message_sent": False,
-        "findings": None,
+        "findings": None, "fix": False,
     }
     assert repo["job_info"][3]["findings"] is None
 
@@ -997,3 +997,93 @@ async def test_report_text_prefers_base(tmp_path):
     base.write_text(edited)
     d = rig.service.detail("acme/app", 1)
     assert (d["report_job"], d["report_text"]) == (job.id, edited)
+
+
+# --- Address jobs ---
+
+ADDR_CFG = dataclasses.replace(CFG, process=ProcessPartConfig(doc=DOC, address_doc="docs/threads.md"))
+
+async def test_answered_threads_are_the_threads_of_the_landed_replies(tmp_path):
+    rig = Rig(tmp_path)
+    replies = [{"n": 1, "thread_id": "T1", "body": "x"}, {"n": 2, "thread_id": "T2", "body": "y"},
+               {"n": 3, "review_id": 7, "body": "z"}]
+    job = finished_job(rig, tmp_path, "posted", kind="address", replies=replies)
+    post(rig, "p1", job, "posted", kind="replies", numbers=[1, 3],
+         landed=[{"n": 1, "path": "", "line": None, "title": "", "where": "reply"},
+                 {"n": 3, "path": "", "line": None, "title": "", "where": "comment"}])
+    assert rig.service._answered_threads(job) == frozenset({"T1"})
+    assert rig.service._answered_threads(rig.store.add_job("acme/app", 1, "address", A, f"{A}:", T0.isoformat())) \
+        == frozenset()
+
+async def test_poll_queues_an_address_job_on_the_operators_pr(tmp_path):
+    mine = snap(spr(1, [Turn("octo", "answer_threads", ("T2", "T1"))], author="octo"))
+    c = RepoContext("acme", "app", ADDR_CFG, FakeClone(tmp_path / "app"), FakeReadiness(mine),
+                    FakeForge({1: det(1, author="octo", requested=())}))
+    rig = Rig(tmp_path, c)
+    await rig.service.poll(c)
+    rig.t = T0 + timedelta(minutes=31)
+    await rig.service.poll(c)
+    assert [(j.kind, j.key) for j in rig.store.jobs("acme/app")] == [("address", f"{A}:T1,T2")]
+    await rig.service.poll(c)
+    assert len(rig.store.jobs("acme/app")) == 1
+
+async def test_address_again_supersedes_and_queues_with_the_instruction(tmp_path):
+    turns = [Turn("octo", "answer_threads", ("T2",)), Turn("octo", "resolve_threads", ("T1",))]
+    c = RepoContext("acme", "app", ADDR_CFG, FakeClone(tmp_path / "app"),
+                    FakeReadiness(snap(spr(1, turns, author="octo"))), FakeForge({1: det(1, author="octo", requested=())}))
+    rig = Rig(tmp_path, c)
+    await rig.service.poll(c)   # the board row
+    now = T0.isoformat()
+    done = rig.store.add_job("acme/app", 1, "address", A, f"{A}:T1", now)
+    rig.store.set_job_state(done.id, "done", "", now)
+    failed = rig.store.add_job("acme/app", 1, "address", A, f"{A}:T2", now)
+    rig.store.set_job_state(failed.id, "failed", "boom", now)
+    new = rig.service.address_again("acme/app", 1, "leave 2 as it is")
+    assert (rig.store.job(done.id).state, rig.store.job(done.id).reason) == ("superseded", "new address")
+    assert rig.store.job(failed.id).state == "failed"
+    assert (new.kind, new.head_sha, new.key, new.state) == ("address", A, f"{A}:T1,T2", "queued")
+    assert rig.store.run(new.id).request == {"instruction": "leave 2 as it is"}
+    with pytest.raises(ValueError, match="already queued"):
+        rig.service.address_again("acme/app", 1, "")
+    with pytest.raises(LookupError):
+        rig.service.address_again("acme/app", 99, "")
+
+ADDRESS_REPLIES = [{"n": 1, "thread_id": "T1", "body": "Fixed in {fix_sha}: x.", "resolve": True, "fixed": True}]
+ADDRESS_FIX = {"files": [{"path": "a.kt", "added": 1, "deleted": 1}], "protected": [], "bytes": 9}
+
+async def test_detail_of_an_address_job(tmp_path):
+    rig = Rig(tmp_path)
+    job = finished_job(rig, tmp_path, "done", kind="address", replies=ADDRESS_REPLIES, fix=ADDRESS_FIX)
+    (tmp_path / "jobs" / job.id / "fix.patch").write_text("diff --git a/a.kt b/a.kt\n")
+    d = rig.service.detail("acme/app", 1)
+    assert (d["replies_job"], d["replies"], d["reply_states"]) == (job.id, ADDRESS_REPLIES, {"1": "open"})
+    assert (d["fix"], d["fix_patch"], d["pushed_sha"]) == (ADDRESS_FIX, "diff --git a/a.kt b/a.kt\n", None)
+    post(rig, "p1", job, "posted", kind="push", sha="b" * 40)
+    assert rig.service.detail("acme/app", 1)["pushed_sha"] == "b" * 40
+
+async def test_detail_of_an_address_job_without_a_fix_and_of_a_newer_recheck(tmp_path):
+    rig = Rig(tmp_path)
+    job = finished_job(rig, tmp_path, "done", kind="address", replies=ADDRESS_REPLIES)
+    d = rig.service.detail("acme/app", 1)
+    assert (d["replies_job"], d["fix"], d["fix_patch"], d["pushed_sha"]) == (job.id, None, None, None)
+    newer = finished_job(rig, tmp_path, "done", kind="recheck", replies=[{"n": 1, "thread_id": "T1", "body": "x"}],
+                         at=T0 + timedelta(minutes=5))
+    d = rig.service.detail("acme/app", 1)
+    assert (d["replies_job"], d["fix"], d["fix_patch"], d["pushed_sha"]) == (newer.id, None, None, None)
+
+async def test_overview_shows_an_address_job(tmp_path):
+    c = ctx(tmp_path, *review_pr())
+    rig = Rig(tmp_path, c)
+    await rig.service.poll(c)   # the board row
+    job = finished_job(rig, tmp_path, "done", kind="address", replies=ADDRESS_REPLIES, fix=ADDRESS_FIX)
+    [repo] = rig.service.overview()
+    assert repo["jobs"][1].id == job.id
+    assert (repo["job_info"][1]["fix"], repo["job_info"][1]["findings"]) == (True, None)
+
+async def test_address_again_needs_an_address_turn(tmp_path):
+    c = ctx(tmp_path, *review_pr())
+    rig = Rig(tmp_path, c)
+    await rig.service.poll(c)
+    with pytest.raises(LookupError, match="no address turn"):
+        rig.service.address_again("acme/app", 1, "")
+    assert rig.store.jobs("acme/app") == []

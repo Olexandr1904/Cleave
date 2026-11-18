@@ -605,3 +605,36 @@ def test_an_argument_that_is_the_flag_raises(command, flag):
         _parse_reviewer_section(_with_flag(command, flag), _vcs(), "r.yaml")
     assert e.value.field == "reviewer.poster.review_command"
     assert str(e.value).startswith(f"reviewer.poster.review_command passes {flag!r} itself: ")
+
+
+# --- Address jobs ---
+
+from config.schemas import ProcessPartConfig, ReviewerJobConfig
+
+def test_address_defaults_and_job():
+    assert ProcessPartConfig().address_doc == "" and ProcessPartConfig().address_protected == [".github/**"]
+    assert ReviewerGlobalConfig().jobs["address"] == ReviewerJobConfig("opus", "xhigh", 5400)
+
+@pytest.mark.parametrize("value", ["/abs/doc.md", "../doc.md"])
+def test_address_doc_must_be_repo_relative(value):
+    with pytest.raises(ConfigError) as e:
+        _parse_reviewer_section(_with(("process.address_doc", value)), _vcs(), "r.yaml")
+    assert e.value.field == "reviewer.process.address_doc"
+
+def test_address_doc_must_be_a_string():
+    with pytest.raises(ConfigError) as e:
+        _parse_reviewer_section(_with(("process.address_doc", ["a.md"])), _vcs(), "r.yaml")
+    assert e.value.field == "reviewer.process.address_doc"
+
+@pytest.mark.parametrize("value", [".github/**", [1], ["ok", None]])
+def test_address_protected_must_be_a_list_of_strings(value):
+    with pytest.raises(ConfigError) as e:
+        _parse_reviewer_section(_with(("process.address_protected", value)), _vcs(), "r.yaml")
+    assert e.value.field == "reviewer.process.address_protected"
+
+def test_address_settings_load():
+    data = _with(("process.address_doc", ".github/pr_comments/400-pr-review-workflow.mdc"))
+    data["reviewer"]["process"]["address_protected"] = [".github/**", "gradle/**"]
+    process = _parse_reviewer_section(data, _vcs(), "r.yaml").process
+    assert process.address_doc == ".github/pr_comments/400-pr-review-workflow.mdc"
+    assert process.address_protected == [".github/**", "gradle/**"]

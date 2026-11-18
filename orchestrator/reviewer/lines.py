@@ -10,7 +10,7 @@ from orchestrator.reviewer.models import BoardRow
 from orchestrator.tg_i18n import ENGLISH, N_, count, current_language, detail, tr
 
 # The job kinds and turn actions a line names, for tr(): an action the readiness tool names otherwise stays as is.
-_NAMES = (N_("review"), N_("recheck"), N_("edit"), N_("draft"))
+_NAMES = (N_("review"), N_("recheck"), N_("address"), N_("edit"), N_("draft"))
 
 
 def turn_line(scope: str, row: BoardRow, change: TurnChange) -> str:
@@ -103,8 +103,26 @@ def recheck_body_problem_line(number: int, problem: str) -> str:
               " answer that thread on GitHub yourself.", number=number, problem=detail(problem))
 
 
+def address_body_problem_line(number: int, problem: str) -> str:
+    """An address message takes no "edit": a new run rewrites the reply."""
+    return tr('#{number}: its text {problem}: nothing posted. Reply "again: …" to have it rewritten.', number=number,
+              problem=detail(problem))
+
+
 def not_posted_line(number: int, why: str) -> str:
     return tr("Not posted on #{number}: {why}.", number=number, why=detail(why))
+
+
+def not_pushed_line(number: int, why: str) -> str:
+    return tr("Not pushed to #{number}: {why}.", number=number, why=detail(why))
+
+
+def pushed_line(number: int, sha: str, url: str, fixed: Sequence[int]) -> str:
+    """`fixed`: the numbers of the replies that report the fix and are not posted yet."""
+    text = tr("Pushed {sha} to #{number}: {url}", sha=sha[:9], number=number, url=url)
+    if fixed:
+        text += "\n" + tr('Reply "post replies {numbers}" to answer the fixed threads.', numbers=_spaced(fixed))
+    return text
 
 
 def nothing_left_line(number: int, head: str) -> str:
@@ -186,7 +204,10 @@ def approve_unknown_line(number: int, head: str) -> str:
 
 
 def not_understood_line(kind: str) -> str:
-    """`kind`: the anchored job's (review or recheck)."""
+    """`kind`: the anchored job's (review, recheck or address)."""
+    if kind == "address":
+        return tr('Not understood; nothing was done. Reply like "push", "post replies 1 3", "text 2", "diff" or '
+                  '"again: …".')
     if kind == "recheck":
         return tr('Not understood; nothing was done. Reply like "post replies 1 3", "text 1" or "review again".')
     return tr('Not understood; nothing was done. Reply like "post 1 2 4 approve", "text 2", "edit 2: …",'
@@ -194,8 +215,11 @@ def not_understood_line(kind: str) -> str:
 
 
 def interrupted_line(scope: str, number: int, kind: str = "review", numbers: Sequence[int] = ()) -> str:
-    """`kind`: the Post's (review, approve or replies); `numbers`: the ones it named. A re-check's replies take no
-    "anyway": only those GitHub does not show are named again."""
+    """`kind`: the Post's (review, approve, replies or push); `numbers`: the ones it named. A re-check's replies take
+    no "anyway": only those GitHub does not show are named again."""
+    if kind == "push":
+        return tr('[{scope}] #{number}: a push was interrupted by a restart. Check the PR\'s commits, then reply'
+                  ' "push" again if the fix is not there.', scope=scope, number=number)
     if kind == "replies":
         named = f" {_spaced(numbers)}" if numbers else ""
         return tr('[{scope}] #{number}: a post of replies{named} was interrupted by a restart. Check the PR, then'

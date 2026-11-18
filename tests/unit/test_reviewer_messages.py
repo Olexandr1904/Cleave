@@ -4,7 +4,8 @@ import dataclasses
 from datetime import datetime, timezone
 from orchestrator.reviewer.lines import (
     drift_line, job_deferred_line, job_failed_line, login_line, outdated_line)
-from orchestrator.reviewer.messages import message_parts, recheck_message, review_message, split_message
+from orchestrator.reviewer.messages import (
+    address_message, message_parts, recheck_message, review_message, split_message)
 from orchestrator.reviewer.report import parse_report
 from tests.unit.test_reviewer_report import HEAD, REPORT
 
@@ -185,3 +186,27 @@ def test_outdated_line_names_the_commands_that_still_run():
     assert outdated_line("deferred", "usage limit") == (
         'This job ended deferred: only "review again" and "skip" work here. Nothing was done.')
     assert outdated_line("superseded", "new head") == "Outdated: there is a review of a newer head. Nothing was done."
+
+
+def test_address_message():
+    replies = [{"n": 1, "thread_id": "T1", "body": "Fixed in {fix_sha}: x.", "resolve": True, "fixed": True},
+               {"n": 2, "thread_id": "T2", "body": "Intended.", "resolve": False}]
+    fix = {"files": [{"path": "a.kt", "added": 24, "deleted": 7}], "protected": [], "bytes": 900}
+    text = address_message("acme/app", 1712, "Fix cart sync", URL, "8f01a2b3c" + "0" * 31, replies,
+                           {1: "FIXED · CartRepo.kt:88 · null list handled"}, fix)
+    assert text == f"""[acme/app] Threads on your PR #1712 "Fix cart sync"
+head 8f01a2b3c · 2 drafted replies · fix: 1 file, +24 −7 — not built or tested here
+
+1. FIXED · CartRepo.kt:88 · null list handled
+2. Intended.
+
+Reply to this message: "push" · "post replies 1 2" · "text 1" · "diff" · "again: …"
+{URL}"""
+    none = address_message("acme/app", 1712, "t", URL, "8f01a2b3c" + "0" * 31, replies, {}, {})
+    assert "no code change" in none and '"push"' not in none and '"diff"' not in none
+    assert 'Reply to this message: "post replies 1 2" · "text 1" · "again: …"' in none
+    guarded = address_message("acme/app", 1712, "t", URL, "8" * 40, replies, {}, {**fix, "protected": [".github/ci.yml"]})
+    assert guarded.splitlines()[2] == "Protected files in the fix (.github/ci.yml): Cleave will not push it."
+    assert '"push"' not in guarded and '"diff"' in guarded     # no push is offered for a fix Cleave refuses to push
+    empty = address_message("acme/app", 1712, "t", URL, "8" * 40, [], {}, fix)
+    assert "No replies drafted." in empty and 'Reply to this message: "push" · "diff" · "again: …"' in empty

@@ -90,6 +90,9 @@ DETAIL = {
     "report_job": "j1", "report": {"event": "COMMENT", "items": []},
     "replies_job": None, "replies": [],
     "tg_lines": {"1": "npe"}, "report_text": "# Review",
+    # An address job's: its fix, its patch and its pushed commit, passed through as the service gives them.
+    "fix": {"files": [{"path": "a.kt", "added": 1, "deleted": 1}], "protected": [], "bytes": 9},
+    "fix_patch": "diff --git a/a.kt b/a.kt\n", "pushed_sha": "b" * 40,
 }
 
 
@@ -261,6 +264,7 @@ def test_board_jobs_carry_their_run_and_large_prs_are_flagged(store, tmp_path):
         "id": done.id, "kind": "review", "state": "done", "head": HEAD[:9], "retry_at": "",
         "started_at": STAMP, "reason": "", "message_sent": True,
         "findings": {"critical": 1, "major": 1, "minor": 1, "question": 2, "preexisting": 1, "dropped": 3},
+        "fix": False,
     }
     assert {k: prs[2]["job"][k] for k in ("state", "retry_at", "reason", "message_sent")} == {
         "state": "deferred", "retry_at": "2026-11-12T10:48:00+00:00", "reason": "usage limit reached",

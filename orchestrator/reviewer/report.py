@@ -163,6 +163,23 @@ def parse_replies_plan(text: str) -> list[dict]:
     return plan
 
 
+def parse_address_plan(text: str) -> list[dict]:
+    """An address job's replies plan: parse_replies_plan's, where `fixed` (true or false) marks a reply that reports
+    a fix and holds the literal {fix_sha} where Cleave puts the pushed commit; no entry carries fix_sha."""
+    plan = parse_replies_plan(text)
+    for entry in plan:
+        n, fixed = entry["n"], entry.get("fixed", False)
+        if "fix_sha" in entry:
+            raise ReportError(f"#{n} carries fix_sha")
+        if not isinstance(fixed, bool):
+            raise ReportError(f"#{n}: fixed is not true or false")
+        if fixed and "{fix_sha}" not in entry["body"]:
+            raise ReportError(f"#{n} is fixed without {{fix_sha}} in its body")
+        if not fixed and "{fix_sha}" in entry["body"]:
+            raise ReportError(f"#{n} names {{fix_sha}} but is not fixed")
+    return plan
+
+
 def parse_tg_lines(text: str) -> dict[int, str]:
     try:
         raw = json.loads(text)

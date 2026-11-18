@@ -174,6 +174,7 @@ def _reviewer_contexts(
                     cfg.poster, repo=f"{github.owner}/{github.repo}", token=github.token,
                 ),
                 allowed_links=_allowed_links(repo_cfg, project.config),
+                commit_author=(repo_cfg.git.commit_author_name, repo_cfg.git.commit_author_email),
             ))
     return contexts
 
@@ -1025,7 +1026,7 @@ def main(argv: list[str] | None = None) -> int:
             # review they answer that reviewer mode is off.
             reviewer_replies = ReviewerReplies(
                 reviewer_contexts, reviewer_store, reviewer, reviewer_chat,
-                Posting(reviewer_store, ledgers_dir=reviewer_data / "ledgers"),
+                Posting(reviewer_store, ledgers_dir=reviewer_data / "ledgers", work_dir=reviewer_data / "work"),
                 review_edits, reply_parser, credential_failing=credential_health.failing,
                 language_of=_language_of,
             )

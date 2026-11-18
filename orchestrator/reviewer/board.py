@@ -7,7 +7,19 @@ from dataclasses import dataclass
 from orchestrator.reviewer.models import BoardRow, BoardSnapshot, PRDetails
 
 JOB_ACTIONS = frozenset({"review", "recheck"})
+# The author-side turns an address job takes, in a repo with process.address_doc.
+ADDRESS_ACTIONS = frozenset({"answer_threads", "resolve_threads", "address_review"})
 TICKET_KEY = re.compile(r"\b[A-Z][A-Z0-9]+-\d+\b")
+
+
+def job_kind(action: str, address: bool) -> str | None:
+    """The kind of job a turn of `action` gets: review, recheck, address (only when `address`), else None (a
+    turn line)."""
+    if action in JOB_ACTIONS:
+        return action
+    if address and action in ADDRESS_ACTIONS:
+        return "address"
+    return None
 
 
 @dataclass(frozen=True)

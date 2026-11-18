@@ -2,7 +2,7 @@
 from __future__ import annotations
 import dataclasses
 from datetime import datetime, timezone
-from config.schemas import ReviewerConfig
+from config.schemas import ProcessPartConfig, ReviewerConfig
 from orchestrator.reviewer.board import BoardUpdate, TurnChange
 from orchestrator.reviewer.jobs import Notice, held_prs, plan_jobs
 from orchestrator.reviewer.lines import doc_missing_line, poll_failed_line, readiness_failed_line
@@ -22,9 +22,10 @@ def job(kind="review", head=A, state="queued", key=None, jid="j1"):
     return Job(jid, "acme/app", 1, kind, head, key or head, state, "", OLD, OLD)
 
 def plan(rows, jobs=None, new=(), gone=(), running=True, first=False, skipped=lambda n, h: False, posting=frozenset(),
-         held=frozenset()):
+         held=frozenset(), cfg=CFG, answered=lambda j: frozenset(), pushed_from=lambda j: ""):
     return plan_jobs("acme/app", BoardUpdate({r.number: r for r in rows}, list(new), list(gone)), jobs or {},
-                     skipped, CFG, running, NOW, first, posting=posting, held=held)
+                     skipped, cfg, running, NOW, first, posting=posting, held=held, answered=answered,
+                     pushed_from=pushed_from)
 
 def test_review_queued_after_quiet_window():
     assert plan([row()]).queue == [(1, "review", A, A)]
@@ -249,3 +250,96 @@ def test_held_prs_are_the_compared_tickets_marked_prs():
     ]}
     assert held_prs(rows, frozenset({"ACME-1"})) == frozenset({1, 2})
     assert held_prs(rows, frozenset()) == frozenset()
+
+
+# --- Address jobs ---
+
+ADDR = dataclasses.replace(CFG, process=ProcessPartConfig(address_doc="docs/threads.md"))
+
+def author_row(actions=(("answer_threads", ("T2", "T1")),), **kw):
+    return dataclasses.replace(row(actions=actions, **kw), roles=["author"])
+
+def test_address_waits_while_a_ticket_workspace_holds_the_pr():
+    held = author_row(pipeline=True)
+    p = plan([held], cfg=ADDR, new=[TurnChange(1, "answer_threads", ("T1", "T2"))])
+    assert p.queue == [] and len(p.lines) == 1                       # no job; the turn line is sent
+    done = job("address", key=f"{A}:T1,T2", state="done")
+    assert plan([held], {1: [done]}, cfg=ADDR).states == []          # a job that ran before stays as it is
+    assert plan([author_row()], cfg=ADDR).queue == [(1, "address", A, f"{A}:T1,T2")]   # the flag dropped
+
+def test_address_skips_a_held_pr_and_sends_its_turn_line():      # one side of a comparison with the skill flow
+    p = plan([author_row()], cfg=ADDR, held=frozenset({1}), new=[TurnChange(1, "answer_threads", ("T1", "T2"))])
+    assert p.queue == [] and len(p.lines) == 1
+
+def test_address_queued_for_the_author_after_the_quiet_window():
+    assert plan([author_row()], cfg=ADDR).queue == [(1, "address", A, f"{A}:T1,T2")]
+    assert plan([author_row()]).queue == []                                           # no address_doc
+    assert plan([row(actions=(("answer_threads", ("T1",)),))], cfg=ADDR).queue == []  # not the author
+    assert plan([dataclasses.replace(author_row(), thread_turns_change=RECENT)], cfg=ADDR).queue == []
+    assert plan([author_row()], cfg=ADDR, running=False).queue == []
+
+def test_address_key_joins_the_threads_of_all_three_actions():
+    r = author_row(actions=(("answer_threads", ("T2",)), ("resolve_threads", ("T1",)), ("address_review", ())))
+    assert plan([r], cfg=ADDR).queue == [(1, "address", A, f"{A}:T1,T2")]
+    assert plan([author_row(actions=(("address_review", ()),))], cfg=ADDR).queue == [(1, "address", A, f"{A}:")]
+
+def test_address_not_queued_while_a_job_covers_the_turn():
+    done = job("address", key=f"{A}:T1,T2,T3", state="done")
+    for state in ("queued", "running", "deferred", "done", "posted"):
+        assert plan([author_row()], {1: [dataclasses.replace(done, state=state)]}, cfg=ADDR).queue == []
+    back = plan([author_row()], {1: [dataclasses.replace(done, state="posted")]}, cfg=ADDR,
+                answered=lambda j: frozenset({"T2"}))      # T2's reply landed and T2 is my turn again
+    assert back.queue == [(1, "address", A, f"{A}:T1,T2")] and back.states == [("j1", "superseded", "new threads")]
+    new_thread = author_row(actions=(("answer_threads", ("T9",)),))
+    assert plan([new_thread], {1: [done]}, cfg=ADDR).queue == [(1, "address", A, f"{A}:T9")]
+    assert plan([author_row(head=B)], {1: [done]}, cfg=ADDR).queue == [(1, "address", B, f"{B}:T1,T2")]
+
+def test_address_not_queued_while_the_board_is_behind_a_push():
+    """After "push" the job is at the new head B. A poll that still shows the old head A (GitHub's list lags) must
+    not queue a job at A and supersede the pushed one."""
+    pushed = job("address", head=B, key=f"{B}:T1,T2", state="done")
+    behind = plan([author_row()], {1: [pushed]}, cfg=ADDR, pushed_from=lambda j: A)
+    assert behind.queue == [] and behind.states == []
+    caught_up = plan([author_row(head=B)], {1: [pushed]}, cfg=ADDR, pushed_from=lambda j: A)
+    assert caught_up.queue == [] and caught_up.states == []
+    other = plan([author_row()], {1: [pushed]}, cfg=ADDR)      # a job at B that was not pushed from A
+    assert other.queue == [(1, "address", A, f"{A}:T1,T2")]
+
+def test_address_not_queued_while_one_is_pending_at_the_head():
+    """Spec, "No new job while one covers the turn": a pending job at this head blocks a new one, whatever its
+    threads; a new thread is taken up once it ended."""
+    for state in ("queued", "running", "deferred"):
+        pending = job("address", key=f"{A}:T1", state=state)
+        assert plan([author_row()], {1: [pending]}, cfg=ADDR).queue == []
+    queued_old_head = job("address", key=f"{A}:T1", state="queued")
+    p = plan([author_row(head=B)], {1: [queued_old_head]}, cfg=ADDR)
+    assert p.queue == [(1, "address", B, f"{B}:T1,T2")] and p.states == [("j1", "superseded", "new threads")]
+
+def test_address_two_failures_stop():
+    f = job("address", key=f"{A}:T1,T2", state="failed")
+    assert plan([author_row()], {1: [f]}, cfg=ADDR).queue == [(1, "address", A, f"{A}:T1,T2")]
+    assert plan([author_row()], {1: [f, dataclasses.replace(f, id="j2")]}, cfg=ADDR).queue == []
+
+def test_address_turn_back_revives_instead_of_queueing():
+    stale = job("address", key=f"{A}:T1,T2", state="stale")
+    p = plan([author_row()], {1: [stale]}, cfg=ADDR)
+    assert p.queue == [] and p.states == [("j1", "done", "turn back")]
+
+def test_gone_address_turn_cancels_and_stales():
+    q = job("address", key=f"{A}:T1", state="queued", jid="q")
+    d = job("address", key=f"{A}:T1", state="done", jid="d")
+    gone = [TurnChange(1, "answer_threads", ("T1",))]
+    p = plan([author_row(actions=(("merge", ()),))], {1: [q, d]}, cfg=ADDR, gone=gone)
+    assert sorted(p.states) == [("d", "stale", "turn gone"), ("q", "cancelled", "turn gone")]
+    still = author_row(actions=(("resolve_threads", ("T1",)),))      # another address action is left
+    assert plan([still], {1: [q, d]}, cfg=ADDR, gone=gone).states == []
+
+def test_address_actions_send_no_turn_line_where_address_is_on():
+    r = author_row(actions=(("merge", ()), ("answer_threads", ("T1",))))
+    new = [TurnChange(1, "merge", ()), TurnChange(1, "answer_threads", ("T1",))]
+    assert plan([r], new=new, cfg=ADDR).lines == [
+        "[acme/app] #1: your turn — merge · https://github.com/acme-org/acme-app/pull/1"]
+    assert len(plan([r], new=new).lines) == 2
+    assert len(plan([dataclasses.replace(r, pipeline=True)], new=new, cfg=ADDR).lines) == 2
+    not_mine = dataclasses.replace(r, roles=["reviewer"])     # no address job for it: the line is its notice
+    assert len(plan([not_mine], new=new, cfg=ADDR).lines) == 2

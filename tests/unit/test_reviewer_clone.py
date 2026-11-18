@@ -444,3 +444,122 @@ async def test_job_clone_has_no_checkout_until_detached(tmp_path, pr7):
     assert not (job.path / "docs").exists()   # the review clone's lock covered no checkout
     await job.detach_at_base()
     assert git("rev-parse", "HEAD", cwd=job.path) == base and (job.path / "docs" / "process.md").is_file()
+
+
+# --- Address jobs: the push of a fix ---
+
+AUTHOR = ("Cleave Bot", "cleave@pipeline.local")
+MESSAGE = "fix: address review comments on #7"
+
+def pr_branch_and_patch(tmp_path, bare, head):
+    """PR 7's branch feature/pr7 at its head on origin, and a patch (made with git diff --binary in a scratch
+    checkout of the head) that changes feature.txt and adds a binary file."""
+    pr_work = tmp_path / "pr-work"
+    git("push", str(bare), f"{head}:refs/heads/feature/pr7", cwd=pr_work)
+    scratch = tmp_path / "scratch"
+    git("clone", "--quiet", str(bare), str(scratch))
+    git("checkout", "--quiet", "--detach", head, cwd=scratch)
+    (scratch / "feature.txt").write_text("feature, fixed\n")
+    (scratch / "blob.bin").write_bytes(b"\x00\xff\xfe binary")
+    git("add", "-A", cwd=scratch)
+    patch = tmp_path / "fix.patch"
+    git("diff", "--cached", "--binary", f"--output={patch}", "HEAD", cwd=scratch)
+    return patch
+
+async def push(clone, tmp_path, head, patch, branch="feature/pr7"):
+    async with clone.lock:
+        return await clone.push_patch(number=7, head=head, branch=branch, patch=patch, message=MESSAGE,
+                                      author=AUTHOR, worktree=tmp_path / "push" / "wt")
+
+def move_pr(tmp_path, bare, refs):
+    """One more commit on the PR's head, pushed to `refs` of origin; its sha."""
+    pr_work = tmp_path / "pr-work"
+    (pr_work / "laptop.txt").write_text("from the laptop")
+    git("add", ".", cwd=pr_work)
+    git("-c", "user.name=t", "-c", "user.email=t@t", "commit", "-m", "laptop", cwd=pr_work)
+    for ref in refs:
+        git("push", "--quiet", str(bare), f"HEAD:{ref}", cwd=pr_work)
+    return git("rev-parse", "HEAD", cwd=pr_work)
+
+async def test_push_patch_adds_one_commit_to_the_branch(tmp_path, pr7):
+    bare, _, head = pr7
+    patch = pr_branch_and_patch(tmp_path, bare, head)
+    clone = await refreshed(tmp_path, bare)
+    sha = await push(clone, tmp_path, head, patch)
+    assert len(sha) == 40
+    assert git("rev-parse", "feature/pr7", cwd=bare) == sha and git("rev-parse", f"{sha}^", cwd=bare) == head
+    assert git("log", "-1", "--format=%an <%ae>|%s", sha, cwd=bare) == f"Cleave Bot <cleave@pipeline.local>|{MESSAGE}"
+    assert git("show", f"{sha}:feature.txt", cwd=bare) == "feature, fixed"
+    blob = subprocess.run(["git", "show", f"{sha}:blob.bin"], cwd=bare, check=True, capture_output=True).stdout
+    assert blob == b"\x00\xff\xfe binary"
+    assert git("diff", "--name-only", head, sha, cwd=bare).split() == ["blob.bin", "feature.txt"]
+
+async def test_push_patch_refuses_a_moved_head(tmp_path, pr7):
+    bare, _, head = pr7
+    patch = pr_branch_and_patch(tmp_path, bare, head)
+    moved = move_pr(tmp_path, bare, ["refs/pull/7/head", "refs/heads/feature/pr7"])
+    clone = await refreshed(tmp_path, bare)
+    with pytest.raises(CloneError, match="head moved"):
+        await push(clone, tmp_path, head, patch)
+    assert git("rev-parse", "feature/pr7", cwd=bare) == moved
+
+async def test_push_patch_refuses_a_non_fast_forward(tmp_path, pr7):
+    # The branch moved, GitHub's pull ref not yet: the push itself is rejected, never forced.
+    bare, _, head = pr7
+    patch = pr_branch_and_patch(tmp_path, bare, head)
+    moved = move_pr(tmp_path, bare, ["refs/heads/feature/pr7"])
+    clone = await refreshed(tmp_path, bare)
+    with pytest.raises(CloneError, match="^git push failed: "):
+        await push(clone, tmp_path, head, patch)
+    assert git("rev-parse", "feature/pr7", cwd=bare) == moved
+
+async def test_push_patch_refuses_a_branch_set_back(tmp_path, pr7):
+    # The branch was reset to the head's parent, GitHub's pull ref not yet: a plain push would fast-forward it and
+    # bring the dropped commit back. The push expects the branch at the job's head and is refused.
+    bare, _, head = pr7
+    patch = pr_branch_and_patch(tmp_path, bare, head)
+    parent = git("rev-parse", f"{head}^", cwd=bare)
+    git("update-ref", "refs/heads/feature/pr7", parent, cwd=bare)
+    clone = await refreshed(tmp_path, bare)
+    with pytest.raises(CloneError, match="^git push failed: "):
+        await push(clone, tmp_path, head, patch)
+    assert git("rev-parse", "feature/pr7", cwd=bare) == parent
+
+async def test_push_patch_never_forces(tmp_path, pr7, monkeypatch):
+    bare, _, head = pr7
+    patch = pr_branch_and_patch(tmp_path, bare, head)
+    clone = await refreshed(tmp_path, bare)
+    argvs, real = [], clone_module.run_command
+    async def recording(argv, **kw):
+        argvs.append(argv)
+        return await real(argv, **kw)
+    monkeypatch.setattr(clone_module, "run_command", recording)
+    await push(clone, tmp_path, head, patch)
+    pushes = [argv for argv in argvs if "push" in argv]
+    assert len(pushes) == 1 and pushes[0][-1] == f"{git('rev-parse', 'feature/pr7', cwd=bare)}^{{commit}}:refs/heads/feature/pr7"
+    # The one lease names the branch and the head it must be at; never a bare one, which trusts a tracking ref.
+    assert [arg for arg in pushes[0] if arg.startswith("--force")] == [f"--force-with-lease=refs/heads/feature/pr7:{head}"]
+    for argv in argvs:
+        assert not {"--force", "-f", "--force-with-lease", "--mirror"} & set(argv)
+    assert not any(arg.startswith("+") for arg in pushes[0])
+
+async def test_push_patch_runs_no_planted_hook(tmp_path, pr7):
+    bare, _, head = pr7
+    patch = pr_branch_and_patch(tmp_path, bare, head)
+    clone = await refreshed(tmp_path, bare)
+    for name in ("pre-commit", "commit-msg", "post-commit", "pre-push", "post-checkout"):
+        hook = clone.path / ".git" / "hooks" / name
+        hook.write_text(f"#!/bin/sh\ntouch {tmp_path / name}-ran\n")
+        hook.chmod(0o755)
+    await push(clone, tmp_path, head, patch)
+    assert not list(tmp_path.glob("*-ran"))
+
+async def test_push_patch_refuses_a_patch_that_does_not_apply(tmp_path, pr7):
+    bare, _, head = pr7
+    pr_branch_and_patch(tmp_path, bare, head)
+    bad = tmp_path / "bad.patch"
+    bad.write_text("diff --git a/nope.txt b/nope.txt\n--- a/nope.txt\n+++ b/nope.txt\n@@ -1 +1 @@\n-a\n+b\n")
+    clone = await refreshed(tmp_path, bare)
+    with pytest.raises(CloneError, match="^git apply failed: "):
+        await push(clone, tmp_path, head, bad)
+    assert git("rev-parse", "feature/pr7", cwd=bare) == head

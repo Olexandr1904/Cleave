@@ -72,6 +72,8 @@ A pipeline PR is authored by the operator's token, so its turns are author-side 
 the repo sets `process.address_doc`, a review comment on a pipeline PR in a reviewer-mode repo produces a
 turn line only: nothing classifies or fixes it automatically.
 
+Closed where `process.address_doc` is set: see `2026-11-18-reviewer-address-design.md`, "PRs the ticket pipeline opened".
+
 ## Tests that must exist
 
 1. A row with `pipeline` set and a `review` turn queues a review; with an author-side turn it sends a turn

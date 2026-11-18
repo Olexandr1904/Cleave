@@ -9,8 +9,8 @@ from integrations.llm.claude_code_adapter import QuotaExhaustedError
 from integrations.llm.llm_interface import LLMResponse
 from orchestrator.reviewer.prepare import JobPaths
 from orchestrator.reviewer.session import (
-    HEAVY_MAX_TURNS, SESSION_TOOLS, SessionOutcome, allowed_tools, recheck_prompt, review_prompt, run_session,
-    session_env, settings_json,
+    HEAVY_MAX_TURNS, SESSION_TOOLS, SessionOutcome, address_prompt, allowed_tools, recheck_prompt, review_prompt,
+    run_session, session_env, settings_json,
 )
 
 NOW = datetime(2026, 11, 20, 10, 0, tzinfo=timezone.utc)
@@ -420,3 +420,34 @@ async def test_glob_characters_in_a_working_directory_fail_the_session(tmp_path,
     assert (outcome.kind, outcome.error) == (
         "failed", f"working directory {bad} holds *, ? or [: the session's permission rules would read it as a pattern")
     assert llm.calls == [] and not paths.job_dir.exists()
+
+
+# --- Address jobs ---
+
+def test_address_session_may_write_the_worktree_but_not_its_git_pointer(clone, paths):
+    tools = allowed_tools("address", clone, paths, [])
+    assert f"Edit({rule_path(paths.worktree)}/**)" in tools
+    assert f"Edit({rule_path(paths.replies_plan.parent)}/**)" in tools
+    s = settings_json([], clone, paths, "address")
+    fs = s["sandbox"]["filesystem"]
+    assert fs["allowWrite"] == [f"{rule_path(d)}/**" for d in (paths.run_dir, paths.replies_plan.parent, paths.worktree)]
+    assert fs["denyWrite"] == [f"{rule_path(clone.resolve())}/**", rule_path(paths.worktree / ".git")]
+    assert f"Edit({rule_path(paths.worktree / '.git')})" in s["permissions"]["deny"]
+    assert s["sandbox"]["network"] == {"allowedDomains": [], "strictAllowlist": True}
+    assert s["permissions"]["blockReadsOutsideWorkingDirectories"] is True
+
+def test_review_and_recheck_settings_are_unchanged(clone, paths):
+    for kind in ("review", "recheck"):
+        s = settings_json([], clone, paths, kind)
+        assert s["sandbox"]["filesystem"]["denyWrite"] == [f"{rule_path(d)}/**" for d in (clone.resolve(), paths.worktree)]
+        assert not any(".git)" in rule for rule in s["permissions"]["deny"] if rule.startswith("Edit("))
+        assert f"Edit({rule_path(paths.worktree)}/**)" not in allowed_tools(kind, clone, paths, [])
+
+def test_address_prompt(paths):
+    p = address_prompt("docs/threads.md", 7, paths, "octo", "leave 2 as it is")
+    assert "Follow docs/threads.md" in p and str(paths.worktree) in p and str(paths.replies_plan) in p
+    assert "{fix_sha}" in p and "Never put fix_sha in an entry." in p and "commit nothing" in p
+    assert f"{paths.run_dir}/threads.json" in p and f"{paths.run_dir}/tg_lines.json" in p
+    assert "The operator's instruction for this run: leave 2 as it is\n" in p
+    assert "operator's instruction" not in address_prompt("docs/threads.md", 7, paths, "octo", "")
+    assert TOKEN not in p and "://" not in p

@@ -137,6 +137,7 @@ def test_contexts_have_poster(tmp_path):
     assert ctx.poster._cfg is app.reviewer.poster
     assert "tok" not in repr(ctx.poster)
     assert ctx.allowed_links == ("https://github.com/acme-org/", "https://acme.atlassian.net/")
+    assert ctx.commit_author == ("Cleave Bot", "cleave@pipeline.local")
 
 
 def test_reviewer_contexts_skip_a_repo_without_a_forge_token(tmp_path, caplog):
@@ -506,6 +507,7 @@ def test_main_wires_replies_with_telegram(tmp_path, monkeypatch, capsys):
     assert (chat.chat_id, chat.store) == ("42", store)
     assert isinstance(posting, Posting) and posting._store is store
     assert posting._ledgers_dir == runner.args[8].ledgers_dir == tmp_path / "rv" / "ledgers"
+    assert posting._work_dir == runner.args[8].work_root == tmp_path / "rv" / "work"   # a push's worktree
     assert isinstance(parser, ReplyParser) and type(parser._llm).__name__ == "ClaudeCodeAdapter"
     assert parser._job_cfg == ReviewerJobConfig("sonnet", "", 60)   # reviewer.jobs.command
     assert parser._work_dir == tmp_path / "rv" / "command"

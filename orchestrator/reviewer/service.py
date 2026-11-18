@@ -11,8 +11,9 @@ from pathlib import Path
 from typing import Any
 
 from config.schemas import ReviewerConfig
-from orchestrator.reviewer.board import build_board
+from orchestrator.reviewer.board import ADDRESS_ACTIONS, build_board
 from orchestrator.reviewer.clone import CloneError
+from orchestrator.reviewer.fix import PATCH_NAME
 from orchestrator.reviewer.forge_github import ForgeError
 from orchestrator.reviewer.jobs import REVIEW_NOW_SUFFIX, Notice, held_prs, plan_jobs
 from orchestrator.reviewer.lines import doc_missing_line, poll_failed_line, readiness_failed_line
@@ -72,8 +73,8 @@ def _report_file(job: Job, run: JobRun | None) -> Path | None:
 
 
 def _has_plan(job: Job, run: JobRun | None) -> bool:
-    """Whether a re-check run drafted a replies plan: its copy holds one, and it did not fail reading it. A
-    run superseded or cancelled at Prepare, or deferred, has none."""
+    """Whether a re-check or an address run drafted a replies plan: its copy holds one, and it did not fail reading
+    it. A run superseded or cancelled at Prepare, or deferred, has none."""
     return (run is not None and job.state != "failed" and bool(run.job_dir)
             and (Path(run.job_dir) / "replies_plan.json").is_file())
 
@@ -142,7 +143,21 @@ def _job_info(job: Job, run: JobRun | None) -> dict:
     return {
         "retry_at": job.retry_at, "started_at": run.started_at, "reason": job.reason,
         "message_sent": run.message_sent, "findings": _findings(job, run),
+        "fix": bool(run.fix),  # an address job's patch: Fix ready rather than Replies ready
     }
+
+
+def _patch_text(run: JobRun) -> str | None:
+    """An address job's patch from its copy, at most _MAX_REPORT_TEXT characters; None without one."""
+    path = Path(run.job_dir) / PATCH_NAME
+    if not run.job_dir or path.is_symlink() or not path.is_file():
+        return None
+    try:
+        with path.open(encoding="utf-8", errors="replace") as f:
+            return f.read(_MAX_REPORT_TEXT)
+    except OSError as e:  # the file list still shows
+        logger.warning("Reviewer patch %s not read: %s", path, type(e).__name__)
+        return None
 
 
 @dataclass
@@ -155,6 +170,7 @@ class RepoContext:
     forge: Any  # open_prs(), details(number, updated_at), reviewed_by(number, login, updated_at)
     poster: Any = None  # review(clone_dir, values, confirm=), replies(...) (see CommandPoster)
     allowed_links: tuple[str, ...] = ()  # lowercase link prefixes a posted body may use
+    commit_author: tuple[str, str] = ("", "")  # name, email of an address job's pushed commit
 
     @property
     def scope(self) -> str:
@@ -320,7 +336,8 @@ class ReviewerService:
         plan = plan_jobs(scope, update, jobs_by_pr,
                          lambda number, head: self._store.is_skipped(scope, number, head),
                          cfg, running, now, not state.first_poll_done, posting=posting,
-                         held=held_prs(update.rows, self._compared_tickets(scope)))
+                         held=held_prs(update.rows, self._compared_tickets(scope)),
+                         answered=self._answered_threads, pushed_from=self._pushed_from)
 
         # Store changes first, sends after: a failed or slow send never loses a store change.
         by_id = {job.id: job for job in jobs}
@@ -351,6 +368,20 @@ class ReviewerService:
             {"scope": scope, "number": job.number, "kind": job.kind, "state": job_state},
         ) for job, job_state in changed]
         return _Outcome(next_at, events, plan.lines, notices + plan.notices)
+
+    def _answered_threads(self, job: Job) -> frozenset[str]:
+        """The thread ids of the job's replies that landed (plan_jobs's `answered`)."""
+        run = self._store.run(job.id)
+        if run is None:
+            return frozenset()
+        posted = self._store.posted_replies(job)
+        return frozenset(e["thread_id"] for e in run.replies
+                         if e.get("n") in posted and isinstance(e.get("thread_id"), str))
+
+    def _pushed_from(self, job: Job) -> str:
+        """The head the job's landed push started from, "" without one (plan_jobs's `pushed_from`)."""
+        push = self._store.push_of(job)
+        return push.head_sha if push else ""
 
     async def _read_clone(self, ctx: RepoContext) -> tuple[bool, list[Notice], BoardSnapshot]:
         """Whether the process doc is on the base (and its notice), then the readiness snapshot; the caller
@@ -430,6 +461,27 @@ class ReviewerService:
         # the same.
         return self._store.add_job(scope, number, "review", head, f"{head}{REVIEW_NOW_SUFFIX}", stamp)
 
+    def address_again(self, scope: str, number: int, instruction: str) -> Job:
+        """Queue an address job at the row's head with the operator's instruction ("again: …"), keyed as plan_jobs
+        keys one; the PR's address jobs done, posted or stale are superseded. LookupError: the row is gone or holds
+        no address turn; ValueError: an address job of the PR is pending."""
+        row = self._row(scope, number)
+        mine = [t for t in row.my_turns if t["action"] in ADDRESS_ACTIONS]
+        if not mine:
+            raise LookupError("no address turn")
+        addresses = [j for j in self._store.jobs(scope, number) if j.kind == "address"]
+        if any(j.state in ("queued", "running", "deferred") for j in addresses):
+            raise ValueError("already queued")
+        stamp = self._now().isoformat()
+        for job in addresses:
+            if job.state in ("done", "posted", "stale"):
+                self._store.set_job_state(job.id, "superseded", "new address", stamp)
+        threads = sorted({tid for t in mine for tid in t["threads"]})
+        job = self._store.add_job(scope, number, "address", row.head_sha, f"{row.head_sha}:{','.join(threads)}",
+                                  stamp)
+        self._store.save_run(JobRun(job.id, request={"instruction": instruction}))
+        return job
+
     def skip(self, scope: str, number: int) -> None:
         """Skip the row's head: its queued and deferred reviews are dropped and none is queued for
         it again."""
@@ -448,15 +500,15 @@ class ReviewerService:
         return row
 
     def overview(self) -> list[dict]:
-        """Per repo: its state, its board rows, the latest review or re-check of each PR (an edit or a draft is
-        never the row's job) with what the board shows of it (job_info, for the PRs on the board only), the PRs
-        whose current head is skipped and the PRs too large to review automatically."""
+        """Per repo: its state, its board rows, the latest review, re-check or address job of each PR (an edit or a
+        draft is never the row's job) with what the board shows of it (job_info, for the PRs on the board only), the
+        PRs whose current head is skipped and the PRs too large to review automatically."""
         repos = []
         for ctx in self._repos:
             state = self._store.repo_state(ctx.scope)
             latest: dict[int, Job] = {}
             for job in self._store.jobs(ctx.scope):  # newest first
-                if job.kind in ("review", "recheck"):
+                if job.kind in ("review", "recheck", "address"):
                     latest.setdefault(job.number, job)
             rows = list(self._store.board(ctx.scope).values())
             repos.append({
@@ -473,8 +525,8 @@ class ReviewerService:
 
     def detail(self, scope: str, number: int) -> dict:
         """One PR: its board row, its jobs (newest first), the newest review report and the replies
-        of the newest re-check that drafted a plan, each number's state (posted, ticked or open) and the
-        PR's posts (newest first). Read-only."""
+        of the newest re-check or address job that drafted a plan (an address job's fix, patch and pushed commit
+        too), each number's state (posted, ticked or open) and the PR's posts (newest first). Read-only."""
         row = self._store.board(scope).get(number)
         jobs = self._store.jobs(scope, number)
         if row is None and not jobs:
@@ -492,9 +544,11 @@ class ReviewerService:
                 except OSError as e:  # the parsed report still shows
                     logger.warning("Reviewer report %s not read: %s", path, type(e).__name__)
                 break
-        recheck = next(
-            (j for j in jobs if j.kind == "recheck" and _has_plan(j, runs[j.id])), None
+        recheck = next(  # a re-check or an address job
+            (j for j in jobs if j.kind in ("recheck", "address") and _has_plan(j, runs[j.id])), None
         )
+        address = recheck is not None and recheck.kind == "address"
+        pushed = self._store.push_of(recheck) if address else None
         posts = self._store.posts(scope, number)
         number_states, reply_states = {}, {}
         if report_job is not None and report_run.report:
@@ -520,4 +574,7 @@ class ReviewerService:
             "number_states": number_states,
             "reply_states": reply_states,
             "posts": [_post_detail(p) for p in posts],
+            "fix": (runs[recheck.id].fix or None) if address else None,
+            "fix_patch": _patch_text(runs[recheck.id]) if address else None,
+            "pushed_sha": pushed.sha if pushed else None,
         }

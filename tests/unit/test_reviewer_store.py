@@ -218,3 +218,31 @@ def test_small_jobs_and_unsent_kinds(store):
     assert store.run(edit.id).request["instruction"] == "shorter"
     store.set_job_state(edit.id, "running", "", T1)
     assert store.jobs_in_state("running", kinds=("review", "recheck")) == []
+
+def test_address_jobs_are_runnable_and_reheaded(store):
+    job = store.add_job("acme/app", 7, "address", "a" * 40, f"{'a' * 40}:T1", "2026-11-20T10:00:00+00:00")
+    assert [j.id for j in store.runnable_jobs("2026-11-20T10:00:01+00:00")] == [job.id]
+    store.rehead_job(job.id, "b" * 40, f"{'b' * 40}:T1", "2026-11-20T11:00:00+00:00")
+    moved = store.job(job.id)
+    assert (moved.head_sha, moved.key, moved.updated_at) == ("b" * 40, f"{'b' * 40}:T1", "2026-11-20T11:00:00+00:00")
+
+def test_address_jobs_are_sent_when_done(store):
+    job = store.add_job("acme/app", 7, "address", "a" * 40, f"{'a' * 40}:T1", T0)
+    store.set_job_state(job.id, "done", "", T1)
+    store.save_run(JobRun(job.id))
+    assert [j.id for j, _ in store.done_unsent()] == [job.id]
+
+def test_push_of_is_the_newest_landed_push(store):
+    job = store.add_job("acme/app", 1712, "address", "a" * 40, f"{'a' * 40}:T1", T0)
+    other = store.add_job("acme/app", 1712, "address", "a" * 40, f"{'a' * 40}:T2", T0)
+    store.save_post(Post("p1", job.id, "acme/app", 1712, "a" * 40, "push", "failed", T0, T0))
+    store.save_post(Post("p2", job.id, "acme/app", 1712, "a" * 40, "push", "posted", T1, T1, sha="b" * 40))
+    store.save_post(Post("p3", job.id, "acme/app", 1712, "a" * 40, "replies", "posted", T1, T1))
+    assert store.push_of(job).sha == "b" * 40
+    assert store.push_of(other) is None
+
+def test_posted_numbers_of_an_address_job_are_its_replies(store):
+    job = dataclasses.replace(recheck_of("a1"), kind="address")
+    store.save_post(Post("p1", "a1", "acme/app", 1712, "b" * 40, "replies", "posted", T1,
+                         landed=[{"n": 2, "path": "", "line": None, "title": "", "where": "reply"}]))
+    assert store.posted_numbers(job, None) == {2}

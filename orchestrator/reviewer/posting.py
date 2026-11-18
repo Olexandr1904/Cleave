@@ -6,8 +6,9 @@ poster tool in a dry run checked against them, GitHub's head again, the confirm 
 GitHub before anything is called posted. A re-check's replies run the spec's "Posting re-check replies" by the
 same rules: the plan checked against Prepare's threads snapshot, a plan file of exactly the named entries, the
 replies tool in a dry run checked against them, the confirm run, and a post-condition read with the threads
-command. Nothing here holds the forge token: the poster and the threads command run with it, and their output
-comes back redacted.
+command. An address job's push runs the address spec's "Push": its patch committed on the PR head in a worktree of
+the review clone and pushed without force, then GitHub's head read back. Nothing here holds the forge token: the
+poster, the threads command and the review clone's git run with it, and their output comes back redacted.
 """
 from __future__ import annotations
 
@@ -15,6 +16,8 @@ import asyncio
 import dataclasses
 import json
 import logging
+import re
+import shutil
 from collections import Counter
 from collections.abc import Awaitable, Callable
 from contextlib import AsyncExitStack
@@ -27,9 +30,11 @@ from uuid import uuid4
 from config.schemas import POSTER_PLACEHOLDERS, REPLIES_PLACEHOLDERS
 from orchestrator.reviewer.clone import CloneError
 from orchestrator.reviewer.commands import CommandResult, placeholder_values, stderr_tail
+from orchestrator.reviewer.fix import PATCH_NAME
 from orchestrator.reviewer.forge_github import ForgeError
 from orchestrator.reviewer.grammar import ReplyCommand, check_command, retry_text
 from orchestrator.reviewer.lines import (
+    address_body_problem_line,
     already_approved_line,
     already_reviewed_line,
     approve_unknown_line,
@@ -40,12 +45,14 @@ from orchestrator.reviewer.lines import (
     internal_error_line,
     left_out_line,
     not_posted_line,
+    not_pushed_line,
     not_shown_line,
     nothing_left_line,
     outdated_line,
     partial_line,
     posted_line,
     pr_closed_line,
+    pushed_line,
     recheck_body_problem_line,
     replies_partial_line,
     replies_posted_line,
@@ -88,6 +95,7 @@ _PLAN_KEYS = ("n", "thread_id", "comment_id", "review_id", "body", "resolve")  #
 _RESULT_STEP = {"replied": "reply", "commented": "comment", "resolved": "resolve"}  # a confirm result's step
 _STEP_ORDER = ("reply", "resolve", "comment")
 _RESOLVED = N_(" · resolved (reply not seen on GitHub: resolved threads are not listed)")
+_PLAIN_BRANCH = re.compile(r"[A-Za-z0-9._/-]+")  # the branch names Cleave pushes to (and never one starting "-")
 _T = TypeVar("_T")
 
 
@@ -286,9 +294,11 @@ class Posting:
 
     def __init__(self, store: ReviewerStore, *, ledgers_dir: Path, now: Callable[[], datetime] = utcnow,
                  sleep: Callable[[float], Awaitable[None]] = asyncio.sleep, verify_reads: int = 3,
-                 verify_wait: float = 2.0, reader_wait: float = 600.0):
+                 verify_wait: float = 2.0, reader_wait: float = 600.0, work_dir: Path | None = None):
         self._store = store
         self._ledgers_dir = Path(ledgers_dir)
+        # A push's worktree of the review clone goes under work_dir/push; by default beside the ledgers.
+        self._work_dir = Path(work_dir) if work_dir is not None else self._ledgers_dir.parent / "work"
         self._now = now
         self._sleep = sleep
         self._verify_reads = verify_reads
@@ -569,21 +579,36 @@ class Posting:
         # 2. GitHub's head.
         await self._pr_at_head(ctx, number, head)
         # 3. The plan checked against Prepare's snapshot of this PR at this head, never the copy's threads.json,
-        # which the session may have rewritten; then the named replies' text.
+        # which the session may have rewritten; then the named replies' text. An address job Cleave pushed for
+        # was prepared at the head before its push.
+        address = job.kind == "address"
+        push = self._store.push_of(job) if address else None
         prepared = _prepared_threads(run.job_dir, number)
-        if (other := _other_pr(prepared, number, head)) is not None:
+        if (other := _other_pr(prepared, number, push.head_sha if push else head)) is not None:
             raise _Refused(not_posted_line(number, f"Prepare's threads snapshot is of {other}"))
         valid, invalid = validate_plan(run.replies, prepared, me)
         if (bad := next((n for n in cmd.numbers if n in invalid), None)) is not None:
             raise _Refused(tr("#{n} cannot be posted: {why}. Nothing was done.", n=bad, why=detail(invalid[bad])))
         entries = [valid[n] for n in cmd.numbers]
+        fix_shas: dict[int, str] = {}
+        if address:
+            # A reply that reports a fix names the job's head: the pushed commit, or the head the fix was already
+            # on when the job changed no code. Cleave writes the SHA; the model's entry never carries one.
+            unpushed = next((e["n"] for e in entries if e.get("fixed") is True), None) if run.fix and not push else None
+            if unpushed is not None:
+                raise _Refused(tr('#{n} reports a fix that is not pushed: reply "push" first. Nothing was done.',
+                                  n=unpushed))
+            entries = [{**e, "body": e["body"].replace("{fix_sha}", head[:9])} if e.get("fixed") is True else e
+                       for e in entries]
+            fix_shas = {e["n"]: head for e in entries if e.get("fixed") is True}
         for entry in entries:
             if problems := body_problems(entry["body"], ctx.allowed_links):
-                raise _Refused(recheck_body_problem_line(entry["n"], problems[0]))
+                line = address_body_problem_line if address else recheck_body_problem_line
+                raise _Refused(line(entry["n"], problems[0]))
         # 4. A plan of exactly the named entries.
         job_dir = Path(run.job_dir)
         head9 = head[:9]
-        plan = _write_plan(job_dir, head9, entries, number)
+        plan = _write_plan(job_dir, head9, entries, number, fix_shas)
         values = placeholder_values(REPLIES_PLACEHOLDERS, repo=ctx.readiness.repo, pr=str(number), head9=head9,
                                     plan=str(plan), job_dir=str(job_dir))
         # 5-8 in one lease, the post-condition included: the threads command runs from the clone too.
@@ -731,6 +756,101 @@ class Posting:
         return PostOutcome(state, replies_partial_line(number, why, results_text, by_hand, retry,
                                                        pr.url if uncertain else ""))
 
+    async def push_fix(self, ctx: RepoContext, job: Job) -> PostOutcome:
+        """The address job's patch committed on the PR head and pushed, under the posting lock; never raises
+        but a cancellation, which leaves the Post `posting` for the restart's recover()."""
+        async with self._lock:
+            try:
+                return await self._push_fix(ctx, job)
+            except _Refused as e:
+                return PostOutcome("refused", str(e))
+            except Exception as e:
+                return self._internal_error(job, e)
+            finally:
+                self._post = None
+
+    async def _push_fix(self, ctx: RepoContext, job: Job) -> PostOutcome:
+        # 1. The job as it is now, with a patch Cleave may push and no push of it landed; no ticket workspace
+        # holding the PR (the ticket pipeline force-pushes its branch), read from the board before GitHub is.
+        job = self._current(job.id)
+        number = job.number
+        run = self._store.run(job.id)
+        if job.kind != "address" or not run.fix:
+            raise _Refused(tr("This job changed no code: nothing to push."))
+        if run.fix.get("protected"):
+            raise _Refused(tr("The fix touches protected files ({paths}): Cleave does not push it. Nothing was done.",
+                              paths=", ".join(run.fix["protected"])[:_MAX_PATH]))
+        if (landed := self._store.push_of(job)) is not None:
+            raise _Refused(tr("Already pushed as {sha}. Nothing was done.", sha=landed.sha[:9]))
+        row = self._store.board(job.scope).get(number)
+        if row is not None and row.pipeline:
+            raise _Refused(tr("A ticket of the pipeline still holds #{number}'s branch and may overwrite it: nothing "
+                              'pushed. Reply "push" again when the ticket is done.', number=number))
+        patch = Path(run.job_dir) / PATCH_NAME
+        if not run.job_dir or patch.is_symlink() or not patch.is_file():
+            raise _Refused(not_pushed_line(number, N_("the patch is not in this job's copy")))
+        # 2. GitHub: open, at the job's head, its branch in this repo, plain and not the base branch.
+        pr = await self._read(number, ctx.forge.pr_full(number))
+        if pr.state != "open":
+            raise _Refused(pr_closed_line(number))
+        if pr.head_sha != job.head_sha:
+            raise _Refused(tr('Head moved ({old} → {new}): nothing pushed. Reply "again" for a new run on the new '
+                              "head.", old=job.head_sha[:9], new=pr.head_sha[:9]))
+        if pr.head_repo.lower() != ctx.readiness.repo.lower():  # GitHub's owner and repo names ignore case
+            raise _Refused(tr("The PR's branch is in a fork ({repo}): Cleave does not push there. Nothing was done.",
+                              repo=pr.head_repo[:_MAX_PATH] or "?"))
+        branch = pr.head_ref
+        if branch == ctx.cfg.base_branch or not _PLAIN_BRANCH.fullmatch(branch) or branch.startswith("-"):
+            raise _Refused(tr("Cleave does not push to the branch {branch}. Nothing was done.",
+                              branch=branch[:_MAX_PATH]))
+        message = (f"fix({run.ticket_key}): address review comments on #{number}" if run.ticket_key
+                   else f"fix: address review comments on #{number}")
+        # 3-4 in one lease of the review clone: the post recorded as under way, then the commit and its push.
+        async with AsyncExitStack() as lease:
+            try:
+                await lease.enter_async_context(ctx.clone.reader(wait=self._reader_wait))
+            except CloneError as e:
+                raise _Refused(not_pushed_line(number, str(e))) from None
+            self._current(job.id)
+            post = self._start(job, ReplyCommand("push", event=""), "push")
+            root = self._work_dir / "push" / post.id
+            try:
+                sha = await ctx.clone.push_patch(number=number, head=job.head_sha, branch=branch, patch=patch,
+                                                 message=message, author=ctx.commit_author, worktree=root / "wt")
+            except CloneError as e:
+                self._end(post, "failed", error=str(e))
+                return PostOutcome("failed", not_pushed_line(number, str(e)))
+            finally:
+                await asyncio.to_thread(shutil.rmtree, root, True)
+        # 5. GitHub must show the new commit as the head; 6. then the job moves to it, before its post ends: a poll
+        # leaves the address jobs of a PR with a Post `posting` alone, so none sees the new head with the job left
+        # behind.
+        if not await self._head_is(ctx, number, sha):
+            self._end(post, "unverified", sha=sha, error=f"GitHub does not show {sha[:9]} as the head")
+            return PostOutcome("unverified", tr(
+                "The push to #{number} ran, but GitHub does not show {sha} as the head. Check the PR's commits before "
+                "pushing again: {url}", number=number, sha=sha[:9], url=pr.url))
+        stamp = self._stamp()
+        self._store.rehead_job(job.id, sha, f"{sha}:{job.key.partition(':')[2]}", stamp)
+        url = f"https://github.com/{ctx.readiness.repo}/commit/{sha}"
+        self._end(post, "posted", sha=sha, urls=[url])
+        posted = self._store.posted_replies(job)
+        fixed = [e["n"] for e in run.replies if e.get("fixed") is True and e["n"] not in posted]
+        return PostOutcome("posted", pushed_line(number, sha, url, fixed))
+
+    async def _head_is(self, ctx: RepoContext, number: int, sha: str) -> bool:
+        """Whether GitHub shows `sha` as the PR's head, read up to verify_reads times, verify_wait apart (its PR
+        head follows a push with a lag); a failed read is one of them."""
+        for read in range(self._verify_reads):
+            if read:
+                await self._sleep(self._verify_wait)
+            try:
+                if (await ctx.forge.pr_full(number)).head_sha == sha:
+                    return True
+            except ForgeError:
+                continue
+        return False
+
     async def _pr_at_head(self, ctx: RepoContext, number: int, head: str) -> PRFull:
         pr = await self._read(number, ctx.forge.pr_full(number))
         if pr.state != "open":
@@ -865,15 +985,19 @@ def _prepared_threads(job_dir: str, number: int) -> dict:
         raise _Refused(not_posted_line(number, N_("Prepare's threads snapshot in this job's copy is unreadable"))) from None
 
 
-def _write_plan(job_dir: Path, head9: str, entries: list[dict], number: int) -> Path:
-    """`job_dir/posting/replies_<head9>.json`: the named entries with their known keys only. The replies tool
-    keeps its own ledger beside it."""
+def _write_plan(job_dir: Path, head9: str, entries: list[dict], number: int,
+                fix_shas: dict[int, str] | None = None) -> Path:
+    """`job_dir/posting/replies_<head9>.json`: the named entries with their known keys only, and `fix_sha` from
+    Cleave (`fix_shas`, by number) on an address job's replies that report a fix. The replies tool keeps its own
+    ledger beside it."""
     posting = job_dir / "posting"
     if posting.is_symlink() or (posting.exists() and not posting.is_dir()):
         raise _Refused(not_posted_line(number, N_("the job copy's posting directory is not Cleave's")))
     _make_dirs(posting)
     path = posting / f"replies_{head9}.json"
-    plan = [{key: entry[key] for key in _PLAN_KEYS if key in entry} for entry in entries]
+    fix_shas = fix_shas or {}
+    plan = [{**{key: entry[key] for key in _PLAN_KEYS if key in entry},
+             **({"fix_sha": fix_shas[entry["n"]]} if entry["n"] in fix_shas else {})} for entry in entries]
     write_atomic(path, json.dumps(plan, indent=2) + "\n")
     return path
 

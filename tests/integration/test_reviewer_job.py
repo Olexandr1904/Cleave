@@ -317,3 +317,146 @@ async def test_login_words_in_the_models_own_text_never_defer_the_job(tmp_path, 
     store, job, notifier, _ = await run_one_job(tmp_path, monkeypatch, events, rc=0)
     assert store.job(job.id).state == "failed"
     assert login_line() not in [text for _, text in notifier.sent]
+
+
+# --- Address jobs: from the board to the pushed commit ---
+
+import httpx
+
+from orchestrator.reviewer.posting import Posting
+
+THREADS_DOC = "docs/threads.md"
+# A fake `claude -p` for an address job: edits feature.txt in the PR's worktree, drops a junk run-directory file
+# named like Cleave's patch, and writes the replies plan and tg_lines.json where its prompt says.
+FAKE_CLAUDE_ADDRESS = r"""#!@PYTHON@
+import json, re, sys
+from pathlib import Path
+
+prompt = sys.stdin.read()
+run_dir = Path(re.search(r"they are in (\S+)/threads\.json", prompt)[1])
+worktree = Path(re.search(r"checked out at (\S+)\. Make every fix", prompt)[1])
+plan = Path(re.search(r"write the replies plan to (\S+): a JSON list", prompt)[1])
+(worktree / "feature.txt").write_text("feature, null-safe\n")
+(run_dir / "fix.patch").write_text("not Cleave's patch\n")
+plan.write_text(json.dumps([{"n": 1, "thread_id": "T1", "body": "Fixed in {fix_sha}: null check added.",
+                             "resolve": True, "fixed": True}]))
+(run_dir / "tg_lines.json").write_text(json.dumps({"1": "FIXED · feature.txt:1 · null check added"}))
+print(json.dumps({"type": "result", "subtype": "success", "is_error": False, "result": "Done.",
+                  "num_turns": 9, "total_cost_usd": 2.0}))
+"""
+
+
+@respx.mock
+async def test_address_job_end_to_end_to_the_pushed_commit(tmp_path, monkeypatch):
+    """A poll queues the address job for the operator's own PR; the job runs over the real clone, Prepare and git
+    (the session a fake `claude` that edits the worktree); "push" commits its patch on the PR branch of the local
+    origin; the next poll queues nothing."""
+    bare, head = origin(tmp_path)
+    work = tmp_path / "work"
+    (work / THREADS_DOC).write_text("# Threads on my own PR\n\nAnswer every thread.\n")
+    commit(work, "threads doc")
+    git("push", "origin", "HEAD:develop", cwd=work)
+    git("push", str(bare), f"{head}:refs/heads/feature/pr7", cwd=tmp_path / "pr-work")
+
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    fake = script(bin_dir / "claude", FAKE_CLAUDE_ADDRESS.replace("@PYTHON@", sys.executable))
+    monkeypatch.setenv("PATH", f"{bin_dir}{os.pathsep}{os.environ['PATH']}")
+    llm = ClaudeCodeAdapter()
+    assert llm._claude_bin == str(fake)   # never the real claude
+
+    def pull(request):   # GitHub's PR, its head read from the origin as it is now
+        now_head = git("rev-parse", "refs/heads/feature/pr7", cwd=bare)
+        return httpx.Response(200, json={
+            "number": 7, "title": TITLE, "body": "Keeps the cart in sync.", "html_url": URL,
+            "user": {"login": "octo"}, "state": "open", "base": {"ref": "develop"},
+            "head": {"sha": now_head, "ref": "feature/pr7", "repo": {"full_name": "acme-org/acme-app"}},
+            "draft": False, "assignees": [], "requested_reviewers": [], "changed_files": 1, "additions": 1,
+            "deletions": 0, "updated_at": UPDATED, "closed_at": None})
+    listed = {"updated_at": UPDATED}   # GitHub's list of PRs: it lags the PR itself after a push
+    respx.get(f"{API}/pulls").mock(
+        side_effect=lambda request: httpx.Response(200, json=[{"number": 7, **listed}]))
+    respx.get(f"{API}/pulls/7").mock(side_effect=pull)
+    for path in ("pulls/7/reviews", "pulls/7/comments", "issues/7/comments"):
+        respx.get(f"{API}/{path}").respond(200, json=[])
+
+    folder = tmp_path / "readiness"
+    folder.mkdir()
+    board = {"me": "octo", "prs": [{"number": 7, "title": TITLE, "url": URL, "author": "octo", "draft": False,
+                                    "turns": [{"login": "octo", "action": "answer_threads", "threads": ["T1"]}]}]}
+    threads = {"number": 7, "author": "octo", "head_sha": head, "threads": [], "review_bodies": []}
+    for name, data in (("board", board), ("threads", threads)):
+        (folder / f"{name}.json").write_text(json.dumps(data))
+        script(folder / f"{name}.sh", f"#!/bin/sh\ncat '{folder / name}.json'\n")
+    rv = tmp_path / "rv"
+    cfg = ReviewerConfig(
+        enabled=True, base_branch="develop", quiet_minutes=0,
+        readiness=ReadinessPartConfig(status_command=["sh", str(folder / "board.sh")],
+                                      threads_command=["sh", str(folder / "threads.sh"), "{pr}"]),
+        process=ProcessPartConfig(doc=DOC, run_dir="tools/review/runs/PR_{pr}",
+                                  replies_plan="tools/threads/runs/PR_{pr}/replies_{head9}.json",
+                                  worktree_dir="../review-wt/PR_{pr}", address_doc=THREADS_DOC))
+    clone = ReviewClone(rv / "repos" / "acme" / "app", f"file://{bare}", "develop", TOKEN)
+    ctx = RepoContext("acme", "app", cfg, clone,
+                      CommandReadiness(cfg.readiness, repo="acme-org/acme-app", token=TOKEN),
+                      GitHubForgeReader(GitHubAdapter(TOKEN, "acme-org", "acme-app")),
+                      commit_author=("Cleave Bot", "cleave@pipeline.local"))
+    conn = connect(rv / "reviewer.db")
+    store, switches = ReviewerStore(conn), Switches(conn)
+    notifier = Notifier()
+    chat = ReviewerChat(notifier, "-1001", store=store)
+    service = ReviewerService([ctx], store, switches, lambda key: False, chat.send,
+                              lambda project_id, repo_id: set())
+    runner = JobRunner([ctx], store, switches, lambda key: False, lambda key, status: None, chat, llm, {},
+                       RunnerConfig(rv / "jobs", [tmp_path / ".env", tmp_path / "config"],
+                                    ReviewerGlobalConfig().jobs))
+
+    await service.poll(ctx)
+    [queued] = store.jobs("acme/app")
+    assert (queued.kind, queued.state, queued.key) == ("address", "queued", f"{head}:T1")
+    job = runner.next_job()
+    await runner.run_job(job)
+
+    # The job: done, its message out, the session's change kept as Cleave's own patch.
+    assert store.job(job.id).state == "done"
+    run = store.run(job.id)
+    assert run.fix["files"] == [{"path": "feature.txt", "added": 1, "deleted": 1}] and run.fix["protected"] == []
+    patch = Path(run.job_dir) / "fix.patch"
+    assert "feature, null-safe" in patch.read_text() and "not Cleave's patch" not in patch.read_text()
+    [(_, message)] = notifier.sent
+    assert message.splitlines()[0] == f'[acme/app] Threads on your PR #7 "{TITLE}"'
+    assert f"head {head[:9]} · 1 drafted reply · fix: 1 file, +1 −1 — not built or tested here" in message
+    assert "1. FIXED · feature.txt:1 · null check added" in message
+    assert git("rev-parse", "refs/heads/feature/pr7", cwd=bare) == head   # nothing pushed by the job itself
+    assert not (rv / "work" / "acme" / "app" / job.id).exists()
+
+    # "push": one commit on the PR branch, by the configured author, holding exactly the session's change.
+    async def no_sleep(seconds):
+        pass
+    posting = Posting(store, ledgers_dir=rv / "ledgers", work_dir=rv / "work", sleep=no_sleep, verify_wait=0)
+    outcome = await posting.push_fix(ctx, store.job(job.id))
+    sha = git("rev-parse", "refs/heads/feature/pr7", cwd=bare)
+    assert outcome.state == "posted", outcome.text
+    assert outcome.text == (f"Pushed {sha[:9]} to #7: https://github.com/acme-org/acme-app/commit/{sha}\n"
+                            'Reply "post replies 1" to answer the fixed threads.')
+    assert git("rev-parse", f"{sha}^", cwd=bare) == head
+    assert git("log", "-1", "--format=%an <%ae>|%s", sha, cwd=bare) == (
+        "Cleave Bot <cleave@pipeline.local>|fix(ACME-1234): address review comments on #7")
+    assert git("show", f"{sha}:feature.txt", cwd=bare) == "feature, null-safe"
+    assert git("diff", "--name-only", head, sha, cwd=bare) == "feature.txt"
+    moved = store.job(job.id)
+    assert (moved.head_sha, moved.key) == (sha, f"{sha}:T1") and store.push_of(moved).sha == sha
+    assert not (rv / "work" / "push").exists() or not any((rv / "work" / "push").iterdir())
+
+    # A second "push" does nothing. The board's next poll queues no second job: neither while GitHub's list still
+    # shows the PR as it was before the push (the row at the old head), nor once it shows the new head.
+    again = await posting.push_fix(ctx, moved)
+    assert again.text == f"Already pushed as {sha[:9]}. Nothing was done."
+    assert git("rev-parse", "refs/heads/feature/pr7", cwd=bare) == sha
+    await service.poll(ctx)
+    assert store.board("acme/app")[7].head_sha == head
+    assert [(j.kind, j.state) for j in store.jobs("acme/app")] == [("address", "done")]
+    listed["updated_at"] = "2026-11-20T09:05:00Z"
+    await service.poll(ctx)
+    assert store.board("acme/app")[7].head_sha == sha
+    assert [(j.kind, j.state) for j in store.jobs("acme/app")] == [("address", "done")]

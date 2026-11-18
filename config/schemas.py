@@ -161,6 +161,7 @@ def _default_reviewer_jobs() -> dict[str, ReviewerJobConfig]:
     return {
         "review": ReviewerJobConfig("opus", "xhigh", 5400),
         "recheck": ReviewerJobConfig("opus", "xhigh", 5400),
+        "address": ReviewerJobConfig("opus", "xhigh", 5400),
         "edit": ReviewerJobConfig("sonnet", "", 300),
         "draft": ReviewerJobConfig("sonnet", "", 300),
         "command": ReviewerJobConfig("sonnet", "", 60),
@@ -421,6 +422,10 @@ class ProcessPartConfig:
     worktree_dir: str = ""
     prepare_steps: list[list[str]] = field(default_factory=list)
     helper_scripts: list[str] = field(default_factory=list)
+    # The repo's author-side document for answering threads on the operator's own PRs; "" = no address jobs.
+    address_doc: str = ""
+    # A fix touching a path matching one of these is never pushed.
+    address_protected: list[str] = field(default_factory=lambda: [".github/**"])
 
 
 @dataclass

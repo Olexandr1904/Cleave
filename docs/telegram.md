@@ -288,6 +288,9 @@ A reply runs at once only when every word in it is in the table below. Case does
 | `post replies 1 3` (re-check message) | `reply`, `answers`, `ответы`, `ответ`, `відповіді`, `відповідь` for `replies` | Posts those drafted replies (see [posting re-check replies](#posting-re-check-replies)) |
 | `review again` | `re-review`, `rereview`, `ревью заново`, `заново ревью`, `ревью ще раз`, `рев'ю заново` | Queues a review of the PR's current head, as **Review now** does: `Queued a review of #1712 at 26c4929c5.` |
 | `skip` | `пропусти`, `пропусть` | Skips the PR's current head, as **Skip** does: `Skipped #1712 at 26c4929c5: no automatic review of this head.` |
+| `push` (threads message of your own PR) | `commit and push`, `пуш`, `пушь`, `запушь`, `запуш`, `закоммить и запушь` | Commits the job's fix on the PR head the job ran on and pushes it to the PR branch, never forced and only while the branch is still at that head: `Pushed 9c2e41d07 to #1712: <commit url>`. Refused when the head moved, the branch is in a fork or is the base branch, the fix touches `reviewer.process.address_protected` files, it was pushed already, or a ticket of the pipeline still holds the PR |
+| `diff` (threads message) | `patch`, `дифф`, `диф`, `патч` | Sends the fix's patch, in up to 3 parts (cut with a note; the dashboard has all of it) |
+| `again` / `again: <instruction>` (threads message) | `redo`, `заново`, `переделай`, `наново` | A new run on the PR's current head, your instruction passed to the session as your own words; the old job is superseded. Works on a failed run's line too |
 
 Numbers need the post word: `approve 1 2`, or `post` with no number and no event, goes to the model fallback. An event alone takes only the joining words: `approve comments` goes to the fallback too, because a bare approve is never guessed. All of this works while reviews are paused; a review queued by `review again` starts once reviews run.
 

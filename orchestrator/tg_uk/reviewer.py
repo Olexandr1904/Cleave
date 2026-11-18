@@ -21,11 +21,20 @@ TEXTS: dict[str, str] = {
     'Reply to this message: "post replies {numbers}" · "text {first}"':
         'Відповідайте на це повідомлення: "post replies {numbers}" · "text {first}"',
     "No replies drafted.": "Чернеток відповідей немає.",
+    '[{scope}] Threads on your PR #{number} "{title}"': '[{scope}] Треди у вашому PR #{number} "{title}"',
+    "head {head} · {replies} · {change}": "коміт {head} · {replies} · {change}",
+    "fix: {files}, +{added} −{deleted} — not built or tested here":
+        "виправлення: {files}, +{added} −{deleted} — тут не зібрано й не протестовано",
+    "no code change": "код не змінено",
+    "Protected files in the fix ({paths}): Cleave will not push it.":
+        "Захищені файли у виправленні ({paths}): Cleave його не запушить.",
+    "Reply to this message: {commands}": "Відповідайте на це повідомлення: {commands}",
     "… {lines} — the full report is on the dashboard": "… ще {lines} — повний звіт на дашборді",
 
     # lines.py: names of job kinds and turn actions
     "review": "рев'ю",
     "recheck": "повторна перевірка",
+    "address": "обробка тредів",
     "edit": "редагування",
     "draft": "чернетка",
 
@@ -62,6 +71,9 @@ TEXTS: dict[str, str] = {
         'Ця задача завершилась зі станом {state}: тут діють лише "review again" і "skip". Нічого не зроблено.',
     'Not understood; nothing was done. Reply like "post replies 1 3", "text 1" or "review again".':
         'Не зрозумів; нічого не зроблено. Відповідайте, наприклад, "post replies 1 3", "text 1" або "review again".',
+    'Not understood; nothing was done. Reply like "push", "post replies 1 3", "text 2", "diff" or "again: …".':
+        'Не зрозумів; нічого не зроблено. Відповідайте, наприклад, "push", "post replies 1 3", "text 2", "diff"'
+        ' або "again: …".',
     'Not understood; nothing was done. Reply like "post 1 2 4 approve", "text 2", "edit 2: …", "draft 7" or'
     ' "review again".':
         'Не зрозумів; нічого не зроблено. Відповідайте, наприклад, "post 1 2 4 approve", "text 2", "edit 2: …",'
@@ -83,6 +95,10 @@ TEXTS: dict[str, str] = {
         "#{number}: його текст {problem}: нічого не опубліковано. Відповідь повторної перевірки тут не редагується:"
         " дайте відповідь у цьому треді на GitHub самі.",
     "Not posted on #{number}: {why}.": "Не опубліковано в #{number}: {why}.",
+    '#{number}: its text {problem}: nothing posted. Reply "again: …" to have it rewritten.':
+        '#{number}: його текст {problem}: нічого не опубліковано. Відповідайте "again: …", щоб його переписали.',
+    '#{n} reports a fix that is not pushed: reply "push" first. Nothing was done.':
+        '#{n} повідомляє про виправлення, яке не запушено: спершу відповідайте "push". Нічого не зроблено.',
     "Nothing left to post on #{number} at {head}: what you named is already posted.":
         "У #{number} на {head} публікувати нічого: усе, що ви назвали, вже опубліковано.",
     'The Summary already landed at #{number} at {head}: add "no summary". Nothing was done.':
@@ -179,12 +195,47 @@ TEXTS: dict[str, str] = {
     ' "anyway": what landed is skipped.':
         '[{scope}] #{number}: публікацію перервав перезапуск. Перевірте PR, потім знову відповідайте "post …" з'
         ' "anyway": те, що вже пройшло, буде пропущено.',
+    '[{scope}] #{number}: a push was interrupted by a restart. Check the PR\'s commits, then reply "push" again if'
+    ' the fix is not there.':
+        '[{scope}] #{number}: пуш перервав перезапуск. Перевірте коміти PR, потім знову відповідайте "push", якщо'
+        ' виправлення там немає.',
+
+    # lines.py and posting.py: the push of an address job's fix
+    "This job changed no code: nothing to push.": "Ця задача не змінила коду: пушити нічого.",
+    "The fix touches protected files ({paths}): Cleave does not push it. Nothing was done.":
+        "Виправлення зачіпає захищені файли ({paths}): Cleave його не пушить. Нічого не зроблено.",
+    "Already pushed as {sha}. Nothing was done.": "Уже запушено як {sha}. Нічого не зроблено.",
+    'A ticket of the pipeline still holds #{number}\'s branch and may overwrite it: nothing pushed. Reply "push"'
+    ' again when the ticket is done.':
+        'Тікет пайплайна ще тримає гілку #{number} і може її перезаписати: нічого не запушено. Відповідайте "push"'
+        ' знову, коли тікет буде завершено.',
+    "the patch is not in this job's copy": "патча немає в копії цієї задачі",
+    'Head moved ({old} → {new}): nothing pushed. Reply "again" for a new run on the new head.':
+        'Коміт змінився ({old} → {new}): нічого не запушено. Відповідайте "again" для нового запуску на новому'
+        ' коміті.',
+    "The PR's branch is in a fork ({repo}): Cleave does not push there. Nothing was done.":
+        "Гілка PR у форку ({repo}): Cleave туди не пушить. Нічого не зроблено.",
+    "Cleave does not push to the branch {branch}. Nothing was done.":
+        "Cleave не пушить у гілку {branch}. Нічого не зроблено.",
+    "The push to #{number} ran, but GitHub does not show {sha} as the head. Check the PR's commits before pushing"
+    " again: {url}":
+        "Пуш у #{number} виконано, але GitHub не показує {sha} як останній коміт. Перевірте коміти PR, перш ніж"
+        " пушити знову: {url}",
+    "Not pushed to #{number}: {why}.": "Не запушено в #{number}: {why}.",
+    "Pushed {sha} to #{number}: {url}": "Запушено {sha} у #{number}: {url}",
+    'Reply "post replies {numbers}" to answer the fixed threads.':
+        'Відповідайте "post replies {numbers}", щоб відповісти у виправлених тредах.',
 
     # grammar.py: check_command's answers and describe()
     'This is a review message: "post replies" works on a re-check message. Nothing was done.':
         'Це повідомлення рев\'ю: "post replies" працює в повідомленні повторної перевірки. Нічого не зроблено.',
     'This is a re-check message: reply "post replies 1 3". Nothing was done.':
         'Це повідомлення повторної перевірки: відповідайте "post replies 1 3". Нічого не зроблено.',
+    'This is a threads message: reply "push", "post replies 1 3", "text 2", "diff" or "again: …". Nothing was done.':
+        'Це повідомлення про треди: відповідайте "push", "post replies 1 3", "text 2", "diff" або "again: …".'
+        ' Нічого не зроблено.',
+    '"{action}" works on a threads message of your own PR. Nothing was done.':
+        '"{action}" працює в повідомленні про треди вашого PR. Нічого не зроблено.',
     'Edit one number at a time: "edit 2: …". Nothing was done.':
         'Редагуйте по одному номеру: "edit 2: …". Нічого не зроблено.',
     'Name a number: "text 2". Nothing was done.': 'Вкажіть номер: "text 2". Нічого не зроблено.',
@@ -238,6 +289,13 @@ TEXTS: dict[str, str] = {
     "A review of #{number} at this head is already queued.": "Рев'ю #{number} на цьому коміті вже в черзі.",
     "#{number} is not on the board any more; nothing was done.": "#{number} уже немає на дошці; нічого не зроблено.",
     "Queued a review of #{number} at {head}.": "Рев'ю #{number} на {head} поставлено в чергу.",
+    "Checking before pushing.": "Перевіряю перед пушем.",
+    "This job changed no code: there is no patch.": "Ця задача не змінила коду: патча немає.",
+    "Patch cut: the dashboard shows all of it.": "Патч обрізано: на дашборді він повністю.",
+    "A run on #{number} is already queued.": "Запуск для #{number} уже в черзі.",
+    "#{number} has no threads waiting on you any more; nothing was done.":
+        "У #{number} більше немає тредів, що чекають на вас; нічого не зроблено.",
+    "Queued a new run on #{number} at {head}.": "Новий запуск для #{number} на {head} поставлено в чергу.",
     "Skipped #{number} at {head}: no automatic review of this head.":
         "Пропущено #{number} на {head}: автоматичного рев'ю цього коміту не буде.",
     "Internal error ({name}); nothing was done.": "Внутрішня помилка ({name}); нічого не зроблено.",

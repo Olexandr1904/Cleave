@@ -113,7 +113,7 @@ class ReviewerStore:
     def runnable_jobs(self, now: str) -> list[Job]:
         # A queued job has no retry_at ("" sorts first) unless it waits for GitHub to be available again.
         sql = (
-            f"SELECT {_JOB_COLUMNS} FROM jobs WHERE kind IN ('review', 'recheck') "
+            f"SELECT {_JOB_COLUMNS} FROM jobs WHERE kind IN ('review', 'recheck', 'address') "
             "AND state IN ('queued', 'deferred') AND retry_at <= ? "
             "ORDER BY created_at, rowid"
         )
@@ -128,6 +128,14 @@ class ReviewerStore:
             self._conn.execute(
                 "UPDATE jobs SET state = ?, reason = ?, updated_at = ?, retry_at = ? WHERE id = ?",
                 (state, reason, now, retry_at, job_id),
+            )
+
+    def rehead_job(self, job_id: str, head_sha: str, key: str, now: str) -> None:
+        """Move a job to another head and key: an address job whose fix Cleave pushed."""
+        with self._lock:
+            self._conn.execute(
+                "UPDATE jobs SET head_sha = ?, key = ?, updated_at = ? WHERE id = ?",
+                (head_sha, key, now, job_id),
             )
 
     def save_run(self, run: JobRun) -> None:
@@ -149,7 +157,7 @@ class ReviewerStore:
         sql = (
             f"SELECT {_JOB_COLUMNS}, data FROM jobs "
             "JOIN job_runs ON job_runs.job_id = jobs.id "
-            "WHERE kind IN ('review', 'recheck') AND state IN ('done', 'posted') "
+            "WHERE kind IN ('review', 'recheck', 'address') AND state IN ('done', 'posted') "
             "AND json_extract(data, '$.message_sent') = 0 "
             "ORDER BY created_at, jobs.rowid"
         )
@@ -290,11 +298,16 @@ class ReviewerStore:
             if item["where"] in ("reply", "comment")
         }
 
+    def push_of(self, job: Job) -> Post | None:
+        """The newest push of the job's fix that landed; None when there is none."""
+        return next((p for p in self.posts(job.scope, job.number)
+                     if p.job_id == job.id and p.kind == "push" and p.state == "posted"), None)
+
     def posted_numbers(self, job: Job, report: Report | None, posts: list[Post] | None = None) -> set[int]:
-        """The numbers of the job that landed: a re-check's replies, or the items of a review's `report` that
-        landed at its head (by path, line and title). The one test of "already posted". `posts`: the job's PR's
-        posts, when the caller has read them."""
-        if job.kind == "recheck":
+        """The numbers of the job that landed: a re-check's or an address job's replies, or the items of a
+        review's `report` that landed at its head (by path, line and title). The one test of "already posted".
+        `posts`: the job's PR's posts, when the caller has read them."""
+        if job.kind in ("recheck", "address"):
             return self.posted_replies(job, posts)
         keys = self.posted_keys(job.scope, job.number, job.head_sha, posts)
         items = report.items if report else ()

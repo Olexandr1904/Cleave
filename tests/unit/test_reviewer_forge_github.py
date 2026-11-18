@@ -130,13 +130,17 @@ async def test_reviewed_by_skips_review_without_user():
 @respx.mock
 async def test_pr_full():
     route = respx.get(f"{BASE}/pulls/1712").respond(200, json={
-        **PR, "body": None, "base": {"ref": "develop", "sha": "b" * 40}, "additions": 120, "deletions": 30})
+        **PR, "body": None, "base": {"ref": "develop", "sha": "b" * 40}, "additions": 120, "deletions": 30,
+        "user": {"login": "octo"},
+        "head": {"sha": "a" * 40, "ref": "feature/x", "repo": {"full_name": "acme-org/acme-app"}}})
     r = reader()
     full = await r.pr_full(1712)
     assert dataclasses.asdict(full) == {
         "number": 1712, "title": "Fix cart sync", "body": "", "url": "https://github.com/acme-org/acme-app/pull/1712",
         "state": "open", "head_sha": "a" * 40, "base": "develop", "additions": 120, "deletions": 30,
-        "changed_files": 14, "closed_at": ""}
+        "changed_files": 14, "closed_at": "", "author": "octo", "head_ref": "feature/x",
+        "head_repo": "acme-org/acme-app"}
+    assert (full.author, full.head_ref, full.head_repo) == ("octo", "feature/x", "acme-org/acme-app")
     await r.pr_full(1712)
     assert route.call_count == 2   # uncached
 
@@ -284,3 +288,11 @@ async def test_pr_full_closed_at(closed_at, expected):
         **PR, "body": "", "base": {"ref": "develop", "sha": "b" * 40}, "additions": 1,
         "deletions": 1, "closed_at": closed_at})
     assert (await reader().pr_full(1712)).closed_at == expected
+
+
+@respx.mock
+async def test_pr_full_head_repo_gone():
+    respx.get(f"{BASE}/pulls/1712").respond(200, json={
+        **PR, "body": "", "base": {"ref": "develop", "sha": "b" * 40}, "additions": 1, "deletions": 1,
+        "head": {"sha": "a" * 40, "ref": "feature/x", "repo": None}})
+    assert (await reader().pr_full(1712)).head_repo == ""

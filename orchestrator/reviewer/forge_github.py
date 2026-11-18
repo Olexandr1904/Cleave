@@ -126,6 +126,10 @@ class GitHubForgeReader:
             deletions=pr["deletions"],
             changed_files=pr["changed_files"],
             closed_at=pr["closed_at"] or "",
+            author=_login(pr),
+            head_ref=pr["head"].get("ref", ""),
+            # The head's repo is null when the fork it lived in was deleted.
+            head_repo=(pr["head"].get("repo") or {}).get("full_name", ""),
         )
 
     async def comments(self, number: int) -> PRComments:

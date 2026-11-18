@@ -17,9 +17,10 @@ from orchestrator.reviewer import runner as runner_module
 from orchestrator.reviewer.chat import ReviewerChat
 from orchestrator.reviewer.clone import ReviewClone
 from orchestrator.reviewer.db import connect
+from orchestrator.reviewer.fix import FixError
 from orchestrator.reviewer.forge_github import ForgeError
 from orchestrator.reviewer.lines import drift_line, login_line
-from orchestrator.reviewer.messages import recheck_message, review_message, split_message
+from orchestrator.reviewer.messages import address_message, recheck_message, review_message, split_message
 from orchestrator.reviewer.models import (
     Anchor, BoardRow, BoardSnapshot, Job, JobRun, Post, PRDetails, PRFull, RepoState, SnapshotPR, Turn,
 )
@@ -27,7 +28,7 @@ from orchestrator.reviewer.prepare import Prepared, PrepareError
 from orchestrator.reviewer.report import parse_report
 from orchestrator.reviewer.runner import JobRunner, RunnerConfig, may_still_save, settle
 from orchestrator.reviewer.service import RepoContext, ReviewerService
-from orchestrator.reviewer.session import SessionOutcome, recheck_prompt, review_prompt
+from orchestrator.reviewer.session import SessionOutcome, address_prompt, recheck_prompt, review_prompt
 from orchestrator.reviewer.store import ReviewerStore
 from orchestrator.tg_i18n import fill
 from orchestrator.switches import Switches
@@ -41,8 +42,9 @@ CHAT_ID = "-1001"
 DOC = "docs/review/process.md"
 CFG = ReviewerConfig(enabled=True, base_branch="develop", process=ProcessPartConfig(
     doc=DOC, run_dir="tools/review/runs/PR_{pr}", replies_plan="tools/threads/runs/PR_{pr}/replies_{head9}.json",
-    worktree_dir="../review-wt/PR_{pr}", helper_scripts=["tools/review/*.py"]))
-JOBS = {"review": ReviewerJobConfig("opus", "xhigh", 5400), "recheck": ReviewerJobConfig("opus", "high", 3600)}
+    worktree_dir="../review-wt/PR_{pr}", helper_scripts=["tools/review/*.py"], address_doc="docs/threads.md"))
+JOBS = {"review": ReviewerJobConfig("opus", "xhigh", 5400), "recheck": ReviewerJobConfig("opus", "high", 3600),
+        "address": ReviewerJobConfig("opus", "xhigh", 5400)}
 ENV = {"HOME": "/home/octo", "GH_TOKEN": "ghp_not_real"}
 PR = PRFull(1712, "Fix cart sync ACME-1234", "Keeps the cart in sync.", URL, "open", HEAD, "develop", 20, 10, 14)
 CONFIG_TEXT = '[core]\n\tbare = false\n[remote "origin"]\n\turl = https://github.com/acme-org/acme-app.git\n'
@@ -142,6 +144,9 @@ class Rig:
             raise self.prepare_error
         paths.run_dir.mkdir(parents=True, exist_ok=True)
         paths.replies_plan.parent.mkdir(parents=True, exist_ok=True)
+        if job.kind == "address":   # the PR's worktree, as add_worktree leaves it
+            paths.worktree.mkdir(parents=True, exist_ok=True)
+            (paths.worktree / ".git").write_text(f"gitdir: {job_clone_dir}/.git/worktrees/PR_1712\n")
         return Prepared(PR, self.drift, job_clone)
     async def _locked_part(self):
         await asyncio.sleep(0)  # a real prepare yields: a runner that loops on a job must not starve the clock
@@ -911,6 +916,11 @@ async def test_review_now_is_delivered_without_a_review_turn(tmp_path, monkeypat
     job = rig.add_job(key=f"{HEAD}:now")
     await rig.runner.run_job(job)
     assert rig.state(job) == ("done", "") and rig.chat.texts == [task4_review()]
+
+def test_settle_address_needs_one_of_its_turns():
+    j = Job("a1", SCOPE, 1712, "address", HEAD, f"{HEAD}:T1", "running", "", "t", "t")
+    assert settle(j, board_row(actions=("resolve_threads",)), [j]) == ("done", "")
+    assert settle(j, board_row(actions=("merge",)), [j]) == ("stale", "turn gone")
 
 def test_settle_review_now_and_skip():
     stamp = T0.isoformat()
@@ -1708,3 +1718,102 @@ async def test_an_error_escaping_a_job_is_logged_and_the_job_waits_a_cycle(tmp_p
     assert calls == [job.id]   # not started again at once: no idle wait has passed
     assert f"Reviewer job {job.id} (acme/app #1712) failed: RuntimeError at " in caplog.text
     assert "store gone" not in caplog.text
+
+
+# --- Address jobs ---
+
+ADDRESS_PLAN = [{"n": 1, "thread_id": "T1", "body": "Fixed in {fix_sha}: null check.", "resolve": True, "fixed": True},
+                {"n": 2, "thread_id": "T2", "body": "Intended.", "resolve": False}]
+FIX = {"files": [{"path": "a.kt", "added": 3, "deleted": 1}], "protected": [], "bytes": 120}
+
+def write_address(paths, plan=ADDRESS_PLAN):
+    paths.replies_plan.write_text(json.dumps(plan))
+    (paths.run_dir / "tg_lines.json").write_text(json.dumps({"1": "FIXED · a.kt:3 · null check"}))
+    (paths.worktree / "a.kt").write_text("fixed\n")
+
+def address_rig(tmp_path, monkeypatch, fix=FIX, clean=None):
+    """The rig with the operator's own PR on the board, and require_clean and capture_fix faked (FakeClone runs no
+    git); `clean`: the FixError require_clean raises."""
+    rig = Rig(tmp_path, monkeypatch)
+    rig.store.replace_board(SCOPE, {1712: dataclasses.replace(board_row(actions=("answer_threads",)), roles=["author"])})
+    rig.write, rig.captured = write_address, []
+    async def capture(worktree, patch, protected, **kw):
+        rig.captured.append((worktree, patch, protected))
+        if isinstance(fix, Exception):
+            raise fix
+        return fix
+    async def require_clean(worktree, **kw):
+        if clean is not None:
+            raise clean
+    monkeypatch.setattr(runner_module, "capture_fix", capture)
+    monkeypatch.setattr(runner_module, "require_clean", require_clean)
+    return rig
+
+async def test_address_job_keeps_plan_fix_and_sends_the_message(tmp_path, monkeypatch):
+    rig = address_rig(tmp_path, monkeypatch)
+    job = rig.add_job("address", key=f"{HEAD}:T1")
+    await rig.runner.run_job(job)
+    assert rig.state(job) == ("done", "")
+    run = rig.store.run(job.id)
+    assert run.replies == ADDRESS_PLAN and run.fix == FIX
+    assert (rig.job_dir(job) / "replies_plan.json").is_file()
+    assert rig.captured == [(rig.paths.worktree, rig.job_dir(job) / "fix.patch", [".github/**"])]
+    assert rig.chat.texts == [address_message(SCOPE, 1712, "Fix cart sync", URL, HEAD, ADDRESS_PLAN,
+                                              {1: "FIXED · a.kt:3 · null check"}, FIX)]
+    assert rig.chat.texts[-1].startswith('[acme/app] Threads on your PR #1712')
+    kw = rig.session_kw
+    assert (kw["kind"], kw["job_cfg"]) == ("address", JOBS["address"])
+    assert kw["prompt"] == address_prompt("docs/threads.md", 1712, rig.paths, "octo", "")
+    assert not rig.root(job).exists()
+
+async def test_address_prompt_carries_the_operators_instruction(tmp_path, monkeypatch):
+    rig = address_rig(tmp_path, monkeypatch)
+    job = rig.add_job("address", key=f"{HEAD}:T1")
+    rig.store.save_run(JobRun(job.id, request={"instruction": "leave 2 as it is"}))
+    await rig.runner.run_job(job)
+    assert "The operator's instruction for this run: leave 2 as it is\n" in rig.session_kw["prompt"]
+    assert rig.store.run(job.id).request == {"instruction": "leave 2 as it is"}
+
+async def test_address_job_fails_when_the_worktree_git_pointer_changed(tmp_path, monkeypatch):
+    rig = address_rig(tmp_path, monkeypatch)
+    rig.during = lambda r: (r.paths.worktree / ".git").write_text("gitdir: /elsewhere\n")
+    job = rig.add_job("address", key=f"{HEAD}:T1")
+    await rig.runner.run_job(job)
+    assert rig.state(job) == ("failed", runner_module._CONFIG_CHANGED) and rig.captured == []
+
+async def test_address_job_fails_before_its_session_when_prepare_left_changes(tmp_path, monkeypatch):
+    why = "Prepare left changes in the worktree: junk.txt"
+    rig = address_rig(tmp_path, monkeypatch, clean=FixError(why))
+    job = rig.add_job("address", key=f"{HEAD}:T1")
+    await rig.runner.run_job(job)
+    assert rig.state(job) == ("failed", why) and rig.session_kw is None and rig.captured == []
+    assert not rig.root(job).exists()
+
+async def test_address_job_fails_on_an_unreadable_plan_or_a_fix_error(tmp_path, monkeypatch):
+    rig = address_rig(tmp_path, monkeypatch)
+    rig.write = lambda p: write_address(p, [{"n": 1, "thread_id": "T1", "body": "x", "fix_sha": "abc"}])
+    job = rig.add_job("address", key=f"{HEAD}:T1")
+    await rig.runner.run_job(job)
+    assert rig.state(job) == ("failed", "report unreadable: #1 carries fix_sha") and rig.captured == []
+    rig = address_rig(tmp_path / "second", monkeypatch, fix=FixError("the fix is too large: 2000000 bytes"))
+    job = rig.add_job("address", key=f"{HEAD}:T1")
+    await rig.runner.run_job(job)
+    assert rig.state(job) == ("failed", "the fix is too large: 2000000 bytes")
+
+async def test_address_jobs_are_recovered_and_wait_for_the_first_poll(tmp_path, monkeypatch):
+    rig = address_rig(tmp_path, monkeypatch)
+    running = rig.add_job("address", key=f"{HEAD}:T1")
+    rig.store.set_job_state(running.id, "running", "", T0.isoformat())
+    rig.runner.recover()
+    assert rig.state(running) == ("failed", "interrupted (daemon restarted)")
+    rig.store.save_repo_state(RepoState(SCOPE))   # no `me` recorded yet
+    job = rig.add_job("address", key=f"{HEAD}:T2")
+    assert rig.runner.next_job() is None and rig.state(job) == ("queued", "waiting for the first poll")
+    rig.store.save_repo_state(RepoState(SCOPE, me="octo"))
+    assert rig.runner.next_job().id == job.id
+
+def test_a_patch_in_the_run_directory_is_never_kept(tmp_path):
+    run_dir, job_dir = tmp_path / "run", tmp_path / "job"
+    run_dir.mkdir(); job_dir.mkdir()
+    (run_dir / "fix.patch").write_text("forged")
+    assert runner_module._archive(run_dir, job_dir) == ["fix.patch"] and not (job_dir / "fix.patch").exists()

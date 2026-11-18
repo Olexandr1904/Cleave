@@ -103,16 +103,20 @@ def build_public_reply(*, reason: str = "") -> str:
 def hand_over_to_reviewer(workspace: Workspace) -> ActionResult:
     """Hand the PR to reviewer mode: drop open escalations, finish the stage."""
     state = workspace.state
-    dropped = sum(
-        1 for c in (state.pending_review_comments or [])
-        if c.get("decision") is None
-    )
+    pending = state.pending_review_comments or []
+    undecided = sum(1 for c in pending if c.get("decision") is None)
+    decided = len(pending) - undecided
     state.pending_review_comments = None
     state.human_input_reply = None
     workspace.save_state()
     entry = "PR handed over to reviewer mode"
-    if dropped:
-        entry += f" ({dropped} undecided comment(s) dropped)"
+    notes = []
+    if undecided:
+        notes.append(f"{undecided} undecided comment(s) dropped")
+    if decided:
+        notes.append(f"{decided} decided comment(s) not carried out")
+    if notes:
+        entry += f" ({', '.join(notes)})"
     _log_pipeline(workspace, entry)
     return ActionResult(success=True, next_state=Stage.DONE, error="", metadata={})
 

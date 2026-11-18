@@ -153,6 +153,14 @@ class TestActionFetchPrComments:
 
         ws.transition.assert_not_called()
 
+    def test_hand_over_with_only_decided_comments_logs_not_carried_out(self):
+        from orchestrator.pipeline.actions.fetch_pr_comments import hand_over_to_reviewer
+        ws = _fake_workspace(state=Stage.PR_REVIEW, pr_number=10)
+        ws.state.pending_review_comments = [{"comment_id": 2, "decision": "fix"}]
+        with patch("orchestrator.pipeline.actions.fetch_pr_comments._log_pipeline") as log:
+            hand_over_to_reviewer(ws)
+        log.assert_called_once_with(ws, "PR handed over to reviewer mode (1 decided comment(s) not carried out)")
+
     def test_hand_over_drops_pending_escalations(self):
         from orchestrator.pipeline.actions.fetch_pr_comments import hand_over_to_reviewer
         ws = _fake_workspace(state=Stage.PR_REVIEW, pr_number=10)
@@ -163,7 +171,7 @@ class TestActionFetchPrComments:
         assert (result.success, result.next_state, result.skipped) == (True, Stage.DONE, False)
         assert ws.state.pending_review_comments is None and ws.state.human_input_reply is None
         ws.save_state.assert_called_once()
-        log.assert_called_once_with(ws, "PR handed over to reviewer mode (1 undecided comment(s) dropped)")
+        log.assert_called_once_with(ws, "PR handed over to reviewer mode (1 undecided comment(s) dropped, 1 decided comment(s) not carried out)")
 
 
 class TestActionFinalize:
@@ -254,6 +262,23 @@ class TestHandleActionStage:
         orch._on_ticket_done.assert_awaited_once_with(ws)
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize("reviewed, expected", [
+        (frozenset({"test-co/test-repo"}), True),
+        (None, False),
+    ])
+    async def test_on_ticket_done_passes_handed_over(self, reviewed, expected):
+        from orchestrator.orchestrator import Orchestrator
+        orch = self._make_orchestrator()
+        orch._projects = {}
+        orch.get_tracker_for_workspace = MagicMock(return_value=None)
+        if reviewed is not None:
+            orch._reviewed_repos = reviewed
+        ws = _fake_workspace()
+        with patch("orchestrator.pipeline.actions.finalize.on_ticket_done", new=AsyncMock()) as done:
+            await Orchestrator._on_ticket_done(orch, ws)
+        assert done.await_args.kwargs["handed_over"] is expected
+
+    @pytest.mark.asyncio
     async def test_fetch_runs_for_an_unknown_scope(self):
         from orchestrator.orchestrator import Orchestrator
         orch = self._make_orchestrator()
@@ -301,7 +326,7 @@ class TestHandleActionStage:
     @pytest.mark.asyncio
     async def test_push_still_sends_review_complete_elsewhere(self):
         from integrations.base.notifier import Button
-        orch, ws = await self._run_push(None)
+        orch, _ = await self._run_push(None)
         orch._notifier.send_message.assert_awaited_once()
         call = orch._notifier.send_message.await_args
         assert "tap Review Complete" in call.args[1]

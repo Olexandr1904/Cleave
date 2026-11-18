@@ -22,6 +22,12 @@ SUBPROCESS_TIMEOUT = 300  # 5 minutes
 # in the product repo.
 _PIPELINE_ARTIFACT_EXCLUDE = "ai_pipeline/"
 
+# The state.json of every ticket workspace under the base dir, by the layout
+# `create` writes. Not a recursive search: the setup workspace the dashboard
+# keeps beside tickets/ has a state.json of its own shape, and a source clone
+# may hold a file of that name.
+_TICKET_STATE_GLOB = "*/*/tickets/*/state.json"
+
 
 def _exclude_pipeline_artifacts(source_dir: Path) -> None:
     """Make the clone's git ignore the pipeline's own report directory."""
@@ -204,7 +210,7 @@ class WorkspaceManager:
 
         terminal_states = {"DONE", "ARCHIVED"}
 
-        for state_file in self._base_dir.rglob("state.json"):
+        for state_file in self._base_dir.glob(_TICKET_STATE_GLOB):
             workspace_root = state_file.parent
             try:
                 ws = Workspace(str(workspace_root))
@@ -314,8 +320,8 @@ class WorkspaceManager:
 
         now = datetime.now(timezone.utc)
 
-        # Collect all state files first to avoid rglob issues during deletion
-        state_files = list(self._base_dir.rglob("state.json"))
+        # Collect all state files first to avoid glob issues during deletion
+        state_files = list(self._base_dir.glob(_TICKET_STATE_GLOB))
 
         for state_file in state_files:
             workspace_root = state_file.parent

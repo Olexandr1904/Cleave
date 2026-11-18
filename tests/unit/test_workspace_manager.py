@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 import json
+import logging
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from unittest.mock import patch, MagicMock
 
 import pytest
 
+from dashboard.setup_workspace import create_setup_workspace, write_state
 from orchestrator.constants import REPORT_BA
 from workspace.workspace import Stage, Workspace, WorkspaceState
 from workspace.workspace_manager import WorkspaceManager, WorkspaceError
@@ -201,6 +203,15 @@ class TestWorkspaceDiscovery:
         workspaces = manager.discover_workspaces()
         assert workspaces == []
 
+    def test_setup_workspace_is_not_a_ticket_workspace(self, manager, base_dir, caplog):
+        """The setup workspace the dashboard's wizard leaves beside tickets/ is not read as a ticket."""
+        write_state(create_setup_workspace(base_dir, "acme", "acme-mobile", "input"), "SETUP_DONE")
+        _create_fake_workspace(base_dir, current_state="DEV", ticket_id="T-1")
+        with caplog.at_level(logging.WARNING, logger="workspace.workspace_manager"):
+            workspaces = manager.discover_workspaces()
+        assert [ws.state.ticket_id for ws in workspaces] == ["T-1"]
+        assert [r.getMessage() for r in caplog.records if r.levelno >= logging.WARNING] == []
+
 
 class TestSourceCleanup:
     def test_cleanup_source_removes_source_only(self, manager, base_dir):
@@ -262,6 +273,15 @@ class TestFullCleanup:
     def test_empty_base_dir(self, manager):
         deleted = manager.cleanup_old_workspaces(max_age_days=7)
         assert deleted == []
+
+    def test_setup_workspace_is_left_alone(self, manager, base_dir, caplog):
+        """The setup workspace beside tickets/ is neither read as a ticket nor deleted."""
+        setup = create_setup_workspace(base_dir, "acme", "acme-mobile", "input")
+        write_state(setup, "SETUP_DONE")
+        with caplog.at_level(logging.WARNING, logger="workspace.workspace_manager"):
+            deleted = manager.cleanup_old_workspaces(max_age_days=7)
+        assert deleted == [] and (setup.setup_dir / "state.json").exists()
+        assert [r.getMessage() for r in caplog.records if r.levelno >= logging.WARNING] == []
 
 
 class TestDiscoverWorkspacesIncludesFailedDeferred:

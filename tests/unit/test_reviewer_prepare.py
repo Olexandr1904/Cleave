@@ -439,3 +439,20 @@ async def test_drift_is_carried_by_a_later_failure(world, origin):
     with pytest.raises(PrepareError) as e:
         await world.prepare()
     assert (e.value.outcome, e.value.reason, e.value.drift) == ("failed", "exit 1: no such PR", True)
+
+
+async def test_address_job_needs_its_document_on_the_base(world, origin):
+    process = dataclasses.replace(world.ctx.cfg.process, address_doc="docs/threads.md")
+    world.ctx.cfg = dataclasses.replace(world.ctx.cfg, process=process)
+    world.job = dataclasses.replace(world.job, kind="address", key=f"{origin.head}:T1")
+    assert await outcome(world) == ("failed", "docs/threads.md not on develop")
+    (origin.work / "docs" / "threads.md").write_text("# Threads\n")
+    commit(origin.work, "threads doc")
+    git("push", "origin", "HEAD:develop", cwd=origin.work)
+    assert (await world.prepare()).pr.head_sha == origin.head
+
+
+async def test_a_review_job_does_not_need_the_address_document(world):
+    process = dataclasses.replace(world.ctx.cfg.process, address_doc="docs/threads.md")
+    world.ctx.cfg = dataclasses.replace(world.ctx.cfg, process=process)
+    assert (await world.prepare()).pr.number == 7

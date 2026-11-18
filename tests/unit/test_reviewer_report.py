@@ -12,6 +12,7 @@ from orchestrator.reviewer.report import (
     DroppedItem,
     Report,
     ReportError,
+    parse_address_plan,
     parse_replies_plan,
     parse_report,
     parse_tg_lines,
@@ -357,3 +358,19 @@ def test_a_dropped_line_off_format_is_kept_whole(line, text):
     report = parse_report(REPORT.replace(DROPPED_9, line), HEAD)
     assert report.dropped[-1] == DroppedItem(9, text, text)
     assert [d.number for d in report.dropped] == [7, 8, 9]
+
+
+def test_parse_address_plan():
+    ok = '[{"n": 1, "thread_id": "T1", "body": "Fixed in {fix_sha}: x.", "resolve": true, "fixed": true},' \
+         ' {"n": 2, "thread_id": "T2", "body": "Intended.", "resolve": false},' \
+         ' {"n": 3, "thread_id": "T3", "body": "Intended too.", "fixed": false}]'
+    assert [e["n"] for e in parse_address_plan(ok)] == [1, 2, 3]
+    for bad, why in (
+        ('[{"n": 1, "thread_id": "T1", "body": "x", "fix_sha": "abc"}]', "#1 carries fix_sha"),
+        ('[{"n": 1, "thread_id": "T1", "body": "Fixed.", "fixed": true}]', "#1 is fixed without {fix_sha} in its body"),
+        ('[{"n": 1, "thread_id": "T1", "body": "In {fix_sha}."}]', "#1 names {fix_sha} but is not fixed"),
+        ('[{"n": 1, "thread_id": "T1", "body": "x", "fixed": "yes"}]', "#1: fixed is not true or false"),
+        ('[{"n": 1, "thread_id": "T1"}]', "replies plan unreadable"),
+    ):
+        with pytest.raises(ReportError, match=re.escape(why)):
+            parse_address_plan(bad)

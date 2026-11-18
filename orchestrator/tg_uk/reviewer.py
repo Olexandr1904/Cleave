@@ -21,11 +21,20 @@ TEXTS: dict[str, str] = {
     'Reply to this message: "post replies {numbers}" · "text {first}"':
         'Відповідайте на це повідомлення: "post replies {numbers}" · "text {first}"',
     "No replies drafted.": "Чернеток відповідей немає.",
+    '[{scope}] Threads on your PR #{number} "{title}"': '[{scope}] Треди у вашому PR #{number} "{title}"',
+    "head {head} · {replies} · {change}": "коміт {head} · {replies} · {change}",
+    "fix: {files}, +{added} −{deleted} — not built or tested here":
+        "виправлення: {files}, +{added} −{deleted} — тут не зібрано й не протестовано",
+    "no code change": "код не змінено",
+    "Protected files in the fix ({paths}): Cleave will not push it.":
+        "Захищені файли у виправленні ({paths}): Cleave його не запушить.",
+    "Reply to this message: {commands}": "Відповідайте на це повідомлення: {commands}",
     "… {lines} — the full report is on the dashboard": "… ще {lines} — повний звіт на дашборді",
 
     # lines.py: names of job kinds and turn actions
     "review": "рев'ю",
     "recheck": "повторна перевірка",
+    "address": "обробка тредів",
     "edit": "редагування",
     "draft": "чернетка",
 

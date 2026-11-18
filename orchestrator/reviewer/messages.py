@@ -1,10 +1,11 @@
-"""The reviewer's Telegram messages, in the current Telegram language: the review message and the re-check message.
-What the review model wrote (a finding's title or Telegram line, the event's reason, why a candidate was dropped, a
-drafted reply) is marked for translation (tg_i18n.model_text)."""
+"""The reviewer's Telegram messages, in the current Telegram language: the review message, the re-check message and
+the address message. What the review model wrote (a finding's title or Telegram line, the event's reason, why a
+candidate was dropped, a drafted reply) is marked for translation (tg_i18n.model_text)."""
 from __future__ import annotations
 
 import posixpath
 
+from orchestrator.reviewer.fix import fix_summary
 from orchestrator.reviewer.report import CONFIRMED, KIND_EMOJI, Report, ReportItem
 from orchestrator.tg_i18n import N_, count, model_text, tr
 
@@ -90,6 +91,45 @@ def recheck_message(
     else:
         lines += [tr("No replies drafted."), ""]
     lines.append(url)
+    return "\n".join(lines)
+
+
+def address_message(
+    scope: str,
+    number: int,
+    title: str,
+    url: str,
+    head_sha: str,
+    replies: list[dict],
+    tg_lines: dict[int, str],
+    fix: dict,
+) -> str:
+    if fix:
+        files, added, deleted = fix_summary(fix)
+        change = tr("fix: {files}, +{added} −{deleted} — not built or tested here", files=count(files, "file"),
+                    added=added, deleted=deleted)
+    else:
+        change = tr("no code change")
+    lines = [
+        tr('[{scope}] Threads on your PR #{number} "{title}"', scope=scope, number=number, title=_cut(title)),
+        tr("head {head} · {replies} · {change}", head=head_sha[:9],
+           replies=count(len(replies), "drafted reply", "drafted replies"), change=change),
+    ]
+    if fix.get("protected"):
+        lines.append(tr("Protected files in the fix ({paths}): Cleave will not push it.",
+                        paths=_cut(", ".join(fix["protected"]))))
+    lines.append("")
+    commands = ['"push"'] if fix else []
+    if replies:
+        for entry in replies:
+            gist = tg_lines.get(entry["n"]) or entry["body"].strip().partition("\n")[0]
+            lines.append(f"{entry['n']}. {model_text(_cut(gist))}")
+        numbers = " ".join(str(entry["n"]) for entry in replies)
+        commands += [f'"post replies {numbers}"', f'"text {replies[0]["n"]}"']
+    else:
+        lines.append(tr("No replies drafted."))
+    commands += ['"diff"'] if fix else []
+    lines += ["", tr("Reply to this message: {commands}", commands=" · ".join([*commands, '"again: …"'])), url]
     return "\n".join(lines)
 
 

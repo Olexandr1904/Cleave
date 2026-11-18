@@ -211,6 +211,8 @@ async def _prepare(
         await ctx.clone.refresh()
         if not ctx.clone.has_file(doc):
             raise PrepareError("failed", f"{doc} not on {base}")
+        if job.kind == "address" and not ctx.clone.has_file(process.address_doc):
+            raise PrepareError("failed", f"{process.address_doc} not on {base}")
         if await ctx.clone.fetch_pr_head(n) != head:
             raise PrepareError("superseded", "head moved")
         # The drift check comes before everything that may fail: a changed section is reported even then.

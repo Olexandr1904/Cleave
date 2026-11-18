@@ -211,6 +211,7 @@ class TestHandleActionStage:
         orch._trackers = {}
         orch._get_vcs_for_workspace = MagicMock(return_value=(MagicMock(), MagicMock()))
         orch._get_chat_id = MagicMock(return_value="")
+        orch._is_compared = MagicMock(return_value=False)  # a spec'd mock's own answer is truthy
         return orch
 
     def _make_stage_def(self, action: str) -> SimpleNamespace:

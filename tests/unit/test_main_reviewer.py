@@ -466,6 +466,8 @@ def test_main_builds_the_runner_with_reviewer_contexts(tmp_path, monkeypatch, ca
     contexts, store, switches, failing, report_auth_failure, chat, llm, trackers, config = runner.args
     assert contexts == [ctx]
     assert store is service.args[1] and switches is service.args[2]   # the service's own
+    compared = service.kwargs["compared_tickets"]   # the orchestrator's, read on each poll
+    assert isinstance(compared.__self__, Orchestrator) and compared.__name__ == "compared_tickets"
     assert isinstance(failing.__self__, CredentialHealth) and failing.__name__ == "failing"
     assert report_auth_failure.__self__ is failing.__self__
     assert report_auth_failure.__name__ == "report_auth_failure"

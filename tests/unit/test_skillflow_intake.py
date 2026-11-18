@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+import sqlite3
 from types import SimpleNamespace
 
 import pytest
@@ -10,6 +11,7 @@ from config.schemas import RepoConfig, RepoInfo, SkillFlowConfig, TelegramConfig
 from integrations.base.tracker import TicketData
 from orchestrator.reviewer.db import connect
 from orchestrator.skillflow import intake as intake_module
+from orchestrator.skillflow.compare_store import ComparisonStore
 from orchestrator.skillflow.intake import SkillIntake, choose_skill
 from orchestrator.skillflow.store import SkillStore
 from workspace.workspace import Stage
@@ -26,25 +28,37 @@ def rig(tmp_path):
     (meta / "attachments" / "a.png").write_bytes(b"png")
     ws = SimpleNamespace(meta_dir=meta, state=SimpleNamespace(
         ticket_id="ACME-1", repo_id="app", branch="feature/ACME-1-acme-1", model="claude-opus-5-5",
-        current_state=Stage.ANALYSIS))
+        current_state=Stage.ANALYSIS, workspace_root=str(tmp_path / "ws"), started_at="2026-11-16T09:59:00+00:00"))
     repo_cfg = RepoConfig(repo=RepoInfo(id="app"), ticket_flow="both",
                           telegram=TelegramConfig(default_chat_id="-100"),
                           skill_flow=SkillFlowConfig(bug_skill="fix-this", task_skill="implement-this"))
-    r = SimpleNamespace(ws=ws, repo_cfg=repo_cfg, store=SkillStore(connect(tmp_path / "reviewer.db")),
+    conn = connect(tmp_path / "reviewer.db")
+    r = SimpleNamespace(ws=ws, repo_cfg=repo_cfg, store=SkillStore(conn), comparisons=ComparisonStore(conn),
                         runs_dir=tmp_path / "runs", outside=tmp_path, woken=0)
+    r.runs = r.store
 
     def wake():
         r.woken += 1
 
-    intake = SkillIntake(r.store, r.runs_dir, lambda cfg: cfg.telegram.default_chat_id, wake, now=lambda: T0)
+    r.intake = SkillIntake(r.store, r.runs_dir, lambda cfg: cfg.telegram.default_chat_id, wake, now=lambda: T0,
+                           comparisons=r.comparisons)
+
+    def ticket(**ticket_fields):
+        return TicketData(id="ACME-1", url="https://acme.example/browse/ACME-1", summary="Login crashes",
+                          description="", assignee="Ann", status="To Do", **ticket_fields)
 
     def create(**ticket_fields):
-        ticket = TicketData(id="ACME-1", url="https://acme.example/browse/ACME-1", summary="Login crashes",
-                            description="", assignee="Ann", status="To Do", **ticket_fields)
-        return intake.create(ws, ticket, "acme", repo_cfg)
+        return r.intake.create(ws, ticket(**ticket_fields), "acme", repo_cfg)
 
+    r.ticket = ticket()
     r.create = create
     return r
+
+
+def raising(error):
+    def call(*args, **kwargs):
+        raise error
+    return call
 
 
 def test_choose_skill():
@@ -126,3 +140,23 @@ def test_a_copy_that_cannot_take_the_runs_name_ends_the_run(rig, monkeypatch):
     assert (run.state, run.reason) == ("failed", "ticket copy not stored: OSError")
     assert not any(rig.runs_dir.iterdir()) and rig.woken == 0
     assert rig.create() is not None                                     # an ended run lets the ticket in again
+
+def test_a_run_gets_its_comparison(rig):
+    run = rig.intake.create(rig.ws, rig.ticket, "acme", rig.repo_cfg)
+    c = rig.comparisons.for_run(run.id)
+    assert (c.scope, c.ticket_id, c.state, c.workspace_started_at) == ("acme/app", "ACME-1", "open", rig.ws.state.started_at)
+    assert c.chat_id == run.chat_id and c.skill == run.skill
+    assert (c.summary, c.workspace_root) == ("Login crashes", rig.ws.state.workspace_root)
+
+def test_no_run_no_comparison(rig):
+    rig.repo_cfg.ticket_flow = "staged"
+    assert rig.intake.create(rig.ws, rig.ticket, "acme", rig.repo_cfg) is None
+    assert rig.comparisons.newest_first() == []
+
+def test_a_failed_comparison_add_fails_the_run(rig):
+    rig.comparisons.add = raising(sqlite3.OperationalError("locked"))
+    with pytest.raises(sqlite3.OperationalError):
+        rig.intake.create(rig.ws, rig.ticket, "acme", rig.repo_cfg)
+    (run,) = rig.runs.runs_for_ticket("acme/app", "ACME-1")
+    assert run.state == "failed" and run.reason == "comparison not stored: OperationalError"
+    assert rig.woken == 0

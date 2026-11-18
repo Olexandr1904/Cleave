@@ -111,13 +111,14 @@ def locked(*args):
 
 class Rig:
     """A service on a real store and switches in tmp_path, a settable clock and recorded lines."""
-    def __init__(self, tmp_path, *contexts, failing=lambda key: False, send=None, bus=None):
+    def __init__(self, tmp_path, *contexts, failing=lambda key: False, send=None, bus=None,
+                 compared=lambda scope: frozenset()):
         conn = connect(tmp_path / "rv" / "reviewer.db")
         self.store, self.switches = ReviewerStore(conn), Switches(conn)
         self.lines, self.t = [], T0
         self.service = ReviewerService(list(contexts), self.store, self.switches, failing,
                                        send or self._send, lambda project_id, repo_id: set(),
-                                       event_bus=bus, now=lambda: self.t)
+                                       event_bus=bus, now=lambda: self.t, compared_tickets=compared)
     async def _send(self, line, **anchor): self.lines.append(line)
     def state(self, scope="acme/app"): return self.store.repo_state(scope)
 
@@ -135,6 +136,21 @@ async def test_poll_builds_board_and_queues_review(tmp_path):
     assert (s.status, s.reason, s.failures, s.first_poll_done) == ("ok", "", 0, True)
     assert (s.last_poll_at, s.last_ok_at) == (rig.t.isoformat(), rig.t.isoformat())
     assert s.next_poll_at == (rig.t + timedelta(seconds=300)).isoformat()
+
+@pytest.mark.parametrize("title, compared, queued", [
+    ("ACME-1: Fix 1 [staged]", {"acme/app": frozenset({"ACME-1"})}, []),
+    ("ACME-1: Fix 1 [skill]", {"acme/app": frozenset({"ACME-1"})}, []),
+    ("ACME-1: Fix 1 [staged]", {}, [1]),                                    # the verdict closed it
+    ("ACME-1: Fix 1", {"acme/app": frozenset({"ACME-1"})}, [1]),             # not one of the two PRs
+])
+async def test_a_compared_tickets_pr_gets_no_review_until_the_verdict(tmp_path, title, compared, queued):
+    c = ctx(tmp_path, FakeReadiness(review_snap()), FakeForge({1: dataclasses.replace(det(1), title=title)}))
+    rig = Rig(tmp_path, c, compared=lambda scope: compared.get(scope, frozenset()))
+    await rig.service.poll(c)
+    rig.t = T0 + timedelta(minutes=31)
+    await rig.service.poll(c)
+    assert [j.number for j in rig.store.jobs("acme/app")] == queued
+    assert 1 in rig.store.board("acme/app")      # still on the board
 
 async def test_first_poll_sends_no_turn_lines(tmp_path):
     merge = snap(spr(2, [Turn("octo", "merge")], author="octo"))

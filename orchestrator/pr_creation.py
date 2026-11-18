@@ -14,6 +14,11 @@ from workspace.workspace import Workspace
 
 logger = logging.getLogger(__name__)
 
+STAGED_MARK = " [staged]"             # ends a compared ticket's PR title, as SKILL_MARK ends the skill flow's
+SKILL_MARK = " [skill]"
+COMPARED_MARKS = (STAGED_MARK, SKILL_MARK)
+TITLE_LIMIT = 256                     # characters of the PR title: GitHub refuses a longer one
+
 
 @dataclass
 class PRCreationResult:
@@ -30,6 +35,8 @@ async def create_pr(
     tracker: TrackerInterface,
     repo_config: RepoConfig,
     event_bus: Any = None,
+    *,
+    compared: bool = False,
 ) -> PRCreationResult:
     """Push branch, open PR, transition Jira ticket.
 
@@ -37,6 +44,9 @@ async def create_pr(
     AC2: Open PR with pr_description_template.
     AC3: Store PR number/URL in state.json.
     AC4: Transition Jira to In Review + comment with PR URL.
+
+    `compared` (the ticket is compared with the skill flow): the PR is a draft titled `… [staged]`
+    and AC4 is held; the operator's verdict makes those tracker writes.
 
     Push policy is graceful: if the project has a pre-push hook that fails for
     environmental reasons (e.g. Gradle/AAPT2 toolchain mismatch — see
@@ -101,7 +111,8 @@ async def create_pr(
         )
 
         # Build PR title and body
-        title = f"{state.ticket_id}: {_get_ticket_summary(workspace)}"
+        summary = _get_ticket_summary(workspace)
+        title = pr_title(state.ticket_id, summary, STAGED_MARK) if compared else f"{state.ticket_id}: {summary}"
         body = _build_pr_body(workspace, repo_config)
 
         # AC2: Open PR
@@ -111,30 +122,17 @@ async def create_pr(
             body=body,
             head_branch=branch,
             base_branch=default_branch,
+            # Only a compared PR passes draft: the base VCSInterface and GitLab's open_pr take no such argument.
+            **({"draft": True} if compared else {}),
         )
         logger.info("Opened PR #%d for %s: %s", pr_number, state.ticket_id, pr_url)
 
         # AC3: Store in state
         workspace.update_state(pr_number=pr_number, pr_url=pr_url)
 
-        # AC4: Transition tracker and comment (provider-aware)
-        provider = repo_config.tracker.provider
-        if provider == "jira":
-            in_review_status = repo_config.tracker.jira.statuses.in_review
-        else:  # trello and any future provider keyed on schema names
-            in_review_status = "in_review"
-        try:
-            await tracker.transition_ticket(state.ticket_id, in_review_status)
-        except Exception as e:
-            logger.warning("Failed to transition %s to in_review: %s", state.ticket_id, e)
-
-        try:
-            await tracker.add_comment(
-                state.ticket_id,
-                f"PR opened: {pr_url}",
-            )
-        except Exception as e:
-            logger.warning("Failed to add PR comment to %s: %s", state.ticket_id, e)
+        # AC4: Transition tracker and comment; its failures are logged there and do not fail the PR.
+        if not compared:
+            await tracker_writes_for_pr(tracker, repo_config, state.ticket_id, pr_url)
 
         return PRCreationResult(
             success=True,
@@ -145,6 +143,50 @@ async def create_pr(
     except Exception as e:
         logger.error("PR creation failed for %s: %s", state.ticket_id, e)
         return PRCreationResult(success=False, error=str(e))
+
+
+async def tracker_writes_for_pr(
+    tracker: TrackerInterface,
+    repo_config: RepoConfig,
+    ticket_id: str,
+    pr_url: str,
+) -> list[str]:
+    """Move the ticket to In Review, then comment "PR opened: <url>" (provider-aware).
+
+    Returns one English line per write that failed, [] when both landed. A line names the
+    exception class only: the exception text may carry the tracker's response.
+    """
+    failed: list[str] = []
+    provider = repo_config.tracker.provider
+    if provider == "jira":
+        in_review_status = repo_config.tracker.jira.statuses.in_review
+    else:  # trello and any future provider keyed on schema names
+        in_review_status = "in_review"
+    try:
+        await tracker.transition_ticket(ticket_id, in_review_status)
+    except Exception as e:
+        logger.warning("Failed to transition %s to in_review: %s", ticket_id, e)
+        failed.append(f"move to {in_review_status} failed: {type(e).__name__}")
+
+    try:
+        await tracker.add_comment(
+            ticket_id,
+            f"PR opened: {pr_url}",
+        )
+    except Exception as e:
+        logger.warning("Failed to add PR comment to %s: %s", ticket_id, e)
+        failed.append(f"\"PR opened\" comment failed: {type(e).__name__}")
+    return failed
+
+
+def pr_title(ticket_id: str, summary: str, mark: str) -> str:
+    """`<ticket>: <summary><mark>`, the summary cut so the title fits GitHub's limit; `mark` is the flow's,
+    " [staged]" or " [skill]"."""
+    title = f"{ticket_id}: {summary}{mark}"
+    if len(title) > TITLE_LIMIT:
+        room = TITLE_LIMIT - len(f"{ticket_id}: …{mark}")
+        title = f"{ticket_id}: {summary[:room]}…{mark}"
+    return title
 
 
 def _get_ticket_summary(workspace: Workspace) -> str:

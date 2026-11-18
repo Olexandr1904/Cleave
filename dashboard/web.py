@@ -351,6 +351,7 @@ def create_app(
     switches: Any | None = None,
     credential_health: Any | None = None,
     reviewer: Any | None = None,
+    comparisons: Any | None = None,
 ) -> Starlette:
     """Create the Starlette dashboard application."""
 
@@ -514,6 +515,10 @@ def create_app(
     if reviewer is not None:
         from dashboard.reviews_api import build_review_routes
         routes.extend(build_review_routes(reviewer))
+
+    if comparisons is not None:
+        from dashboard.comparisons_api import build_comparison_routes
+        routes.extend(build_comparison_routes(comparisons))
 
     # Project-create route
     from dashboard.project_create import build_create_route

@@ -107,6 +107,14 @@ export async function loadReviews() {
   return resp.json();
 }
 
+export async function loadComparisons() {
+  const resp = await fetch('/api/comparisons');
+  // The comparison route exists only when the skill flow runs.
+  if (resp.status === 404) return { rows: [], tally: { skill: 0, staged: 0, neither: 0, undecided: 0 } };
+  if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+  return resp.json();
+}
+
 export async function loadReviewDetail(scope, number) {
   const qs = `scope=${encodeURIComponent(scope)}&number=${encodeURIComponent(number)}`;
   const resp = await fetch(`/api/reviews/pr?${qs}`);

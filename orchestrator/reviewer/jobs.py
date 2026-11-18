@@ -6,9 +6,10 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 
 from config.schemas import ReviewerConfig
+from orchestrator.pr_creation import COMPARED_MARKS
 from orchestrator.reviewer.board import JOB_ACTIONS, BoardUpdate
 from orchestrator.reviewer.lines import large_line, turn_line
-from orchestrator.reviewer.models import Job
+from orchestrator.reviewer.models import BoardRow, Job
 
 _GONE_STATES = {"queued": "cancelled", "deferred": "cancelled", "done": "stale"}
 # A new re-check supersedes the PR's older re-checks in these states: a reply plan read from older threads
@@ -51,6 +52,13 @@ def _turn_back(same: list[Job], states: dict[str, tuple[str, str]]) -> None:
             states.setdefault(newest.id, ("done", "turn back"))
 
 
+def held_prs(rows: dict[int, BoardRow], compared_tickets: frozenset[str]) -> frozenset[int]:
+    """The two PRs of each ticket compared with the skill flow, by the mark their titles end with: until the
+    verdict (which retitles the winner and closes the comparison) a review would change one side mid-comparison."""
+    return frozenset(n for n, row in rows.items()
+                     if row.ticket_key in compared_tickets and row.title.endswith(COMPARED_MARKS))
+
+
 def plan_jobs(
     scope: str,
     update: BoardUpdate,
@@ -61,18 +69,21 @@ def plan_jobs(
     now: datetime,
     first_poll: bool,
     posting: frozenset[str] = frozenset(),
+    held: frozenset[int] = frozenset(),
 ) -> Plan:
     """Rules in order: review (new head, turn back), re-check (turn back, new threads), gone turns,
     turn lines.
 
     A job matched by more than one rule gets one state change: the first rule in that order wins. A job in
     `posting` (the ids of the jobs with a Post `posting`) is left to its post by the gone-turn rule: the post
-    itself takes the turn away.
+    itself takes the turn away. A PR in `held` (see held_prs) gets no review and no re-check job.
     """
     plan = Plan([], [], [], [])
     states: dict[str, tuple[str, str]] = {}  # job id -> (state, reason)
     quiet = timedelta(minutes=cfg.quiet_minutes)
     for number, row in update.rows.items():
+        if number in held:
+            continue
         jobs = jobs_by_pr.get(number, [])
         head = row.head_sha
         review_settled = True  # the re-check waits while this head's review is still to come

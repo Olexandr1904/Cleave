@@ -11,7 +11,7 @@ from config.schemas import RepoConfig, RepoInfo, SkillFlowConfig, TelegramConfig
 from integrations.llm.llm_interface import LLMResponse
 from orchestrator.reviewer.commands import redact
 from orchestrator.reviewer.db import connect
-from orchestrator.skillflow import runner as runner_module
+from orchestrator.skillflow import publish as publish_module
 from orchestrator.skillflow.chat import SkillChat
 from orchestrator.skillflow.runner import SkillRepo, SkillRunner
 from orchestrator.skillflow.store import SkillStore
@@ -200,7 +200,8 @@ class Rig:
     and notifier; a clock that moves only when told. One queued run for ACME-1, its ticket copy on disk, and its
     worktree a real directory the gate commands run in."""
 
-    def __init__(self, tmp_path, mode="auto", texts=(), idle_seconds=0.01, gates=None, gate_rounds=2):
+    def __init__(self, tmp_path, mode="auto", texts=(), idle_seconds=0.01, gates=None, gate_rounds=2,
+                 language_of=None):
         conn = connect(tmp_path / "reviewer.db")
         self.store, self.switches = SkillStore(conn), Switches(conn)
         self.switches.set("tickets", "running")          # paused on a first boot
@@ -229,7 +230,7 @@ class Rig:
             [self.repo], self.store, self.chat, self.llm, slot=self.slot, switches=self.switches,
             credential_failing=self.failing.__contains__, get_mode=lambda: self.mode, runs_dir=self.runs_dir,
             secret_paths=[tmp_path / ".env"], event_bus=self, now=self.clock.now, environ=self.environ,
-            idle_seconds=idle_seconds)
+            idle_seconds=idle_seconds, **({} if language_of is None else {"language_of": language_of}))
         self.add_run("ACME-1", NOW, summary="Login crashes",
                      facts={"assignee": "Ann", "status": "To Do", "staged_branch": "feature/ACME-1-acme-1"})
         self.gate_seen = []
@@ -272,11 +273,11 @@ class Rig:
 
     def spy_gates(self, monkeypatch):
         """While the gates run, record whether the slot is held and the run's stored state."""
-        real = runner_module.run_gates
+        real = publish_module.run_gates
 
         async def spy(worktree, commands, env, **kwargs):
             [run] = self.store.runs_for_ticket(SCOPE, "ACME-1")
             self.gate_seen.append((self.slot.locked(), run.state))
             return await real(worktree, commands, env, **kwargs)
 
-        monkeypatch.setattr(runner_module, "run_gates", spy)
+        monkeypatch.setattr(publish_module, "run_gates", spy)

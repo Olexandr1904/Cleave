@@ -11,6 +11,7 @@ from pathlib import Path
 from config.schemas import RepoConfig, SkillFlowConfig
 from integrations.base.tracker import TicketData
 from orchestrator.reviewer.service import utcnow
+from orchestrator.skillflow.compare_store import ComparisonStore
 from orchestrator.skillflow.models import ENDED_STATES, SkillRun
 from orchestrator.skillflow.store import SkillStore
 from orchestrator.switches import scope_of
@@ -31,13 +32,14 @@ def _symlinks(directory: str, names: list[str]) -> list[str]:
 class SkillIntake:
     def __init__(self, store: SkillStore, runs_dir: Path, chat_id_for: Callable[[RepoConfig], str],
                  wake: Callable[[], None], now: Callable[[], datetime] = utcnow, *,
-                 serves: Callable[[str], bool] = lambda scope: True):
+                 serves: Callable[[str], bool] = lambda scope: True, comparisons: ComparisonStore | None = None):
         self._store = store
         self._runs_dir = runs_dir
         self._chat_id_for = chat_id_for
         self._wake = wake
         self._now = now
         self._serves = serves   # whether the runner takes this scope's runs
+        self._comparisons = comparisons
 
     def create(self, workspace, ticket: TicketData, project_id: str, repo_cfg: RepoConfig) -> SkillRun | None:
         """A queued run with its copy at runs_dir/<run id>/ticket/; None when the repo runs only the staged flow or
@@ -78,5 +80,17 @@ class SkillIntake:
                               reason=f"ticket copy not stored: {type(e).__name__}")
             shutil.rmtree(staging, ignore_errors=True)
             raise
+        if self._comparisons is not None:
+            try:
+                self._comparisons.add(scope, ticket.id, run.id, self._now().isoformat(), chat_id=run.chat_id,
+                                      summary=ticket.summary, skill=run.skill,
+                                      workspace_root=workspace.state.workspace_root,
+                                      workspace_started_at=workspace.state.started_at)
+            except BaseException as e:
+                # A run with no comparison would publish a draft PR no verdict ever reaches, while the staged
+                # side runs as uncompared.
+                self._store.claim(run.id, ("queued",), self._now().isoformat(), "failed",
+                                  reason=f"comparison not stored: {type(e).__name__}")
+                raise
         self._wake()
         return run

@@ -167,6 +167,60 @@ def test_qa_passes_when_all_hard_gates_pass_even_if_prose_is_ambiguous(tmp_path)
     assert outcome == "pass"
 
 
+def _gate_that_could_not_run(name: str, hard: bool = True) -> GateResult:
+    return GateResult(
+        name=name, command="./gradlew :app:testDebugUnitTest", exit_code=1, hard_gate=hard,
+        output_tail="Cannot locate tasks that match ':app:testDebugUnitTest' as task 'testDebugUnitTest' "
+                    "is ambiguous in project ':app'. Candidates are: 'testChinaDebugUnitTest', "
+                    "'testGlobalDebugUnitTest'.",
+    )
+
+
+def test_qa_with_a_hard_gate_that_could_not_run_is_not_a_fail(tmp_path):
+    """Nothing in the branch made the gate fail, so there is nothing for dev to fix."""
+    ws = _make_workspace(tmp_path, "ACME-20")
+    outcome = parse_agent_outcome(
+        "qa", "## Status: PASS", ws, gate_results=[_gate_that_could_not_run("tests"), _gate("build", 0)],
+    )
+    assert outcome == "gate_could_not_run"
+
+
+def test_qa_with_only_a_soft_gate_that_could_not_run_still_passes(tmp_path):
+    ws = _make_workspace(tmp_path, "ACME-21")
+    outcome = parse_agent_outcome(
+        "qa", "## Status: PASS", ws,
+        gate_results=[_gate("tests", 0), _gate_that_could_not_run("lint", hard=False)],
+    )
+    assert outcome == "pass"
+
+
+@pytest.mark.asyncio
+async def test_qa_gate_that_could_not_run_blocks_with_the_gate_named(orchestrator_with_stubs, tmp_path):
+    """The operator gets the gate, its command and the build tool's own words; dev gets nothing."""
+    orch = orchestrator_with_stubs
+    ws = _make_workspace(tmp_path, "ACME-22", state=Stage.QA)
+    (ws.reports_dir / "qa-agent-output.md").write_text("## Status: PASS")
+    orch._agent_runtime.execute = AsyncMock(return_value=AgentResult(
+        agent_id="qa-agent", success=True, output="## Status: PASS",
+    ))
+    orch._get_repo_config = MagicMock(return_value=MagicMock())
+    stage_def = MagicMock()
+    stage_def.agent = "qa-agent"
+    stage_def.max_iterations = 2
+
+    with patch(
+        "orchestrator.pipeline.agent_stage.run_gates",
+        return_value=[_gate_that_could_not_run("tests"), _gate("build", 0)],
+    ), patch("orchestrator.pipeline.agent_stage.get_next_stage") as next_stage:
+        await orch._handle_agent_stage(ws, "qa", stage_def)
+
+    next_stage.assert_not_called()
+    assert ws.state.current_state == Stage.BLOCKED
+    assert "gate `tests` could not run" in ws.state.error
+    assert "./gradlew :app:testDebugUnitTest" in ws.state.error
+    assert "is ambiguous in project" in ws.state.error
+
+
 def test_qa_falls_back_to_the_agents_verdict_when_no_gates_configured(tmp_path):
     ws = _make_workspace(tmp_path, "ACME-3")
     (ws.reports_dir / "qa.md").write_text("## Status: FAIL")

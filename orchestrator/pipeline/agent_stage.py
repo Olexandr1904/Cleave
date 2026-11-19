@@ -172,7 +172,10 @@ def parse_agent_outcome(
     output_lower = output.lower()
 
     if stage_id == "qa" and gate_results:
-        return "fail" if failing_hard_gates(gate_results) else "pass"
+        failing = failing_hard_gates(gate_results)
+        if any(gate.could_not_run for gate in failing):
+            return "gate_could_not_run"
+        return "fail" if failing else "pass"
 
     if stage_id == "analysis":
         # BA flagged decisions the ticket asked to align on before work starts.
@@ -436,6 +439,15 @@ async def handle_agent_stage(
             f"no `Status: PASS` or `Status: FAIL` line in {STAGE_REPORT_FILE[stage_id]} "
             "or in the agent's reply"
         )
+        return
+
+    # A gate that could not run found no defect either: its command or the
+    # host is what failed, and the operator is the one who can fix that.
+    if outcome == "gate_could_not_run":
+        await _block_unverified("; ".join(
+            f"gate `{gate.name}` could not run ({gate.could_not_run}): `{gate.command}`"
+            for gate in failing_hard_gates(gate_results) if gate.could_not_run
+        ))
         return
 
     next_stage = get_next_stage(stage_id, workflow, outcome)

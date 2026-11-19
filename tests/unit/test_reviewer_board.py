@@ -30,8 +30,18 @@ def test_membership_rules():
     d = {1: det(1, requested=()), 2: det(2, requested=(), assignees=("octo",)), 3: det(3, requested=()),
          4: det(4), 5: det(5, author="octo", requested=())}
     u = build_board(s, d, {1: False, 2: False, 3: True, 4: False, 5: False}, {}, set(), T0)
-    assert sorted(u.rows) == [2, 3, 4, 5]
-    assert (u.rows[2].roles, u.rows[3].roles, u.rows[5].roles) == (["assignee"], ["reviewer"], ["author"])
+    assert sorted(u.rows) == [1, 2, 3, 4, 5]
+    assert (u.rows[1].roles, u.rows[2].roles, u.rows[3].roles, u.rows[5].roles) == (
+        [], ["assignee"], ["reviewer"], ["author"])
+
+def test_a_pr_i_am_not_on_is_kept_without_a_role():
+    """The board shows every PR the snapshot lists (`status --all` lists every open one): one I have no role on
+    keeps its turns, which are someone else's, and sends no turn line."""
+    u = build_board(snap(spr(1, [Turn("octo-author", "finish_draft")])), {1: det(1, requested=())},
+                    {1: False}, {}, set(), T0)
+    r = u.rows[1]
+    assert (r.roles, r.my_turns, r.other_turns) == ([], [], [{"login": "octo-author", "action": "finish_draft"}])
+    assert u.new_turns == [] and u.gone_turns == []
 
 def test_closed_pr_dropped():
     u = build_board(snap(spr(1, [Turn("octo", "review")])), {}, {}, {}, set(), T0)

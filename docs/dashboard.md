@@ -98,7 +98,7 @@ Credentials are re-checked in the background every 15 minutes, and immediately a
 
 ## Reviews view
 
-**Reviews** in the sidebar (`#/reviews`) shows the reviews board of every repo with `reviewer.enabled: true` in its repo YAML: the open PRs that involve you, and whose turn it is on each. With no such repo the view says `No repo has reviews enabled.` It refreshes with the toolbar's **Refresh** and **Auto** like the Board; the Board's **Hide done** and **+ New Project** are not shown on it.
+**Reviews** in the sidebar (`#/reviews`) shows the reviews board of every repo with `reviewer.enabled: true` in its repo YAML: the open PRs the repo's `readiness.status_command` lists (those that involve you, or every open PR when the command takes `--all`), and whose turn it is on each. With no such repo the view says `No repo has reviews enabled.` It refreshes with the toolbar's **Refresh** and **Auto** like the Board; the Board's **Hide done** and **+ New Project** are not shown on it.
 
 Nothing is posted from the dashboard: Telegram is the only posting path. Queued reviews and re-checks run unattended, up to `reviewer.max_parallel_jobs` (default 6) at once and one per PR, and their result comes to Telegram (see [review and re-check messages](telegram.md#review-and-re-check-messages)); you post it by replying there (see [replying to reviewer messages](telegram.md#replying-to-reviewer-messages)). The dashboard shows what was posted.
 
@@ -127,10 +127,12 @@ The PRs of every repo with reviews are on one board of four columns, by whose mo
 
 | Column | A PR is in it when |
 |---|---|
-| **To review** | one of your turns is `review` or `recheck` |
+| **To review** | one of your turns is `review` or `recheck`, or you have no role on the PR (you are not its author, an assignee or a reviewer) |
 | **To fix** | else you have any other turn but `merge` (`resolve_conflicts`, `request_review`, `answer_threads`, `resolve_threads`, `address_review`, `finish_draft`, `fix_checks`, or any new action) |
 | **With others** | you have no turn: someone else has, or nobody |
 | **To merge** | else your only turn is `merge` |
+
+A PR you have no role on (listed by a status command with `--all`) has a dashed card tagged **Not involved**, and a `not involved` flag in its panel. Its move line says whose move it really is (`<login>: finish draft`); **Review now** reviews it, and no review of it starts by itself, since none of its turns is yours.
 
 Each column lists its PRs the longest unchanged first; an empty one shows a dashed `Nothing to review`, `Nothing to fix`, `Nobody else's move` or `Nothing to merge`. The ticket pipeline's own PRs are on the board too.
 

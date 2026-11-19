@@ -9,7 +9,7 @@ import { renderSwitchPanel } from './switches.js';
 import { esc, fmtIso, timeAgo } from './helpers.js';
 import {
   COLUMNS, againConfirm, avatarsHtml, boardColumns, boardTiles, buttonsHtml, cardHtml, cardTitle, columnOf,
-  findingsScale, jobLineHtml, moveText, repoFilterOf, ticketLinkHtml,
+  findingsScale, jobLineHtml, moveText, notInvolved, repoFilterOf, ticketLinkHtml,
 } from './reviews-board.js';
 
 // The board's names for the report's finding kinds (orchestrator/reviewer/service.py's _FINDING_KINDS).
@@ -202,8 +202,8 @@ function panelHeadHtml(target, pr) {
   // The card's language: the moves in words and the job line, never a turn code or a green "Report ready".
   const repo = repos.find(r => r.scope === target.scope);
   const move = moveText(pr, columnOf(pr), repo?.me);
-  const flags = [pr.large && 'large', pr.draft && 'draft', pr.pipeline && 'pipeline'].filter(Boolean)
-    .map(flag => `<span class="reviews-flag">${flag}</span>`).join('');
+  const flags = [notInvolved(pr) && 'not involved', pr.large && 'large', pr.draft && 'draft', pr.pipeline && 'pipeline']
+    .filter(Boolean).map(flag => `<span class="reviews-flag">${flag}</span>`).join('');
   return `<div class="review-panel-head">
     <div class="review-panel-row">${back}
       <a class="reviews-num" href="${esc(pr.url)}" target="_blank" rel="noopener"

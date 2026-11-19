@@ -61,6 +61,20 @@ test('columnOf: my review or re-check, then any other move of mine but merge, th
   assert.equal(B.columnOf(pr(1, { other_turns: [other('octo-dev', 'merge')] })), 'others');
 });
 
+test('a PR I am not on goes to To review, marked, with whose move it really is', () => {
+  const draft = pr(18, { roles: [], draft: true, other_turns: [other('octo-dev', 'finish_draft')] });
+  assert.equal(B.columnOf(draft), 'review');
+  assert.equal(B.columnOf(pr(19, { roles: [] })), 'review');
+  assert.deepEqual(B.moveText(draft, 'review', 'octo'), { logins: ['octo-dev'], text: 'octo-dev: finish draft' });
+  const card = B.cardHtml('acme/app', draft, VIEW);
+  assert.match(card, /<article class="reviews-card is-not-involved"/);
+  assert.match(card,
+    /<span class="reviews-tag is-not-involved" title="You are not its author, an assignee or a reviewer">Not involved</);
+  assert.match(card, /data-review-action="review-now"/);
+  assert.doesNotMatch(card, /data-review-action="skip"/);  // Skip needs a review turn of mine
+  assert.doesNotMatch(B.cardHtml('acme/app', byNumber(15), VIEW), /is-not-involved/);
+});
+
 test('the fixture lands in the four columns, oldest first, in board order', () => {
   assert.deepEqual(B.COLUMNS.map(c => c.key), ['review', 'fix', 'others', 'merge']);
   assert.deepEqual(B.COLUMNS.map(c => c.title), ['To review', 'To fix', 'With others', 'To merge']);

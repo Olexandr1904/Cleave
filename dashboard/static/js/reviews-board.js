@@ -4,10 +4,10 @@
 
 import { esc } from './helpers.js';
 
-// Left to right. A PR is in one column: my review or re-check, else any other move of mine but merge, else my
-// merge; no move of mine, With others.
+// Left to right. A PR is in one column: my review or re-check, or a PR I have no role on (it is open for review),
+// else any other move of mine but merge, else my merge; no move of mine, With others.
 export const COLUMNS = [
-  { key: 'review', title: 'To review', hint: 'your review or re-check', empty: 'Nothing to review' },
+  { key: 'review', title: 'To review', hint: 'your review or re-check; PRs you are not on', empty: 'Nothing to review' },
   { key: 'fix', title: 'To fix', hint: 'your move on your PR', empty: 'Nothing to fix' },
   { key: 'others', title: 'With others', hint: 'no move of yours', empty: "Nobody else's move" },
   { key: 'merge', title: 'To merge', hint: 'your merge', empty: 'Nothing to merge' },
@@ -33,11 +33,13 @@ export const actionWords = action => WORDS[action] ?? String(action).replaceAll(
 // The repo the hash names (#/reviews/<scope>) when it is listed; else null: every repo.
 export const repoFilterOf = (scope, repos) => (scope && repos.some(r => r.scope === scope) ? scope : null);
 export const isMine = pr => pr.roles.includes('author');
+// Not its author, an assignee or a reviewer: the board lists it because the repo's status command lists every PR.
+export const notInvolved = pr => !pr.roles.length;
 
 export function columnOf(pr) {
   const turns = pr.my_turns;
+  if (turns.some(a => a === 'review' || a === 'recheck') || notInvolved(pr)) return 'review';
   if (!turns.length) return 'others';
-  if (turns.some(a => a === 'review' || a === 'recheck')) return 'review';
   if (turns.some(a => a !== 'merge')) return 'fix';
   return 'merge';
 }
@@ -149,7 +151,7 @@ export function boardTiles(prs, now) {
 
 // What the card's bottom line says and whose avatars it shows.
 export function moveText(pr, column, me) {
-  if (column === 'others') {
+  if (column === 'others' || notInvolved(pr)) {  // a PR I am not on: whose move it really is
     const logins = [...new Set(pr.other_turns.map(t => t.login))];
     if (!logins.length) return { logins, text: "nobody's turn" };
     const of = login => [...new Set(pr.other_turns.filter(t => t.login === login).map(t => actionWords(t.action)))];
@@ -320,9 +322,12 @@ export function cardHtml(scope, pr, view) {
     .map(flag => `<span class="reviews-flag">${flag}</span>`).join('');
   const title = cardTitle(pr.title, pr.ticket_key);
   const buttons = buttonsHtml(scope, pr, 'card');
-  return `<article class="reviews-card" tabindex="0" data-review-row="${esc(key)}" data-fk="row:${esc(key)}"
+  const tag = isMine(pr) ? '<span class="reviews-tag is-mine">Your PR</span>'
+    : notInvolved(pr) ? '<span class="reviews-tag is-not-involved" title="You are not its author, an assignee or a reviewer">Not involved</span>'
+      : '<span class="reviews-tag">Reviewing</span>';
+  return `<article class="reviews-card${notInvolved(pr) ? ' is-not-involved' : ''}" tabindex="0" data-review-row="${esc(key)}" data-fk="row:${esc(key)}"
       data-scope="${esc(scope)}" data-number="${esc(pr.number)}">
-    <div class="reviews-card-head"><span class="reviews-tag${isMine(pr) ? ' is-mine' : ''}">${isMine(pr) ? 'Your PR' : 'Reviewing'}</span>
+    <div class="reviews-card-head">${tag}
       <a class="reviews-num" href="${esc(pr.url)}" target="_blank" rel="noopener" data-fk="num:row:${esc(key)}"
         aria-label="Open #${esc(pr.number)} on GitHub">#${esc(pr.number)}</a>${ticketLinkHtml(pr.ticket_key, view.jiraUrl, 'row', key)}${flags}${
       view.repoLabel ? `<span class="reviews-repo-label">${esc(view.repoLabel)}</span>` : ''}</div>

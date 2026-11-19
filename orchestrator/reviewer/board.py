@@ -79,9 +79,9 @@ def build_board(
         d = details.get(pr.number)
         if d is None or d.state != "open":  # not open any more, maybe closed after the list
             continue
+        # A PR I have no role on stays, with roles []: the snapshot decides which PRs the board shows (a status
+        # command with --all lists every open one), and such a PR's turns are someone else's.
         roles = _roles(d, me, reviewed.get(pr.number, False))
-        if not roles:
-            continue
         my_turns = [
             {"action": t.action, "threads": list(t.threads)} for t in pr.turns if t.login == me
         ]

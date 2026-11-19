@@ -84,6 +84,7 @@ reviewer:
   max_files_auto: 40
   readiness:
     kind: command                                   # later: rule
+    # The board shows the PRs this lists: those that involve you, or every open PR when the tool takes "--all".
     status_command: ["python3", "tools/threads/threads.py", "--repo", "{repo}", "status"]
     threads_command: ["python3", "tools/threads/threads.py", "--repo", "{repo}", "threads", "{pr}"]
   process:

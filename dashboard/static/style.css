@@ -1185,6 +1185,9 @@
 .reviews-card-head { display: flex; align-items: center; gap: 6px; color: #6e7681; font-size: 11px; white-space: nowrap; overflow: hidden; }
 .reviews-tag { color: #8b949e; font-size: 9.5px; font-weight: 700; letter-spacing: .07em; text-transform: uppercase; }
 .reviews-tag.is-mine { color: #58a6ff; }
+/* A PR I have no role on: dashed, so it reads as someone else's at a glance. */
+.reviews-card.is-not-involved { border-style: dashed; }
+.reviews-tag.is-not-involved { border: 1px dashed #484f58; border-radius: 4px; padding: 0 4px; }
 .reviews-card-head .reviews-num { font-size: 11px; }
 .reviews-card-head .reviews-flag { font-size: 10.5px; padding: 0 4px; }
 .reviews-ticket { color: #8ab4f8; text-decoration: none; font-variant-numeric: tabular-nums; }

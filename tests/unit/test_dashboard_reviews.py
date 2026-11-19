@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import dataclasses
+from types import SimpleNamespace
 
 import pytest
 from starlette.testclient import TestClient
@@ -22,9 +23,18 @@ HEAD = "0123456789abcdef0123456789abcdef01234567"
 STAMP = "2026-11-12T10:00:00+00:00"
 PR_KEYS = {
     "number", "title", "url", "ticket_key", "roles", "my_turns", "other_turns", "pipeline",
-    "draft", "changed_files", "head", "job", "last_change", "skipped", "large",
+    "draft", "changed_files", "head", "job", "last_change", "skipped", "large", "review", "can_fix", "fix",
 }
 QUEUED_INFO = {"retry_at": "", "started_at": "", "reason": "", "message_sent": False, "findings": None}
+# A PR's newest review as the service gives it (ReviewerService._review_info), passed through.
+REVIEW_INFO = {
+    "id": "r1", "state": "done", "head": HEAD[:9], "started_at": STAMP, "finished_at": "2026-11-12T11:00:10+00:00",
+    "duration_s": 3610, "cost_usd": 28.93, "message_sent": True,
+    "findings": {"critical": 2, "major": 0, "minor": 1, "question": 3, "preexisting": 0, "dropped": 1},
+}
+# A PR's newest address job as the service gives it (ReviewerService._fix_info), passed through.
+FIX_INFO = {"id": "a2", "state": "done", "head": HEAD[:9], "started_at": STAMP, "fix": True, "pushed": False,
+            "posting": False}
 
 
 def _row(number, my_turns=(), other_turns=(), pipeline=False):
@@ -57,14 +67,21 @@ class FakeService:
         self.calls = []
         self.review_now_error = None
         self.skip_error = None
+        self.address_now_error = None
 
     def overview(self):
         return [{
-            "scope": "acme/app", "status": "ok", "reason": "",
+            "scope": "acme/app", "project_id": "acme", "me": "octo", "status": "ok", "reason": "",
             "last_poll_at": STAMP, "next_poll_at": "2026-11-12T10:05:00+00:00",
             "rows": self.rows, "jobs": {1: _job(1)}, "job_info": {1: QUEUED_INFO},
-            "skipped": set(), "large": {3},
+            "skipped": set(), "large": {3}, "reviews": {1: REVIEW_INFO}, "fixable": {2}, "fixes": {2: FIX_INFO},
         }]
+
+    def address_now(self, scope, number):
+        self.calls.append(("address_now", scope, number))
+        if self.address_now_error is not None:
+            raise self.address_now_error
+        return dataclasses.replace(_job(number), id=f"a{number}", kind="address")
 
     def review_now(self, scope, number):
         self.calls.append(("review_now", scope, number))
@@ -132,6 +149,11 @@ def test_get_reviews_groups_and_trims(client):
     assert repo["my_turn"][0]["pipeline"] is True
     assert repo["waiting"][0]["job"] is None
     assert [(p["number"], p["large"]) for p in repo["waiting"]] == [(3, True)]
+    assert (repo["me"], repo["jira_url"]) == ("octo", "")   # no projects passed: no Jira link
+    assert (pr["review"], pr["can_fix"]) == (REVIEW_INFO, False)
+    assert repo["waiting"][0]["review"] is None
+    assert repo["my_turn"][0]["can_fix"] is True
+    assert (repo["my_turn"][0]["fix"], pr["fix"]) == (FIX_INFO, None)
     assert repo["my_turn"][0]["large"] is False
     assert pr["large"] is False
 
@@ -177,7 +199,47 @@ def test_skip_codes(client):
     assert len(svc.calls) == 2
 
 
-@pytest.mark.parametrize("path", ["/api/reviews/review-now", "/api/reviews/skip"])
+def test_fix_now_codes(client):
+    c, svc = client
+    r = c.post("/api/reviews/fix-now", json={"scope": "acme/app", "number": 2})
+    assert r.status_code == 200
+    assert r.json() == {"job": {"id": "a2", "kind": "address", "state": "queued", "head": HEAD[:9]}}
+    assert svc.calls == [("address_now", "acme/app", 2)]
+    svc.address_now_error = LookupError("no PR #9 on the acme/app board")
+    r = c.post("/api/reviews/fix-now", json={"scope": "acme/app", "number": 9})
+    assert r.status_code == 404 and r.json()["error"]
+    svc.address_now_error = ValueError("already queued")
+    r = c.post("/api/reviews/fix-now", json={"scope": "acme/app", "number": 2})
+    assert r.status_code == 409 and r.json()["error"] == "already queued"
+    svc.address_now_error = ValueError("not fixable: not your PR")
+    r = c.post("/api/reviews/fix-now", json={"scope": "acme/app", "number": 1})
+    assert r.status_code == 409 and r.json()["error"] == "not fixable: not your PR"
+    r = c.post("/api/reviews/fix-now", json={})
+    assert r.status_code == 400 and r.json()["error"]
+    assert len(svc.calls) == 4  # a bad body never reaches the service
+
+
+def _projects(tracker):
+    return {"acme": SimpleNamespace(config=SimpleNamespace(tracker=tracker))}
+
+
+JIRA = SimpleNamespace(provider="jira", jira=SimpleNamespace(url="https://acme.atlassian.net/"))
+
+
+@pytest.mark.parametrize("projects, jira_url", [
+    (_projects(JIRA), "https://acme.atlassian.net"),
+    (_projects(SimpleNamespace(provider="linear", jira=JIRA.jira)), ""),
+    (_projects(SimpleNamespace(provider="jira", jira=SimpleNamespace(url=""))), ""),
+    (_projects(None), ""),
+    ({"other": _projects(JIRA)["acme"]}, ""),
+])
+def test_jira_url_from_the_project_tracker(store, projects, jira_url):
+    c = TestClient(create_app(EventBus(), store, reviewer=FakeService(), projects=projects))
+    [repo] = c.get("/api/reviews").json()["repos"]
+    assert repo["jira_url"] == jira_url
+
+
+@pytest.mark.parametrize("path", ["/api/reviews/review-now", "/api/reviews/skip", "/api/reviews/fix-now"])
 @pytest.mark.parametrize("body", [
     b"not json",
     b"[1]",
@@ -196,7 +258,7 @@ def test_bad_body_is_400(client, path, body):
     assert svc.calls == []
 
 
-@pytest.mark.parametrize("path", ["/api/reviews/review-now", "/api/reviews/skip"])
+@pytest.mark.parametrize("path", ["/api/reviews/review-now", "/api/reviews/skip", "/api/reviews/fix-now"])
 @pytest.mark.parametrize("headers", [
     {"Content-Type": "text/plain"},  # a cross-site form or no-cors fetch needs no preflight
     {"Content-Type": "application/json", "Origin": "http://evil.example"},
@@ -296,14 +358,14 @@ def test_detail_route(client):
 
 
 def test_no_posting_route():
-    """Nothing in the dashboard posts or confirms: its review routes are the board, a PR's detail, Review now and
-    Skip (Starlette answers HEAD on a GET route with the GET handler)."""
+    """Nothing in the dashboard posts or confirms: its review routes are the board, a PR's detail, Review now, Skip
+    and Fix now, which only queues an address job (Starlette answers HEAD on a GET route with the GET handler)."""
     routes = build_review_routes(FakeService())
     assert sorted((method, r.path) for r in routes for method in r.methods - {"HEAD"}) == [
         ("GET", "/api/reviews"), ("GET", "/api/reviews/pr"),
-        ("POST", "/api/reviews/review-now"), ("POST", "/api/reviews/skip"),
+        ("POST", "/api/reviews/fix-now"), ("POST", "/api/reviews/review-now"), ("POST", "/api/reviews/skip"),
     ]
-    assert len(routes) == 4
+    assert len(routes) == 5
 
 
 def test_routes_absent_without_service(store):

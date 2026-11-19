@@ -303,13 +303,24 @@ async function init() {
     doRenderEventLog();
   });
 
-  // Bind refresh
-  document.getElementById('toolbar-refresh-btn').addEventListener('click', () => {
-    if (state.view === 'board') doRenderBoard();
-    else if (state.view === 'reviews') renderReviews();
-    else if (state.view === 'comparison') renderComparison();
-    else if (state.view === 'eventlog') doRenderEventLog();
-    else if (state.view === 'detail') renderDetail(state.ticketId, (pid) => showBoard(pid));
+  // Bind refresh. The button says "Refreshing…" until the view has reloaded, and for at least half a
+  // second: the APIs answer in milliseconds, so a redraw alone shows nothing happened.
+  const refreshBtn = document.getElementById('toolbar-refresh-btn');
+  refreshBtn.addEventListener('click', async () => {
+    refreshBtn.disabled = true;
+    refreshBtn.textContent = 'Refreshing…';
+    const shown = new Promise(resolve => setTimeout(resolve, 500));
+    try {
+      if (state.view === 'board') await doRenderBoard();
+      else if (state.view === 'reviews') await renderReviews();
+      else if (state.view === 'comparison') await renderComparison();
+      else if (state.view === 'eventlog') await doRenderEventLog();
+      else if (state.view === 'detail') await renderDetail(state.ticketId, (pid) => showBoard(pid));
+    } finally {
+      await shown;
+      refreshBtn.disabled = false;
+      refreshBtn.textContent = 'Refresh';
+    }
   });
 
   // Bind auto-refresh toggle

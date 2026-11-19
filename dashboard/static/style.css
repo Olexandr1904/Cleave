@@ -101,6 +101,9 @@
     transition: border-color .12s;
   }
   select:hover, button:hover { border-color: #58a6ff; }
+  /* Wide enough for "Refreshing…", so the toolbar does not shift while it reloads. */
+  #toolbar-refresh-btn { min-width: 96px; }
+  #toolbar-refresh-btn:disabled { color: #8b949e; border-color: #30363d; cursor: progress; }
 
   label.auto-refresh {
     display: flex;

@@ -52,6 +52,24 @@ def state_to_stage(state: str) -> str | None:
     return _STATE_TO_STAGE.get(state)
 
 
+def reset_attempts_from(workspace: Workspace, state: str) -> None:
+    """Give the stage an operator sends a ticket back to, and every stage after it, a fresh attempt budget.
+
+    A stage at its cap escalates before it runs (see advance_workspace). Sent back to a stage with that
+    counter at the cap, a ticket escalated again without an agent run; restarted from an earlier stage, it did
+    so at each later stage whose counter was still at its cap. Stages before the restart point keep their counts.
+    """
+    stage_ids = list(_STAGE_TO_STATE)
+    stage_id = state_to_stage(state)
+    if stage_id is None:
+        return
+    iterations = workspace.state.stage_iterations
+    iterations[stage_id] = 0
+    for later in stage_ids[stage_ids.index(stage_id) + 1:]:
+        if later in iterations:
+            iterations[later] = 0
+
+
 def advance_to_stage(
     workspace: Workspace,
     stage_id: str,

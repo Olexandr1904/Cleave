@@ -208,6 +208,21 @@ class TestRetryEndpoint:
         assert resp.json()["new_state"] == "PLAN_REVIEW"
         assert ws.state.stage_iterations["plan_review"] == 0
 
+    def test_retry_frees_the_stages_after_its_target_too(self, client, orchestrator, tmp_path):
+        """Sent back to plan review with dev and the scope check still at their caps, the ticket would
+        escalate at each of them without an agent run."""
+        from orchestrator.constants import REPORT_BA
+        ws = _make_workspace("T-1", "FAILED", previous="DEV", error="stuck")
+        ws.reports_dir = tmp_path
+        (tmp_path / REPORT_BA).write_text("# plan")
+        ws.state.stage_iterations = {"analysis": 5, "plan_review": 2, "dev": 3, "scope_check": 2}
+        orchestrator.get_active_workspaces.return_value = [ws]
+
+        resp = client.post("/api/workspaces/T-1/retry")
+
+        assert resp.json()["new_state"] == "PLAN_REVIEW"
+        assert ws.state.stage_iterations == {"analysis": 5, "plan_review": 0, "dev": 0, "scope_check": 0}
+
 
 class TestClearGradleAndRetryEndpoint:
     def test_clears_cache_and_retries_when_signature_matches(
@@ -776,8 +791,3 @@ class TestPauseFallsBackToDiskScan:
                                 content=json.dumps({"confirm": True}))
         assert resp.status_code == 404
 
-
-def test_plan_review_is_a_counter_stage() -> None:
-    """Retrying into plan_review must clear its iteration counter."""
-    from dashboard.actions import _COUNTER_STAGE_KEYS
-    assert "plan_review" in _COUNTER_STAGE_KEYS

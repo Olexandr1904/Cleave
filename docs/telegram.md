@@ -150,7 +150,7 @@ When Cleave escalates a BLOCKED workspace, the message you receive in Telegram i
 
 - The reply text is stored on `state.human_input_reply` and appended to `meta/human-input.md`, together with the message it answers (`In reply to:`), so a short answer such as `yes` keeps its meaning. Every agent of the ticket then gets your replies as the **Operator Replies** section of its instructions, apart from the ticket text.
 - The workspace transitions out of BLOCKED back to its `previous_state` and the orchestrator wakes immediately.
-- The stage it goes back to gets a fresh attempt budget: a stage that was blocked by its attempt cap (`stuck after 2/2 attempts`) runs again. The other stages keep their counts.
+- The stage it goes back to, and every stage after it, gets a fresh attempt budget: a stage that was blocked by its attempt cap (`stuck after 2/2 attempts`) runs again. The stages before it keep their counts. `retry TICKET-1 from <stage>` and the dashboard's Retry follow the same rule.
 - If you reply with `retry`, the workspace re-enters its `previous_state` without adding context — useful when the agent just needs another shot.
 - If you reply with `skip`, the workspace is advanced to the next stage (e.g. ANALYSIS → DEV) without re-running the blocked stage — useful when you want to move past a stuck agent rather than give it another shot.
 

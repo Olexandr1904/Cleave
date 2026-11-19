@@ -99,3 +99,28 @@ def test_the_question_ends_with_the_block_it_was_asked_in(tmp_path):
     ws.transition(Stage.SCOPE_CHECK)
 
     assert ws.state.human_input_question is None
+
+
+async def test_a_restart_from_an_earlier_stage_frees_every_stage_after_it(tmp_path):
+    """`retry ACME-1 from analysis` reset the analysis counter alone. The ticket then reached plan review, dev and
+    the scope check with their counters still at the caps, and escalated at each one, "stuck after 2/2
+    attempts", without an agent run."""
+    stuck = {"analysis": 5, "plan_review": 2, "dev": 3, "scope_check": 2}
+    ws = _blocked_at_the_cap(tmp_path, Stage.SCOPE_CHECK, dict(stuck))
+    handler = _handler(ws, ParsedIntent(intent="retry", params={"ticket_id": "ACME-1", "from_stage": "analysis"}))
+
+    await handler.handle_message("retry ACME-1 from analysis", "1")
+
+    assert ws.state.current_state == Stage.ANALYSIS
+    assert ws.state.stage_iterations == {"analysis": 0, "plan_review": 0, "dev": 0, "scope_check": 0}
+    ws.transition(Stage.PLAN_REVIEW)        # the BA is done
+    assert await _runs_the_agent(ws)
+
+
+async def test_a_restart_from_a_later_stage_leaves_the_earlier_ones(tmp_path):
+    ws = _blocked_at_the_cap(tmp_path, Stage.SCOPE_CHECK, {"analysis": 5, "plan_review": 2, "dev": 3, "scope_check": 2})
+    handler = _handler(ws, ParsedIntent(intent="retry", params={"ticket_id": "ACME-1", "from_stage": "dev"}))
+
+    await handler.handle_message("retry ACME-1 from dev", "1")
+
+    assert ws.state.stage_iterations == {"analysis": 5, "plan_review": 2, "dev": 0, "scope_check": 0}

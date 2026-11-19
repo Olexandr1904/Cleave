@@ -274,13 +274,16 @@ class Runtime:
         )
 
         while not self._shutdown_event.is_set():
+            # Cleared before the cycle, not after it: a wake that arrives while
+            # the cycle runs (an operator's reply about another ticket) must
+            # start the next cycle, not wait out the poll interval.
+            self._wake_event.clear()
             try:
                 await self.poll_cycle()
             except Exception as e:
                 logger.error("Poll cycle error: %s", e, exc_info=True)
 
             try:
-                self._wake_event.clear()
                 done, pending = await asyncio.wait(
                     [
                         asyncio.create_task(self._shutdown_event.wait()),

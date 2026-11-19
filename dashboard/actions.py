@@ -20,6 +20,7 @@ from orchestrator.constants import (
     REPORT_QA,
     REPORT_SCOPE_GUARD,
 )
+from orchestrator.pipeline.driver import reset_attempts_from
 from workspace.workspace import Stage, archive_workspace
 
 from config.host_os import terminal_launch_command
@@ -27,11 +28,6 @@ from config.host_os import terminal_launch_command
 logger = logging.getLogger(__name__)
 
 TERMINAL_STATES = {Stage.DONE, Stage.ARCHIVED}
-
-# Agent stages that track a per-stage attempt counter in stage_iterations.
-# Retrying into one of these must clear its counter, or the driver's
-# max-iterations cap re-escalates immediately without re-running the agent.
-_COUNTER_STAGE_KEYS = {"analysis", "plan_review", "dev", "scope_check", "code_review", "qa"}
 
 
 def _find_workspace(
@@ -167,12 +163,10 @@ def build_action_routes(
 
         ws.state.human_input_pending = False
         ws.state.error = None
-        # Clear the target stage's attempt counter so the driver's cap check
-        # doesn't immediately re-escalate without running the agent (mirrors the
-        # TG "retry … from <stage>" command).
-        reset_key = str(target).lower()
-        if reset_key in _COUNTER_STAGE_KEYS:
-            ws.state.stage_iterations[reset_key] = 0
+        # Fresh attempt budgets for the target stage and those after it, so the
+        # driver's cap check doesn't re-escalate without running the agent
+        # (the same rule as the TG "retry … from <stage>" command).
+        reset_attempts_from(ws, target)
         # Restore QA as the gating stage so the approval summary and auto-resume
         # logic both know which gate to present.
         extra = {"previous_state": Stage.QA} if target == Stage.AWAITING_APPROVAL else {}

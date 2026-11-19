@@ -28,7 +28,7 @@ from orchestrator.constants import (
     REPORT_QA,
     REPORT_SCOPE_GUARD,
 )
-from orchestrator.pipeline.driver import state_to_stage
+from orchestrator.pipeline.driver import reset_attempts_from
 from orchestrator.reviewer.grammar import parse_reply
 from orchestrator.skillflow.replies import SKILL_OFF
 from orchestrator.switches import GLOBAL, switch_scopes
@@ -482,16 +482,6 @@ class CommandHandler:
         "push": Stage.PUSHED,
     }
 
-    def _fresh_attempts(self, ws: Any, state: str) -> None:
-        """Give the stage the operator sends a ticket back to a fresh attempt budget.
-
-        A stage blocked by its attempt cap keeps its counter at the cap: entered like that, the driver escalates
-        again before the stage runs. The counter's key is the driver's own stage id for the state.
-        """
-        stage_id = state_to_stage(state)
-        if stage_id:
-            ws.state.stage_iterations[stage_id] = 0
-
     async def _handle_reviewed(self, intent: ParsedIntent, chat_id: str, workspaces: list[Any], processing_msg_id: int | None = None) -> None:
         """Signal that code review is complete for a PR_REVIEW workspace."""
         pr_workspaces = [ws for ws in workspaces if ws.state.current_state == Stage.PR_REVIEW]
@@ -574,7 +564,7 @@ class CommandHandler:
 
         ws.state.human_input_pending = False
         ws.state.error = None
-        self._fresh_attempts(ws, target_state)
+        reset_attempts_from(ws, target_state)
         ws.transition(target_state)
         ws.save_state()
 
@@ -642,7 +632,7 @@ class CommandHandler:
         target.state.human_input_pending = False
         _write_human_input(target, input_text)
         resume_state = target.state.previous_state or "ANALYSIS"
-        self._fresh_attempts(target, resume_state)
+        reset_attempts_from(target, resume_state)
         target.transition(resume_state)
         target.save_state()
         self._recently_unblocked[target.state.ticket_id] = (time.time(), resume_state)
@@ -885,7 +875,7 @@ class CommandHandler:
                     resume_state = ws.state.previous_state or Stage.ANALYSIS
                     ws.state.human_input_pending = False
                     ws.state.error = None
-                    self._fresh_attempts(ws, resume_state)
+                    reset_attempts_from(ws, resume_state)
                     ws.transition(resume_state)
                     ws.save_state()
                     _title = tg_format.read_ticket_title(ws)
@@ -903,7 +893,7 @@ class CommandHandler:
                 ws.state.human_input_pending = False
                 _write_human_input(ws, text)
                 resume_state = ws.state.previous_state or Stage.ANALYSIS
-                self._fresh_attempts(ws, resume_state)
+                reset_attempts_from(ws, resume_state)
                 ws.transition(resume_state)
                 ws.save_state()
                 self._recently_unblocked[ws.state.ticket_id] = (time.time(), resume_state)

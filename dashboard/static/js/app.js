@@ -40,7 +40,7 @@ function showBoard(projectId, fromHash) {
   showBoardControls(true);
   updateActiveNav(projectId ? `nav-proj-${projectId}` : 'nav-board');
   scheduleAutoRefresh();
-  doRenderBoard();
+  loadView();
   if (!fromHash) setHash(projectId ? `#/board/${projectId}` : '#/board');
 }
 
@@ -54,7 +54,7 @@ function showReviews(fromHash, repo = null) {
   updateActiveNav('nav-reviews');
   scheduleAutoRefresh();
   setReviewsRepo(repo);
-  renderReviews();
+  loadView();
   if (!fromHash) setHash(repo ? `#/reviews/${repo}` : '#/reviews');
 }
 
@@ -66,7 +66,7 @@ function showComparison(fromHash) {
   showBoardControls(false);
   updateActiveNav('nav-comparison');
   scheduleAutoRefresh();
-  renderComparison();
+  loadView();
   if (!fromHash) setHash('#/comparison');
 }
 
@@ -78,7 +78,7 @@ function showEventLog(fromHash) {
   showBoardControls(true);
   updateActiveNav('nav-eventlog');
   scheduleAutoRefresh();
-  doRenderEventLog();
+  loadView();
   if (!fromHash) setHash('#/eventlog');
 }
 
@@ -90,6 +90,7 @@ function showSettings(fromHash) {
   showBoardControls(true);
   updateActiveNav('nav-settings');
   stopAutoRefresh();
+  loadView();
   import('./settings.js').then(({ renderSettings }) => renderSettings());
   if (!fromHash) setHash('#/settings');
 }
@@ -101,8 +102,21 @@ function showDetail(ticketId, fromHash) {
   showBoardControls(true);
   document.getElementById('view-title').textContent = `Ticket: ${ticketId}`;
   stopAutoRefresh();
-  renderDetail(ticketId, (projectId) => showBoard(projectId));
+  loadView();
   if (!fromHash) setHash(`#/ticket/${ticketId}`);
+}
+
+// Load the current view; "Updated hh:mm:ss" beside Auto (30s) says when it last loaded. Settings has
+// no data to reload: no time.
+async function loadView() {
+  const updated = document.getElementById('last-updated');
+  if (state.view === 'board') await doRenderBoard();
+  else if (state.view === 'reviews') await renderReviews();
+  else if (state.view === 'comparison') await renderComparison();
+  else if (state.view === 'eventlog') await doRenderEventLog();
+  else if (state.view === 'detail') await renderDetail(state.ticketId, (pid) => showBoard(pid));
+  else { updated.textContent = ''; return; }
+  updated.textContent = `Updated ${new Date().toLocaleTimeString('en-GB', { hour12: false })}`;
 }
 
 function routeFromHash() {
@@ -265,10 +279,7 @@ function scheduleAutoRefresh() {
   const cb = document.getElementById('auto-refresh-cb');
   if (cb && cb.checked) {
     state.timer = setInterval(() => {
-      if (state.view === 'board') doRenderBoard();
-      else if (state.view === 'reviews') renderReviews();
-      else if (state.view === 'comparison') renderComparison();
-      else if (state.view === 'eventlog') doRenderEventLog();
+      loadView();
       updateDaemonStatus();
     }, 30000);
   }
@@ -311,11 +322,7 @@ async function init() {
     refreshBtn.textContent = 'Refreshing…';
     const shown = new Promise(resolve => setTimeout(resolve, 500));
     try {
-      if (state.view === 'board') await doRenderBoard();
-      else if (state.view === 'reviews') await renderReviews();
-      else if (state.view === 'comparison') await renderComparison();
-      else if (state.view === 'eventlog') await doRenderEventLog();
-      else if (state.view === 'detail') await renderDetail(state.ticketId, (pid) => showBoard(pid));
+      await loadView();
     } finally {
       await shown;
       refreshBtn.disabled = false;
@@ -348,7 +355,7 @@ async function init() {
     routeFromHash();
   } else {
     updateActiveNav('nav-board');
-    await doRenderBoard();
+    await loadView();
   }
   await updateDaemonStatus();
   scheduleAutoRefresh();

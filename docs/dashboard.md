@@ -14,7 +14,7 @@ The dashboard runs in-process with the daemon — when you start Cleave (`./run.
 - **Configured at:** `global.yaml` → `dashboard.host`, `dashboard.port`
 - **Disable:** `dashboard.enabled: false` in `global.yaml`
 - **Database:** `dashboard.db_path` (default `data/events.db`) — SQLite event store
-- **Auto-refresh:** every 5 s, toggle off via the **Auto (5s)** checkbox
+- **Auto-refresh:** every 30 s, toggle off via the **Auto (30s)** checkbox
 - **URL hash routing:** the active view is saved in the URL hash, so refreshing keeps you on the same page
 
 If `projects` is empty when the daemon starts, the dashboard still comes up so you can create your first project from the wizard.
@@ -37,7 +37,7 @@ If `projects` is empty when the daemon starts, the dashboard still comes up so y
 - **Hide done** — checkbox to remove DONE/ARCHIVED workspaces from the Board
 - **+ New Project** — opens the project-creation wizard (Atlas)
 - **Refresh** — manual reload
-- **Auto (5s)** — toggle auto-refresh
+- **Auto (30s)** — toggle auto-refresh
 
 In the Event Log view, an additional event-type filter dropdown appears.
 

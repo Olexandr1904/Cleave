@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 
 import pytest
@@ -245,3 +246,11 @@ def test_static_files_are_revalidated(client):
     r = client.get("/static/js/app.js")
     assert r.status_code == 200
     assert r.headers["cache-control"] == "no-cache"
+
+
+def test_auto_refresh_label_names_its_interval(client):
+    """The toolbar's checkbox names the period app.js refreshes at; the two drifted once (label 5 s, timer 30 s)."""
+    label = re.search(r"Auto \((\d+)s\)", client.get("/").text)
+    timer = re.search(r"function scheduleAutoRefresh\(\).*?\},\s*(\d+)\);", client.get("/static/js/app.js").text, re.S)
+    assert label and timer
+    assert int(label.group(1)) * 1000 == int(timer.group(1))

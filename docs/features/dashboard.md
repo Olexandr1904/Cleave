@@ -50,7 +50,7 @@ Local web dashboard providing real-time visibility into the Cleave pipeline. Sho
 - [x] Project list shows all active projects
 - [x] Clicking a project shows its tickets and events
 - [x] Clicking a ticket shows its full event timeline
-- [x] Auto-refresh updates the view every 5 seconds
+- [x] Auto-refresh updates the view every 30 seconds
 - [x] Event type filter works
 - [x] All existing tests still pass
 - [x] Dashboard config in global.yaml

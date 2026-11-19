@@ -113,6 +113,17 @@ test('boardTiles on the fixture', () => {
   assert.deepEqual(t.longest, { value: '2d', sub: '#14 · re-check', alert: false });
 });
 
+test('boardTiles: a PR I am not on is in To review but does not need me', () => {
+  const notMine = [
+    pr(18, { roles: [], draft: true, other_turns: [other('octo-dev', 'finish_draft')] }),
+    pr(19, { roles: [], other_turns: [other('octo-dev', 'answer_threads')] }),
+  ];
+  assert.deepEqual(B.boardColumns([...FIXTURE, ...notMine]).review.map(p => p.number), [18, 19]);
+  assert.deepEqual(B.boardTiles([...FIXTURE, ...notMine], NOW).needYou, { value: 3, sub: '2 to fix · 1 to merge', alert: false });
+  const toReview = pr(20, { my_turns: ['review'] });
+  assert.deepEqual(B.boardTiles([toReview, ...notMine], NOW).needYou, { value: 1, sub: '1 to review', alert: false });
+});
+
 test('boardTiles on an empty board', () => {
   const t = B.boardTiles([], NOW);
   assert.deepEqual([t.needYou.value, t.critical.value, t.waiting.value, t.longest.value], [0, 0, 0, '—']);

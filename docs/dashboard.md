@@ -142,7 +142,7 @@ Four tiles count the PRs the repo chips show (the search does not change them):
 
 | Tile | Value | Under it |
 |---|---|---|
-| **Need you** | the PRs in To review, To fix and To merge | how many in each: `2 to fix · 1 to merge` |
+| **Need you** | the PRs in To review, To fix and To merge where the move is yours: a PR you have no role on (**Not involved**) is not counted | how many in each: `2 to fix · 1 to merge` |
 | **Critical in your PRs** | the critical findings of the reviews of your own PRs (self-reviews) at their current head, `done` or `posted`; red above 0 | the PRs with the most: `self-reviews: 15 in #1712 · 4 in #1715`, or `no self-reviews` |
 | **Waiting on others** | the PRs in With others | who holds them: `all on <login>`, or `<login> 3 · <login> 1` |
 | **Longest wait** | how long the oldest PR in With others has been unchanged | its number and what it waits for: `#1708 · re-check` |

@@ -125,9 +125,11 @@ export function findingsScale(prs) {
 
 export function boardTiles(prs, now) {
   const cols = boardColumns(prs);
-  const mineCount = ['review', 'fix', 'merge'].reduce((n, k) => n + cols[k].length, 0);
+  // Need you: the PRs where the move is mine. A PR I am not on sits in To review, but nothing on it waits for me.
+  const need = Object.fromEntries(['review', 'fix', 'merge'].map(k => [k, cols[k].filter(pr => !notInvolved(pr)).length]));
+  const mineCount = need.review + need.fix + need.merge;
   const needSub = [['review', 'to review'], ['fix', 'to fix'], ['merge', 'to merge']]
-    .filter(([k]) => cols[k].length).map(([k, w]) => `${cols[k].length} ${w}`).join(' · ');
+    .filter(([k]) => need[k]).map(([k, w]) => `${need[k]} ${w}`).join(' · ');
 
   const selfReviews = prs.filter(pr => isMine(pr) && shownReview(pr) && pr.review.head === pr.head);
   const critical = selfReviews.map(pr => [pr.number, pr.review.findings.critical]).filter(([, c]) => c > 0)

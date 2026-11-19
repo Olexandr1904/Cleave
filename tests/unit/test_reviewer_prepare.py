@@ -11,12 +11,13 @@ from orchestrator.reviewer.clone import ReviewClone
 from orchestrator.reviewer.commands import CommandResult, base_env
 from orchestrator.reviewer.db import connect
 from orchestrator.reviewer.forge_github import ForgeError
-from orchestrator.reviewer.models import Job, PRComments, PRFull
+from orchestrator.reviewer.models import Job, JobRun, PRComments, PRFull
 from orchestrator.reviewer.prepare import (
     JobPaths, PrepareError, existing_comments_md, job_paths, prepare, section_hash, section_text,
     ticket_json,
 )
 from orchestrator.reviewer.readiness import ReadinessError
+from orchestrator.reviewer.report import Report, ReportItem, confirmed_findings
 from orchestrator.reviewer.service import RepoContext
 from orchestrator.reviewer.store import ReviewerStore
 
@@ -456,3 +457,73 @@ async def test_a_review_job_does_not_need_the_address_document(world):
     process = dataclasses.replace(world.ctx.cfg.process, address_doc="docs/threads.md")
     world.ctx.cfg = dataclasses.replace(world.ctx.cfg, process=process)
     assert (await world.prepare()).pr.number == 7
+
+
+# --- Findings jobs ---
+
+def findings_job(world, origin, *kinds, review_head=None, doc=True, request=True):
+    """world.job becomes a findings job of the operator's self-review at the job's head (review_head: the review's
+    head), whose report has items of `kinds`; with `doc`, the address document is on the base."""
+    process = dataclasses.replace(world.ctx.cfg.process, address_doc="docs/threads.md")
+    world.ctx.cfg = dataclasses.replace(world.ctx.cfg, process=process)
+    if doc:
+        (origin.work / "docs" / "threads.md").write_text("# Threads\n")
+        commit(origin.work, "threads doc")
+        git("push", "origin", "HEAD:develop", cwd=origin.work)
+    head = review_head or origin.head
+    review = world.store.add_job("acme/app", 7, "review", head, f"{head}:now", T0)
+    world.store.set_job_state(review.id, "done", "", T0)
+    items = tuple(ReportItem(i, k, f"t{i}", "feature.txt", i if i != 2 else None, "", f"b{i}")
+                  for i, k in enumerate(kinds, 1))
+    report = Report("T", head, "", None, "COMMENT", "", items, (), "", "").to_dict()
+    world.store.save_run(JobRun(review.id, report=report))
+    world.job = dataclasses.replace(world.job, kind="findings", key=f"{origin.head}:{review.id}")
+    world.store.save_run(JobRun(world.job.id, request={"review": review.id} if request else {}))
+    return review, report
+
+
+async def test_findings_job_writes_its_findings(world, origin):
+    _, report = findings_job(world, origin, "red", "yellow", "question", "orange", "preexisting")
+    await world.prepare()
+    got = json.loads((world.paths.run_dir / "findings.json").read_text())
+    assert got == confirmed_findings(report)
+    assert [(f["n"], f["severity"], f["line"]) for f in got] == [(1, "critical", 1), (2, "minor", None),
+                                                                  (4, "major", 4)]
+    assert git("rev-parse", "HEAD", cwd=world.worktree) == origin.head
+
+
+async def test_findings_job_needs_the_address_document_on_the_base(world, origin):
+    findings_job(world, origin, "red", doc=False)
+    assert await outcome(world) == ("failed", "docs/threads.md not on develop")
+
+
+async def test_findings_job_fails_without_its_self_review(world, origin):
+    findings_job(world, origin, "red", request=False)
+    assert await outcome(world) == ("failed", "the self-review's report is gone")
+    world.store.save_run(JobRun(world.job.id, request={"review": "gone"}))
+    assert await outcome(world) == ("failed", "the self-review's report is gone")
+
+
+async def test_findings_job_fails_when_the_review_has_no_report(world, origin):
+    review, _ = findings_job(world, origin, "red")
+    world.store.save_run(JobRun(review.id))
+    assert await outcome(world) == ("failed", "the self-review's report is gone")
+
+
+async def test_findings_job_fails_on_a_report_of_another_head(world, origin):
+    findings_job(world, origin, "red", review_head="b" * 40)
+    assert await outcome(world) == ("failed", "the self-review's report is gone")
+
+
+async def test_findings_job_fails_without_a_confirmed_finding(world, origin):
+    findings_job(world, origin, "question", "preexisting")
+    assert await outcome(world) == ("failed", "no confirmed findings")
+
+
+async def test_findings_job_fails_before_the_review_clones_lock(world, origin):
+    findings_job(world, origin, "question")
+    await world.ctx.clone.lock.acquire()     # held: a findings check after it would wait forever
+    try:
+        assert await asyncio.wait_for(outcome(world), 5) == ("failed", "no confirmed findings")
+    finally:
+        world.ctx.clone.lock.release()

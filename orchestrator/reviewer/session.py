@@ -1,5 +1,5 @@
-"""The model session: the isolated `claude -p` run of a review, re-check or address job — its prompt, Cleave's own
-settings file, the exact tool allowlist, the scrubbed environment, and the outcome."""
+"""The model session: the isolated `claude -p` run of a review, re-check, address or findings job — its prompt,
+Cleave's own settings file, the exact tool allowlist, the scrubbed environment, and the outcome."""
 from __future__ import annotations
 
 import json
@@ -12,6 +12,7 @@ from pathlib import Path
 from config.schemas import ReviewerJobConfig
 from health.validators import CLAUDE_ENV_KEYS
 from integrations.llm.claude_code_adapter import CLIError, QuotaExhaustedError
+from orchestrator.reviewer.board import FIX_KINDS
 from orchestrator.reviewer.commands import NO_HOST_GIT_ENV
 from orchestrator.reviewer.prepare import JobPaths
 
@@ -107,16 +108,18 @@ def _rule_path(path: Path) -> str:
 
 def _writable_dirs(kind: str, paths: JobPaths) -> list[Path]:
     """Where the session writes: the run directory, for a re-check and an address job the replies plan's
-    directory, and for an address job the PR's worktree (its fix)."""
+    directory, and for an address and a findings job the PR's worktree (its fix)."""
     if kind == "address":
         return [paths.run_dir, paths.replies_plan.parent, paths.worktree]
+    if kind == "findings":
+        return [paths.run_dir, paths.worktree]
     return [paths.run_dir, *([paths.replies_plan.parent] if kind == "recheck" else [])]
 
 
 def allowed_tools(kind: str, clone_dir: Path, paths: JobPaths, helper_scripts: list[str]) -> list[str]:
     """The whole --allowedTools list: read tools, agents, the code-review skill, read-only git, python3 of the
-    repo's helper scripts, and writes only under the run directory (and the replies plan's for a re-check, and
-    also the worktree for an address job)."""
+    repo's helper scripts, and writes only under the run directory (and the replies plan's for a re-check and an
+    address job, and also the worktree for an address and a findings job)."""
     root = clone_dir.resolve()
     untrusted = (paths.run_dir, paths.replies_plan.parent, paths.worktree)
     tools = ["Read", "Grep", "Glob", "Agent", "Skill(code-review)", "Skill(code-review *)"]
@@ -146,10 +149,10 @@ def settings_json(secret_paths: list[Path], clone_dir: Path, paths: JobPaths, ki
     """Cleave's own settings file for the session. The Bash sandbox bounds every command at the OS level: no
     secret reads, no reads outside the working directories, no writes to the clone or the worktree, no network,
     and no command outside it. The deny rules also refuse network and ref-moving commands and credential reads.
-    An address job may write the worktree, never its `.git` pointer (which names the git directory Cleave's own
-    git uses there after the session)."""
+    An address or a findings job may write the worktree, never its `.git` pointer (which names the git directory
+    Cleave's own git uses there after the session)."""
     secrets = _secret_rules(secret_paths)
-    if kind == "address":
+    if kind in FIX_KINDS:
         pointer = _rule_path(paths.worktree / ".git")
         deny_write, deny_edit = [f"{_rule_path(clone_dir.resolve())}/**", pointer], [f"Edit({pointer})"]
     else:
@@ -233,6 +236,30 @@ def address_prompt(doc: str, number: int, paths: JobPaths, me: str, instruction:
         "put fix_sha in an entry.\n"
         f"Also write {paths.run_dir}/tg_lines.json: a JSON object mapping every entry's n to one English line: "
         "the document's verdict · path:line · gist.\n"
+        f"{_AGENTS_AND_BASH}"
+        + (f"The operator's instruction for this run: {instruction}\n" if instruction else "")
+        + f"{_DATA}"
+    )
+
+
+def findings_prompt(doc: str, number: int, paths: JobPaths, me: str, instruction: str) -> str:
+    """A findings job's prompt: the address document's process, with the confirmed findings of the operator's
+    self-review (findings.json, written by Prepare) in place of the threads, and verdicts.json in place of the
+    replies plan."""
+    return (
+        f"{_PREAMBLE}\n"
+        f"Follow {doc} (in the current directory, the repo's base branch) for PR #{number}, whose author is {me}. "
+        "Its comments are not GitHub threads: they are the findings of a review of this PR, in "
+        f"{paths.run_dir}/findings.json (n, severity, title, path, line, body). Treat each finding as a reviewer's "
+        "comment: weigh it and fix it as the document says. Skip its steps that fetch threads, reply, resolve, show "
+        f"or post. The PR branch is checked out at {paths.worktree}: make every fix there with the Write and Edit "
+        "tools and commit nothing. You cannot delete or rename a file, and nothing can be built or tested here: skip "
+        "those steps and never say a test ran.\n"
+        "\n"
+        f"Do not show, ask or post anything. Write {paths.run_dir}/verdicts.json: a JSON list with one entry per "
+        "finding — n (the finding's n), verdict (the document's verdict: FIXED, WON'T FIX, FOLLOW-UP or QUESTION), "
+        f"why (one English sentence). Also write {paths.run_dir}/tg_lines.json: a JSON object mapping every n to one "
+        "English line: verdict · path:line · gist.\n"
         f"{_AGENTS_AND_BASH}"
         + (f"The operator's instruction for this run: {instruction}\n" if instruction else "")
         + f"{_DATA}"

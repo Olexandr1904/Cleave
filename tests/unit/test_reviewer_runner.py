@@ -20,15 +20,19 @@ from orchestrator.reviewer.db import connect
 from orchestrator.reviewer.fix import FixError
 from orchestrator.reviewer.forge_github import ForgeError
 from orchestrator.reviewer.lines import drift_line, login_line
-from orchestrator.reviewer.messages import address_message, recheck_message, review_message, split_message
+from orchestrator.reviewer.messages import (
+    address_message, findings_message, recheck_message, review_message, split_message,
+)
 from orchestrator.reviewer.models import (
     Anchor, BoardRow, BoardSnapshot, Job, JobRun, Post, PRDetails, PRFull, RepoState, SnapshotPR, Turn,
 )
 from orchestrator.reviewer.prepare import Prepared, PrepareError
-from orchestrator.reviewer.report import parse_report
+from orchestrator.reviewer.report import Report, ReportItem, parse_report
 from orchestrator.reviewer.runner import JobRunner, RunnerConfig, may_still_save, settle
 from orchestrator.reviewer.service import RepoContext, ReviewerService
-from orchestrator.reviewer.session import SessionOutcome, address_prompt, recheck_prompt, review_prompt
+from orchestrator.reviewer.session import (
+    SessionOutcome, address_prompt, findings_prompt, recheck_prompt, review_prompt,
+)
 from orchestrator.reviewer.store import ReviewerStore
 from orchestrator.tg_i18n import fill
 from orchestrator.switches import Switches
@@ -44,7 +48,7 @@ CFG = ReviewerConfig(enabled=True, base_branch="develop", process=ProcessPartCon
     doc=DOC, run_dir="tools/review/runs/PR_{pr}", replies_plan="tools/threads/runs/PR_{pr}/replies_{head9}.json",
     worktree_dir="../review-wt/PR_{pr}", helper_scripts=["tools/review/*.py"], address_doc="docs/threads.md"))
 JOBS = {"review": ReviewerJobConfig("opus", "xhigh", 5400), "recheck": ReviewerJobConfig("opus", "high", 3600),
-        "address": ReviewerJobConfig("opus", "xhigh", 5400)}
+        "address": ReviewerJobConfig("opus", "xhigh", 5400), "findings": ReviewerJobConfig("opus", "max", 7200)}
 ENV = {"HOME": "/home/octo", "GH_TOKEN": "ghp_not_real"}
 PR = PRFull(1712, "Fix cart sync ACME-1234", "Keeps the cart in sync.", URL, "open", HEAD, "develop", 20, 10, 14)
 CONFIG_TEXT = '[core]\n\tbare = false\n[remote "origin"]\n\turl = https://github.com/acme-org/acme-app.git\n'
@@ -144,7 +148,7 @@ class Rig:
             raise self.prepare_error
         paths.run_dir.mkdir(parents=True, exist_ok=True)
         paths.replies_plan.parent.mkdir(parents=True, exist_ok=True)
-        if job.kind == "address":   # the PR's worktree, as add_worktree leaves it
+        if job.kind in ("address", "findings"):   # the PR's worktree, as add_worktree leaves it
             paths.worktree.mkdir(parents=True, exist_ok=True)
             (paths.worktree / ".git").write_text(f"gitdir: {job_clone_dir}/.git/worktrees/PR_1712\n")
         return Prepared(PR, self.drift, job_clone)
@@ -1829,3 +1833,119 @@ def test_a_patch_in_the_run_directory_is_never_kept(tmp_path):
     run_dir.mkdir(); job_dir.mkdir()
     (run_dir / "fix.patch").write_text("forged")
     assert runner_module._archive(run_dir, job_dir) == ["fix.patch"] and not (job_dir / "fix.patch").exists()
+
+
+# --- Findings jobs ---
+
+FINDINGS_VERDICTS = [{"n": 1, "verdict": "FIXED", "why": "null check added"},
+                     {"n": 3, "verdict": "WON'T FIX", "why": "intended"}]
+
+def write_findings(paths, verdicts=FINDINGS_VERDICTS):
+    (paths.run_dir / "verdicts.json").write_text(json.dumps(verdicts))
+    (paths.run_dir / "tg_lines.json").write_text(json.dumps({"1": "FIXED · a.kt:1 · null check"}))
+    (paths.worktree / "a.kt").write_text("fixed\n")
+
+def stored_self_review(rig, *kinds):
+    review = rig.store.add_job(SCOPE, 1712, "review", HEAD, f"{HEAD}:now", rig.t.isoformat())
+    rig.store.set_job_state(review.id, "done", "", rig.t.isoformat())
+    items = tuple(ReportItem(i, k, f"t{i}", "a.kt", i, "", f"b{i}") for i, k in enumerate(kinds, 1))
+    rig.store.save_run(JobRun(review.id, report=Report("T", HEAD, "", None, "COMMENT", "", items, (), "", "").to_dict()))
+    return review
+
+def findings_rig(tmp_path, monkeypatch, **kw):
+    """address_rig, whose fake session writes verdicts.json, and the operator's self-review at HEAD with confirmed
+    findings 1 and 3."""
+    rig = address_rig(tmp_path, monkeypatch, **kw)
+    rig.write = write_findings
+    rig.review = stored_self_review(rig, "red", "question", "orange")
+    return rig
+
+def add_findings(rig, **request):
+    job = rig.add_job("findings", key=f"{HEAD}:{rig.review.id}")
+    rig.store.save_run(JobRun(job.id, request={"review": rig.review.id, **request}))
+    return job
+
+async def test_findings_job_keeps_verdicts_and_fix_and_sends_the_message(tmp_path, monkeypatch):
+    rig = findings_rig(tmp_path, monkeypatch)
+    job = add_findings(rig)
+    await rig.runner.run_job(job)
+    assert rig.state(job) == ("done", "")
+    run = rig.store.run(job.id)
+    assert (run.verdicts, run.fix, run.replies) == (FINDINGS_VERDICTS, FIX, [])
+    assert rig.captured == [(rig.paths.worktree, rig.job_dir(job) / "fix.patch", [".github/**"])]
+    assert rig.chat.texts == [findings_message(SCOPE, 1712, "Fix cart sync", URL, HEAD, FINDINGS_VERDICTS,
+                                               {1: "FIXED · a.kt:1 · null check"}, FIX)]
+    assert rig.chat.texts[0].startswith('[acme/app] Self-review findings on your PR #1712 "Fix cart sync"')
+    kw = rig.session_kw
+    assert (kw["kind"], kw["job_cfg"]) == ("findings", JOBS["findings"])
+    assert kw["prompt"] == findings_prompt("docs/threads.md", 1712, rig.paths, "octo", "")
+    assert (rig.job_dir(job) / "verdicts.json").is_file()
+    assert not rig.root(job).exists()
+
+async def test_findings_prompt_carries_the_operators_instruction(tmp_path, monkeypatch):
+    rig = findings_rig(tmp_path, monkeypatch)
+    job = add_findings(rig, instruction="leave 3")
+    await rig.runner.run_job(job)
+    assert "The operator's instruction for this run: leave 3\n" in rig.session_kw["prompt"]
+    assert rig.store.run(job.id).request == {"review": rig.review.id, "instruction": "leave 3"}
+
+async def test_findings_job_fails_without_verdicts(tmp_path, monkeypatch):
+    rig = findings_rig(tmp_path, monkeypatch)
+    rig.write = lambda paths: None
+    job = add_findings(rig)
+    await rig.runner.run_job(job)
+    assert rig.state(job) == ("failed", "no verdicts written") and rig.captured == []
+    assert rig.chat.texts == ["[acme/app] #1712: findings failed — no verdicts written"]
+
+async def test_findings_job_fails_on_unreadable_verdicts(tmp_path, monkeypatch):
+    rig = findings_rig(tmp_path, monkeypatch)
+    rig.write = lambda paths: write_findings(paths, FINDINGS_VERDICTS[:1])
+    job = add_findings(rig)
+    await rig.runner.run_job(job)
+    assert rig.state(job) == ("failed", "report unreadable: no verdict for #3") and rig.captured == []
+    assert rig.store.run(job.id).verdicts == []
+
+async def test_findings_job_fails_when_the_worktree_git_pointer_changed(tmp_path, monkeypatch):
+    rig = findings_rig(tmp_path, monkeypatch)
+    rig.during = lambda r: (r.paths.worktree / ".git").write_text("gitdir: /elsewhere\n")
+    job = add_findings(rig)
+    await rig.runner.run_job(job)
+    assert rig.state(job) == ("failed", runner_module._CONFIG_CHANGED) and rig.captured == []
+
+async def test_findings_job_fails_before_its_session_when_prepare_left_changes(tmp_path, monkeypatch):
+    why = "Prepare left changes in the worktree: junk.txt"
+    rig = findings_rig(tmp_path, monkeypatch, clean=FixError(why))
+    job = add_findings(rig)
+    await rig.runner.run_job(job)
+    assert rig.state(job) == ("failed", why) and rig.session_kw is None and rig.captured == []
+
+async def test_findings_jobs_are_recovered_and_wait_for_the_first_poll(tmp_path, monkeypatch):
+    rig = findings_rig(tmp_path, monkeypatch)
+    running = add_findings(rig)
+    rig.store.set_job_state(running.id, "running", "", T0.isoformat())
+    rig.runner.recover()
+    assert rig.state(running) == ("failed", "interrupted (daemon restarted)")
+    rig.store.save_repo_state(RepoState(SCOPE))   # no `me` recorded yet
+    job = add_findings(rig)
+    assert rig.runner.next_job() is None and rig.state(job) == ("queued", "waiting for the first poll")
+    rig.store.save_repo_state(RepoState(SCOPE, me="octo"))
+    assert rig.runner.next_job().id == job.id
+
+def _reply_line(text):
+    return next(line for line in text.splitlines() if line.startswith("Reply to this message:"))
+
+@pytest.mark.parametrize("roles, address_doc, fixable", [
+    (["author"], "docs/threads.md", True),
+    (["reviewer"], "docs/threads.md", False),
+    (["author"], "", False),
+])
+async def test_a_self_review_run_offers_fix(tmp_path, monkeypatch, roles, address_doc, fixable):
+    rig = Rig(tmp_path, monkeypatch)
+    for c in rig.contexts:
+        c.cfg = dataclasses.replace(c.cfg, process=dataclasses.replace(c.cfg.process, address_doc=address_doc))
+    rig.store.replace_board(SCOPE, {1712: dataclasses.replace(board_row(actions=()), roles=roles)})
+    job = rig.add_job("review", key=f"{HEAD}:now")
+    await rig.runner.run_job(job)
+    assert rig.state(job) == ("done", "")
+    assert rig.store.run(job.id).findings_fixable is fixable
+    assert _reply_line(rig.chat.texts[0]).endswith(' · "fix"') is fixable

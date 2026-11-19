@@ -16,6 +16,8 @@ TEXTS: dict[str, str] = {
     "No findings.": "Зауважень немає.",
     'Reply to this message: "post 1 2 4 approve" · "text 2" · "edit 2: …" · "review again"':
         'Відповідайте на це повідомлення: "post 1 2 4 approve" · "text 2" · "edit 2: …" · "review again"',
+    'Reply to this message: "post 1 2 4 approve" · "text 2" · "edit 2: …" · "review again" · "fix"':
+        'Відповідайте на це повідомлення: "post 1 2 4 approve" · "text 2" · "edit 2: …" · "review again" · "fix"',
     '[{scope}] Re-check of PR #{number} "{title}"': '[{scope}] Повторна перевірка PR #{number} "{title}"',
     "head {head} · {replies}": "коміт {head} · {replies}",
     'Reply to this message: "post replies {numbers}" · "text {first}"':
@@ -26,6 +28,9 @@ TEXTS: dict[str, str] = {
     "fix: {files}, +{added} −{deleted} — not built or tested here":
         "виправлення: {files}, +{added} −{deleted} — тут не зібрано й не протестовано",
     "no code change": "код не змінено",
+    '[{scope}] Self-review findings on your PR #{number} "{title}"':
+        '[{scope}] Зауваження самоперевірки у вашому PR #{number} "{title}"',
+    "head {head} · {findings} · {change}": "коміт {head} · {findings} · {change}",
     "Protected files in the fix ({paths}): Cleave will not push it.":
         "Захищені файли у виправленні ({paths}): Cleave його не запушить.",
     "Reply to this message: {commands}": "Відповідайте на це повідомлення: {commands}",
@@ -35,6 +40,7 @@ TEXTS: dict[str, str] = {
     "review": "рев'ю",
     "recheck": "повторна перевірка",
     "address": "обробка тредів",
+    "findings": "виправлення зауважень",
     "edit": "редагування",
     "draft": "чернетка",
 
@@ -327,6 +333,16 @@ TEXTS: dict[str, str] = {
     "Prepare's threads snapshot in this job's copy is unreadable":
         "знімок тредів від Prepare у копії цієї задачі не читається",
     "the job copy's posting directory is not Cleave's": "тека публікації в копії задачі не належить Cleave",
+    "the self-review's report is gone": "звіту самоперевірки вже немає",
+    "no confirmed findings": "підтверджених зауважень немає",
+    "no verdicts written": "вердикти не записано",
+
+    # service.py: why the findings of a self-review cannot be fixed (Fix findings…, "fix")
+    "no address_doc": "немає address_doc",
+    "not your PR": "це не ваш PR",
+    "a ticket workspace holds it": "його тримає робочий простір тікета",
+    "held by a comparison": "його тримає порівняння",
+    "no finished self-review at this head": "немає завершеної самоперевірки цього коміту",
 }
 
 NOUNS: dict[str, tuple[str, str, str]] = {
@@ -337,4 +353,5 @@ NOUNS: dict[str, tuple[str, str, str]] = {
     "drafted reply": ("чернетка відповіді", "чернетки відповідей", "чернеток відповідей"),
     "more line": ("рядок", "рядки", "рядків"),
     "review": ("рев'ю", "рев'ю", "рев'ю"),
+    "finding": ("зауваження", "зауваження", "зауважень"),
 }

@@ -1,6 +1,6 @@
-"""The job runner: runs the queued review and re-check jobs, several at once (one per PR), each from Prepare in a
-job clone of its own through the model session to the job's state, its copy in the jobs directory and its
-Telegram message."""
+"""The job runner: runs the queued review, re-check, address and findings jobs, several at once (one per PR), each
+from Prepare in a job clone of its own through the model session to the job's state, its copy in the jobs directory
+and its Telegram message."""
 from __future__ import annotations
 
 import asyncio
@@ -15,7 +15,7 @@ from pathlib import Path
 from typing import Any
 
 from config.schemas import ReviewerJobConfig
-from orchestrator.reviewer.board import ADDRESS_ACTIONS, TICKET_KEY
+from orchestrator.reviewer.board import ADDRESS_ACTIONS, FIX_KINDS, TICKET_KEY
 from orchestrator.reviewer.chat import ReviewerChat
 from orchestrator.reviewer.clone import ReviewClone, git_file_changed, guarded_git_files
 from orchestrator.reviewer.fix import PATCH_NAME, FixError, capture_fix, require_clean
@@ -29,6 +29,7 @@ from orchestrator.reviewer.lines import (
 from orchestrator.reviewer.messages import (
     MESSAGE_LIMIT,
     address_message,
+    findings_message,
     message_parts,
     recheck_message,
     review_message,
@@ -38,7 +39,9 @@ from orchestrator.reviewer.prepare import JobPaths, Prepared, PrepareError, job_
 from orchestrator.reviewer.report import (
     Report,
     ReportError,
+    confirmed_findings,
     parse_address_plan,
+    parse_findings_verdicts,
     parse_replies_plan,
     parse_report,
     parse_tg_lines,
@@ -48,6 +51,7 @@ from orchestrator.reviewer.service import RepoContext, _where, utcnow
 from orchestrator.reviewer.session import (
     SessionOutcome,
     address_prompt,
+    findings_prompt,
     recheck_prompt,
     review_prompt,
     run_session,
@@ -69,6 +73,7 @@ _MAX_DEFERRALS = 3
 _DEFERRED_TOO_OFTEN = f"deferred {_MAX_DEFERRALS} times (usage limit or login)"
 _NO_ME = "waiting for the first poll"
 _PLAN_COPY = "replies_plan.json"
+_VERDICTS = "verdicts.json"  # a findings job's output, in its run directory and so in its copy
 _PREPARED_THREADS = "threads.prepared.json"  # Prepare's threads.json in the job copy (see _run)
 # Names in job_dir that are Cleave's, never copied from run_dir; matched after NFC and casefold, as a
 # case-insensitive filesystem (the host's APFS) would match them. "posting" holds Cleave's posting files.
@@ -191,10 +196,13 @@ def _message(job: Job, run: JobRun) -> str:
     if job.kind == "review":
         return review_message(job.scope, job.number, run.title, run.ticket_key, run.url, run.files,
                               Report.from_dict(run.report), tg_lines, posted_at_head=run.posted_at_head,
-                              summary_posted=run.summary_posted)
+                              summary_posted=run.summary_posted, fixable=run.findings_fixable)
     if job.kind == "address":
         return address_message(job.scope, job.number, run.title, run.url, job.head_sha, run.replies, tg_lines,
                                run.fix)
+    if job.kind == "findings":
+        return findings_message(job.scope, job.number, run.title, run.url, job.head_sha, run.verdicts, tg_lines,
+                                run.fix)
     return recheck_message(job.scope, job.number, run.title, run.url, job.head_sha, run.replies, tg_lines)
 
 
@@ -320,9 +328,10 @@ class JobRunner:
         return not done
 
     def recover(self) -> None:
-        """A review, re-check or address job still running at start-up was interrupted: it fails, so plan 3's rules
-        retry it once. Edit and draft jobs are not this runner's."""
-        for job in self._store.jobs_in_state("running", kinds=("review", "recheck", "address")):
+        """A review, re-check, address or findings job still running at start-up was interrupted: it fails, so plan 3's
+        rules retry it once (a findings job only when the operator asks again). Edit and draft jobs are not this
+        runner's."""
+        for job in self._store.jobs_in_state("running", kinds=("review", "recheck", *FIX_KINDS)):
             self._change(job, "failed", N_("interrupted (daemon restarted)"))
 
     def _clear_work(self) -> None:
@@ -360,7 +369,8 @@ class JobRunner:
         """The first runnable job whose repo is configured and passes the gates: reviews running there, its
         forge token and the claude login not failing, no login failure in the last 15 minutes, no usage-limit
         wait, enough free space for a job clone; not one in flight, nor one of a PR with a job in flight; a
-        re-check or an address job also waits for its PR's pending review and for the repo's recorded login."""
+        re-check, an address or a findings job also waits for its PR's pending review and for the repo's recorded
+        login."""
         now = self._now()
         if self._credential_failing("claude_login"):
             return None
@@ -378,7 +388,7 @@ class JobRunner:
             if (ctx is not None
                     and self._switches.is_running("reviews", ctx.project_id, ctx.repo_id)
                     and not self._credential_failing(f"forge:{job.scope}")
-                    and (job.kind not in ("recheck", "address") or self._recheck_ready(job))):
+                    and (job.kind not in ("recheck", *FIX_KINDS) or self._recheck_ready(job))):
                 return job
         return None
 
@@ -398,8 +408,9 @@ class JobRunner:
         return low
 
     def _recheck_ready(self, job: Job) -> bool:
-        """A re-check (or an address job) runs after its PR's pending review (review first), and once a poll has
-        recorded the repo's login (the prompt names whose turn it is): until then it is requeued, saying so."""
+        """A re-check (or an address or a findings job) runs after its PR's pending review (review first), and once a
+        poll has recorded the repo's login (the prompt names whose turn it is, or the PR's author): until then it is
+        requeued, saying so."""
         if any(j.kind == "review" and j.state in _PENDING_STATES for j in self._store.jobs(job.scope, job.number)):
             return False
         if not self._store.repo_state(job.scope).me:
@@ -492,7 +503,7 @@ class JobRunner:
                 self._store.save_run(run)
             if prepared.drift:  # at once: prepare has stored the new hash, a later failure must not lose it
                 await self._send_drift(ctx)
-            if job.kind == "address":
+            if job.kind in FIX_KINDS:
                 try:  # what the worktree holds beyond the head after the session is pushed as the fix
                     await require_clean(paths.worktree)
                 except FixError as e:
@@ -577,10 +588,11 @@ class JobRunner:
         self, ctx: RepoContext, job: Job, paths: JobPaths, clone: ReviewClone, run: JobRun,
     ) -> tuple[SessionOutcome, bool]:
         """The session's outcome, in the job clone, and whether it changed the job clone's .git/config,
-        .git/info/attributes or .git/commondir, or for an address job the worktree's .git pointer. Nothing is
-        written back, and the job clone is removed with the job. No git runs in the job clone after a review or a
-        re-check; after an address job Cleave's git stages the worktree and writes its patch (capture_fix), only
-        once these files are found as they were, with hooks and fsmonitor off and no host config."""
+        .git/info/attributes or .git/commondir, or for an address or a findings job the worktree's .git pointer.
+        Nothing is written back, and the job clone is removed with the job. No git runs in the job clone after a
+        review or a re-check; after an address or a findings job Cleave's git stages the worktree and writes its patch
+        (capture_fix), only once these files are found as they were, with hooks and fsmonitor off and no host
+        config."""
         process = ctx.cfg.process
         if job.kind == "review":
             prompt = review_prompt(process.doc, process.prepare_section, job.number, paths)
@@ -589,10 +601,13 @@ class JobRunner:
             if job.kind == "address":
                 prompt = address_prompt(process.address_doc, job.number, paths, me,
                                         run.request.get("instruction", ""))
+            elif job.kind == "findings":
+                prompt = findings_prompt(process.address_doc, job.number, paths, me,
+                                         run.request.get("instruction", ""))
             else:
                 prompt = recheck_prompt(process.doc, process.recheck_section, job.number, paths, job.head_sha, me)
         saved = guarded_git_files(clone.path)
-        if job.kind == "address":
+        if job.kind in FIX_KINDS:
             pointer = paths.worktree / ".git"
             saved[pointer] = pointer.read_bytes() if pointer.exists() else None
         outcome = await run_session(
@@ -608,8 +623,10 @@ class JobRunner:
     async def _finish(
         self, ctx: RepoContext, job: Job, paths: JobPaths, run: JobRun, prepared: Prepared,
     ) -> None:
-        """Keep the run directory in the job's copy, parse from the copy, settle and send."""
-        review = job.kind == "review"
+        """Keep the run directory in the job's copy, parse from the copy, settle and send. A findings job's output is
+        verdicts.json in the run directory, checked against the confirmed findings of the self-review it fixes; a
+        review's run records whether its message offers "fix"."""
+        review, findings = job.kind == "review", job.kind == "findings"
         try:
             kept_out = _archive(paths.run_dir, paths.job_dir)
         except _ArchiveRefused as e:
@@ -619,16 +636,19 @@ class JobRunner:
             run.notes += [f"not kept from the run directory: {name} (a name the job copy reserves)"
                           for name in kept_out]
             self._store.save_run(run)
-        if not review and _regular(paths.replies_plan):
+        if not (review or findings) and _regular(paths.replies_plan):
             shutil.copyfile(paths.replies_plan, paths.job_dir / _PLAN_COPY)
-        output = paths.job_dir / (paths.report.name if review else _PLAN_COPY)
+        output = paths.job_dir / (paths.report.name if review else _VERDICTS if findings else _PLAN_COPY)
         if not output.is_file():
-            await self._fail(job, N_("no report written") if review else N_("no replies plan written"))
+            await self._fail(job, N_("no report written") if review else N_("no verdicts written") if findings
+                             else N_("no replies plan written"))
             return
         text = output.read_text(encoding="utf-8", errors="replace")
         try:
             if review:
                 run.report = parse_report(text, job.head_sha).to_dict()
+            elif findings:
+                run.verdicts = parse_findings_verdicts(text, self._finding_numbers(run))
             elif job.kind == "address":
                 run.replies = parse_address_plan(text)
             else:
@@ -636,7 +656,7 @@ class JobRunner:
         except ReportError as e:
             await self._fail(job, f"report unreadable: {e}")
             return
-        if job.kind == "address":
+        if job.kind in FIX_KINDS:
             try:
                 run.fix = await capture_fix(paths.worktree, paths.job_dir / PATCH_NAME,
                                             ctx.cfg.process.address_protected)
@@ -653,6 +673,9 @@ class JobRunner:
             pr = prepared.pr
             key = m.group(0) if (m := TICKET_KEY.search(pr.title)) else ""
             run.title, run.url, run.ticket_key, run.files = pr.title, pr.url, key, pr.changed_files
+        # A self-review: its message offers "fix" (when its report has a confirmed finding).
+        run.findings_fixable = (review and row is not None and "author" in row.roles
+                                and bool(ctx.cfg.process.address_doc))
         # Saved with the run: the message's parts come from it alone, the same on every attempt.
         run.posted_at_head, run.summary_posted = self._store.posted_count(job.scope, job.number, job.head_sha)
         self._store.save_run(run)
@@ -660,6 +683,13 @@ class JobRunner:
         self._change(job, state, reason)
         if state == "done":
             await self._deliver(job, run)
+
+    def _finding_numbers(self, run: JobRun) -> set[int]:
+        """The numbers of the findings a findings job weighed: the confirmed findings of the self-review its request
+        names (none when that review's run is gone, so every verdict is refused)."""
+        review_id = run.request.get("review")
+        review_run = self._store.run(review_id) if isinstance(review_id, str) else None
+        return {f["n"] for f in confirmed_findings(review_run.report if review_run else {})}
 
     async def _settle(self, job: Job) -> tuple[str, str]:
         """settle(), after one read of the PR on GitHub: the board may not have seen a new head or a close

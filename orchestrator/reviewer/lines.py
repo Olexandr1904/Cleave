@@ -10,7 +10,7 @@ from orchestrator.reviewer.models import BoardRow
 from orchestrator.tg_i18n import ENGLISH, N_, count, current_language, detail, tr
 
 # The job kinds and turn actions a line names, for tr(): an action the readiness tool names otherwise stays as is.
-_NAMES = (N_("review"), N_("recheck"), N_("address"), N_("edit"), N_("draft"))
+_NAMES = (N_("review"), N_("recheck"), N_("address"), N_("findings"), N_("edit"), N_("draft"))
 
 
 def turn_line(scope: str, row: BoardRow, change: TurnChange) -> str:

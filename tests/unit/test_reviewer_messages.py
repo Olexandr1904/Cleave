@@ -5,7 +5,7 @@ from datetime import datetime, timezone
 from orchestrator.reviewer.lines import (
     drift_line, job_deferred_line, job_failed_line, login_line, outdated_line)
 from orchestrator.reviewer.messages import (
-    address_message, message_parts, recheck_message, review_message, split_message)
+    address_message, findings_message, message_parts, recheck_message, review_message, split_message)
 from orchestrator.reviewer.report import parse_report
 from tests.unit.test_reviewer_report import HEAD, REPORT
 
@@ -210,3 +210,49 @@ Reply to this message: "push" · "post replies 1 2" · "text 1" · "diff" · "ag
     assert '"push"' not in guarded and '"diff"' in guarded     # no push is offered for a fix Cleave refuses to push
     empty = address_message("acme/app", 1712, "t", URL, "8" * 40, [], {}, fix)
     assert "No replies drafted." in empty and 'Reply to this message: "push" · "diff" · "again: …"' in empty
+
+
+# --- Findings jobs ---
+
+VERDICTS = [{"n": 2, "verdict": "FIXED", "why": "null check added"},
+            {"n": 3, "verdict": "WON'T FIX", "why": "intended"}]
+FINDINGS_FIX = {"files": [{"path": "a.kt", "added": 24, "deleted": 7}], "protected": [], "bytes": 900}
+
+
+def test_findings_message():
+    text = findings_message("acme/app", 108, "Fix cart sync", URL, "8f01a2b3c" + "0" * 31, VERDICTS,
+                            {2: "FIXED · CartRepo.kt:88 · null list handled"}, FINDINGS_FIX)
+    assert text == f"""[acme/app] Self-review findings on your PR #108 "Fix cart sync"
+head 8f01a2b3c · 2 findings · fix: 1 file, +24 −7 — not built or tested here
+
+2. FIXED · CartRepo.kt:88 · null list handled
+3. WON'T FIX · intended
+
+Reply to this message: "push" · "diff" · "again: …"
+{URL}"""
+
+
+def test_findings_message_without_a_patch_offers_no_push():
+    text = findings_message("acme/app", 108, "t", URL, "8" * 40, VERDICTS[:1], {}, {})
+    assert text.splitlines()[1] == "head 888888888 · 1 finding · no code change"
+    assert '"push"' not in text and '"diff"' not in text
+    assert 'Reply to this message: "again: …"' in text
+
+
+def test_findings_message_with_a_protected_file_offers_no_push():
+    text = findings_message("acme/app", 108, "t", URL, "8" * 40, VERDICTS, {},
+                            {**FINDINGS_FIX, "protected": [".github/ci.yml"]})
+    assert text.splitlines()[2] == "Protected files in the fix (.github/ci.yml): Cleave will not push it."
+    assert 'Reply to this message: "diff" · "again: …"' in text
+
+
+def test_review_message_offers_fix_only_when_fixable_with_a_confirmed_finding():
+    report = parse_report(REPORT, HEAD)
+    hint = 'Reply to this message: "post 1 2 4 approve" · "text 2" · "edit 2: …" · "review again"'
+    fixable = review_message("acme/app", 1712, "t", "", URL, 14, report, TG, fixable=True)
+    assert hint + ' · "fix"' in fixable.splitlines()
+    assert hint in review(report).splitlines()           # not fixable: no "fix"
+    questions = dataclasses.replace(report, items=tuple(i for i in report.items if i.kind == "question"))
+    assert questions.items
+    only_questions = review_message("acme/app", 1712, "t", "", URL, 14, questions, TG, fixable=True)
+    assert hint in only_questions.splitlines() and '"fix"' not in only_questions

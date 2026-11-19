@@ -232,6 +232,13 @@ def test_address_jobs_are_sent_when_done(store):
     store.save_run(JobRun(job.id))
     assert [j.id for j, _ in store.done_unsent()] == [job.id]
 
+def test_findings_jobs_are_runnable_and_sent_when_done(store):
+    job = store.add_job("acme/app", 7, "findings", "a" * 40, f"{'a' * 40}:r1", T0)
+    assert [j.id for j in store.runnable_jobs(T1)] == [job.id]
+    store.set_job_state(job.id, "done", "", T1)
+    store.save_run(JobRun(job.id))
+    assert [j.id for j, _ in store.done_unsent()] == [job.id]
+
 def test_push_of_is_the_newest_landed_push(store):
     job = store.add_job("acme/app", 1712, "address", "a" * 40, f"{'a' * 40}:T1", T0)
     other = store.add_job("acme/app", 1712, "address", "a" * 40, f"{'a' * 40}:T2", T0)

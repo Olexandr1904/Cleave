@@ -54,7 +54,13 @@ def test_recheck_keyed_by_threads():
     assert plan([row(actions=(("review", ()), ("recheck", ("T1",))))]).queue == [(1, "review", A, A)]
 
 def test_gone_pr_cancels_queued():
+    """A PR that left the board (merged or closed) says so: "PR gone", not "turn gone"."""
     p = plan([], {1: [job(state="queued", jid="q"), job(state="done", jid="d")]},
+             gone=[TurnChange(1, "review", ())])
+    assert sorted(p.states) == [("d", "stale", "PR gone"), ("q", "cancelled", "PR gone")]
+
+def test_gone_turn_on_a_pr_still_on_the_board():
+    p = plan([row(actions=(("merge", ()),))], {1: [job(state="queued", jid="q"), job(state="done", jid="d")]},
              gone=[TurnChange(1, "review", ())])
     assert sorted(p.states) == [("d", "stale", "turn gone"), ("q", "cancelled", "turn gone")]
 
@@ -78,7 +84,7 @@ def test_one_state_change_per_job_first_rule_wins():
     gone = [TurnChange(1, "review", ()), TurnChange(1, "review", ())]
     queued_old_head = {1: [job(head=A, state="queued", jid="q")]}
     assert plan([row(head=B)], queued_old_head, gone=gone).states == [("q", "superseded", "new head")]
-    assert plan([], queued_old_head, gone=gone).states == [("q", "cancelled", "turn gone")]
+    assert plan([], queued_old_head, gone=gone).states == [("q", "cancelled", "PR gone")]
 
 
 def test_failure_and_doc_lines():
@@ -175,7 +181,7 @@ def test_recheck_new_threads_supersede_deferred():
 
 def test_gone_turn_cancels_deferred():
     p = plan([], {1: [job(state="deferred", jid="d")]}, gone=[TurnChange(1, "review", ())])
-    assert p.states == [("d", "cancelled", "turn gone")]
+    assert p.states == [("d", "cancelled", "PR gone")]
 
 
 def test_turn_back_ignores_stale_next_to_deferred():
@@ -229,9 +235,9 @@ def test_a_post_under_way_keeps_its_job_from_going_stale():
     (/code-review C3). Other jobs, and other rules, are as before."""
     gone = [TurnChange(1, "review", ()), TurnChange(1, "recheck", ())]
     jobs = {1: [job(state="done", jid="d"), job("recheck", state="done", jid="r"), job(state="queued", jid="q")]}
-    assert sorted(plan([], jobs, gone=gone, posting=frozenset({"d", "r"})).states) == [("q", "cancelled", "turn gone")]
+    assert sorted(plan([], jobs, gone=gone, posting=frozenset({"d", "r"})).states) == [("q", "cancelled", "PR gone")]
     assert sorted(plan([], jobs, gone=gone).states) == [
-        ("d", "stale", "turn gone"), ("q", "cancelled", "turn gone"), ("r", "stale", "turn gone")]
+        ("d", "stale", "PR gone"), ("q", "cancelled", "PR gone"), ("r", "stale", "PR gone")]
     assert plan([row(head=B)], {1: [job(state="queued", jid="d")]}, posting=frozenset({"d"})).states == [
         ("d", "superseded", "new head")]
 

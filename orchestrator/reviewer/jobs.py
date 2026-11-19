@@ -176,13 +176,15 @@ def plan_jobs(
         gone_row = update.rows.get(change.number)
         if kind == "address" and gone_row is not None and ADDRESS_ACTIONS & set(gone_row.my_actions):
             continue  # another of the three actions is left: the job keeps its turn
+        # A PR off the board (merged or closed, or no longer listed): "PR gone", as settle() says.
+        reason = "turn gone" if gone_row is not None else "PR gone"
         for j in jobs_by_pr.get(change.number, []):
             if j.kind != kind or j.state not in _GONE_STATES or j.id in posting:
                 continue
             state = _GONE_STATES[j.state]
             if state == "cancelled" and j.key.endswith(REVIEW_NOW_SUFFIX):
                 continue  # the operator asked for it: it needs no turn, and only a skip drops it
-            states.setdefault(j.id, (state, "turn gone"))
+            states.setdefault(j.id, (state, reason))
     plan.states = [(job_id, state, reason) for job_id, (state, reason) in states.items()]
     if not first_poll:
         for change in update.new_turns:

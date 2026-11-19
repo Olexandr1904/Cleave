@@ -304,7 +304,7 @@ A reply that cannot run is answered, and nothing from it runs:
 | `#1 is already posted at this head. Nothing was done.` | A number that landed at this head (see [never twice](#never-twice)) |
 | `Nothing to post: name numbers or keep the Summary. Nothing was done.` | `request changes no summary`, or `post all confirmed` with no confirmed finding |
 | `Nothing left to post: every confirmed finding is already posted at this head. Nothing was done.` | `post all confirmed` (with no other number) once every confirmed finding landed at this head |
-| `Outdated: there is a review of a newer head. Nothing was done.` (or `there is a newer review`, or `this report no longer matches the PR (<reason>)`) | The job was superseded by a newer review or is stale (its PR or your turn is gone): nothing runs from its messages, `review again` and `skip` included. Use the newer review's message, or **Review now** |
+| `Outdated: there is a review of a newer head. Nothing was done.` (or `there is a newer review`, or `this report no longer matches the PR (<reason>)`) | The job was superseded by a newer review or is stale (`PR gone`: it left the board, merged or closed, or without `--all` no longer yours; `turn gone`: your turn left a PR still on it): nothing runs from its messages, `review again` and `skip` included. Use the newer review's message, or **Review now** |
 | `This job ended failed: only "review again" and "skip" work here. Nothing was done.` | A command about the report on a job that is not done or posted (failed, deferred, …) |
 | `#7 is not a dropped number. Nothing was done.` | `draft` of a number that is not a dropped candidate |
 | `#7 is drafted already: reply "text 7". Nothing was done.` | `draft` of a candidate drafted before |

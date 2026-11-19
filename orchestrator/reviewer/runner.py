@@ -106,7 +106,7 @@ class RunnerConfig:
 def settle(job: Job, row: BoardRow | None, jobs: list[Job], skipped: bool = False) -> tuple[str, str]:
     """The state of a job whose session ended well, against the board and the PR's jobs as they are now.
     `skipped`: the operator skipped the job's head after it was queued. A review the operator asked for
-    (Review now) needs no review turn."""
+    (Review now) needs no review turn, nor does a findings job (only the operator queues one)."""
     if row is None:
         return "stale", N_("PR gone")
     if row.head_sha != job.head_sha:
@@ -116,6 +116,8 @@ def settle(job: Job, row: BoardRow | None, jobs: list[Job], skipped: bool = Fals
     review_now = job.kind == "review" and job.key.endswith(REVIEW_NOW_SUFFIX)
     if job.kind == "address":
         has_turn = bool(ADDRESS_ACTIONS & set(row.my_actions))
+    elif job.kind == "findings":
+        has_turn = True
     else:
         has_turn = job.kind in row.my_actions or review_now
     if not has_turn:

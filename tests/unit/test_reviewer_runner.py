@@ -922,6 +922,18 @@ def test_settle_address_needs_one_of_its_turns():
     assert settle(j, board_row(actions=("resolve_threads",)), [j]) == ("done", "")
     assert settle(j, board_row(actions=("merge",)), [j]) == ("stale", "turn gone")
 
+def test_settle_findings_needs_no_turn():
+    j = Job("f1", SCOPE, 1712, "findings", HEAD, f"{HEAD}:r1", "running", "", "t", "t")
+    assert settle(j, board_row(actions=()), [j]) == ("done", "")
+    assert settle(j, board_row(actions=("merge",)), [j]) == ("done", "")
+    assert settle(j, None, [j]) == ("stale", "PR gone")
+    assert settle(j, board_row(head="b" * 40, actions=()), [j]) == ("superseded", "new head")
+    newer = Job("f2", SCOPE, 1712, "findings", HEAD, f"{HEAD}:r2", "queued", "", "u", "u")
+    assert settle(j, board_row(actions=()), [newer, j]) == ("superseded", "newer job")
+    address = Job("a2", SCOPE, 1712, "address", HEAD, f"{HEAD}:T1", "queued", "", "u", "u")
+    assert settle(j, board_row(actions=()), [address, j]) == ("done", "")     # another fix kind supersedes nothing
+
+
 def test_settle_review_now_and_skip():
     stamp = T0.isoformat()
     now = Job("j1", SCOPE, 1712, "review", HEAD, f"{HEAD}:now", "running", "", stamp, stamp)

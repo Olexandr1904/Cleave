@@ -1,4 +1,5 @@
-"""From a board update: the review, re-check and address jobs to queue or retire, and the lines to send."""
+"""From a board update: the review, re-check and address jobs to queue or retire, the findings jobs to retire (only
+the operator queues one), and the lines to send."""
 from __future__ import annotations
 
 from collections.abc import Callable
@@ -82,7 +83,7 @@ def plan_jobs(
     pushed_from: Callable[[Job], str] = lambda job: "",
 ) -> Plan:
     """Rules in order: review (new head, turn back), re-check (turn back, new threads), address (turn back, new
-    threads or head), gone turns, turn lines.
+    threads or head), findings (new head: never queued here), gone turns, turn lines.
 
     A job matched by more than one rule gets one state change: the first rule in that order wins. A job in
     `posting` (the ids of the jobs with a Post `posting`) is left to its post by the gone-turn rule: the post
@@ -161,6 +162,12 @@ def plan_jobs(
                     if j.state in _RECHECK_SUPERSEDED:
                         states.setdefault(j.id, ("superseded", "new threads"))
                 plan.queue.append((number, "address", head, key))
+        # Findings: only the operator queues one (ReviewerService.fix_findings). One at an old head is retired, unless
+        # its landed push started from this head (the board is behind GitHub) or its push is under way.
+        for j in jobs:
+            if (j.kind == "findings" and j.state in ("queued", "deferred", "done") and j.head_sha != head
+                    and pushed_from(j) != head and j.id not in posting):
+                states.setdefault(j.id, ("superseded", "new head"))
     for change in update.gone_turns:
         kind = job_kind(change.action, True)
         if kind is None:

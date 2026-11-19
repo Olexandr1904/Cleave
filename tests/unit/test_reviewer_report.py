@@ -12,7 +12,10 @@ from orchestrator.reviewer.report import (
     DroppedItem,
     Report,
     ReportError,
+    ReportItem,
+    confirmed_findings,
     parse_address_plan,
+    parse_findings_verdicts,
     parse_replies_plan,
     parse_report,
     parse_tg_lines,
@@ -374,3 +377,68 @@ def test_parse_address_plan():
     ):
         with pytest.raises(ReportError, match=re.escape(why)):
             parse_address_plan(bad)
+
+
+# --- Findings jobs ---
+
+def _report_dict(*kinds):
+    items = [ReportItem(i, kind, f"t{i}", "a.kt", i * 10 if i != 2 else None, "", f"b{i}")
+             for i, kind in enumerate(kinds, 1)]
+    return Report("T", "a" * 40, "", None, "COMMENT", "", tuple(items), (), "", "").to_dict()
+
+
+def test_confirmed_findings_keeps_red_orange_yellow_in_order():
+    got = confirmed_findings(_report_dict("red", "question", "yellow", "preexisting", "orange"))
+    assert [(f["n"], f["severity"]) for f in got] == [(1, "critical"), (3, "minor"), (5, "major")]
+    assert got[0] == {"n": 1, "severity": "critical", "title": "t1", "path": "a.kt", "line": 10, "body": "b1"}
+
+
+def test_confirmed_findings_of_questions_only_is_empty():
+    assert confirmed_findings(_report_dict("question", "preexisting")) == []
+
+
+def test_confirmed_findings_of_no_report_is_empty():
+    assert confirmed_findings({}) == []
+
+
+def test_confirmed_findings_keep_a_null_line():
+    assert confirmed_findings(_report_dict("question", "red"))[0]["line"] is None
+
+
+def test_parse_findings_verdicts():
+    text = json.dumps([{"n": 3, "verdict": "WON'T FIX", "why": "intended"},
+                       {"n": 1, "verdict": "FIXED", "why": "null check added", "extra": "dropped"}])
+    assert parse_findings_verdicts(text, {1, 3}) == [
+        {"n": 3, "verdict": "WON'T FIX", "why": "intended"}, {"n": 1, "verdict": "FIXED", "why": "null check added"}]
+
+
+@pytest.mark.parametrize("entries", [
+    {"n": 1},                                                    # not a list
+    [{"n": 1, "verdict": "FIXED", "why": "x"}],                  # finding 3 missing
+    [{"n": 1, "verdict": "FIXED", "why": "x"}, {"n": 1, "verdict": "FIXED", "why": "x"},
+     {"n": 3, "verdict": "FIXED", "why": "x"}],                  # repeated
+    [{"n": 1, "verdict": "FIXED", "why": "x"}, {"n": 3, "verdict": "FIXED", "why": "x"},
+     {"n": 4, "verdict": "FIXED", "why": "x"}],                  # not a finding
+    [{"n": "1", "verdict": "FIXED", "why": "x"}, {"n": 3, "verdict": "FIXED", "why": "x"}],
+    [{"n": True, "verdict": "FIXED", "why": "x"}, {"n": 3, "verdict": "FIXED", "why": "x"}],
+    [{"n": 1, "verdict": "", "why": "x"}, {"n": 3, "verdict": "FIXED", "why": "x"}],
+    [{"n": 1, "verdict": "F" * 41, "why": "x"}, {"n": 3, "verdict": "FIXED", "why": "x"}],
+    [{"n": 1, "verdict": 1, "why": "x"}, {"n": 3, "verdict": "FIXED", "why": "x"}],
+    [{"n": 1, "verdict": "FIXED", "why": 5}, {"n": 3, "verdict": "FIXED", "why": "x"}],
+    [{"n": 1, "verdict": "FIXED"}, {"n": 3, "verdict": "FIXED", "why": "x"}],
+    ["FIXED", {"n": 3, "verdict": "FIXED", "why": "x"}],
+])
+def test_parse_findings_verdicts_refuses(entries):
+    with pytest.raises(ReportError):
+        parse_findings_verdicts(json.dumps(entries), {1, 3})
+
+
+@pytest.mark.parametrize("text", ["not json", "[" * 100_000, "[]" + " " * 1_000_000])
+def test_parse_findings_verdicts_refuses_unreadable_text(text):
+    with pytest.raises(ReportError):
+        parse_findings_verdicts(text, {1})
+
+
+def test_parse_findings_verdicts_takes_a_verdict_of_forty_characters():
+    text = json.dumps([{"n": 1, "verdict": "F" * 40, "why": ""}])
+    assert parse_findings_verdicts(text, {1}) == [{"n": 1, "verdict": "F" * 40, "why": ""}]

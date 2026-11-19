@@ -190,6 +190,11 @@ class JobRun:
     # An address job's patch (fix.patch in its copy): {"files": [{"path", "added", "deleted"}], "protected":
     # [path], "bytes"}; {} when the session changed no code.
     fix: dict = field(default_factory=dict)
+    # A findings job's verdicts.json, parsed: [{"n", "verdict", "why"}], one per confirmed finding.
+    verdicts: list = field(default_factory=list)
+    # A review job's run: its message offers "fix" (an own PR in a repo with address_doc), decided when the run
+    # finished so every delivery attempt builds the same message.
+    findings_fixable: bool = False
 
     def to_json(self) -> str:
         return json.dumps(dataclasses.asdict(self))

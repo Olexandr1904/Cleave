@@ -162,6 +162,7 @@ def _default_reviewer_jobs() -> dict[str, ReviewerJobConfig]:
         "review": ReviewerJobConfig("opus", "xhigh", 5400),
         "recheck": ReviewerJobConfig("opus", "xhigh", 5400),
         "address": ReviewerJobConfig("opus", "xhigh", 5400),
+        "findings": ReviewerJobConfig("opus", "xhigh", 5400),
         "edit": ReviewerJobConfig("sonnet", "", 300),
         "draft": ReviewerJobConfig("sonnet", "", 300),
         "command": ReviewerJobConfig("sonnet", "", 60),

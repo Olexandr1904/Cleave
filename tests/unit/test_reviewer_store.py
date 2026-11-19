@@ -246,3 +246,12 @@ def test_posted_numbers_of_an_address_job_are_its_replies(store):
     store.save_post(Post("p1", "a1", "acme/app", 1712, "b" * 40, "replies", "posted", T1,
                          landed=[{"n": 2, "path": "", "line": None, "title": "", "where": "reply"}]))
     assert store.posted_numbers(job, None) == {2}
+
+
+def test_a_run_stored_before_verdicts_loads_with_the_defaults(store):
+    data = json.loads(JobRun("j1", title="t").to_json())
+    for key in ("verdicts", "findings_fixable"):
+        data.pop(key, None)
+    store._conn.execute("INSERT INTO job_runs (job_id, data) VALUES (?, ?)", ("j1", json.dumps(data)))
+    run = store.run("j1")
+    assert (run.title, run.verdicts, run.findings_fixable) == ("t", [], False)

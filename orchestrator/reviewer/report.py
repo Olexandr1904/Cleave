@@ -222,7 +222,8 @@ def parse_findings_verdicts(text: str, numbers: Collection[int]) -> list[dict]:
         if not isinstance(why, str):
             raise ReportError(f"#{n}: why is not a string")
         seen.add(n)
-        verdicts.append({"n": n, "verdict": verdict, "why": why})
+        # One line each, as parse_tg_lines keeps a line: a line break would print a line of its own in the message.
+        verdicts.append({"n": n, "verdict": " ".join(verdict.split()), "why": " ".join(why.split())})
     if missing := sorted(set(numbers) - seen):
         raise ReportError(f"no verdict for {', '.join(f'#{n}' for n in missing)}")
     return verdicts

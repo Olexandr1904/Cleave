@@ -10,7 +10,7 @@ import { renderSwitchPanel } from './switches.js';
 import { esc, fmtIso, timeAgo } from './helpers.js';
 import {
   COLUMNS, againConfirm, avatarsHtml, boardColumns, boardTiles, buttonsHtml, cardHtml, cardTitle, columnOf,
-  findingsScale, jobLineHtml, moveText, repoFilterOf, ticketLinkHtml, verdictsHtml,
+  findingsScale, jobLineHtml, moveText, panelParts, repoFilterOf, ticketLinkHtml, verdictsHtml,
 } from './reviews-board.js';
 
 // The board's names for the report's finding kinds (orchestrator/reviewer/service.py's _FINDING_KINDS).
@@ -317,11 +317,10 @@ function repliesHtml(detail) {
     <thead><tr><th>N</th><th>State</th><th>Target</th><th>Body</th></tr></thead><tbody>${rows}</tbody></table></div>`);
 }
 
-// A findings job's verdicts under the report, then its fix (the newest fix of either kind, as the detail gives it).
-function findingsFixHtml(detail) {
-  if (!detail.verdicts_job || !detail.verdicts.length) return '';
+// A findings job's verdicts, shown under the report they fix (panelParts).
+function verdictsSectionHtml(detail) {
   return section(`Fix of the findings <span>${detail.verdicts.length}</span> · job ${esc(detail.verdicts_job)}`, null,
-    verdictsHtml(detail.verdicts)) + fixHtml(detail);
+    verdictsHtml(detail.verdicts));
 }
 
 // A fix job's fix (address or findings): its files, the protected ones, whether it was pushed, and the patch.
@@ -430,11 +429,12 @@ function jobsHtml(jobs) {
 }
 
 function panelBodyHtml(pr, detail) {
-  const at = id => detail.jobs.findIndex(j => j.id === id);
-  // A re-check (or an address job, with its fix) newer than the report shows its replies instead of the findings.
-  const replies = detail.replies_job && (!detail.report_job || at(detail.replies_job) < at(detail.report_job));
-  const main = replies ? repliesHtml(detail) + fixHtml(detail)
-    : detail.report_job ? reportHtml(detail) + findingsFixHtml(detail)
+  // A re-check (or an address job, with its fix) newer than the report shows its replies instead of the findings;
+  // a findings job's verdicts and fix go under the report they fix (panelParts).
+  const parts = panelParts(detail);
+  const fix = parts.fix ? fixHtml(detail) : '';
+  const main = parts.view === 'replies' ? repliesHtml(detail) + fix
+    : parts.view === 'report' ? reportHtml(detail) + (parts.verdicts ? verdictsSectionHtml(detail) : '') + fix
       : section('', null, `<div class="review-empty">${esc(noReportText(pr, detail.jobs))}</div>`);
   const raw = detail.report_text == null ? '' : section('', null, details('raw', false,
     `Raw report · job ${esc(detail.report_job)}`, `<pre class="report-content">${esc(detail.report_text)}</pre>`,

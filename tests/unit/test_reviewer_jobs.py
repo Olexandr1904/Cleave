@@ -368,6 +368,12 @@ def test_findings_job_with_a_post_under_way_is_kept():
     pushing = job("findings", head=B, key=f"{B}:r1", state="done")
     assert plan([author_row(actions=())], {1: [pushing]}, cfg=ADDR, posting=frozenset({"j1"})).states == []
 
+def test_address_not_queued_while_a_findings_push_is_under_way():
+    """Spec anti-goal: no new fix of either kind while a push of a fix of the PR is under way."""
+    pushing = job("findings", key=f"{A}:r1", state="done")
+    assert plan([author_row()], {1: [pushing]}, cfg=ADDR, posting=frozenset({"j1"})).queue == []
+    assert plan([author_row()], {1: [pushing]}, cfg=ADDR).queue == [(1, "address", A, f"{A}:T1,T2")]
+
 def test_findings_job_of_a_held_pr_is_kept():
     queued = job("findings", head=B, key=f"{B}:r1", state="queued")
     assert plan([author_row(actions=())], {1: [queued]}, cfg=ADDR, held=frozenset({1})).states == []

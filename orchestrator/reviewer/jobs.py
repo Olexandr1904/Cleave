@@ -8,7 +8,7 @@ from datetime import datetime, timedelta
 
 from config.schemas import ReviewerConfig
 from orchestrator.pr_creation import COMPARED_MARKS
-from orchestrator.reviewer.board import ADDRESS_ACTIONS, BoardUpdate, job_kind
+from orchestrator.reviewer.board import ADDRESS_ACTIONS, FIX_KINDS, BoardUpdate, job_kind
 from orchestrator.reviewer.lines import large_line, turn_line
 from orchestrator.reviewer.models import BoardRow, Job
 
@@ -87,7 +87,7 @@ def plan_jobs(
 
     A job matched by more than one rule gets one state change: the first rule in that order wins. A job in
     `posting` (the ids of the jobs with a Post `posting`) is left to its post by the gone-turn rule: the post
-    itself takes the turn away; and while an address job has one, no address job is queued for its PR. A PR in
+    itself takes the turn away; and while a fix job of either kind has one, no address job is queued for its PR. A PR in
     `held` (see held_prs) gets no review, no re-check and no address job.
     `answered(job)`: the thread ids of an address job's replies that landed. `pushed_from(job)`: the head its
     landed push started from, "" without one.
@@ -152,8 +152,9 @@ def plan_jobs(
             # GitHub (else this poll would queue a job at the old head and supersede the pushed one).
             covered = any((j.head_sha == head or pushed_from(j) == head) and (j.state in _PENDING or (
                 j.state in ("done", "posted") and current <= _threads_of(j) - answered(j))) for j in addresses)
-            # A post under way: a push moves its job to the new head only once GitHub shows that head.
-            busy = any(j.id in posting for j in addresses)
+            # A post under way, of a fix of either kind: a push moves its job to the new head only once GitHub shows
+            # that head, and no new fix of the PR starts while one is being pushed.
+            busy = any(j.id in posting for j in jobs if j.kind in FIX_KINDS)
             failures = sum(j.state == "failed" for j in same_key)
             settled = datetime.fromisoformat(row.thread_turns_change or row.last_change)
             if (reviews_running and now - settled >= quiet

@@ -682,9 +682,10 @@ class ReviewerService:
 
     def detail(self, scope: str, number: int) -> dict:
         """One PR: its board row, its jobs (newest first), the newest review report, the replies of the newest
-        re-check or address job that drafted a plan, the verdicts of the newest findings job that wrote them, each
-        number's state (posted, ticked or open) and the PR's posts (newest first). The fix, patch and pushed commit
-        are the newer of that address job and that findings job's. Read-only."""
+        re-check or address job that drafted a plan, the verdicts of the newest findings job that wrote them (and the
+        review they fix, verdicts_review), each number's state (posted, ticked or open) and the PR's posts (newest
+        first). The fix, patch and pushed commit are the newer of that address job and that findings job's (fix_job):
+        the panel shows them beside that job only. Read-only."""
         row = self._store.board(scope).get(number)
         jobs = self._store.jobs(scope, number)
         if row is None and not jobs:
@@ -738,6 +739,8 @@ class ReviewerService:
             "posts": [_post_detail(p) for p in posts],
             "verdicts_job": verdicts.id if verdicts else None,
             "verdicts": runs[verdicts.id].verdicts if verdicts else [],
+            "verdicts_review": runs[verdicts.id].request.get("review") if verdicts else None,
+            "fix_job": fix_job.id if fix_job else None,
             "fix": (runs[fix_job.id].fix or None) if fix_job else None,
             "fix_patch": _patch_text(runs[fix_job.id]) if fix_job else None,
             "pushed_sha": pushed.sha if pushed else None,

@@ -642,7 +642,7 @@ async def test_poll_records_me(tmp_path):
 
 DETAIL_KEYS = {"row", "jobs", "report_job", "report", "replies_job", "replies", "tg_lines",
                "report_text", "number_states", "reply_states", "posts", "fix", "fix_patch", "pushed_sha",
-               "verdicts_job", "verdicts"}
+               "verdicts_job", "verdicts", "verdicts_review", "fix_job"}
 JOB_KEYS = {"id", "kind", "state", "reason", "head", "created_at", "updated_at", "retry_at",
             "started_at", "finished_at", "duration_s", "cost_usd", "turns", "message_ids", "message_sent",
             "notes"}
@@ -1401,6 +1401,18 @@ async def test_detail_of_a_findings_job(tmp_path):
     assert d["replies_job"] == address.id                      # the threads' replies still show
     post(rig, "p1", job, "posted", kind="push", sha="c" * 40)
     assert rig.service.detail("acme/app", 1)["pushed_sha"] == "c" * 40
+
+
+async def test_detail_names_whose_fix_and_which_review_the_verdicts_fix(tmp_path):
+    """The panel shows a fix beside the job it belongs to, and verdicts under the report they fix."""
+    rig = Rig(tmp_path)
+    address = finished_job(rig, tmp_path, "done", kind="address", replies=ADDRESS_REPLIES, fix=ADDRESS_FIX)
+    d = rig.service.detail("acme/app", 1)
+    assert (d["fix_job"], d["verdicts_review"]) == (address.id, None)
+    job = finished_job(rig, tmp_path, "done", kind="findings", verdicts=VERDICTS, fix=FINDINGS_FIX,
+                       request={"review": "r1"}, at=T0 + timedelta(minutes=5))
+    d = rig.service.detail("acme/app", 1)
+    assert (d["fix_job"], d["verdicts_review"], d["replies_job"]) == (job.id, "r1", address.id)
 
 
 async def test_detail_takes_the_fix_of_the_newer_kind(tmp_path):

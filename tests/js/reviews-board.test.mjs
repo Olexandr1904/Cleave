@@ -316,6 +316,15 @@ test('Fix findings… in the panel only, with its states', () => {
   assert.match(html, /data-review-action="fix-findings-again"/);
 });
 
+test('a pushed findings fix is not offered again: the next one is a plain Fix findings…', () => {
+  // self-review → Fix findings… → "push" → a self-review at the new head: nothing unpushed is replaced.
+  const pushed = mineNoTurn({ can_fix_findings: true, fix: fixJob({ kind: 'findings', pushed: true }) });
+  assert.equal(B.fixState(pushed, 'findings'), 'none');
+  const html = B.buttonsHtml('acme/app', pushed, 'panel');
+  assert.match(html, /data-review-action="fix-findings"[^>]*>Fix findings…</);
+  assert.doesNotMatch(html, /fix-findings-again/);
+});
+
 test('Fix findings… asks first, naming the confirmed findings and the head', () => {
   const p = mineNoTurn({ review: review({ critical: 1, major: 2, minor: 1, question: 3, preexisting: 2 }, { head: '8f01a2b3c' }) });
   const c = B.againConfirm(p, 'fix-findings');
@@ -333,6 +342,31 @@ test('Fix findings… asks first, naming the confirmed findings and the head', (
   assert.ok(noTime.bodyHtml.endsWith(' The current fix is replaced; it was not pushed.'), noTime.bodyHtml);
   const hostile = B.againConfirm(mineNoTurn({ review: review({ critical: 1 }, { head: '<b>' }) }), 'fix-findings');
   assert.doesNotMatch(hostile.bodyHtml, /<b>/);
+});
+
+test('panelParts: each fix beside the job it belongs to, verdicts under the report they fix', () => {
+  const V = [{ n: 1, verdict: 'FIXED', why: 'x' }];
+  // jobs are newest first; R a self-review, A an address job, F a findings job.
+  const detail = (ids, fields) => ({ jobs: ids.map(id => ({ id })), report_job: null, replies_job: null,
+    verdicts_job: null, verdicts: [], verdicts_review: null, fix_job: null, ...fields });
+  // R → A → F at one head: F's verdicts and F's fix under R's report (A's replies are older).
+  assert.deepEqual(B.panelParts(detail(['F', 'A', 'R'], { report_job: 'R', replies_job: 'A', verdicts_job: 'F',
+    verdicts: V, verdicts_review: 'R', fix_job: 'F' })), { view: 'report', verdicts: true, fix: true });
+  // R → F → A: A's replies with A's own fix; F's verdicts are older.
+  assert.deepEqual(B.panelParts(detail(['A', 'F', 'R'], { report_job: 'R', replies_job: 'A', verdicts_job: 'F',
+    verdicts: V, verdicts_review: 'R', fix_job: 'A' })), { view: 'replies', verdicts: false, fix: true });
+  // The replies view never shows another job's fix.
+  assert.deepEqual(B.panelParts(detail(['A', 'F', 'R'], { report_job: 'R', replies_job: 'A', fix_job: 'F' })),
+    { view: 'replies', verdicts: false, fix: false });
+  // R1 → F (pushed) → R2: R2's report, without R1's verdicts or F's fix.
+  assert.deepEqual(B.panelParts(detail(['R2', 'F', 'R1'], { report_job: 'R2', verdicts_job: 'F', verdicts: V,
+    verdicts_review: 'R1', fix_job: 'F' })), { view: 'report', verdicts: false, fix: false });
+  // A report newer than the address job: the report, no fix (as before findings jobs).
+  assert.deepEqual(B.panelParts(detail(['R', 'A'], { report_job: 'R', replies_job: 'A', fix_job: 'A' })),
+    { view: 'report', verdicts: false, fix: false });
+  assert.deepEqual(B.panelParts(detail(['A'], { replies_job: 'A', fix_job: 'A' })),
+    { view: 'replies', verdicts: false, fix: true });
+  assert.equal(B.panelParts(detail([], {})).view, 'none');
 });
 
 test('verdictsHtml lists each verdict, escaped', () => {

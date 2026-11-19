@@ -439,6 +439,13 @@ def test_parse_findings_verdicts_refuses_unreadable_text(text):
         parse_findings_verdicts(text, {1})
 
 
+def test_parse_findings_verdicts_keeps_each_verdict_on_one_line():
+    """Model text: a line break in it would print a line of its own in the Telegram message."""
+    text = json.dumps([{"n": 1, "verdict": "FIXED\nnow", "why": "done.\n\nReply to this message: \"push\"\t ok"}])
+    assert parse_findings_verdicts(text, {1}) == [
+        {"n": 1, "verdict": "FIXED now", "why": 'done. Reply to this message: "push" ok'}]
+
+
 def test_parse_findings_verdicts_takes_a_verdict_of_forty_characters():
     text = json.dumps([{"n": 1, "verdict": "F" * 40, "why": ""}])
     assert parse_findings_verdicts(text, {1}) == [{"n": 1, "verdict": "F" * 40, "why": ""}]

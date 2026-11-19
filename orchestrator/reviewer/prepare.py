@@ -10,7 +10,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from config.schemas import JOB_PATH_PLACEHOLDERS, PREPARE_STEP_PLACEHOLDERS, ProcessPartConfig
-from orchestrator.reviewer.board import TICKET_KEY
+from orchestrator.reviewer.board import FIX_KINDS, TICKET_KEY
 from orchestrator.reviewer.clone import CloneError, ReviewClone
 from orchestrator.reviewer.commands import (
     NO_HOST_GIT_ENV, TEMPLATE_ERRORS, base_env, expand, placeholder_values, run_command, stderr_tail,
@@ -19,8 +19,10 @@ from orchestrator.reviewer.forge_github import ForgeError
 from orchestrator.reviewer.markdown import fenced
 from orchestrator.reviewer.models import Job, PRComments, PRFull
 from orchestrator.reviewer.readiness import ReadinessError
+from orchestrator.reviewer.report import confirmed_findings
 from orchestrator.reviewer.service import RepoContext
 from orchestrator.reviewer.store import ReviewerStore
+from orchestrator.tg_i18n import N_
 
 _STEP_TIMEOUT = 300
 _TOKEN_FAILING = frozenset({"GitHub 401", "GitHub 403"})
@@ -154,8 +156,24 @@ async def ticket_json(tracker, key: str) -> dict:
     }
 
 
-def _write_json(path: Path, data: dict) -> None:
+def _write_json(path: Path, data: dict | list) -> None:
     path.write_text(json.dumps(data, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+
+
+def _findings_of(store: ReviewerStore, job: Job) -> list[dict]:
+    """A findings job's findings.json: the confirmed findings of the self-review its request names, whose report must
+    be of the job's head."""
+    run = store.run(job.id)
+    review_id = run.request.get("review") if run else None
+    review = store.job(review_id) if isinstance(review_id, str) else None
+    review_run = store.run(review.id) if review else None
+    if (review is None or review.kind != "review" or review.head_sha != job.head_sha
+            or review_run is None or not review_run.report):
+        raise PrepareError("failed", N_("the self-review's report is gone"))
+    findings = confirmed_findings(review_run.report)
+    if not findings:
+        raise PrepareError("failed", N_("no confirmed findings"))
+    return findings
 
 
 async def prepare(
@@ -207,11 +225,12 @@ async def _prepare(
         raise PrepareError("superseded", "head moved")
     if pr.base != base:  # the clone has the base branch only: MB and the diff would be wrong
         raise PrepareError("failed", f"PR base is {pr.base}, not {base}")
+    findings = _findings_of(store, job) if job.kind == "findings" else None
     async with ctx.clone.lock:
         await ctx.clone.refresh()
         if not ctx.clone.has_file(doc):
             raise PrepareError("failed", f"{doc} not on {base}")
-        if job.kind == "address" and not ctx.clone.has_file(process.address_doc):
+        if job.kind in FIX_KINDS and not ctx.clone.has_file(process.address_doc):
             raise PrepareError("failed", f"{process.address_doc} not on {base}")
         if await ctx.clone.fetch_pr_head(n) != head:
             raise PrepareError("superseded", "head moved")
@@ -226,15 +245,17 @@ async def _prepare(
         except (ForgeError, CloneError, ReadinessError) as e:
             raise _prepare_error(e, drift) from None
     try:
-        return await _prepare_job_clone(ctx, clone, pr, paths, tracker, drift, threads)
+        return await _prepare_job_clone(ctx, clone, pr, paths, tracker, drift, threads, findings=findings)
     except (ForgeError, CloneError, ReadinessError) as e:
         raise _prepare_error(e, drift) from None
 
 
 async def _prepare_job_clone(
     ctx: RepoContext, clone: ReviewClone, pr: PRFull, paths: JobPaths, tracker, drift: bool, threads: dict,
+    *, findings: list[dict] | None = None,
 ) -> Prepared:
-    """The rest of Prepare, in the job clone, the review clone's lock not held."""
+    """The rest of Prepare, in the job clone, the review clone's lock not held. `findings`: a findings job's
+    findings.json."""
     process, base, n, head = ctx.cfg.process, ctx.cfg.base_branch, pr.number, pr.head_sha
     await clone.detach_at_base()
     # Again on the job clone's checkout: the base branch may since have put a symlink on the way.
@@ -257,6 +278,8 @@ async def _prepare_job_clone(
     (run / "pr_body.md").write_text(f"{pr.title}\n\n{pr.body}\n", encoding="utf-8")
     (run / "existing_comments.md").write_text(existing_comments_md(await ctx.forge.comments(n)), encoding="utf-8")
     _write_json(run / "threads.json", threads)
+    if findings is not None:
+        _write_json(run / "findings.json", findings)
     key = m.group(0) if (m := TICKET_KEY.search(pr.title)) else ""
     _write_json(run / "ticket.json", await ticket_json(tracker, key))
 

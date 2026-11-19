@@ -9,6 +9,9 @@ from orchestrator.reviewer.models import BoardRow, BoardSnapshot, PRDetails
 JOB_ACTIONS = frozenset({"review", "recheck"})
 # The author-side turns an address job takes, in a repo with process.address_doc.
 ADDRESS_ACTIONS = frozenset({"answer_threads", "resolve_threads", "address_review"})
+# The kinds of job whose session writes the PR's worktree and whose patch "push" commits: an address job (review
+# threads) and a findings job (the confirmed findings of the operator's self-review).
+FIX_KINDS = ("address", "findings")
 TICKET_KEY = re.compile(r"\b[A-Z][A-Z0-9]+-\d+\b")
 
 

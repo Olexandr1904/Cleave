@@ -1,4 +1,5 @@
-"""From a board update: the review, re-check and address jobs to queue or retire, and the lines to send."""
+"""From a board update: the review, re-check and address jobs to queue or retire, the findings jobs to retire (only
+the operator queues one), and the lines to send."""
 from __future__ import annotations
 
 from collections.abc import Callable
@@ -7,7 +8,7 @@ from datetime import datetime, timedelta
 
 from config.schemas import ReviewerConfig
 from orchestrator.pr_creation import COMPARED_MARKS
-from orchestrator.reviewer.board import ADDRESS_ACTIONS, BoardUpdate, job_kind
+from orchestrator.reviewer.board import ADDRESS_ACTIONS, FIX_KINDS, BoardUpdate, job_kind
 from orchestrator.reviewer.lines import large_line, turn_line
 from orchestrator.reviewer.models import BoardRow, Job
 
@@ -82,11 +83,11 @@ def plan_jobs(
     pushed_from: Callable[[Job], str] = lambda job: "",
 ) -> Plan:
     """Rules in order: review (new head, turn back), re-check (turn back, new threads), address (turn back, new
-    threads or head), gone turns, turn lines.
+    threads or head), findings (new head: never queued here), gone turns, turn lines.
 
     A job matched by more than one rule gets one state change: the first rule in that order wins. A job in
     `posting` (the ids of the jobs with a Post `posting`) is left to its post by the gone-turn rule: the post
-    itself takes the turn away; and while an address job has one, no address job is queued for its PR. A PR in
+    itself takes the turn away; and while a fix job of either kind has one, no address job is queued for its PR. A PR in
     `held` (see held_prs) gets no review, no re-check and no address job.
     `answered(job)`: the thread ids of an address job's replies that landed. `pushed_from(job)`: the head its
     landed push started from, "" without one.
@@ -151,8 +152,9 @@ def plan_jobs(
             # GitHub (else this poll would queue a job at the old head and supersede the pushed one).
             covered = any((j.head_sha == head or pushed_from(j) == head) and (j.state in _PENDING or (
                 j.state in ("done", "posted") and current <= _threads_of(j) - answered(j))) for j in addresses)
-            # A post under way: a push moves its job to the new head only once GitHub shows that head.
-            busy = any(j.id in posting for j in addresses)
+            # A post under way, of a fix of either kind: a push moves its job to the new head only once GitHub shows
+            # that head, and no new fix of the PR starts while one is being pushed.
+            busy = any(j.id in posting for j in jobs if j.kind in FIX_KINDS)
             failures = sum(j.state == "failed" for j in same_key)
             settled = datetime.fromisoformat(row.thread_turns_change or row.last_change)
             if (reviews_running and now - settled >= quiet
@@ -161,6 +163,12 @@ def plan_jobs(
                     if j.state in _RECHECK_SUPERSEDED:
                         states.setdefault(j.id, ("superseded", "new threads"))
                 plan.queue.append((number, "address", head, key))
+        # Findings: only the operator queues one (ReviewerService.fix_findings). One at an old head is retired, unless
+        # its landed push started from this head (the board is behind GitHub) or its push is under way.
+        for j in jobs:
+            if (j.kind == "findings" and j.state in ("queued", "deferred", "done") and j.head_sha != head
+                    and pushed_from(j) != head and j.id not in posting):
+                states.setdefault(j.id, ("superseded", "new head"))
     for change in update.gone_turns:
         kind = job_kind(change.action, True)
         if kind is None:

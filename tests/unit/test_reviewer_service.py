@@ -18,7 +18,7 @@ from orchestrator.reviewer.models import (
     Anchor, BoardRow, BoardSnapshot, JobRun, Post, PRDetails, RepoState, SnapshotPR, Turn,
 )
 from orchestrator.reviewer.readiness import ReadinessError
-from orchestrator.reviewer.report import parse_report
+from orchestrator.reviewer.report import Report, ReportItem, parse_report
 from orchestrator.reviewer.service import RepoContext, ReviewerService, _why_not_fixable
 from orchestrator.reviewer.store import ReviewerStore
 from orchestrator.switches import Switches
@@ -641,7 +641,8 @@ async def test_poll_records_me(tmp_path):
 # --- Plan 4: the PR detail view ---
 
 DETAIL_KEYS = {"row", "jobs", "report_job", "report", "replies_job", "replies", "tg_lines",
-               "report_text", "number_states", "reply_states", "posts", "fix", "fix_patch", "pushed_sha"}
+               "report_text", "number_states", "reply_states", "posts", "fix", "fix_patch", "pushed_sha",
+               "verdicts_job", "verdicts", "verdicts_review", "fix_job"}
 JOB_KEYS = {"id", "kind", "state", "reason", "head", "created_at", "updated_at", "retry_at",
             "started_at", "finished_at", "duration_s", "cost_usd", "turns", "message_ids", "message_sent",
             "notes"}
@@ -1200,8 +1201,8 @@ async def test_overview_carries_the_newest_address_job_whatever_job_is_newer(tmp
     rig.service.review_now("acme/app", 1)   # a self-review after the fix: the row's job is the review now
     [repo] = rig.service.overview()
     assert repo["jobs"][1].kind == "review"
-    assert repo["fixes"][1] == {"id": fix.id, "state": "done", "head": A[:9], "started_at": now, "fix": True,
-                                "pushed": False, "posting": False}
+    assert repo["fixes"][1] == {"id": fix.id, "kind": "address", "state": "done", "head": A[:9], "started_at": now,
+                                "fix": True, "pushed": False, "posting": False}
     post(rig, "p1", fix, "posted", kind="push")
     post(rig, "p2", fix, "posting", kind="replies")
     assert {k: rig.service.overview()[0]["fixes"][1][k] for k in ("pushed", "posting")} == {
@@ -1226,3 +1227,207 @@ async def test_address_now_refuses_a_repo_no_longer_configured(tmp_path):
     await Rig(tmp_path, c).service.poll(c)   # its board stays in the store
     with pytest.raises(LookupError):
         Rig(tmp_path).service.address_now("acme/app", 1)
+
+
+# --- Findings jobs: Fix findings… and "fix" ---
+
+B = "b" * 40
+
+
+def self_review(rig, *kinds, head=A, state="done", stamp=None):
+    """A review job of PR 1 at `head` with a report of these item kinds (see test_reviewer_report._report_dict)."""
+    stamp = stamp or T0.isoformat()
+    job = rig.store.add_job("acme/app", 1, "review", head, f"{head}:now", stamp)
+    rig.store.set_job_state(job.id, state, "", stamp)
+    items = tuple(ReportItem(i, k, f"t{i}", "a.kt", i, "", f"b{i}") for i, k in enumerate(kinds, 1))
+    rig.store.save_run(JobRun(job.id, report=Report("T", head, "", None, "COMMENT", "", items, (), "", "").to_dict()))
+    return job
+
+
+async def findings_rig(tmp_path, cfg=ADDR_CFG, **kw):
+    """Rig with the operator's own PR 1 at head A on the board (address_ctx), polled once."""
+    c = address_ctx(tmp_path, cfg)
+    rig = Rig(tmp_path, c, **kw)
+    await rig.service.poll(c)
+    return rig
+
+
+async def test_fix_findings_queues_a_findings_job(tmp_path):
+    rig = await findings_rig(tmp_path)
+    review = self_review(rig, "red", "question", "yellow")
+    old = rig.store.add_job("acme/app", 1, "findings", A, f"{A}:{review.id}", T0.isoformat())
+    rig.store.set_job_state(old.id, "done", "", T0.isoformat())
+    failed = rig.store.add_job("acme/app", 1, "findings", A, f"{A}:{review.id}", T0.isoformat())
+    rig.store.set_job_state(failed.id, "failed", "boom", T0.isoformat())
+    address = rig.store.add_job("acme/app", 1, "address", A, f"{A}:T1,T2", T0.isoformat())
+    rig.store.set_job_state(address.id, "done", "", T0.isoformat())
+    job = rig.service.fix_findings("acme/app", 1, instruction="leave 3 as it is")
+    assert (job.kind, job.head_sha, job.key, job.state) == ("findings", A, f"{A}:{review.id}", "queued")
+    assert rig.store.run(job.id).request == {"review": review.id, "instruction": "leave 3 as it is"}
+    assert (rig.store.job(old.id).state, rig.store.job(old.id).reason) == ("superseded", "new findings fix")
+    assert rig.store.job(failed.id).state == "failed"
+    assert rig.store.job(address.id).state == "done"      # the other fix kind is not superseded
+
+
+async def test_fix_findings_without_an_instruction_and_with_the_reviews_id(tmp_path):
+    rig = await findings_rig(tmp_path)
+    review = self_review(rig, "orange", state="posted")
+    job = rig.service.fix_findings("acme/app", 1, review_id=review.id)
+    assert rig.store.run(job.id).request == {"review": review.id}
+
+
+@pytest.mark.parametrize("setup, why", [
+    ("no_address_doc", "no address_doc"),
+    ("not_author", "not your PR"),
+    ("pipeline", "a ticket workspace holds it"),
+    ("held", "held by a comparison"),
+    ("no_review", "no finished self-review at this head"),
+    ("review_running", "no finished self-review at this head"),
+    ("review_failed", "no finished self-review at this head"),
+    ("review_of_old_head", "no finished self-review at this head"),
+    ("questions_only", "no confirmed findings"),
+    ("no_report", "no confirmed findings"),
+])
+async def test_fix_findings_refuses_what_is_not_fixable(tmp_path, setup, why):
+    compared = {"acme/app": frozenset({"ACME-1"})} if setup == "held" else {}
+    rig = await findings_rig(tmp_path, CFG if setup == "no_address_doc" else ADDR_CFG,
+                             compared=lambda scope: compared.get(scope, frozenset()))
+    row = rig.store.board("acme/app")[1]
+    changes = {"not_author": {"roles": ["reviewer"]}, "pipeline": {"pipeline": True},
+               "held": {"title": "ACME-1: Fix 1 [skill]", "ticket_key": "ACME-1"}}.get(setup)
+    if changes:
+        rig.store.replace_board("acme/app", {1: dataclasses.replace(row, **changes)})
+    if setup == "review_running":
+        self_review(rig, "red", state="running")
+    elif setup == "review_failed":
+        self_review(rig, "red", state="failed")
+    elif setup == "review_of_old_head":
+        self_review(rig, "red", head=B)
+    elif setup == "questions_only":
+        self_review(rig, "question", "preexisting")
+    elif setup == "no_report":
+        review = rig.store.add_job("acme/app", 1, "review", A, f"{A}:now", T0.isoformat())
+        rig.store.set_job_state(review.id, "done", "", T0.isoformat())
+    elif setup != "no_review":
+        self_review(rig, "red")
+    with pytest.raises(ValueError, match=f"^not fixable: {why}$"):
+        rig.service.fix_findings("acme/app", 1)
+    assert [j.kind for j in rig.store.jobs("acme/app", 1) if j.kind == "findings"] == []
+    assert (1 in rig.service.overview()[0]["findings_fixable"]) is False
+
+
+async def test_fix_findings_refuses_a_review_that_is_not_the_newest(tmp_path):
+    rig = await findings_rig(tmp_path)
+    older = self_review(rig, "red", stamp=T0.isoformat())
+    newer = self_review(rig, "red", stamp=(T0 + timedelta(minutes=1)).isoformat())
+    with pytest.raises(ValueError, match="^not the newest self-review$"):
+        rig.service.fix_findings("acme/app", 1, review_id=older.id)
+    assert [j for j in rig.store.jobs("acme/app", 1) if j.kind == "findings"] == []
+    assert rig.service.fix_findings("acme/app", 1, review_id=newer.id).key == f"{A}:{newer.id}"
+
+
+async def test_one_fix_of_a_pr_at_a_time(tmp_path):
+    rig = await findings_rig(tmp_path)
+    self_review(rig, "red")
+    address = rig.service.address_now("acme/app", 1)                    # an address job pending
+    with pytest.raises(ValueError, match="^already queued$"):
+        rig.service.fix_findings("acme/app", 1)
+    rig.store.set_job_state(address.id, "failed", "boom", T0.isoformat())
+    findings = rig.service.fix_findings("acme/app", 1)                 # a findings job pending
+    for state in ("queued", "running", "deferred"):
+        rig.store.set_job_state(findings.id, state, "", T0.isoformat())
+        for call in (lambda: rig.service.address_now("acme/app", 1),
+                     lambda: rig.service.address_again("acme/app", 1, "x"),
+                     lambda: rig.service.fix_findings("acme/app", 1)):
+            with pytest.raises(ValueError, match="^already queued$"):
+                call()
+    assert [j.state for j in rig.store.jobs("acme/app", 1) if j.kind in ("address", "findings")] == [
+        "deferred", "failed"]
+
+
+@pytest.mark.parametrize("kind", ["address", "findings"])
+async def test_no_fix_is_queued_while_a_push_is_under_way(tmp_path, kind):
+    rig = await findings_rig(tmp_path)
+    review = self_review(rig, "red")
+    fix = rig.store.add_job("acme/app", 1, kind, A, f"{A}:{review.id}", T0.isoformat())
+    rig.store.set_job_state(fix.id, "done", "", T0.isoformat())
+    post(rig, "p1", fix, "posting", kind="push")
+    for call in (lambda: rig.service.fix_findings("acme/app", 1),
+                 lambda: rig.service.address_now("acme/app", 1),
+                 lambda: rig.service.address_again("acme/app", 1, "x")):
+        with pytest.raises(ValueError, match="^a post is under way$"):
+            call()
+    assert rig.store.job(fix.id).state == "done"
+    assert len(rig.store.jobs("acme/app", 1)) == 2
+
+
+async def test_fix_findings_lookup_errors(tmp_path):
+    rig = await findings_rig(tmp_path)
+    self_review(rig, "red")
+    with pytest.raises(LookupError):
+        rig.service.fix_findings("acme/app", 999)
+    with pytest.raises(LookupError):     # its board outlived its configuration
+        Rig(tmp_path).service.fix_findings("acme/app", 1)
+
+
+async def test_overview_shows_findings_fixable_and_the_newest_fix_of_either_kind(tmp_path):
+    rig = await findings_rig(tmp_path)
+    assert rig.service.overview()[0]["findings_fixable"] == set()
+    self_review(rig, "red")
+    [repo] = rig.service.overview()
+    assert repo["findings_fixable"] == {1}
+    address = rig.store.add_job("acme/app", 1, "address", A, f"{A}:T1,T2", T0.isoformat())
+    rig.store.set_job_state(address.id, "failed", "boom", T0.isoformat())
+    job = rig.service.fix_findings("acme/app", 1)
+    [repo] = rig.service.overview()
+    assert (repo["fixes"][1]["id"], repo["fixes"][1]["kind"]) == (job.id, "findings")
+    assert repo["findings_fixable"] == {1}         # a pending fix is the button's state, not the rule's
+
+
+VERDICTS = [{"n": 1, "verdict": "FIXED", "why": "null check added"}]
+FINDINGS_FIX = {"files": [{"path": "b.kt", "added": 2, "deleted": 0}], "protected": [], "bytes": 12}
+
+
+async def test_detail_of_a_findings_job(tmp_path):
+    rig = Rig(tmp_path)
+    address = finished_job(rig, tmp_path, "done", kind="address", replies=ADDRESS_REPLIES, fix=ADDRESS_FIX)
+    (tmp_path / "jobs" / address.id / "fix.patch").write_text("diff --git a/a.kt b/a.kt\n")
+    job = finished_job(rig, tmp_path, "done", kind="findings", verdicts=VERDICTS, fix=FINDINGS_FIX,
+                       at=T0 + timedelta(minutes=5))
+    (tmp_path / "jobs" / job.id / "fix.patch").write_text("diff --git a/b.kt b/b.kt\n")
+    d = rig.service.detail("acme/app", 1)
+    assert (d["verdicts_job"], d["verdicts"]) == (job.id, VERDICTS)
+    assert (d["fix"], d["fix_patch"], d["pushed_sha"]) == (FINDINGS_FIX, "diff --git a/b.kt b/b.kt\n", None)
+    assert d["replies_job"] == address.id                      # the threads' replies still show
+    post(rig, "p1", job, "posted", kind="push", sha="c" * 40)
+    assert rig.service.detail("acme/app", 1)["pushed_sha"] == "c" * 40
+
+
+async def test_detail_names_whose_fix_and_which_review_the_verdicts_fix(tmp_path):
+    """The panel shows a fix beside the job it belongs to, and verdicts under the report they fix."""
+    rig = Rig(tmp_path)
+    address = finished_job(rig, tmp_path, "done", kind="address", replies=ADDRESS_REPLIES, fix=ADDRESS_FIX)
+    d = rig.service.detail("acme/app", 1)
+    assert (d["fix_job"], d["verdicts_review"]) == (address.id, None)
+    job = finished_job(rig, tmp_path, "done", kind="findings", verdicts=VERDICTS, fix=FINDINGS_FIX,
+                       request={"review": "r1"}, at=T0 + timedelta(minutes=5))
+    d = rig.service.detail("acme/app", 1)
+    assert (d["fix_job"], d["verdicts_review"], d["replies_job"]) == (job.id, "r1", address.id)
+
+
+async def test_detail_takes_the_fix_of_the_newer_kind(tmp_path):
+    rig = Rig(tmp_path)
+    job = finished_job(rig, tmp_path, "done", kind="findings", verdicts=VERDICTS, fix=FINDINGS_FIX)
+    address = finished_job(rig, tmp_path, "done", kind="address", replies=ADDRESS_REPLIES, fix=ADDRESS_FIX,
+                           at=T0 + timedelta(minutes=5))
+    d = rig.service.detail("acme/app", 1)
+    assert (d["verdicts_job"], d["verdicts"], d["fix"]) == (job.id, VERDICTS, ADDRESS_FIX)
+    post(rig, "p1", address, "posted", kind="push", sha="d" * 40)
+    assert rig.service.detail("acme/app", 1)["pushed_sha"] == "d" * 40
+
+
+async def test_detail_without_a_findings_job(tmp_path):
+    rig = Rig(tmp_path)
+    finished_job(rig, tmp_path, "failed", kind="findings", verdicts=VERDICTS, fix=FINDINGS_FIX)
+    d = rig.service.detail("acme/app", 1)
+    assert (d["verdicts_job"], d["verdicts"], d["fix"]) == (None, [], None)

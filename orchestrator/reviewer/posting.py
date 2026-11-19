@@ -28,6 +28,7 @@ from typing import TypeVar
 from uuid import uuid4
 
 from config.schemas import POSTER_PLACEHOLDERS, REPLIES_PLACEHOLDERS
+from orchestrator.reviewer.board import FIX_KINDS
 from orchestrator.reviewer.clone import CloneError
 from orchestrator.reviewer.commands import CommandResult, placeholder_values, stderr_tail
 from orchestrator.reviewer.fix import PATCH_NAME
@@ -757,8 +758,8 @@ class Posting:
                                                        pr.url if uncertain else ""))
 
     async def push_fix(self, ctx: RepoContext, job: Job) -> PostOutcome:
-        """The address job's patch committed on the PR head and pushed, under the posting lock; never raises
-        but a cancellation, which leaves the Post `posting` for the restart's recover()."""
+        """A fix job's patch (an address or a findings job's) committed on the PR head and pushed, under the posting
+        lock; never raises but a cancellation, which leaves the Post `posting` for the restart's recover()."""
         async with self._lock:
             try:
                 return await self._push_fix(ctx, job)
@@ -775,7 +776,7 @@ class Posting:
         job = self._current(job.id)
         number = job.number
         run = self._store.run(job.id)
-        if job.kind != "address" or not run.fix:
+        if job.kind not in FIX_KINDS or not run.fix:
             raise _Refused(tr("This job changed no code: nothing to push."))
         if run.fix.get("protected"):
             raise _Refused(tr("The fix touches protected files ({paths}): Cleave does not push it. Nothing was done.",
@@ -803,8 +804,8 @@ class Posting:
         if branch == ctx.cfg.base_branch or not _PLAIN_BRANCH.fullmatch(branch) or branch.startswith("-"):
             raise _Refused(tr("Cleave does not push to the branch {branch}. Nothing was done.",
                               branch=branch[:_MAX_PATH]))
-        message = (f"fix({run.ticket_key}): address review comments on #{number}" if run.ticket_key
-                   else f"fix: address review comments on #{number}")
+        what = "address review comments" if job.kind == "address" else "self-review findings"
+        message = f"fix({run.ticket_key}): {what} on #{number}" if run.ticket_key else f"fix: {what} on #{number}"
         # 3-4 in one lease of the review clone: the post recorded as under way, then the commit and its push.
         async with AsyncExitStack() as lease:
             try:
@@ -834,6 +835,7 @@ class Posting:
         self._store.rehead_job(job.id, sha, f"{sha}:{job.key.partition(':')[2]}", stamp)
         url = f"https://github.com/{ctx.readiness.repo}/commit/{sha}"
         self._end(post, "posted", sha=sha, urls=[url])
+        # A findings job has no replies: no "post replies" hint follows its push.
         posted = self._store.posted_replies(job)
         fixed = [e["n"] for e in run.replies if e.get("fixed") is True and e["n"] not in posted]
         return PostOutcome("posted", pushed_line(number, sha, url, fixed))

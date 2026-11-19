@@ -1,4 +1,5 @@
-"""Parsers for what the review model writes: the report, the re-check replies plan and tg_lines.json.
+"""Parsers for what the review model writes: the report, the re-check replies plan, a findings job's verdicts and
+tg_lines.json; and the confirmed findings of a stored report, which a findings job is given.
 
 The text is untrusted model output: it is scanned line by line and never evaluated.
 """
@@ -7,12 +8,16 @@ from __future__ import annotations
 import dataclasses
 import json
 import re
+from collections.abc import Collection
 from dataclasses import dataclass
 
 from orchestrator.reviewer.markdown import fenced, split_lines
 
 KIND_EMOJI = {"red": "🔴", "orange": "🟠", "yellow": "🟡", "question": "❓", "preexisting": "🟣"}
 CONFIRMED = ("red", "orange", "yellow")
+# A confirmed finding's severity in findings.json, by its report kind.
+SEVERITY = {"red": "critical", "orange": "major", "yellow": "minor"}
+_MAX_VERDICT = 40  # characters of a findings verdict
 
 _MAX_REPORT = 1_000_000  # characters
 _MAX_DIGITS = 9  # of an item number, a line, a dropped number or the candidates total
@@ -178,6 +183,50 @@ def parse_address_plan(text: str) -> list[dict]:
         if not fixed and "{fix_sha}" in entry["body"]:
             raise ReportError(f"#{n} names {{fix_sha}} but is not fixed")
     return plan
+
+
+def confirmed_findings(report: dict) -> list[dict]:
+    """The findings a findings job weighs: the stored report's (Report.to_dict()) items of a confirmed kind, in report
+    order, under their report numbers. {} (no report) has none."""
+    return [
+        {"n": item["number"], "severity": SEVERITY[item["kind"]], "title": item["title"], "path": item["path"],
+         "line": item["line"], "body": item["body"]}
+        for item in report.get("items", ()) if item["kind"] in CONFIRMED
+    ]
+
+
+def parse_findings_verdicts(text: str, numbers: Collection[int]) -> list[dict]:
+    """A findings job's verdicts.json: a list with one {"n", "verdict", "why"} per finding of `numbers`. The verdict's
+    words are the address document's, not Cleave's: only its shape is checked. Entries are reduced to the three keys."""
+    if len(text) > _MAX_REPORT:
+        raise ReportError("verdicts too large")
+    try:
+        raw = json.loads(text)
+    except (ValueError, RecursionError):
+        raw = None
+    if not isinstance(raw, list):
+        raise ReportError("verdicts are not a JSON list")
+    verdicts: list[dict] = []
+    seen: set[int] = set()
+    for entry in raw:
+        n = entry.get("n") if isinstance(entry, dict) else None
+        if type(n) is not int:  # not a bool either
+            raise ReportError("a verdict without a number")
+        if n not in numbers:
+            raise ReportError(f"#{n} is not a finding")
+        if n in seen:
+            raise ReportError(f"#{n} has two verdicts")
+        verdict, why = entry.get("verdict"), entry.get("why")
+        if not isinstance(verdict, str) or not verdict.strip() or len(verdict) > _MAX_VERDICT:
+            raise ReportError(f"#{n}: no verdict of at most {_MAX_VERDICT} characters")
+        if not isinstance(why, str):
+            raise ReportError(f"#{n}: why is not a string")
+        seen.add(n)
+        # One line each, as parse_tg_lines keeps a line: a line break would print a line of its own in the message.
+        verdicts.append({"n": n, "verdict": " ".join(verdict.split()), "why": " ".join(why.split())})
+    if missing := sorted(set(numbers) - seen):
+        raise ReportError(f"no verdict for {', '.join(f'#{n}' for n in missing)}")
+    return verdicts
 
 
 def parse_tg_lines(text: str) -> dict[int, str]:

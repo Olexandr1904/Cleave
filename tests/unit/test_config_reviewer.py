@@ -638,3 +638,7 @@ def test_address_settings_load():
     process = _parse_reviewer_section(data, _vcs(), "r.yaml").process
     assert process.address_doc == ".github/pr_comments/400-pr-review-workflow.mdc"
     assert process.address_protected == [".github/**", "gradle/**"]
+
+
+def test_findings_job_defaults():
+    assert ReviewerGlobalConfig().jobs["findings"] == ReviewerJobConfig("opus", "xhigh", 5400)

@@ -13,6 +13,7 @@ from collections import Counter
 from collections.abc import Iterable
 from dataclasses import dataclass
 
+from orchestrator.reviewer.board import FIX_KINDS
 from orchestrator.reviewer.lines import _spaced
 from orchestrator.reviewer.report import CONFIRMED, Report
 from orchestrator.tg_i18n import tr
@@ -51,6 +52,8 @@ _PHRASES = {
     # An address message's: each only as the whole reply.
     "push": ("push", "commit and push", "пуш", "пушь", "запушь", "закоммить и запушь", "запуш"),
     "diff": ("diff", "patch", "дифф", "диф", "патч"),
+    # A self-review message's: fix its confirmed findings; only as the whole reply.
+    "fix": ("fix", "fix findings", "пофикси", "почини", "фикс", "пофікси", "полагодь"),
     "filler": (
         "comments", "comment", "коментарии", "комментарии", "коменты", "комменты", "коментарі",
         "коменти", "questions", "question", "вопросы", "вопрос", "питання",
@@ -73,7 +76,7 @@ _RETRY_EVENT = {"APPROVE": "approve", "REQUEST_CHANGES": "request changes"}
 
 @dataclass(frozen=True)
 class ReplyCommand:
-    action: str  # post, post_replies, text, edit, draft, review_again, skip, push, diff, again
+    action: str  # post, post_replies, text, edit, draft, review_again, skip, push, diff, again, fix
     numbers: tuple[int, ...] = ()
     event: str = "COMMENT"
     all_confirmed: bool = False
@@ -105,7 +108,7 @@ def parse_reply(text: str) -> ReplyCommand | None:
     count = Counter(kinds)
     used = set(kinds)
     numbers = tuple(n for kind, n in tokens if kind == "number")
-    if kinds in (["review_again"], ["skip"], ["push"], ["diff"]):
+    if kinds in (["review_again"], ["skip"], ["push"], ["diff"], ["fix"]):
         return ReplyCommand(kinds[0])
     if used == {"text", "number"} and count["text"] == 1:
         return ReplyCommand("text", numbers)
@@ -139,12 +142,20 @@ def check_command(
     drafted: set[int],
 ) -> ReplyCommand | str:
     """The command with "all confirmed" expanded into numbers, or why nothing is done. An address message takes a
-    re-check's commands on its replies plan, and push, diff and again."""
+    re-check's commands on its replies plan, and push, diff and again; a findings message takes push, diff and again
+    only; "fix" works on a review message (the service decides whether it is a fixable self-review)."""
+    if cmd.action == "fix":
+        if kind != "review":
+            return tr('"fix" works on the message of a self-review of your own PR. Nothing was done.')
+        return cmd
+    if kind == "findings" and cmd.action not in ("push", "diff", "again", "review_again", "skip"):
+        return tr('This is a findings message: reply "push", "diff" or "again: …". Nothing was done.')
     if kind == "address" and cmd.action in ("post", "edit", "draft"):
         return tr('This is a threads message: reply "push", "post replies 1 3", "text 2", "diff" or "again: …". '
                   "Nothing was done.")
-    if kind != "address" and cmd.action in ("push", "diff", "again"):
-        return tr('"{action}" works on a threads message of your own PR. Nothing was done.', action=cmd.action)
+    if kind not in FIX_KINDS and cmd.action in ("push", "diff", "again"):
+        return tr('"{action}" works on a fix message of your own PR (threads or self-review findings). Nothing was '
+                  "done.", action=cmd.action)
     recheck = kind in ("recheck", "address")
     if not recheck and cmd.action == "post_replies":
         return tr('This is a review message: "post replies" works on a re-check message. Nothing was done.')
@@ -213,7 +224,7 @@ def describe(cmd: ReplyCommand, head: str) -> str:
         return f'edit {numbers}: "{cmd.instruction}"'
     if cmd.action == "review_again":
         return "review again"
-    if cmd.action in ("push", "diff"):
+    if cmd.action in ("push", "diff", "fix"):
         return cmd.action
     if cmd.action == "again":
         return f'again: "{cmd.instruction}"' if cmd.instruction else "again"

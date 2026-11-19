@@ -267,3 +267,125 @@ test('repoFilterOf: a listed scope filters; an unknown or no scope shows every r
   assert.equal(B.repoFilterOf('old/repo', repos), null);
   assert.equal(B.repoFilterOf(null, repos), null);
 });
+
+// --- Findings jobs: Fix findings… ---
+
+const mineNoTurn = (fields = {}) => pr(1, { roles: ['author'], ...fields });
+
+test('a fix ready to push puts my PR in To fix, of either kind', () => {
+  const ready = mineNoTurn({ fix: fixJob({ kind: 'findings' }) });
+  assert.equal(B.columnOf(ready), 'fix');
+  assert.equal(B.moveText(ready, 'fix', 'octo').text, 'fix ready: push from Telegram');
+  assert.equal(B.columnOf({ ...ready, fix: fixJob() }), 'fix');                          // an address fix
+  assert.equal(B.columnOf({ ...ready, fix: fixJob({ kind: 'findings', pushed: true }) }), 'others');
+  assert.equal(B.columnOf({ ...ready, fix: fixJob({ kind: 'findings', fix: false }) }), 'others');
+  assert.equal(B.columnOf({ ...ready, fix: fixJob({ kind: 'findings', state: 'queued' }) }), 'others');
+  assert.equal(B.columnOf({ ...ready, my_turns: ['merge'] }), 'fix');                     // the push before the merge
+  assert.equal(B.columnOf({ ...ready, my_turns: ['merge'], fix: null }), 'merge');
+  assert.equal(B.columnOf({ ...ready, my_turns: ['recheck'] }), 'review');
+});
+
+test('the move line of a findings fix: only while it waits for the push', () => {
+  const turn = mineNoTurn({ my_turns: ['request_review'] });
+  for (const fields of [{ pushed: true }, { fix: false }, { state: 'failed' }]) {
+    assert.equal(B.moveText({ ...turn, fix: fixJob({ kind: 'findings', ...fields }) }, 'fix', 'octo').text,
+      'request review', JSON.stringify(fields));
+  }
+  // An address fix keeps its lines.
+  assert.equal(B.moveText({ ...turn, fix: fixJob({ fix: false }) }, 'fix', 'octo').text, 'replies ready: post from Telegram');
+});
+
+test('Fix findings… in the panel only, with its states', () => {
+  const base = mineNoTurn({ can_fix_findings: true });
+  assert.match(B.buttonsHtml('acme/app', base, 'panel'), /data-review-action="fix-findings"[^>]*>Fix findings…</);
+  assert.doesNotMatch(B.buttonsHtml('acme/app', base, 'card'), /fix-findings/);
+  assert.doesNotMatch(B.buttonsHtml('acme/app', { ...base, can_fix_findings: false }, 'panel'), /fix-findings/);
+  for (const state of ['done', 'posted']) {
+    const again = { ...base, fix: fixJob({ kind: 'findings', state }) };
+    assert.match(B.buttonsHtml('acme/app', again, 'panel'), /data-review-action="fix-findings-again"[^>]*>Fix findings again…</);
+  }
+  const failed = { ...base, fix: fixJob({ kind: 'findings', state: 'failed' }) };
+  assert.match(B.buttonsHtml('acme/app', failed, 'panel'), />Fix findings…</);
+  const addressDone = { ...base, fix: fixJob({ kind: 'address' }) };
+  assert.match(B.buttonsHtml('acme/app', addressDone, 'panel'), /data-review-action="fix-findings"[^>]*>Fix findings…</);
+  assert.equal(B.fixState(addressDone, 'findings'), 'none');
+  assert.equal(B.fixState(addressDone), 'again');
+  for (const [state, label] of [['queued', 'Queued'], ['running', 'Running'], ['deferred', 'Deferred']]) {
+    const pending = { ...base, fix: fixJob({ kind: 'address', state }) };
+    assert.match(B.buttonsHtml('acme/app', pending, 'panel'), new RegExp(`disabled[^>]*>${label}<`), state);
+    assert.doesNotMatch(B.buttonsHtml('acme/app', pending, 'panel'), /fix-findings/);
+  }
+  const posting = { ...base, fix: fixJob({ kind: 'findings', posting: true }) };
+  assert.match(B.buttonsHtml('acme/app', posting, 'panel'), /disabled[^>]*>Posting</);
+  // With Fix now too: one disabled button, not two.
+  const both = { ...base, can_fix: true, fix: fixJob({ state: 'queued' }) };
+  assert.equal((B.buttonsHtml('acme/app', both, 'panel').match(/>Queued</g) || []).length, 1);
+  const bothPosting = { ...base, can_fix: true, fix: fixJob({ posting: true }) };
+  assert.equal((B.buttonsHtml('acme/app', bothPosting, 'panel').match(/>Posting</g) || []).length, 1);
+  // A findings fix done: Fix now stays Fix now (it does not replace that fix), Fix findings again… replaces it.
+  const findingsDone = { ...base, can_fix: true, fix: fixJob({ kind: 'findings' }) };
+  const html = B.buttonsHtml('acme/app', findingsDone, 'panel');
+  assert.match(html, /data-review-action="fix-now"/);
+  assert.doesNotMatch(html, /data-review-action="fix-again"/);
+  assert.match(html, /data-review-action="fix-findings-again"/);
+});
+
+test('a pushed findings fix is not offered again: the next one is a plain Fix findings…', () => {
+  // self-review → Fix findings… → "push" → a self-review at the new head: nothing unpushed is replaced.
+  const pushed = mineNoTurn({ can_fix_findings: true, fix: fixJob({ kind: 'findings', pushed: true }) });
+  assert.equal(B.fixState(pushed, 'findings'), 'none');
+  const html = B.buttonsHtml('acme/app', pushed, 'panel');
+  assert.match(html, /data-review-action="fix-findings"[^>]*>Fix findings…</);
+  assert.doesNotMatch(html, /fix-findings-again/);
+});
+
+test('Fix findings… asks first, naming the confirmed findings and the head', () => {
+  const p = mineNoTurn({ review: review({ critical: 1, major: 2, minor: 1, question: 3, preexisting: 2 }, { head: '8f01a2b3c' }) });
+  const c = B.againConfirm(p, 'fix-findings');
+  assert.equal(c.title, 'Fix the findings of the self-review?');
+  assert.equal(c.label, 'Fix findings');
+  assert.equal(c.bodyHtml, 'Claude (Opus) weighs each of the 4 confirmed findings of the self-review at 8f01a2b3c, '
+    + 'fixes those that hold and says why for the rest. Nothing is pushed until you reply &quot;push&quot; in Telegram.');
+  const one = B.againConfirm(mineNoTurn({ review: review({ minor: 1 }, { head: '8f01a2b3c' }) }), 'fix-findings');
+  assert.match(one.bodyHtml, /weighs the 1 confirmed finding of the self-review at 8f01a2b3c, fixes it if it holds and says why if not\./);
+  const again = B.againConfirm({ ...p, fix: fixJob({ kind: 'findings', started_at: '2026-11-19T10:00:00Z' }) },
+    'fix-findings-again');
+  assert.equal(again.title, 'Fix the findings of the self-review?');
+  assert.ok(again.bodyHtml.endsWith(' in Telegram. The fix from 19 Nov 10:00 is replaced; it was not pushed.'), again.bodyHtml);
+  const noTime = B.againConfirm({ ...p, fix: fixJob({ kind: 'findings', started_at: '' }) }, 'fix-findings-again');
+  assert.ok(noTime.bodyHtml.endsWith(' The current fix is replaced; it was not pushed.'), noTime.bodyHtml);
+  const hostile = B.againConfirm(mineNoTurn({ review: review({ critical: 1 }, { head: '<b>' }) }), 'fix-findings');
+  assert.doesNotMatch(hostile.bodyHtml, /<b>/);
+});
+
+test('panelParts: each fix beside the job it belongs to, verdicts under the report they fix', () => {
+  const V = [{ n: 1, verdict: 'FIXED', why: 'x' }];
+  // jobs are newest first; R a self-review, A an address job, F a findings job.
+  const detail = (ids, fields) => ({ jobs: ids.map(id => ({ id })), report_job: null, replies_job: null,
+    verdicts_job: null, verdicts: [], verdicts_review: null, fix_job: null, ...fields });
+  // R → A → F at one head: F's verdicts and F's fix under R's report (A's replies are older).
+  assert.deepEqual(B.panelParts(detail(['F', 'A', 'R'], { report_job: 'R', replies_job: 'A', verdicts_job: 'F',
+    verdicts: V, verdicts_review: 'R', fix_job: 'F' })), { view: 'report', verdicts: true, fix: true });
+  // R → F → A: A's replies with A's own fix; F's verdicts are older.
+  assert.deepEqual(B.panelParts(detail(['A', 'F', 'R'], { report_job: 'R', replies_job: 'A', verdicts_job: 'F',
+    verdicts: V, verdicts_review: 'R', fix_job: 'A' })), { view: 'replies', verdicts: false, fix: true });
+  // The replies view never shows another job's fix.
+  assert.deepEqual(B.panelParts(detail(['A', 'F', 'R'], { report_job: 'R', replies_job: 'A', fix_job: 'F' })),
+    { view: 'replies', verdicts: false, fix: false });
+  // R1 → F (pushed) → R2: R2's report, without R1's verdicts or F's fix.
+  assert.deepEqual(B.panelParts(detail(['R2', 'F', 'R1'], { report_job: 'R2', verdicts_job: 'F', verdicts: V,
+    verdicts_review: 'R1', fix_job: 'F' })), { view: 'report', verdicts: false, fix: false });
+  // A report newer than the address job: the report, no fix (as before findings jobs).
+  assert.deepEqual(B.panelParts(detail(['R', 'A'], { report_job: 'R', replies_job: 'A', fix_job: 'A' })),
+    { view: 'report', verdicts: false, fix: false });
+  assert.deepEqual(B.panelParts(detail(['A'], { replies_job: 'A', fix_job: 'A' })),
+    { view: 'replies', verdicts: false, fix: true });
+  assert.equal(B.panelParts(detail([], {})).view, 'none');
+});
+
+test('verdictsHtml lists each verdict, escaped', () => {
+  const html = B.verdictsHtml([{ n: 2, verdict: 'FIXED', why: 'null <check> added' }, { n: 3, verdict: "WON'T FIX", why: 'intended' }]);
+  assert.match(html, /<li[^>]*>2\. FIXED — null &lt;check&gt; added<\/li>/);
+  assert.match(html, /<li[^>]*>3\. WON'T FIX — intended<\/li>/);
+  assert.equal(B.verdictsHtml([]), '');
+});

@@ -16,6 +16,8 @@ TEXTS: dict[str, str] = {
     "No findings.": "Зауважень немає.",
     'Reply to this message: "post 1 2 4 approve" · "text 2" · "edit 2: …" · "review again"':
         'Відповідайте на це повідомлення: "post 1 2 4 approve" · "text 2" · "edit 2: …" · "review again"',
+    'Reply to this message: "post 1 2 4 approve" · "text 2" · "edit 2: …" · "review again" · "fix"':
+        'Відповідайте на це повідомлення: "post 1 2 4 approve" · "text 2" · "edit 2: …" · "review again" · "fix"',
     '[{scope}] Re-check of PR #{number} "{title}"': '[{scope}] Повторна перевірка PR #{number} "{title}"',
     "head {head} · {replies}": "коміт {head} · {replies}",
     'Reply to this message: "post replies {numbers}" · "text {first}"':
@@ -26,6 +28,9 @@ TEXTS: dict[str, str] = {
     "fix: {files}, +{added} −{deleted} — not built or tested here":
         "виправлення: {files}, +{added} −{deleted} — тут не зібрано й не протестовано",
     "no code change": "код не змінено",
+    '[{scope}] Self-review findings on your PR #{number} "{title}"':
+        '[{scope}] Зауваження самоперевірки у вашому PR #{number} "{title}"',
+    "head {head} · {findings} · {change}": "коміт {head} · {findings} · {change}",
     "Protected files in the fix ({paths}): Cleave will not push it.":
         "Захищені файли у виправленні ({paths}): Cleave його не запушить.",
     "Reply to this message: {commands}": "Відповідайте на це повідомлення: {commands}",
@@ -35,6 +40,7 @@ TEXTS: dict[str, str] = {
     "review": "рев'ю",
     "recheck": "повторна перевірка",
     "address": "обробка тредів",
+    "findings": "виправлення зауважень",
     "edit": "редагування",
     "draft": "чернетка",
 
@@ -71,6 +77,8 @@ TEXTS: dict[str, str] = {
         'Ця задача завершилась зі станом {state}: тут діють лише "review again" і "skip". Нічого не зроблено.',
     'Not understood; nothing was done. Reply like "post replies 1 3", "text 1" or "review again".':
         'Не зрозумів; нічого не зроблено. Відповідайте, наприклад, "post replies 1 3", "text 1" або "review again".',
+    'Not understood; nothing was done. Reply like "push", "diff" or "again: …".':
+        'Не зрозумів; нічого не зроблено. Відповідайте, наприклад, "push", "diff" або "again: …".',
     'Not understood; nothing was done. Reply like "push", "post replies 1 3", "text 2", "diff" or "again: …".':
         'Не зрозумів; нічого не зроблено. Відповідайте, наприклад, "push", "post replies 1 3", "text 2", "diff"'
         ' або "again: …".',
@@ -234,8 +242,13 @@ TEXTS: dict[str, str] = {
     'This is a threads message: reply "push", "post replies 1 3", "text 2", "diff" or "again: …". Nothing was done.':
         'Це повідомлення про треди: відповідайте "push", "post replies 1 3", "text 2", "diff" або "again: …".'
         ' Нічого не зроблено.',
-    '"{action}" works on a threads message of your own PR. Nothing was done.':
-        '"{action}" працює в повідомленні про треди вашого PR. Нічого не зроблено.',
+    '"{action}" works on a fix message of your own PR (threads or self-review findings). Nothing was done.':
+        '"{action}" працює в повідомленні про виправлення вашого PR (треди чи зауваження самоперевірки).'
+        ' Нічого не зроблено.',
+    'This is a findings message: reply "push", "diff" or "again: …". Nothing was done.':
+        'Це повідомлення про зауваження: відповідайте "push", "diff" або "again: …". Нічого не зроблено.',
+    '"fix" works on the message of a self-review of your own PR. Nothing was done.':
+        '"fix" працює в повідомленні самоперевірки вашого PR. Нічого не зроблено.',
     'Edit one number at a time: "edit 2: …". Nothing was done.':
         'Редагуйте по одному номеру: "edit 2: …". Нічого не зроблено.',
     'Name a number: "text 2". Nothing was done.': 'Вкажіть номер: "text 2". Нічого не зроблено.',
@@ -293,6 +306,15 @@ TEXTS: dict[str, str] = {
     "This job changed no code: there is no patch.": "Ця задача не змінила коду: патча немає.",
     "Patch cut: the dashboard shows all of it.": "Патч обрізано: на дашборді він повністю.",
     "A run on #{number} is already queued.": "Запуск для #{number} уже в черзі.",
+    "A push or a post of a fix of #{number} is under way; try again when it ends. Nothing was done.":
+        "Пуш або публікація виправлення #{number} ще триває; спробуйте, коли закінчиться. Нічого не зроблено.",
+    "This is not the newest self-review of #{number} at its head. Nothing was done.":
+        "Це не найновіша самоперевірка #{number} на його поточному коміті. Нічого не зроблено.",
+    "Cannot fix the findings of #{number}: {why}. Nothing was done.":
+        "Не можу виправити зауваження #{number}: {why}. Нічого не зроблено.",
+    'Fixing the findings of #{number} at {head}: the result comes here; nothing is pushed until you reply "push".':
+        'Виправляю зауваження #{number} на {head}: результат прийде сюди; нічого не буде запушено, доки ви не'
+        ' відповісте "push".',
     "#{number} has no threads waiting on you any more; nothing was done.":
         "У #{number} більше немає тредів, що чекають на вас; нічого не зроблено.",
     "Queued a new run on #{number} at {head}.": "Новий запуск для #{number} на {head} поставлено в чергу.",
@@ -327,6 +349,16 @@ TEXTS: dict[str, str] = {
     "Prepare's threads snapshot in this job's copy is unreadable":
         "знімок тредів від Prepare у копії цієї задачі не читається",
     "the job copy's posting directory is not Cleave's": "тека публікації в копії задачі не належить Cleave",
+    "the self-review's report is gone": "звіту самоперевірки вже немає",
+    "no confirmed findings": "підтверджених зауважень немає",
+    "no verdicts written": "вердикти не записано",
+
+    # service.py: why the findings of a self-review cannot be fixed (Fix findings…, "fix")
+    "no address_doc": "немає address_doc",
+    "not your PR": "це не ваш PR",
+    "a ticket workspace holds it": "його тримає робочий простір тікета",
+    "held by a comparison": "його тримає порівняння",
+    "no finished self-review at this head": "немає завершеної самоперевірки цього коміту",
 }
 
 NOUNS: dict[str, tuple[str, str, str]] = {
@@ -337,4 +369,5 @@ NOUNS: dict[str, tuple[str, str, str]] = {
     "drafted reply": ("чернетка відповіді", "чернетки відповідей", "чернеток відповідей"),
     "more line": ("рядок", "рядки", "рядків"),
     "review": ("рев'ю", "рев'ю", "рев'ю"),
+    "finding": ("зауваження", "зауваження", "зауважень"),
 }

@@ -343,3 +343,42 @@ def test_address_actions_send_no_turn_line_where_address_is_on():
     assert len(plan([dataclasses.replace(r, pipeline=True)], new=new, cfg=ADDR).lines) == 2
     not_mine = dataclasses.replace(r, roles=["reviewer"])     # no address job for it: the line is its notice
     assert len(plan([not_mine], new=new, cfg=ADDR).lines) == 2
+
+
+# --- Findings jobs ---
+
+def test_findings_job_is_never_queued():
+    review = job("review", key=f"{A}:now", state="done", jid="r1")
+    assert plan([author_row(actions=())], {1: [review]}, cfg=ADDR).queue == []
+    assert plan([author_row()], {1: [review]}, cfg=ADDR).queue == [(1, "address", A, f"{A}:T1,T2")]
+
+def test_findings_job_at_an_old_head_is_superseded():
+    jobs = [job("findings", head=B, key=f"{B}:r1", state=s, jid=s) for s in ("queued", "deferred", "done", "failed")]
+    p = plan([author_row(actions=())], {1: jobs}, cfg=ADDR)
+    assert sorted(p.states) == [("deferred", "superseded", "new head"), ("done", "superseded", "new head"),
+                                ("queued", "superseded", "new head")]
+    assert plan([author_row(actions=(), head=B)], {1: jobs}, cfg=ADDR).states == []     # at the row's head
+
+def test_findings_job_pushed_from_the_rows_head_is_kept():
+    """After "push" the job is at the new head B; GitHub's list still shows A."""
+    pushed = job("findings", head=B, key=f"{B}:r1", state="done")
+    assert plan([author_row(actions=())], {1: [pushed]}, cfg=ADDR, pushed_from=lambda j: A).states == []
+
+def test_findings_job_with_a_post_under_way_is_kept():
+    pushing = job("findings", head=B, key=f"{B}:r1", state="done")
+    assert plan([author_row(actions=())], {1: [pushing]}, cfg=ADDR, posting=frozenset({"j1"})).states == []
+
+def test_address_not_queued_while_a_findings_push_is_under_way():
+    """Spec anti-goal: no new fix of either kind while a push of a fix of the PR is under way."""
+    pushing = job("findings", key=f"{A}:r1", state="done")
+    assert plan([author_row()], {1: [pushing]}, cfg=ADDR, posting=frozenset({"j1"})).queue == []
+    assert plan([author_row()], {1: [pushing]}, cfg=ADDR).queue == [(1, "address", A, f"{A}:T1,T2")]
+
+def test_findings_job_of_a_held_pr_is_kept():
+    queued = job("findings", head=B, key=f"{B}:r1", state="queued")
+    assert plan([author_row(actions=())], {1: [queued]}, cfg=ADDR, held=frozenset({1})).states == []
+
+def test_findings_job_is_not_retired_by_a_gone_turn():
+    done = job("findings", key=f"{A}:r1", state="done")
+    gone = [TurnChange(1, "answer_threads", ("T1",)), TurnChange(1, "review", ())]
+    assert plan([author_row(actions=(("merge", ()),))], {1: [done]}, cfg=ADDR, gone=gone).states == []

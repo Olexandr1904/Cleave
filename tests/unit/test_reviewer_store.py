@@ -232,6 +232,13 @@ def test_address_jobs_are_sent_when_done(store):
     store.save_run(JobRun(job.id))
     assert [j.id for j, _ in store.done_unsent()] == [job.id]
 
+def test_findings_jobs_are_runnable_and_sent_when_done(store):
+    job = store.add_job("acme/app", 7, "findings", "a" * 40, f"{'a' * 40}:r1", T0)
+    assert [j.id for j in store.runnable_jobs(T1)] == [job.id]
+    store.set_job_state(job.id, "done", "", T1)
+    store.save_run(JobRun(job.id))
+    assert [j.id for j, _ in store.done_unsent()] == [job.id]
+
 def test_push_of_is_the_newest_landed_push(store):
     job = store.add_job("acme/app", 1712, "address", "a" * 40, f"{'a' * 40}:T1", T0)
     other = store.add_job("acme/app", 1712, "address", "a" * 40, f"{'a' * 40}:T2", T0)
@@ -246,3 +253,12 @@ def test_posted_numbers_of_an_address_job_are_its_replies(store):
     store.save_post(Post("p1", "a1", "acme/app", 1712, "b" * 40, "replies", "posted", T1,
                          landed=[{"n": 2, "path": "", "line": None, "title": "", "where": "reply"}]))
     assert store.posted_numbers(job, None) == {2}
+
+
+def test_a_run_stored_before_verdicts_loads_with_the_defaults(store):
+    data = json.loads(JobRun("j1", title="t").to_json())
+    for key in ("verdicts", "findings_fixable"):
+        data.pop(key, None)
+    store._conn.execute("INSERT INTO job_runs (job_id, data) VALUES (?, ?)", ("j1", json.dumps(data)))
+    run = store.run("j1")
+    assert (run.title, run.verdicts, run.findings_fixable) == ("t", [], False)

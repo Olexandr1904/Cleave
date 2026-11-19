@@ -5,7 +5,8 @@
 import { esc } from './helpers.js';
 
 // Left to right. A PR is in one column: my review or re-check, or a PR I have no role on (it is open for review),
-// else any other move of mine but merge, else my merge; no move of mine, With others.
+// else any other move of mine but merge or a fix ready to push (the push is my move), else my merge; no move of
+// mine, With others.
 export const COLUMNS = [
   { key: 'review', title: 'To review', hint: 'your review or re-check; PRs you are not on', empty: 'Nothing to review' },
   { key: 'fix', title: 'To fix', hint: 'your move on your PR', empty: 'Nothing to fix' },
@@ -36,12 +37,14 @@ export const isMine = pr => pr.roles.includes('author');
 // Not its author, an assignee or a reviewer: the board lists it because the repo's status command lists every PR.
 export const notInvolved = pr => !pr.roles.length;
 
+// The PR's newest fix (of either kind) is done, made a patch and is not pushed: pushing it from Telegram is my move.
+const readyFix = pr => Boolean(pr.fix && pr.fix.state === 'done' && pr.fix.fix && !pr.fix.pushed);
+
 export function columnOf(pr) {
   const turns = pr.my_turns;
   if (turns.some(a => a === 'review' || a === 'recheck') || notInvolved(pr)) return 'review';
-  if (!turns.length) return 'others';
-  if (turns.some(a => a !== 'merge')) return 'fix';
-  return 'merge';
+  if (turns.some(a => a !== 'merge') || readyFix(pr)) return 'fix';
+  return turns.length ? 'merge' : 'others';
 }
 
 const ms = iso => Date.parse(iso);
@@ -73,13 +76,17 @@ export function reviewPending(pr) {
   return r && r.head === pr.head && PENDING.includes(r.state) ? r.state : '';
 }
 
-// From the PR's newest address job (pr.fix), whatever job is newer: a self-review after a fix must not hide it.
-export function fixState(pr) {
+// From the PR's newest fix job of either kind (pr.fix), whatever job is newer: a self-review after a fix must not hide
+// it. Posting and pending hold both buttons (one fix of a PR at a time); "again" is the button's own `kind` only: Fix
+// now does not replace a findings fix, nor Fix findings… a threads fix. A pushed findings fix is done with: nothing
+// unpushed is replaced, so the next run is a plain Fix findings….
+export function fixState(pr, kind = 'address') {
   const fix = pr.fix;
   if (!fix) return 'none';
-  if (fix.posting) return 'posting';  // a push or a post of its replies is under way: the server refuses Fix now
+  if (fix.posting) return 'posting';  // a push or a post of its replies is under way: the server refuses a new fix
   if (PENDING.includes(fix.state)) return 'pending';
-  return REPORTED.includes(fix.state) ? 'again' : 'none';
+  if (kind === 'findings' && fix.pushed) return 'none';
+  return REPORTED.includes(fix.state) && (fix.kind || 'address') === kind ? 'again' : 'none';
 }
 
 export function shortAge(iso, now) {
@@ -166,6 +173,8 @@ export function moveText(pr, column, me) {
   } else if (column === 'review' && pr.review && pr.review.state === 'done' && pr.review.head === pr.head
     && pr.review.message_sent) {
     text = 'post the review from Telegram';
+  } else if (column === 'fix' && fix && fix.state === 'done' && fix.kind === 'findings') {
+    if (readyFix(pr)) text = 'fix ready: push from Telegram';  // pushed or no patch: nothing left to do with it
   } else if (column === 'fix' && fix && fix.state === 'done') {
     text = fix.pushed ? 'fix pushed: post the replies from Telegram'
       : fix.fix ? 'fix ready: push from Telegram' : 'replies ready: post from Telegram';
@@ -215,6 +224,30 @@ export function findingsHtml(pr, scale) {
     words.join('') || '<span>no findings</span>'}<span class="reviews-sev-x">· ${state}${older ? ' · on an older commit' : ''}</span></div></div>`;
 }
 
+// What the PR panel's body shows, from its detail: the replies of the newest re-check or address job when they are
+// newer than the report and than the verdicts shown, else the report ('none' without either); a findings job's
+// verdicts only under the report they fix; the fix (its files, patch, pushed commit) only beside the job it belongs
+// to — the replies' job, or the findings job whose verdicts show.
+export function panelParts(detail) {
+  const at = id => detail.jobs.findIndex(j => j.id === id);
+  const newer = (a, b) => Boolean(a) && (!b || at(a) < at(b));
+  const verdicts = Boolean(detail.report_job && detail.verdicts_job && detail.verdicts.length
+    && detail.verdicts_review === detail.report_job);
+  const replies = newer(detail.replies_job, detail.report_job)
+    && !(verdicts && newer(detail.verdicts_job, detail.replies_job));
+  const view = replies ? 'replies' : detail.report_job ? 'report' : 'none';
+  const owner = replies ? detail.replies_job : view === 'report' && verdicts ? detail.verdicts_job : null;
+  return { view, verdicts: view === 'report' && verdicts, fix: Boolean(owner) && detail.fix_job === owner };
+}
+
+// A findings fix's verdicts in the PR panel: `n. VERDICT — why` each (model text, escaped); '' without any.
+export function verdictsHtml(verdicts) {
+  if (!verdicts.length) return '';
+  // The Dropped list's look: a number, then the text.
+  return `<ul class="review-dropped">${verdicts.map(v => `<li>${esc(v.n)}. ${esc(v.verdict)} — ${esc(v.why)}</li>`)
+    .join('')}</ul>`;
+}
+
 const JOB_NAME = { review: 'Cleave review', recheck: 'Cleave re-check', address: 'Claude fix' };
 
 const jobLine = (state, text) => `<div class="reviews-jobline is-${state}"><span class="reviews-dot"></span>${esc(text)}</div>`;
@@ -243,7 +276,8 @@ export function jobLineHtml(pr, now) {
 }
 
 const PENDING_LABEL = { review: { queued: 'Queued', running: 'Running', deferred: 'Deferred' },
-  fix: { queued: 'Queued', running: 'Fixing', deferred: 'Deferred' } };
+  fix: { queued: 'Queued', running: 'Fixing', deferred: 'Deferred' },
+  findings: { queued: 'Queued', running: 'Running', deferred: 'Deferred' } };
 
 // The buttons of a card ('card') or of the panel header ('panel'). Nothing here opens GitHub: #number does.
 export function buttonsHtml(scope, pr, where) {
@@ -275,6 +309,16 @@ export function buttonsHtml(scope, pr, where) {
     else if (state === 'again') out.push(button('fix-again', 'Fix again…'));
     else out.push(button('fix-now', 'Fix now', true));
   }
+  if (mine && where === 'panel' && pr.can_fix_findings) {
+    const state = fixState(pr, 'findings');
+    const held = state === 'posting' || state === 'pending';
+    // A posting or pending fix holds both buttons: its disabled button is shown once, by Fix now when it is there.
+    if (held && !pr.can_fix) {
+      out.push(state === 'posting' ? disabled('Posting', 'A push or a post of a fix of this PR is under way')
+        : disabled(PENDING_LABEL.findings[pr.fix.state], `A fix of this PR is ${pr.fix.state}`));
+    } else if (state === 'again') out.push(button('fix-findings-again', 'Fix findings again…'));
+    else if (!held) out.push(button('fix-findings', 'Fix findings…'));
+  }
   // Skip drops a queued or deferred review of this head too (Review now after a skip).
   const pending = reviewPending(pr);
   if (!mine && pr.my_turns.includes('review') && (!pr.skipped || pending === 'queued' || pending === 'deferred')) {
@@ -287,8 +331,22 @@ function andList(parts) {
   return parts.length > 1 ? `${parts.slice(0, -1).join(', ')} and ${parts[parts.length - 1]}` : parts.join('');
 }
 
-// The confirmation before a run that replaces a report or a fix of the same commit.
+// The confirmation before a run that replaces a report or a fix of the same commit, and before Fix findings….
 export function againConfirm(pr, action) {
+  if (action === 'fix-findings' || action === 'fix-findings-again') {
+    const r = pr.review || {};
+    const f = r.findings || {};
+    const n = (f.critical || 0) + (f.major || 0) + (f.minor || 0);
+    const what = n === 1
+      ? `weighs the 1 confirmed finding of the self-review at ${r.head}, fixes it if it holds and says why if not.`
+      : `weighs each of the ${n} confirmed findings of the self-review at ${r.head}, fixes those that hold and says why for the rest.`;
+    let body = `Claude (Opus) ${what} Nothing is pushed until you reply "push" in Telegram.`;
+    if (action === 'fix-findings-again') {
+      const when = fmtWhen((pr.fix || {}).started_at);
+      body += ` ${when ? `The fix from ${when}` : 'The current fix'} is replaced; it was not pushed.`;
+    }
+    return { title: 'Fix the findings of the self-review?', label: 'Fix findings', bodyHtml: esc(body) };
+  }
   if (action === 'fix-again') {
     const fix = pr.fix || {};
     const what = fmtWhen(fix.started_at) ? `The fix from ${fmtWhen(fix.started_at)}` : 'The current fix';

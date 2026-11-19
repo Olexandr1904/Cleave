@@ -113,7 +113,7 @@ class ReviewerStore:
     def runnable_jobs(self, now: str) -> list[Job]:
         # A queued job has no retry_at ("" sorts first) unless it waits for GitHub to be available again.
         sql = (
-            f"SELECT {_JOB_COLUMNS} FROM jobs WHERE kind IN ('review', 'recheck', 'address') "
+            f"SELECT {_JOB_COLUMNS} FROM jobs WHERE kind IN ('review', 'recheck', 'address', 'findings') "
             "AND state IN ('queued', 'deferred') AND retry_at <= ? "
             "ORDER BY created_at, rowid"
         )
@@ -157,7 +157,7 @@ class ReviewerStore:
         sql = (
             f"SELECT {_JOB_COLUMNS}, data FROM jobs "
             "JOIN job_runs ON job_runs.job_id = jobs.id "
-            "WHERE kind IN ('review', 'recheck', 'address') AND state IN ('done', 'posted') "
+            "WHERE kind IN ('review', 'recheck', 'address', 'findings') AND state IN ('done', 'posted') "
             "AND json_extract(data, '$.message_sent') = 0 "
             "ORDER BY created_at, jobs.rowid"
         )

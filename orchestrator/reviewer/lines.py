@@ -10,7 +10,7 @@ from orchestrator.reviewer.models import BoardRow
 from orchestrator.tg_i18n import ENGLISH, N_, count, current_language, detail, tr
 
 # The job kinds and turn actions a line names, for tr(): an action the readiness tool names otherwise stays as is.
-_NAMES = (N_("review"), N_("recheck"), N_("address"), N_("edit"), N_("draft"))
+_NAMES = (N_("review"), N_("recheck"), N_("address"), N_("findings"), N_("edit"), N_("draft"))
 
 
 def turn_line(scope: str, row: BoardRow, change: TurnChange) -> str:
@@ -204,7 +204,9 @@ def approve_unknown_line(number: int, head: str) -> str:
 
 
 def not_understood_line(kind: str) -> str:
-    """`kind`: the anchored job's (review, recheck or address)."""
+    """`kind`: the anchored job's (review, recheck, address or findings)."""
+    if kind == "findings":
+        return tr('Not understood; nothing was done. Reply like "push", "diff" or "again: …".')
     if kind == "address":
         return tr('Not understood; nothing was done. Reply like "push", "post replies 1 3", "text 2", "diff" or '
                   '"again: …".')

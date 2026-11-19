@@ -1,6 +1,7 @@
-"""The reviewer's Telegram messages, in the current Telegram language: the review message, the re-check message and
-the address message. What the review model wrote (a finding's title or Telegram line, the event's reason, why a
-candidate was dropped, a drafted reply) is marked for translation (tg_i18n.model_text)."""
+"""The reviewer's Telegram messages, in the current Telegram language: the review message, the re-check message, the
+address message and the findings message. What the review model wrote (a finding's title or Telegram line, the event's
+reason, why a candidate was dropped, a drafted reply, a verdict and why) is marked for translation
+(tg_i18n.model_text)."""
 from __future__ import annotations
 
 import posixpath
@@ -11,6 +12,10 @@ from orchestrator.tg_i18n import N_, count, model_text, tr
 
 _REVIEW_HINT = N_(
     'Reply to this message: "post 1 2 4 approve" · "text 2" · "edit 2: …" · "review again"'
+)
+# A self-review of the operator's own PR with a confirmed finding, in a repo with address_doc: "fix" fixes them.
+_FIXABLE_REVIEW_HINT = N_(
+    'Reply to this message: "post 1 2 4 approve" · "text 2" · "edit 2: …" · "review again" · "fix"'
 )
 # Characters of any one text from the report, the replies plan, tg_lines or the PR that a line prints:
 # a hostile report could otherwise turn one line into many Telegram parts.
@@ -28,7 +33,10 @@ def review_message(
     tg_lines: dict[int, str],
     posted_at_head: int = 0,
     summary_posted: bool = False,
+    fixable: bool = False,
 ) -> str:
+    """`fixable`: the run is a self-review of the operator's own PR in a repo with address_doc (JobRun.findings_fixable);
+    with a confirmed finding its reply line offers "fix"."""
     kinds = [item.kind for item in report.items]
     total = report.candidates_total
     if total is None:
@@ -62,7 +70,7 @@ def review_message(
         )))
     if not report.items and not report.dropped:
         lines.append(tr("No findings."))
-    lines += ["", tr(_REVIEW_HINT), url]
+    lines += ["", tr(_FIXABLE_REVIEW_HINT if fixable and confirmed else _REVIEW_HINT), url]
     return "\n".join(lines)
 
 
@@ -94,6 +102,21 @@ def recheck_message(
     return "\n".join(lines)
 
 
+def _change(fix: dict) -> str:
+    """A fix job's patch in a few words: its size, or that the session changed no code."""
+    if not fix:
+        return tr("no code change")
+    files, added, deleted = fix_summary(fix)
+    return tr("fix: {files}, +{added} −{deleted} — not built or tested here", files=count(files, "file"),
+              added=added, deleted=deleted)
+
+
+def _protected_line(fix: dict) -> list[str]:
+    if not fix.get("protected"):
+        return []
+    return [tr("Protected files in the fix ({paths}): Cleave will not push it.", paths=_cut(", ".join(fix["protected"])))]
+
+
 def address_message(
     scope: str,
     number: int,
@@ -104,21 +127,14 @@ def address_message(
     tg_lines: dict[int, str],
     fix: dict,
 ) -> str:
-    if fix:
-        files, added, deleted = fix_summary(fix)
-        change = tr("fix: {files}, +{added} −{deleted} — not built or tested here", files=count(files, "file"),
-                    added=added, deleted=deleted)
-    else:
-        change = tr("no code change")
+    change = _change(fix)
     lines = [
         tr('[{scope}] Threads on your PR #{number} "{title}"', scope=scope, number=number, title=_cut(title)),
         tr("head {head} · {replies} · {change}", head=head_sha[:9],
            replies=count(len(replies), "drafted reply", "drafted replies"), change=change),
+        *_protected_line(fix),
+        "",
     ]
-    if fix.get("protected"):
-        lines.append(tr("Protected files in the fix ({paths}): Cleave will not push it.",
-                        paths=_cut(", ".join(fix["protected"]))))
-    lines.append("")
     commands = ['"push"'] if fix and not fix.get("protected") else []
     if replies:
         for entry in replies:
@@ -130,6 +146,33 @@ def address_message(
         lines.append(tr("No replies drafted."))
     commands += ['"diff"'] if fix else []
     lines += ["", tr("Reply to this message: {commands}", commands=" · ".join([*commands, '"again: …"'])), url]
+    return "\n".join(lines)
+
+
+def findings_message(
+    scope: str,
+    number: int,
+    title: str,
+    url: str,
+    head_sha: str,
+    verdicts: list[dict],
+    tg_lines: dict[int, str],
+    fix: dict,
+) -> str:
+    """A findings job's message: a line per finding of the self-review, under its number there, with its verdict."""
+    lines = [
+        tr('[{scope}] Self-review findings on your PR #{number} "{title}"', scope=scope, number=number,
+           title=_cut(title)),
+        tr("head {head} · {findings} · {change}", head=head_sha[:9], findings=count(len(verdicts), "finding"),
+           change=_change(fix)),
+        *_protected_line(fix),
+        "",
+    ]
+    for entry in verdicts:
+        gist = tg_lines.get(entry["n"]) or f"{entry['verdict']} · {entry['why']}"
+        lines.append(f"{entry['n']}. {model_text(_cut(gist))}")
+    commands = [*(['"push"'] if fix and not fix.get("protected") else []), *(['"diff"'] if fix else []), '"again: …"']
+    lines += ["", tr("Reply to this message: {commands}", commands=" · ".join(commands)), url]
     return "\n".join(lines)
 
 

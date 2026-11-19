@@ -1,15 +1,16 @@
 // reviews.js — Reviews tab: one board of the repos with reviews, in four columns (To review · To fix · With others ·
 // To merge) under a status line per repo, a repo filter, four tiles and a search; a card opens the PR in a side
-// panel (report, replies, posts, jobs). Read-only plus Review now, Skip, Fix now and the reviews switches: nothing
-// is posted from the dashboard. The board's model (columns, tiles, cards, buttons) is reviews-board.js.
+// panel (report, replies, verdicts, posts, jobs). Read-only plus Review now, Skip, Fix now, Fix findings… and the
+// reviews switches: nothing is posted from the dashboard. The board's model (columns, tiles, cards, buttons) is
+// reviews-board.js.
 
-import { fixNow, loadReviewDetail, loadReviews, reviewNow, skipReview } from './api.js';
+import { fixFindings, fixNow, loadReviewDetail, loadReviews, reviewNow, skipReview } from './api.js';
 import { showConfirmDialog } from './actions.js';
 import { renderSwitchPanel } from './switches.js';
 import { esc, fmtIso, timeAgo } from './helpers.js';
 import {
   COLUMNS, againConfirm, avatarsHtml, boardColumns, boardTiles, buttonsHtml, cardHtml, cardTitle, columnOf,
-  findingsScale, jobLineHtml, moveText, repoFilterOf, ticketLinkHtml,
+  findingsScale, jobLineHtml, moveText, repoFilterOf, ticketLinkHtml, verdictsHtml,
 } from './reviews-board.js';
 
 // The board's names for the report's finding kinds (orchestrator/reviewer/service.py's _FINDING_KINDS).
@@ -32,10 +33,11 @@ const TILES = [
   ['needYou', 'Need you'], ['critical', 'Critical in your PRs'], ['waiting', 'Waiting on others'],
   ['longest', 'Longest wait'],
 ];
-// What each card or panel button calls; the "…again" ones ask first (againConfirm).
+// What each card or panel button calls; the "…again" ones and Fix findings… ask first (againConfirm).
 const CALLS = {
   'review-now': reviewNow, 'review-again': reviewNow, 'self-review': reviewNow, 'self-review-again': reviewNow,
-  'fix-now': fixNow, 'fix-again': fixNow, skip: skipReview,
+  'fix-now': fixNow, 'fix-again': fixNow, 'fix-findings': fixFindings, 'fix-findings-again': fixFindings,
+  skip: skipReview,
 };
 
 const VIEW_HTML = `<div class="reviews-view">
@@ -315,8 +317,15 @@ function repliesHtml(detail) {
     <thead><tr><th>N</th><th>State</th><th>Target</th><th>Body</th></tr></thead><tbody>${rows}</tbody></table></div>`);
 }
 
-// An address job's fix: its files, the protected ones, whether it was pushed, and the patch. Pushing is done by
-// replying "push" in Telegram.
+// A findings job's verdicts under the report, then its fix (the newest fix of either kind, as the detail gives it).
+function findingsFixHtml(detail) {
+  if (!detail.verdicts_job || !detail.verdicts.length) return '';
+  return section(`Fix of the findings <span>${detail.verdicts.length}</span> · job ${esc(detail.verdicts_job)}`, null,
+    verdictsHtml(detail.verdicts)) + fixHtml(detail);
+}
+
+// A fix job's fix (address or findings): its files, the protected ones, whether it was pushed, and the patch.
+// Pushing is done by replying "push" in Telegram.
 function fixHtml(detail) {
   const fix = detail.fix;
   if (!fix) return '';
@@ -378,7 +387,8 @@ function noReportText(pr, jobs) {
     if (pr && pr.large) return `No report: ${pr.changed_files} files, so no automatic review.`;
     return pr && pr.skipped ? 'No report: this head is skipped.' : 'No report yet.';
   }
-  const what = { recheck: 're-check', address: 'run on your threads' }[job.kind] || 'review';
+  const what = { recheck: 're-check', address: 'run on your threads', findings: 'fix of the findings' }[job.kind]
+    || 'review';
   if (job.state === 'queued') return `No report yet: the ${what} is queued.`;
   if (job.state === 'running') return `No report yet: the ${what} is running.`;
   if (job.state === 'deferred') return `No report yet: deferred until ${localTime(job.retry_at)}.`;
@@ -424,7 +434,7 @@ function panelBodyHtml(pr, detail) {
   // A re-check (or an address job, with its fix) newer than the report shows its replies instead of the findings.
   const replies = detail.replies_job && (!detail.report_job || at(detail.replies_job) < at(detail.report_job));
   const main = replies ? repliesHtml(detail) + fixHtml(detail)
-    : detail.report_job ? reportHtml(detail)
+    : detail.report_job ? reportHtml(detail) + findingsFixHtml(detail)
       : section('', null, `<div class="review-empty">${esc(noReportText(pr, detail.jobs))}</div>`);
   const raw = detail.report_text == null ? '' : section('', null, details('raw', false,
     `Raw report · job ${esc(detail.report_job)}`, `<pre class="report-content">${esc(detail.report_text)}</pre>`,
@@ -510,8 +520,9 @@ function showStatus(view, text, failed) {
   statusTimer = setTimeout(() => { status.textContent = ''; }, failed ? 10000 : 6000);
 }
 
-// What a button queued: "a review", "a self-review" or "a fix".
-const queuedWhat = action => (action.startsWith('fix') ? 'a fix' : action.startsWith('self') ? 'a self-review' : 'a review');
+// What a button queued: "a review", "a self-review", "a fix" or "a fix of the findings".
+const queuedWhat = action => (action.startsWith('fix-findings') ? 'a fix of the findings'
+  : action.startsWith('fix') ? 'a fix' : action.startsWith('self') ? 'a self-review' : 'a review');
 
 // `inPanel` is asked at the click: a refresh while a confirmation is open replaces the button.
 async function runAction(view, btn, inPanel) {
@@ -547,7 +558,8 @@ function onClick(view, e) {
     const kind = action.dataset.reviewAction;
     const inPanel = action.closest('.review-panel') !== null;
     const pr = findPr({ scope: action.dataset.scope, number: Number(action.dataset.number) });
-    if (kind.endsWith('-again') && pr) {  // it replaces a report or a fix of the same commit: ask first
+    // It replaces a report or a fix of the same commit, or starts a Claude fix: ask first.
+    if ((kind.endsWith('-again') || kind === 'fix-findings') && pr) {
       const ask = againConfirm(pr, kind);
       showConfirmDialog(ask.title, ask.bodyHtml, ask.label, () => runAction(view, action, inPanel));
       // The dialog takes the focus: Enter on the button behind it would open a second one.

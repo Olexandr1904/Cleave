@@ -24,6 +24,7 @@ STAMP = "2026-11-12T10:00:00+00:00"
 PR_KEYS = {
     "number", "title", "url", "ticket_key", "roles", "my_turns", "other_turns", "pipeline",
     "draft", "changed_files", "head", "job", "last_change", "skipped", "large", "review", "can_fix", "fix",
+    "can_fix_findings",
 }
 QUEUED_INFO = {"retry_at": "", "started_at": "", "reason": "", "message_sent": False, "findings": None}
 # A PR's newest review as the service gives it (ReviewerService._review_info), passed through.
@@ -33,8 +34,8 @@ REVIEW_INFO = {
     "findings": {"critical": 2, "major": 0, "minor": 1, "question": 3, "preexisting": 0, "dropped": 1},
 }
 # A PR's newest address job as the service gives it (ReviewerService._fix_info), passed through.
-FIX_INFO = {"id": "a2", "state": "done", "head": HEAD[:9], "started_at": STAMP, "fix": True, "pushed": False,
-            "posting": False}
+FIX_INFO = {"id": "a2", "kind": "address", "state": "done", "head": HEAD[:9], "started_at": STAMP, "fix": True,
+            "pushed": False, "posting": False}
 
 
 def _row(number, my_turns=(), other_turns=(), pipeline=False):
@@ -68,6 +69,8 @@ class FakeService:
         self.review_now_error = None
         self.skip_error = None
         self.address_now_error = None
+        self.fix_findings_error = None
+        self.findings_fixable = {2}
 
     def overview(self):
         return [{
@@ -75,7 +78,14 @@ class FakeService:
             "last_poll_at": STAMP, "next_poll_at": "2026-11-12T10:05:00+00:00",
             "rows": self.rows, "jobs": {1: _job(1)}, "job_info": {1: QUEUED_INFO},
             "skipped": set(), "large": {3}, "reviews": {1: REVIEW_INFO}, "fixable": {2}, "fixes": {2: FIX_INFO},
+            "findings_fixable": self.findings_fixable,
         }]
+
+    def fix_findings(self, scope, number, *, review_id=None, instruction=None):
+        self.calls.append(("fix_findings", scope, number, review_id, instruction))
+        if self.fix_findings_error is not None:
+            raise self.fix_findings_error
+        return dataclasses.replace(_job(number), id=f"f{number}", kind="findings")
 
     def address_now(self, scope, number):
         self.calls.append(("address_now", scope, number))
@@ -110,6 +120,8 @@ DETAIL = {
     # An address job's: its fix, its patch and its pushed commit, passed through as the service gives them.
     "fix": {"files": [{"path": "a.kt", "added": 1, "deleted": 1}], "protected": [], "bytes": 9},
     "fix_patch": "diff --git a/a.kt b/a.kt\n", "pushed_sha": "b" * 40,
+    # The newest findings job's verdicts, passed through.
+    "verdicts_job": "f1", "verdicts": [{"n": 1, "verdict": "FIXED", "why": "null check added"}],
 }
 
 
@@ -239,7 +251,8 @@ def test_jira_url_from_the_project_tracker(store, projects, jira_url):
     assert repo["jira_url"] == jira_url
 
 
-@pytest.mark.parametrize("path", ["/api/reviews/review-now", "/api/reviews/skip", "/api/reviews/fix-now"])
+@pytest.mark.parametrize("path", ["/api/reviews/review-now", "/api/reviews/skip", "/api/reviews/fix-now",
+                                  "/api/reviews/fix-findings"])
 @pytest.mark.parametrize("body", [
     b"not json",
     b"[1]",
@@ -258,7 +271,8 @@ def test_bad_body_is_400(client, path, body):
     assert svc.calls == []
 
 
-@pytest.mark.parametrize("path", ["/api/reviews/review-now", "/api/reviews/skip", "/api/reviews/fix-now"])
+@pytest.mark.parametrize("path", ["/api/reviews/review-now", "/api/reviews/skip", "/api/reviews/fix-now",
+                                  "/api/reviews/fix-findings"])
 @pytest.mark.parametrize("headers", [
     {"Content-Type": "text/plain"},  # a cross-site form or no-cors fetch needs no preflight
     {"Content-Type": "application/json", "Origin": "http://evil.example"},
@@ -359,13 +373,14 @@ def test_detail_route(client):
 
 def test_no_posting_route():
     """Nothing in the dashboard posts or confirms: its review routes are the board, a PR's detail, Review now, Skip
-    and Fix now, which only queues an address job (Starlette answers HEAD on a GET route with the GET handler)."""
+    and Fix now and Fix findings…, which only queue a fix job (Starlette answers HEAD on a GET route with the GET
+    handler)."""
     routes = build_review_routes(FakeService())
     assert sorted((method, r.path) for r in routes for method in r.methods - {"HEAD"}) == [
-        ("GET", "/api/reviews"), ("GET", "/api/reviews/pr"),
+        ("GET", "/api/reviews"), ("GET", "/api/reviews/pr"), ("POST", "/api/reviews/fix-findings"),
         ("POST", "/api/reviews/fix-now"), ("POST", "/api/reviews/review-now"), ("POST", "/api/reviews/skip"),
     ]
-    assert len(routes) == 5
+    assert len(routes) == 6
 
 
 def test_routes_absent_without_service(store):
@@ -373,3 +388,39 @@ def test_routes_absent_without_service(store):
     assert c.get("/api/reviews").status_code == 404
     r = c.post("/api/reviews/review-now", json={"scope": "acme/app", "number": 1})
     assert r.status_code == 404
+
+
+def test_pr_can_fix_findings_and_fix_kind(client):
+    c, svc = client
+    [repo] = c.get("/api/reviews").json()["repos"]
+    prs = {p["number"]: p for p in repo["my_turn"] + repo["waiting"]}
+    assert [prs[n]["can_fix_findings"] for n in (1, 2, 3)] == [False, True, False]
+    assert prs[2]["fix"]["kind"] == "address"
+    svc.findings_fixable = {1, 3}
+    [repo] = c.get("/api/reviews").json()["repos"]
+    prs = {p["number"]: p for p in repo["my_turn"] + repo["waiting"]}
+    assert [prs[n]["can_fix_findings"] for n in (1, 2, 3)] == [True, False, True]
+
+
+def test_fix_findings_codes(client):
+    c, svc = client
+    r = c.post("/api/reviews/fix-findings", json={"scope": "acme/app", "number": 2})
+    assert r.status_code == 200
+    assert r.json() == {"job": {"id": "f2", "kind": "findings", "state": "queued", "head": HEAD[:9]}}
+    assert svc.calls == [("fix_findings", "acme/app", 2, None, None)]   # no review id, no instruction
+    svc.fix_findings_error = LookupError("no PR #9 on the acme/app board")
+    r = c.post("/api/reviews/fix-findings", json={"scope": "acme/app", "number": 9})
+    assert r.status_code == 404 and r.json()["error"]
+    for error in ("already queued", "not fixable: no confirmed findings", "a post is under way"):
+        svc.fix_findings_error = ValueError(error)
+        r = c.post("/api/reviews/fix-findings", json={"scope": "acme/app", "number": 2})
+        assert r.status_code == 409 and r.json() == {"error": error}
+    r = c.post("/api/reviews/fix-findings", json={})
+    assert r.status_code == 400 and r.json()["error"]
+    assert len(svc.calls) == 5  # a bad body never reaches the service
+
+
+def test_detail_carries_verdicts(client):
+    c, _ = client
+    d = c.get("/api/reviews/pr", params={"scope": "acme/app", "number": "1"}).json()
+    assert (d["verdicts_job"], d["verdicts"]) == ("f1", [{"n": 1, "verdict": "FIXED", "why": "null check added"}])

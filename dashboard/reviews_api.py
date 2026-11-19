@@ -1,5 +1,6 @@
-"""Dashboard routes for the Reviews tab: the board, a PR's detail, Review now, Skip and Fix now. Nothing here
-posts: Fix now only queues an address job, whose result is pushed and posted from Telegram."""
+"""Dashboard routes for the Reviews tab: the board, a PR's detail, Review now, Skip, Fix now and Fix findings…. Nothing
+here posts: Fix now only queues an address job and Fix findings… a findings job, whose result is pushed (and posted)
+from Telegram."""
 from __future__ import annotations
 
 from collections.abc import Callable
@@ -34,7 +35,8 @@ def _pr(row: BoardRow, repo: dict) -> dict:
         "large": row.number in repo["large"],  # not reviewed automatically
         "review": repo["reviews"].get(row.number),  # the newest review, whatever job is newer
         "can_fix": row.number in repo["fixable"],  # Fix now applies
-        "fix": repo["fixes"].get(row.number),  # the newest address job, whatever job is newer
+        "can_fix_findings": row.number in repo["findings_fixable"],  # Fix findings… applies
+        "fix": repo["fixes"].get(row.number),  # the newest fix job of either kind, whatever job is newer
     }
 
 
@@ -143,10 +145,23 @@ def build_review_routes(service: Any, get_projects: Callable[[], dict] = dict) -
             return JSONResponse({"error": str(e)}, status_code=409)
         return JSONResponse({"job": _job(job)})
 
+    async def post_fix_findings(request: Request) -> JSONResponse:
+        target = await _target(request)
+        if isinstance(target, JSONResponse):
+            return target
+        try:
+            job = service.fix_findings(*target)  # the PR's self-review at its head: no review id
+        except LookupError as e:
+            return JSONResponse({"error": str(e)}, status_code=404)
+        except ValueError as e:  # already queued, a post under way, or not fixable
+            return JSONResponse({"error": str(e)}, status_code=409)
+        return JSONResponse({"job": _job(job)})
+
     return [
         Route("/api/reviews", get_reviews, methods=["GET"]),
         Route("/api/reviews/pr", get_pr, methods=["GET"]),
         Route("/api/reviews/review-now", post_review_now, methods=["POST"]),
         Route("/api/reviews/skip", post_skip, methods=["POST"]),
         Route("/api/reviews/fix-now", post_fix_now, methods=["POST"]),
+        Route("/api/reviews/fix-findings", post_fix_findings, methods=["POST"]),
     ]

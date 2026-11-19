@@ -165,6 +165,30 @@ class TestRetryEndpoint:
         assert ws.state.stage_iterations["dev"] == 1
 
 
+    @pytest.mark.parametrize("judge, its_report", [
+        ("SCOPE_CHECK", "scope-guard.md"),
+        ("CODE_REVIEW", "scope-guard.md"),
+        ("QA", "qa.md"),
+    ])
+    def test_retry_of_a_ticket_blocked_at_a_judge_goes_back_to_that_judge(
+        self, client, orchestrator, tmp_path, judge, its_report,
+    ):
+        """A report on disk is not a stage that passed: the stage that blocked wrote its own before it
+        blocked. Retry sent a failed scope check on to QA, skipped code review after any scope report, and
+        offered a failed QA for push."""
+        ws = _make_workspace("T-1", "BLOCKED", previous=judge, error="stuck")
+        ws.reports_dir = tmp_path
+        for name in ("ba.md", "developer.md", its_report):
+            (tmp_path / name).write_text("## Status: FAIL\n")
+        ws.state.stage_iterations = {"dev": 3, judge.lower(): 2}
+        orchestrator.get_active_workspaces.return_value = [ws]
+
+        resp = client.post("/api/workspaces/T-1/retry")
+
+        assert resp.json()["new_state"] == judge
+        ws.transition.assert_called_once_with(judge)
+        assert ws.state.stage_iterations == {"dev": 3, judge.lower(): 0}
+
     def test_retry_with_only_a_plan_goes_through_plan_review(
         self, client, orchestrator, tmp_path,
     ):

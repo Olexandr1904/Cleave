@@ -39,3 +39,10 @@ STAGE_RUNTIME_OUTPUT: dict[str, str] = {
     "code_review": RUNTIME_OUTPUT_CODE_REVIEW,
     "qa": RUNTIME_OUTPUT_QA,
 }
+
+# Workspace states of the stages that judge an earlier stage's work. A retry of
+# a ticket blocked at one of them re-enters it. The stage's own report is on
+# disk whether it passed or not, so a retry that resumed after "the furthest
+# report on disk" sent a failed scope check on to QA, skipped code review
+# after any scope report, and offered a failed QA for push.
+JUDGING_STATES = frozenset({"PLAN_REVIEW", "SCOPE_CHECK", "CODE_REVIEW", "QA"})

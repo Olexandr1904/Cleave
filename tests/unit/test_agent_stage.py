@@ -167,9 +167,9 @@ def test_qa_passes_when_all_hard_gates_pass_even_if_prose_is_ambiguous(tmp_path)
     assert outcome == "pass"
 
 
-def test_qa_falls_back_to_prose_when_no_gates_configured(tmp_path):
+def test_qa_falls_back_to_the_agents_verdict_when_no_gates_configured(tmp_path):
     ws = _make_workspace(tmp_path, "ACME-3")
-    (ws.reports_dir / "qa-agent-output.md").write_text("## Status: FAIL")
+    (ws.reports_dir / "qa.md").write_text("## Status: FAIL")
     assert parse_agent_outcome("qa", "", ws, gate_results=[]) == "fail"
 
 
@@ -198,13 +198,13 @@ def test_gate_report_not_written_when_no_gates_configured(tmp_path):
 
 def test_code_review_fail_verdict_routes_back_to_dev(tmp_path):
     ws = _make_workspace(tmp_path, "ACME-6")
-    (ws.reports_dir / "code-review-agent-output.md").write_text("## Status: FAIL")
+    (ws.reports_dir / "code-review.md").write_text("## Status: FAIL")
     assert parse_agent_outcome("code_review", "", ws) == "fail"
 
 
 def test_code_review_pass_verdict_advances(tmp_path):
     ws = _make_workspace(tmp_path, "ACME-7")
-    (ws.reports_dir / "code-review-agent-output.md").write_text("## Status: PASS")
+    (ws.reports_dir / "code-review.md").write_text("## Status: PASS")
     assert parse_agent_outcome("code_review", "", ws) == "pass"
 
 

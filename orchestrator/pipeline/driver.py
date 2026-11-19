@@ -48,7 +48,7 @@ def _stage_to_state(stage_id: str) -> str | None:
     return _STAGE_TO_STATE.get(stage_id)
 
 
-def _state_to_stage(state: str) -> str | None:
+def state_to_stage(state: str) -> str | None:
     return _STATE_TO_STAGE.get(state)
 
 
@@ -262,7 +262,7 @@ async def advance_workspace(
         return  # Terminal
 
     # Map pipeline state to workflow stage
-    stage_id = _state_to_stage(current)
+    stage_id = state_to_stage(current)
     if not stage_id:
         return
 

@@ -277,7 +277,9 @@ class ClaudeCodeAdapter(LLMInterface):
             extra_args: CLI flags inserted right after -p.
             resume_fallback: False = a failed --resume raises instead of
                 retrying as a cold start, for a caller whose session's
-                context is the work itself.
+                context is the work itself. Such a caller's first run of
+                a session that already exists raises too; otherwise that
+                session is resumed.
 
         Returns:
             LLMResponse with the final text output and usage stats.
@@ -301,7 +303,20 @@ class ClaudeCodeAdapter(LLMInterface):
             extra_args=extra_args,
         )
         if not (resume and session_id):
-            return await self._run_cli(**kwargs)
+            try:
+                return await self._run_cli(**kwargs)
+            except QuotaExhaustedError:
+                raise
+            except RuntimeError as e:
+                # The CLI keeps a named session after its run and refuses to
+                # start another under that name. The caller takes "first
+                # entry" from an attempt counter, which an operator's retry
+                # resets while the session lives on. The refusal read as
+                # transient, so the ticket sat in DEFERRED and retried forever.
+                if not (session_id and resume_fallback and "is already in use" in str(e)):
+                    raise
+                logger.warning("Session %s already exists — resuming it", session_id)
+                return await self._run_cli(**kwargs, resume=True)
 
         try:
             return await self._run_cli(**kwargs, resume=True)

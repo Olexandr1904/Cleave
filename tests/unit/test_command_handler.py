@@ -273,6 +273,30 @@ class TestRetryDeferred:
         ws.transition.assert_called_once_with(Stage.PLAN_REVIEW)
         assert ws.state.stage_iterations["plan_review"] == 0
 
+    async def test_retry_of_a_ticket_blocked_at_a_judge_goes_back_to_that_judge(
+        self, mock_notifier, mock_mode_handler, tmp_path,
+    ):
+        """`retry T-1` with a scope report on disk went to QA, past a code review that never passed."""
+        from orchestrator.constants import REPORT_BA, REPORT_DEV, REPORT_SCOPE_GUARD
+        ws = _make_workspace("T-J", "BLOCKED", previous_state="CODE_REVIEW")
+        ws.reports_dir = tmp_path
+        for name in (REPORT_BA, REPORT_DEV, REPORT_SCOPE_GUARD):
+            (tmp_path / name).write_text("## Status: PASS\n")
+        ws.state.stage_iterations = {"code_review": 2}
+        mock_intent_parser = AsyncMock()
+        mock_intent_parser.parse = AsyncMock(return_value=ParsedIntent(
+            intent="retry", params={"ticket_id": "T-J"}, reply="",
+        ))
+        handler = CommandHandler(
+            intent_parser=mock_intent_parser,
+            notifier=mock_notifier,
+            mode_handler=mock_mode_handler,
+            active_workspaces_fn=lambda: [ws],
+        )
+        await handler.handle_message("retry T-J", "12345")
+        ws.transition.assert_called_once_with("CODE_REVIEW")
+        assert ws.state.stage_iterations["code_review"] == 0
+
     async def test_retry_deferred_ticket_discriminates_branch(
         self, mock_notifier, mock_mode_handler,
     ):
@@ -1199,3 +1223,38 @@ async def test_the_skill_flows_own_answers_follow_the_chats_language(mock_intent
                            chat_language=chat_language)
     assert await on.handle_reply(7, "ok", "-100") is True
     assert skill.answers[-1][2] != SKILL_STORE_UNREAD and "skill-run store could not be read" not in on.sent[-1]
+
+
+# --- the operator's replies on file: each with the question it answers ---
+# Operators answer in a word ("yes", "1 — may", "A"). Alone, such a reply names nothing: an agent that has to
+# check what was allowed (scope-guard, for a lint or CI file) could not tell from the record.
+
+def _blocked_workspace(tmp_path, question):
+    from types import SimpleNamespace
+    return SimpleNamespace(meta_dir=tmp_path, state=SimpleNamespace(human_input_question=question))
+
+
+def test_a_reply_is_recorded_with_the_question_it_answers(tmp_path):
+    from integrations.telegram.command_handler import _write_human_input
+    ws = _blocked_workspace(tmp_path, "May the pipeline edit .github/workflows/release.yml?\nReply yes or no.")
+
+    _write_human_input(ws, "yes")
+
+    recorded = (tmp_path / "human-input.md").read_text(encoding="utf-8")
+    assert recorded.endswith(
+        "In reply to:\n"
+        "> May the pipeline edit .github/workflows/release.yml?\n"
+        "> Reply yes or no.\n"
+        "\n"
+        "yes\n"
+    )
+
+
+def test_a_reply_to_no_recorded_question_is_recorded_alone(tmp_path):
+    from integrations.telegram.command_handler import _write_human_input
+    ws = _blocked_workspace(tmp_path, None)
+
+    _write_human_input(ws, "use option B")
+
+    recorded = (tmp_path / "human-input.md").read_text(encoding="utf-8")
+    assert "In reply to" not in recorded and recorded.endswith("\n\nuse option B\n")

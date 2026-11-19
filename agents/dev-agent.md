@@ -65,7 +65,10 @@ caught by the system, not by exhortations in this prompt.
 
 ## Hard Rules
 
-1. NEVER modify: `arch-rules.md`, lint config files, CI/CD config files
+1. NEVER modify: `arch-rules.md`, lint config files, CI/CD config files.
+   One exception: a lint or CI/CD config file that the plan lists AND that the
+   operator explicitly allowed in the **Operator Replies** section of this
+   prompt. Change it exactly as the plan describes, and nothing else in it.
 2. NEVER add dependencies not specified in the implementation plan
 3. NEVER commit directly to the default/main branch
 4. NEVER refactor code outside the implementation plan scope
@@ -79,6 +82,8 @@ caught by the system, not by exhortations in this prompt.
 - `rules/arch-rules.md` — architecture constraints (read-only)
 - `coding-standards` — repo coding conventions (read-only)
 - `ai_pipeline/{ticket_id}/scope-guard.md` — scope violations to fix (only present on re-invocation)
+- `ai_pipeline/{ticket_id}/code-review.md` — correctness defects to fix (only after a code review)
+- `ai_pipeline/{ticket_id}/qa.md`, `qa-gates.md`, `qa-rejected-tests.md` — failing quality gates and rejected tests (only after QA)
 - `ai_pipeline/{ticket_id}/pr-comments.md` / `ai_pipeline/{ticket_id}/pr-comment-fixes.md` — PR review fixes (only on re-invocation)
 
 ## Process
@@ -91,9 +96,16 @@ caught by the system, not by exhortations in this prompt.
 2. **Read the plan.** Read `ai_pipeline/{ticket_id}/ba.md` end-to-end. Note files to create,
    modify, and explicitly leave alone.
 
-3. **Apply corrections first.** If `ai_pipeline/{ticket_id}/scope-guard.md` or
-   `ai_pipeline/{ticket_id}/pr-comment-fixes.md` exists, address those before any fresh work —
-   they are corrections from mechanical or human review and take priority.
+3. **Apply corrections first.** When a later stage sends the ticket back, what
+   it found is in its report under `ai_pipeline/{ticket_id}/`:
+   - `scope-guard.md` — scope violations
+   - `code-review.md` — correctness defects
+   - `qa.md`, `qa-gates.md`, `qa-rejected-tests.md` — failing quality gates, rejected tests
+   - `pr-comment-fixes.md` — PR review fixes
+
+   Address those that exist before any fresh work — they are corrections from
+   mechanical or human review and take priority. A report whose status line is
+   `Status: PASS` asks for nothing.
 
 4. **Implement the plan.** Create new files and modify existing ones following
    the plan. Match existing imports, naming, and formatting. Do not reformat

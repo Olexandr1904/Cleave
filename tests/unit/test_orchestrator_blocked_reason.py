@@ -142,3 +142,17 @@ async def test_missing_output_falls_back_when_summarizer_returns_none(tmp_path):
         reason = await build_blocked_reason(ws, "qa")
     assert "qa" in reason.lower()
     assert "no output" in reason.lower() or "may have timed out" in reason.lower()
+
+
+async def test_reason_is_the_newest_attempt_not_the_first(tmp_path):
+    """The reply file keeps every attempt. The operator was shown the first one — "the scope check failed on one
+    file" — for a ticket whose last check had passed."""
+    from orchestrator.agent_runtime import _write_agent_output
+    ws = _make_ws(tmp_path)
+    replies = ws.reports_dir / RUNTIME_OUTPUT_SCOPE_GUARD
+    _write_agent_output(replies, "The scope check failed on one file.")
+    _write_agent_output(replies, "Scope guard passes after the revert.")
+
+    reason = await build_blocked_reason(ws, "scope_check")
+
+    assert reason == "Scope guard passes after the revert."

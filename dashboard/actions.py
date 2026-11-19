@@ -13,7 +13,13 @@ from typing import Any
 from starlette.requests import Request
 from starlette.responses import JSONResponse
 
-from orchestrator.constants import REPORT_BA, REPORT_DEV, REPORT_QA, REPORT_SCOPE_GUARD
+from orchestrator.constants import (
+    JUDGING_STATES,
+    REPORT_BA,
+    REPORT_DEV,
+    REPORT_QA,
+    REPORT_SCOPE_GUARD,
+)
 from workspace.workspace import Stage, archive_workspace
 
 from config.host_os import terminal_launch_command
@@ -145,7 +151,9 @@ def build_action_routes(
         # jumping straight to PUSHED — same gate the normal QA flow uses.
         target = ws.state.previous_state or Stage.ANALYSIS
         reports = Path(ws.reports_dir)
-        if (reports / REPORT_QA).exists():
+        if ws.state.current_state == Stage.BLOCKED and target in JUDGING_STATES:
+            pass  # back to the judge that blocked it — see JUDGING_STATES
+        elif (reports / REPORT_QA).exists():
             target = Stage.AWAITING_APPROVAL
         elif (reports / REPORT_SCOPE_GUARD).exists():
             target = Stage.QA

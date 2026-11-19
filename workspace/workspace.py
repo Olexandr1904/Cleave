@@ -224,9 +224,12 @@ class Workspace:
             updates["previous_state"] = current
             updates["human_input_pending"] = True
         elif current in paused_states:
-            # Resuming from a paused state — clear pending flag
+            # Resuming from a paused state — clear pending flag, and the
+            # question with it: a reply is recorded with the question it
+            # answers, and a later block that asks none must not inherit this one.
             updates["previous_state"] = None
             updates["human_input_pending"] = False
+            updates["human_input_question"] = None
 
         # retry_at is meaningful only while in DEFERRED; clear on any other target
         if new_state != Stage.DEFERRED:

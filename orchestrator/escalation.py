@@ -13,6 +13,7 @@ from typing import Any
 from integrations.base.notifier import NotifierInterface
 from orchestrator import tg_format
 from orchestrator.agent_failure_summarizer import summarize_agent_failure
+from orchestrator.agent_runtime import last_attempt_block
 from orchestrator.constants import (
     REPORT_BA_QUESTIONS,
     STAGE_RUNTIME_OUTPUT,
@@ -127,7 +128,8 @@ async def build_blocked_reason(workspace: Any, stage_id: str) -> str:
         # Stage has no known agent output — don't show an unrelated stage's file.
         return f"Pipeline stuck at {stage_id}. Check pipeline logs for details."
 
-    raw = stage_output.read_text(encoding="utf-8")
+    # The newest attempt: the file keeps every run, and its start is the oldest.
+    raw = last_attempt_block(stage_output.read_text(encoding="utf-8"))
     # Strip leading boilerplate and blank lines.
     lines = raw.splitlines()
     start = 0

@@ -295,6 +295,47 @@ class TestScopeCheckIterationClear:
 
         assert ws.state.stage_iterations["scope_check"] == 1
 
+    @pytest.mark.asyncio
+    async def test_pass_in_the_report_advances_although_the_reply_is_prose(self, tmp_path):
+        """The run that stranded three tickets: `## Status: PASS` in scope-guard.md, a prose reply."""
+        from orchestrator.constants import REPORT_SCOPE_GUARD, RUNTIME_OUTPUT_SCOPE_GUARD
+        orch, ws, stage_def = self._make_orch(tmp_path)
+        reply = "The scope check **passes**. I wrote the certificate, so the ticket can go to QA."
+
+        async def run_agent(*args, **kwargs):
+            (ws.reports_dir / REPORT_SCOPE_GUARD).write_text("# Scope Certificate\n\n## Status: PASS\n")
+            (ws.reports_dir / RUNTIME_OUTPUT_SCOPE_GUARD).write_text(reply)
+            return SimpleNamespace(
+                success=True, output=reply, duration_seconds=1.0,
+                input_tokens=0, output_tokens=0, failure_kind=None, error=None, retry_at=None,
+            )
+
+        orch._agent_runtime.execute = AsyncMock(side_effect=run_agent)
+        with patch(
+            "orchestrator.pipeline.agent_stage.get_next_stage", return_value="code_review",
+        ) as next_stage:
+            await orch._handle_agent_stage(ws, "scope_check", stage_def)
+
+        assert next_stage.call_args.args[2] == "pass"
+        ws.transition.assert_called_once_with(Stage.CODE_REVIEW)
+
+    @pytest.mark.asyncio
+    async def test_no_verdict_blocks_with_the_reason_instead_of_going_to_dev(self, tmp_path):
+        """A judge that gave no verdict found no violation: dev has nothing to fix."""
+        from orchestrator.constants import RUNTIME_OUTPUT_SCOPE_GUARD
+        orch, ws, stage_def = self._make_orch(tmp_path)
+        reply = "I looked at the diff and it seems fine to me."
+        (ws.reports_dir / RUNTIME_OUTPUT_SCOPE_GUARD).write_text(reply)
+        orch._agent_runtime.execute.return_value.output = reply
+
+        with patch("orchestrator.pipeline.agent_stage.get_next_stage") as next_stage:
+            await orch._handle_agent_stage(ws, "scope_check", stage_def)
+
+        next_stage.assert_not_called()
+        ws.transition.assert_called_once_with(Stage.BLOCKED)
+        error = ws.update_state.call_args.kwargs["error"]
+        assert "scope-guard.md" in error and "Status: PASS" in error
+
 
 def test_plan_review_verify_requires_report(tmp_path: Path) -> None:
     """A plan_review run that produced no output must not be treated as verified."""

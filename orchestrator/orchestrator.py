@@ -627,9 +627,3 @@ class Orchestrator:
         elif getattr(self, "_events", None) is not None:
             self._events.emit(event_type, message, **kwargs)
 
-
-# Backward-compat re-exports — moved to orchestrator.pipeline.agent_stage.
-from orchestrator.pipeline.agent_stage import (  # noqa: E402
-    _looks_like_fail,
-    _looks_like_pass,
-)

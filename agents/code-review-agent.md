@@ -119,6 +119,11 @@ Write `ai_pipeline/{ticket_id}/code-review.md`:
    - Suggested fix: {one or two sentences}
 ```
 
+Write the report on every run, also on a re-review where nothing changed: the
+pipeline routes on the `## Status:` line of the report this run wrote and does
+not read an older one. End your reply with that same line on a line of its own
+(`Status: PASS` or `Status: FAIL`).
+
 ## Verdict rules
 
 **FAIL** if any finding would produce, on a realistic path:

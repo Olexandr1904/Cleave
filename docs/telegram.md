@@ -148,10 +148,13 @@ A reply to a reviewer message goes to the reviewer before any of the below (see 
 
 When Cleave escalates a BLOCKED workspace, the message you receive in Telegram is a *thread anchor*: replying to it (Telegram's "Reply to" feature, not a new message) feeds your reply back to the agent.
 
-- The reply text is stored on `state.human_input_reply` and made available as additional context when the agent resumes.
+- The reply text is stored on `state.human_input_reply` and appended to `meta/human-input.md`, together with the message it answers (`In reply to:`), so a short answer such as `yes` keeps its meaning. Every agent of the ticket then gets your replies as the **Operator Replies** section of its instructions, apart from the ticket text.
 - The workspace transitions out of BLOCKED back to its `previous_state` and the orchestrator wakes immediately.
+- The stage it goes back to gets a fresh attempt budget: a stage that was blocked by its attempt cap (`stuck after 2/2 attempts`) runs again. The other stages keep their counts.
 - If you reply with `retry`, the workspace re-enters its `previous_state` without adding context — useful when the agent just needs another shot.
 - If you reply with `skip`, the workspace is advanced to the next stage (e.g. ANALYSIS → DEV) without re-running the blocked stage — useful when you want to move past a stuck agent rather than give it another shot.
+
+**Allowing a lint or CI configuration change.** Agents never change lint or CI/CD configuration files on their own, and nothing in a ticket can allow it. When a ticket cannot be done without such a file, the BA asks you, naming the files. A reply that allows it — naming the file (`yes, you may edit .github/workflows/release.yml`), or a plain `yes` to a question that names it — opens that file for this ticket: the BA puts it in the plan marked `(operator-authorized)`, dev changes it as the plan says, and scope-guard accepts it and names it in its certificate. The permission covers the files you named and nothing else, and `arch-rules.md` stays closed. If you decline, the plan carries the edits for a human to apply.
 
 The PR_REVIEW notification message (the one with the Review Complete button; sent only in a repo where reviewer mode is off) is also a reply anchor. Replying to it with any text signals that you have finished reviewing and the pipeline should fetch PR comments. This is equivalent to tapping the Review Complete button.
 

@@ -22,7 +22,7 @@ from orchestrator.constants import (
     REPORT_BA,
     REPORT_BA_QUESTIONS,
     RUNTIME_OUTPUT_PLAN_REVIEW,
-    STAGE_RUNTIME_OUTPUT,
+    STAGE_REPORT_FILE,
 )
 from orchestrator.escalation import handle_escalate
 from orchestrator.git_ops import git_diff_files_vs_base, git_head_sha
@@ -86,39 +86,45 @@ def _write_gate_report(workspace: Workspace, results: list[GateResult]) -> None:
     )
 
 
-def _looks_like_pass(text: str) -> bool:
-    """Check if agent output indicates a pass verdict."""
-    return any(m in text for m in (
-        "status: pass", "verdict: pass", "all gates passed",
-        "qa pass", "qa complete", "verdict: hold",
-        "scope audit complete. verdict: **pass",
-        "scope audit complete. **status: pass",
-        "advances to qa", "advances to",
-        "merge as-is",
-    ))
-
-
-def _looks_like_fail(text: str) -> bool:
-    """Check if agent output indicates a fail verdict."""
-    return any(m in text for m in (
-        "status: fail", "verdict: fail", "verdict: **fail",
-        "status: blocked",
-    ))
-
-
-# plan_review deliberately does NOT reuse _looks_like_pass: that matcher accepts
-# "advances to" and treats "verdict: hold" as a pass, and parse_agent_outcome
-# checks pass before fail. A plan-review report reading "the plan advances to dev
-# only if..." would be read as PASS — the exact inversion this gate exists to
-# prevent. Strict line match, and anything unparseable fails closed.
+# A verdict is one line: `Status: PASS` or `Status: FAIL`. It is never guessed
+# from prose. The matcher this replaced looked for substrings ("status: pass",
+# "advances to", "verdict: hold") anywhere in the agent's reply, so a reply
+# that put the same verdict in other words read as FAIL, and "the plan advances
+# to dev only if..." in a rejection read as PASS.
 # Markdown decoration around the line is tolerated — agents emit `**Status:
-# PASS**` and `## Status: PASS`, and `_looks_like_fail` above already carries
-# `verdict: **fail` because it was seen in the wild. The verdict token itself
-# stays strict: `\b` keeps prose like "status: passing this now" from matching.
-_PLAN_REVIEW_VERDICT = re.compile(
-    r"^[ \t]*[*#]*[ \t]*status[ \t]*\**[ \t]*:[ \t]*\**[ \t]*(pass|fail)\b",
+# PASS**` and `## Status: PASS`. The verdict token itself stays strict: `\b`
+# keeps prose like "status: passing this now" from matching, and the lookahead
+# keeps a report template's `Status: PASS | FAIL`, copied as is, from passing.
+_VERDICT_LINE = re.compile(
+    r"^[ \t]*[*#]*[ \t]*status[ \t]*\**[ \t]*:[ \t]*\**[ \t]*(pass|fail)\b(?![ \t]*(?:[|/]|or\b))",
     re.IGNORECASE | re.MULTILINE,
 )
+
+
+def _verdict_in(text: str) -> str | None:
+    match = _VERDICT_LINE.search(text)
+    return match.group(1).lower() if match else None
+
+
+def _parse_judge_outcome(
+    stage_id: str, output: str, workspace: Workspace, started_at: float | None,
+) -> str:
+    """'pass' or 'fail' from this attempt's verdict line; 'no_verdict' if it wrote none.
+
+    The verdict is where the agent's contract puts it: the `## Status:` line of
+    the report it writes (scope-guard.md, code-review.md, qa.md), which is also
+    the file dev reads to learn what to fix. A report this attempt did not
+    write is an earlier attempt's verdict on an earlier diff, so it does not
+    count. With no such report the reply decides, by the same line. `output`
+    is this attempt's reply alone: the `-agent-output.md` file keeps every
+    attempt, and a `Status: PASS` from an old one outlived a later FAIL there.
+    """
+    report = workspace.reports_dir / STAGE_REPORT_FILE[stage_id]
+    if report.exists() and (started_at is None or report.stat().st_mtime >= started_at):
+        verdict = _verdict_in(report.read_text(encoding="utf-8"))
+        if verdict:
+            return verdict
+    return _verdict_in(output) or "no_verdict"
 
 
 def _parse_plan_review_outcome(workspace: Workspace) -> str:
@@ -132,10 +138,7 @@ def _parse_plan_review_outcome(workspace: Workspace) -> str:
     if not report.exists():
         return "fail"
     block = last_attempt_block(report.read_text(encoding="utf-8"))
-    match = _PLAN_REVIEW_VERDICT.search(block)
-    if match is None:
-        return "fail"
-    return "pass" if match.group(1).lower() == "pass" else "fail"
+    return _verdict_in(block) or "fail"
 
 
 def rollback_iteration(workspace: Workspace, stage_id: str) -> None:
@@ -164,8 +167,7 @@ def parse_agent_outcome(
     a BA questions file counts only if this attempt wrote it.
 
     For `qa`, configured gate exit codes win over the agent's narrative: the
-    agent has written "PASS for ticket scope" over a non-zero exit (PR #1530),
-    and `_looks_like_pass` is a substring match that accepts "verdict: hold".
+    agent has written "PASS for ticket scope" over a non-zero exit (PR #1530).
     """
     output_lower = output.lower()
 
@@ -199,18 +201,7 @@ def parse_agent_outcome(
         return _parse_plan_review_outcome(workspace)
 
     if stage_id in ("scope_check", "code_review", "qa"):
-        runtime_name = STAGE_RUNTIME_OUTPUT.get(stage_id)
-        if runtime_name:
-            report = workspace.reports_dir / runtime_name
-            if report.exists():
-                content = report.read_text().lower()
-                if _looks_like_pass(content):
-                    return "pass"
-                if _looks_like_fail(content):
-                    return "fail"
-        if _looks_like_pass(output_lower):
-            return "pass"
-        return "fail"
+        return _parse_judge_outcome(stage_id, output, workspace, started_at)
 
     return "default"
 
@@ -347,25 +338,29 @@ async def handle_agent_stage(
         if sha != "unknown":
             sha_info = f" Commit: {sha[:8]}."
     _log_pipeline(workspace, f"{stage_id} ({stage_def.agent}) completed.{sha_info} Output: `ai_pipeline/{state.ticket_id}/{stage_def.agent}-output.md`")
+
+    async def _block_unverified(reason: str) -> None:
+        agent_snippet = (result.output or "")[:200].replace("\n", " ")
+        error_msg = f"{stage_id}: {reason} (agent said: {agent_snippet})"
+        workspace.transition(Stage.BLOCKED)
+        workspace.update_state(error=error_msg)
+        _log_pipeline(workspace, f"BLOCKED — {stage_id} verification failed: {reason}")
+        _emit(
+            event_bus,
+            "stage_verification_failed",
+            f"{stage_id} verification failed for {state.ticket_id}: {reason}",
+            project_id=state.company_id, ticket_id=state.ticket_id,
+            data={"stage": stage_id, "reason": reason},
+        )
+        await notify_verification_blocked_fn(workspace, stage_id, reason)
+
     verify_result = stage_verifier.verify(
         stage_id, workspace, stage_start_commit,
         duration_seconds=result.duration_seconds,
         default_branch=getattr(getattr(repo_config, "vcs", None), "default_branch", None),
     )
     if not verify_result.ok:
-        agent_snippet = (result.output or "")[:200].replace("\n", " ")
-        error_msg = f"{stage_id}: {verify_result.reason} (agent said: {agent_snippet})"
-        workspace.transition(Stage.BLOCKED)
-        workspace.update_state(error=error_msg)
-        _log_pipeline(workspace, f"BLOCKED — {stage_id} verification failed: {verify_result.reason}")
-        _emit(
-            event_bus,
-            "stage_verification_failed",
-            f"{stage_id} verification failed for {state.ticket_id}: {verify_result.reason}",
-            project_id=state.company_id, ticket_id=state.ticket_id,
-            data={"stage": stage_id, "reason": verify_result.reason},
-        )
-        await notify_verification_blocked_fn(workspace, stage_id, verify_result.reason)
+        await _block_unverified(verify_result.reason)
         return
     # Ground truth for QA: run the repo's configured gates ourselves. Runs in a
     # thread — a gradle build blocks for minutes and would stall the event loop
@@ -432,6 +427,16 @@ async def handle_agent_stage(
                     + "\n".join(f"  • {w}" for w in warnings)
                     + "\n\n" + tr("CI on GitHub will be the authoritative gate.")
                 ))
+
+    # A judge that wrote no verdict found no defect. Sent to dev as a FAIL, the
+    # dev agent has nothing to fix and the ticket bounces between the two
+    # stages until the iteration cap. Stop here and say what is missing.
+    if outcome == "no_verdict":
+        await _block_unverified(
+            f"no `Status: PASS` or `Status: FAIL` line in {STAGE_REPORT_FILE[stage_id]} "
+            "or in the agent's reply"
+        )
+        return
 
     next_stage = get_next_stage(stage_id, workflow, outcome)
 

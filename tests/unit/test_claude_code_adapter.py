@@ -516,6 +516,35 @@ class TestSessionResume:
         assert "--resume" not in second
         assert "--session-id" in second
 
+    async def test_a_named_session_that_already_exists_is_resumed(self, adapter):
+        """The CLI keeps a named session and refuses a second --session-id for it, every time. The caller's
+        "first entry" is a guess from an attempt counter, and an operator's retry resets that counter while
+        the session lives on: read as transient, the refusal parked the ticket in DEFERRED for good."""
+        taken = _make_streaming_proc(
+            [], [f"Error: Session ID {self.SESSION} is already in use.".encode()], rc=1,
+        )
+        procs = [taken, self._ok_proc()]
+        with patch("asyncio.create_subprocess_exec", side_effect=procs) as m:
+            result = await adapter.execute_in_workspace(
+                prompt="p", cwd="/tmp", allowed_tools=["read_file"],
+                session_id=self.SESSION,
+            )
+        assert result.content == "done"
+        first, second = list(m.call_args_list[0][0]), list(m.call_args_list[1][0])
+        assert "--session-id" in first
+        assert second[second.index("--resume") + 1] == self.SESSION
+        assert "--session-id" not in second
+
+    async def test_another_failure_of_a_first_run_is_not_retried(self, adapter):
+        broken = _make_streaming_proc([], [b"Error: something else broke"], rc=1)
+        with patch("asyncio.create_subprocess_exec", return_value=broken) as m, \
+             pytest.raises(RuntimeError, match="something else broke"):
+            await adapter.execute_in_workspace(
+                prompt="p", cwd="/tmp", allowed_tools=["read_file"],
+                session_id=self.SESSION,
+            )
+        assert m.call_count == 1
+
     async def test_quota_error_during_resume_is_not_retried(self, adapter):
         """A rate limit must stay a QuotaExhaustedError, not become a cold start."""
         quota = _make_streaming_proc(
@@ -656,6 +685,13 @@ async def test_resume_without_fallback_raises(monkeypatch):
     adapter, calls = adapter_with_run_cli(monkeypatch, [RuntimeError("No conversation found")])
     with pytest.raises(RuntimeError, match="No conversation found"):
         await adapter.execute_in_workspace("p", "/tmp", session_id="s", resume=True, resume_fallback=False)
+    assert len(calls) == 1
+
+
+async def test_without_fallback_an_existing_session_is_not_resumed(monkeypatch):
+    adapter, calls = adapter_with_run_cli(monkeypatch, [RuntimeError("Session ID s is already in use.")])
+    with pytest.raises(RuntimeError, match="already in use"):
+        await adapter.execute_in_workspace("p", "/tmp", session_id="s", resume_fallback=False)
     assert len(calls) == 1
 
 

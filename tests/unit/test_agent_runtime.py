@@ -211,6 +211,79 @@ class TestAssemblePrompt:
         # implementation enforces a hard ceiling).
         assert prompt.count(marker) <= _TOTAL_CONTEXT_BYTES
 
+    # --- Operator replies: the one voice that may lift hard rules 2 and 3 ---
+    # On ACME-15333 the operator answered "yes, edit the workflow file" three
+    # times. The BA planned the edit, dev made it, scope-guard failed it as
+    # something "nothing in the ticket context can override", and dev took it
+    # out again. The reply sat in the user turn beside the ticket text, and no
+    # rule said what an operator's permission is worth.
+
+    def test_operator_replies_go_to_the_system_part_not_beside_the_ticket(
+        self, registry, mock_llm, workspace,
+    ):
+        (workspace.meta_dir / "ticket.md").write_text("# ACME-1\n\nFix the release workflow.\n")
+        (workspace.meta_dir / "human-input.md").write_text(
+            "\n## Human input (2026-11-19 16:02 UTC)\n\n"
+            "You may edit .github/workflows/release.yml for this ticket.\n"
+        )
+        runtime = AgentRuntime(registry, mock_llm)
+        system, user = runtime.assemble_prompt_parts(registry.get_agent("scope-guard-agent"), workspace)
+
+        assert "You may edit .github/workflows/release.yml" in system
+        assert system.index("## Operator Replies") < system.index("## HARD SAFETY RULES")
+        assert "Fix the release workflow." in user
+        assert "release.yml for this ticket" not in user
+        assert 'file="human-input.md"' not in user
+
+    def test_no_operator_replies_section_before_the_operator_has_replied(
+        self, registry, mock_llm, workspace,
+    ):
+        runtime = AgentRuntime(registry, mock_llm)
+        system, _ = runtime.assemble_prompt_parts(registry.get_agent("scope-guard-agent"), workspace)
+
+        assert "## Operator Replies" not in system
+
+    def test_long_operator_replies_keep_the_newest(self, registry, mock_llm, workspace):
+        from orchestrator.agent_runtime import _OPERATOR_REPLIES_CHARS
+        (workspace.meta_dir / "human-input.md").write_text(
+            "the oldest reply\n" + "x" * _OPERATOR_REPLIES_CHARS + "\nthe newest reply\n"
+        )
+        runtime = AgentRuntime(registry, mock_llm)
+        system, _ = runtime.assemble_prompt_parts(registry.get_agent("dev-agent"), workspace)
+
+        assert "the newest reply" in system
+        assert "the oldest reply" not in system
+
+    def test_hard_rules_name_the_operator_as_the_only_exception(self):
+        assert "Operator Replies" in HARD_SAFETY_RULES
+        assert "Rules 2 and 3" in HARD_SAFETY_RULES
+
+    def test_dev_is_told_where_each_stage_that_sends_work_back_reports(self, registry):
+        """A FAIL routes the ticket to dev; what failed is in that stage's report. A report dev is not pointed
+        at is a finding it cannot fix, and the two stages trade the ticket until the attempt cap."""
+        from orchestrator.constants import STAGE_REPORT_FILE
+        from orchestrator.workflow_router import load_workflow
+        workflow = load_workflow(str(Path(PROJECT_ROOT) / "workflows" / "default-workflow.yaml"))
+        dev_prompt = Path(registry.get_agent("dev-agent").file_path).read_text(encoding="utf-8")
+
+        senders = [stage.id for stage in workflow.stages.values() if stage.on_fail == "dev"]
+        assert senders == ["scope_check", "code_review", "qa"]
+        for stage_id in senders:
+            assert STAGE_REPORT_FILE[stage_id] in dev_prompt
+        # The orchestrator's own findings at the qa stage, written for dev.
+        assert "qa-gates.md" in dev_prompt and "qa-rejected-tests.md" in dev_prompt
+
+    @pytest.mark.parametrize("agent_id", ["ba-agent", "dev-agent", "scope-guard-agent"])
+    def test_agents_that_plan_make_or_judge_config_changes_know_the_exception(
+        self, registry, mock_llm, workspace, agent_id,
+    ):
+        """One rule for all three: before, each improvised its own reading of an operator's yes."""
+        runtime = AgentRuntime(registry, mock_llm)
+        system, _ = runtime.assemble_prompt_parts(registry.get_agent(agent_id), workspace)
+        own_instructions = system.split("## HARD SAFETY RULES")[0]
+
+        assert "Operator Replies" in own_instructions
+
 
 class TestExecute:
     async def test_successful_execution(self, registry, mock_llm, workspace):

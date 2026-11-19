@@ -14,53 +14,6 @@ from orchestrator.constants import REPORT_BA, REPORT_DEV, REPORT_QA, REPORT_SCOP
 from workspace.workspace import Stage
 
 
-# --- _looks_like_pass / _looks_like_fail ---
-
-class TestLooksLikePass:
-    def _check(self, text):
-        # Import from module level
-        import importlib
-        mod = importlib.import_module("orchestrator.orchestrator")
-        return mod._looks_like_pass(text.lower())
-
-    def test_status_pass(self):
-        assert self._check("Status: PASS") is True
-
-    def test_verdict_pass(self):
-        assert self._check("Verdict: PASS") is True
-
-    def test_qa_pass(self):
-        assert self._check("QA pass complete. Summary:") is True
-
-    def test_advances_to_qa(self):
-        assert self._check("Advances to QA.") is True
-
-    def test_scope_audit_pass(self):
-        assert self._check("Scope audit complete. **Status: PASS**") is True
-
-    def test_random_text(self):
-        assert self._check("The fix looks good but needs review") is False
-
-
-class TestLooksLikeFail:
-    def _check(self, text):
-        import importlib
-        mod = importlib.import_module("orchestrator.orchestrator")
-        return mod._looks_like_fail(text.lower())
-
-    def test_status_fail(self):
-        assert self._check("Status: FAIL") is True
-
-    def test_verdict_fail(self):
-        assert self._check("Verdict: **FAIL**") is True
-
-    def test_status_blocked(self):
-        assert self._check("Status: BLOCKED — escalation required") is True
-
-    def test_pass_text(self):
-        assert self._check("All checks passed successfully") is False
-
-
 # --- Iteration cap escalation ---
 
 class TestIterationCapEscalates:

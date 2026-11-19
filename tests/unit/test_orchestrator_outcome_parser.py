@@ -36,16 +36,15 @@ def test_parse_outcome_analysis_no_ba_is_unclear(tmp_path: Path) -> None:
 
 
 def test_parse_outcome_qa_pass_from_output(tmp_path: Path) -> None:
-    """When report file is absent and output matches a pass keyword, returns 'pass'."""
-    # "qa pass" is a literal substring checked by _looks_like_pass.
-    output = "qa pass — all gates green"
+    """With no report, the verdict line of the reply decides."""
+    output = "## Status: PASS\n\nAll gates green."
     assert parse_agent_outcome("qa", output, _ws(tmp_path)) == "pass"
 
 
-def test_parse_outcome_qa_fail_from_output(tmp_path: Path) -> None:
-    """When report is absent and output does NOT match pass keywords, returns 'fail'."""
+def test_parse_outcome_qa_without_a_verdict_is_not_a_fail(tmp_path: Path) -> None:
+    """No verdict line anywhere is its own outcome: there is nothing for dev to fix."""
     output = "some random text without verdict"
-    assert parse_agent_outcome("qa", output, _ws(tmp_path)) == "fail"
+    assert parse_agent_outcome("qa", output, _ws(tmp_path)) == "no_verdict"
 
 
 def test_parse_outcome_unknown_stage_returns_default(tmp_path: Path) -> None:
@@ -173,3 +172,84 @@ def test_plan_review_prose_containing_the_words_is_not_a_pass(tmp_path: Path) ->
         "Status: probably pass\n",
     )
     assert parse_agent_outcome("plan_review", "", _ws(tmp_path)) == "fail"
+
+
+# --- scope_check / code_review / qa: the verdict is the report's Status line ---
+# The agents' contract is a report file with `## Status: PASS|FAIL`
+# (scope-guard.md, code-review.md, qa.md). The reply is free prose and its
+# wording changes with the model: on three ACME tickets in one evening every
+# scope check wrote `## Status: PASS` to the report, answered "The scope check
+# passes", and was routed back to dev until the ticket blocked.
+
+_JUDGE_REPORTS = [
+    ("scope_check", "scope-guard.md"),
+    ("code_review", "code-review.md"),
+    ("qa", "qa.md"),
+]
+
+
+@pytest.mark.parametrize("stage_id, report_name", _JUDGE_REPORTS)
+def test_pass_is_read_from_the_report_when_the_reply_is_prose(
+    tmp_path: Path, stage_id: str, report_name: str,
+) -> None:
+    (tmp_path / report_name).write_text(
+        "# Scope Certificate — T-1\n\n## Status: PASS\n\n## Summary\n- All files in plan: YES\n",
+        encoding="utf-8",
+    )
+    reply = (
+        "The scope check **passes**. I wrote the certificate to "
+        "`ai_pipeline/T-1/scope-guard.md`, so the ticket can go to QA."
+    )
+    assert parse_agent_outcome(stage_id, reply, _ws(tmp_path)) == "pass"
+
+
+@pytest.mark.parametrize("stage_id, report_name", _JUDGE_REPORTS)
+def test_fail_is_read_from_the_report_when_the_reply_is_prose(
+    tmp_path: Path, stage_id: str, report_name: str,
+) -> None:
+    (tmp_path / report_name).write_text(
+        "# Scope Report — T-1\n\n## Status: FAIL\n\n## Violations\n\n1. Unauthorized file\n",
+        encoding="utf-8",
+    )
+    reply = "One file is outside the plan. Once it is reverted the branch advances to QA."
+    assert parse_agent_outcome(stage_id, reply, _ws(tmp_path)) == "fail"
+
+
+def test_a_fail_is_not_overruled_by_an_older_attempts_pass(tmp_path: Path) -> None:
+    """The reply file keeps every attempt; an old `Status: PASS` in it is not this run's verdict."""
+    from orchestrator.agent_runtime import _write_agent_output
+    from orchestrator.constants import RUNTIME_OUTPUT_SCOPE_GUARD
+    replies = tmp_path / RUNTIME_OUTPUT_SCOPE_GUARD
+    _write_agent_output(replies, "Scope check complete. **Status: PASS.**")
+    newest = "Scope guard verdict written to the report.\n\n**Status: FAIL** — one violation."
+    _write_agent_output(replies, newest)
+    assert parse_agent_outcome("scope_check", newest, _ws(tmp_path)) == "fail"
+
+
+def test_a_report_left_from_an_earlier_attempt_is_not_this_attempts_verdict(tmp_path: Path) -> None:
+    import os
+    import time
+    report = tmp_path / "scope-guard.md"
+    report.write_text("## Status: PASS\n", encoding="utf-8")
+    started_at = time.time()
+    os.utime(report, (started_at - 600, started_at - 600))
+    reply = "Nothing changed since my last check."
+    assert parse_agent_outcome("scope_check", reply, _ws(tmp_path), started_at=started_at) == "no_verdict"
+
+
+def test_the_reply_decides_when_this_attempt_wrote_no_report(tmp_path: Path) -> None:
+    assert parse_agent_outcome("scope_check", "Status: FAIL\n\nOne violation.", _ws(tmp_path)) == "fail"
+    assert parse_agent_outcome("code_review", "**Status: PASS**\n\nNo findings.", _ws(tmp_path)) == "pass"
+
+
+def test_prose_about_passing_is_not_a_verdict(tmp_path: Path) -> None:
+    """The old substring match read "advances to" as PASS, also in a report of violations."""
+    reply = "The check found two violations. After the fix the ticket advances to QA."
+    assert parse_agent_outcome("scope_check", reply, _ws(tmp_path)) == "no_verdict"
+
+
+@pytest.mark.parametrize("placeholder", ["## Status: PASS | FAIL", "## Status: PASS / FAIL", "Status: PASS or FAIL"])
+def test_the_report_templates_placeholder_line_is_not_a_verdict(tmp_path: Path, placeholder: str) -> None:
+    """code-review-agent.md shows the line as `## Status: PASS | FAIL`; copied as is, it decides nothing."""
+    (tmp_path / "code-review.md").write_text(f"# Code Review — T-1\n\n{placeholder}\n", encoding="utf-8")
+    assert parse_agent_outcome("code_review", "Review written.", _ws(tmp_path)) == "no_verdict"

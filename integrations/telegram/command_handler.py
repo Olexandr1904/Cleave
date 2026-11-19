@@ -21,7 +21,14 @@ from integrations.telegram.switch_commands import (
     resolve_scope,
 )
 from orchestrator import tg_format
-from orchestrator.constants import REPORT_BA, REPORT_DEV, REPORT_QA, REPORT_SCOPE_GUARD
+from orchestrator.constants import (
+    JUDGING_STATES,
+    REPORT_BA,
+    REPORT_DEV,
+    REPORT_QA,
+    REPORT_SCOPE_GUARD,
+)
+from orchestrator.pipeline.driver import state_to_stage
 from orchestrator.reviewer.grammar import parse_reply
 from orchestrator.skillflow.replies import SKILL_OFF
 from orchestrator.switches import GLOBAL, switch_scopes
@@ -32,14 +39,22 @@ logger = logging.getLogger(__name__)
 
 
 def _write_human_input(workspace: Any, text: str) -> None:
-    """Write human reply to meta/human-input.md so the agent sees it on next run."""
+    """Write human reply to meta/human-input.md so the agent sees it on next run.
+
+    The escalation it answers is recorded with it. Operators answer in a word ("yes", "A"): alone, such a reply
+    names nothing, and an agent that must check what was allowed could not tell from the record.
+    """
     meta = Path(workspace.meta_dir) if hasattr(workspace, 'meta_dir') else Path(workspace.state.workspace_root) / "meta"
     meta.mkdir(parents=True, exist_ok=True)
     path = meta / "human-input.md"
     # Append to preserve history of multiple replies
     existing = path.read_text(encoding="utf-8") if path.exists() else ""
     timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
-    entry = f"\n## Human input ({timestamp})\n\n{text}\n"
+    question = getattr(workspace.state, "human_input_question", None)
+    asked = ""
+    if isinstance(question, str) and question.strip():
+        asked = "In reply to:\n" + "\n".join(f"> {line}".rstrip() for line in question.strip().splitlines()) + "\n\n"
+    entry = f"\n## Human input ({timestamp})\n\n{asked}{text}\n"
     path.write_text(existing + entry, encoding="utf-8")
 
 
@@ -467,6 +482,16 @@ class CommandHandler:
         "push": Stage.PUSHED,
     }
 
+    def _fresh_attempts(self, ws: Any, state: str) -> None:
+        """Give the stage the operator sends a ticket back to a fresh attempt budget.
+
+        A stage blocked by its attempt cap keeps its counter at the cap: entered like that, the driver escalates
+        again before the stage runs. The counter's key is the driver's own stage id for the state.
+        """
+        stage_id = state_to_stage(state)
+        if stage_id:
+            ws.state.stage_iterations[stage_id] = 0
+
     async def _handle_reviewed(self, intent: ParsedIntent, chat_id: str, workspaces: list[Any], processing_msg_id: int | None = None) -> None:
         """Signal that code review is complete for a PR_REVIEW workspace."""
         pr_workspaces = [ws for ws in workspaces if ws.state.current_state == Stage.PR_REVIEW]
@@ -532,7 +557,9 @@ class CommandHandler:
         else:
             # Smart retry: detect furthest completed stage from artifacts
             reports = Path(ws.reports_dir) if hasattr(ws, 'reports_dir') else Path(ws.state.workspace_root) / "reports"
-            if (reports / REPORT_QA).exists():
+            if ws.state.current_state == Stage.BLOCKED and ws.state.previous_state in JUDGING_STATES:
+                target_state = ws.state.previous_state  # back to the judge that blocked it
+            elif (reports / REPORT_QA).exists():
                 target_state = Stage.PUSHED
             elif (reports / REPORT_SCOPE_GUARD).exists():
                 target_state = Stage.QA
@@ -547,11 +574,7 @@ class CommandHandler:
 
         ws.state.human_input_pending = False
         ws.state.error = None
-        # Clear iteration counter for the target stage so the cap check doesn't
-        # immediately re-escalate without running the agent.
-        stage_key = {v: k for k, v in self._VALID_RETRY_STATES.items()}.get(target_state)
-        if stage_key:
-            ws.state.stage_iterations[stage_key] = 0
+        self._fresh_attempts(ws, target_state)
         ws.transition(target_state)
         ws.save_state()
 
@@ -619,6 +642,7 @@ class CommandHandler:
         target.state.human_input_pending = False
         _write_human_input(target, input_text)
         resume_state = target.state.previous_state or "ANALYSIS"
+        self._fresh_attempts(target, resume_state)
         target.transition(resume_state)
         target.save_state()
         self._recently_unblocked[target.state.ticket_id] = (time.time(), resume_state)
@@ -861,6 +885,7 @@ class CommandHandler:
                     resume_state = ws.state.previous_state or Stage.ANALYSIS
                     ws.state.human_input_pending = False
                     ws.state.error = None
+                    self._fresh_attempts(ws, resume_state)
                     ws.transition(resume_state)
                     ws.save_state()
                     _title = tg_format.read_ticket_title(ws)
@@ -878,6 +903,7 @@ class CommandHandler:
                 ws.state.human_input_pending = False
                 _write_human_input(ws, text)
                 resume_state = ws.state.previous_state or Stage.ANALYSIS
+                self._fresh_attempts(ws, resume_state)
                 ws.transition(resume_state)
                 ws.save_state()
                 self._recently_unblocked[ws.state.ticket_id] = (time.time(), resume_state)

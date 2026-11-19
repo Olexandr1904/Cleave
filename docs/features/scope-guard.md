@@ -24,7 +24,8 @@ Agent that validates the developer's diff against the implementation plan and ar
 - Scope Guard is a BMAD-style prompt file with diff analysis instructions
 - Agent receives the full diff and the implementation plan, performs line-by-line analysis
 - File allowlist derived from implementation plan's "files to create/modify" section
-- Architecture rules checked: no modifications to protected files (arch-rules.md, lint config, CI config)
+- Architecture rules checked: no modifications to protected files (arch-rules.md, lint config, CI config). One exception: a lint or CI config file that the plan lists and the operator explicitly allowed in a reply to an escalation of the ticket ([Telegram](../telegram.md))
+- The pipeline routes on the `## Status: PASS` / `## Status: FAIL` line of the `scope-guard.md` this run wrote, not on the wording of the agent's reply; a run that wrote no such line, in the report or in its reply, blocks the ticket (`verification failed`) and does not go back to dev
 - Scope certificate is a simple markdown file confirming all checks passed
 - Scope report lists each violation with file, line, type, and suggested fix
 

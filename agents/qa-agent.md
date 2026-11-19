@@ -118,8 +118,11 @@ test({ticket_id}): add tests for {feature description}
   contract — the orchestrator routes on this line):
     - `## Status: PASS` — all hard gates green; advances to push
     - `## Status: FAIL` — any hard gate red; routes back to dev with details
-  Variants like "Quality gates: PASS" or "Verdict: pass" are NOT recognized
-  and will be treated as FAIL, bouncing the ticket unnecessarily.
+  Variants like "Quality gates: PASS" or "Verdict: pass" are NOT recognized:
+  a run without one of the two lines decides nothing and stops the ticket for
+  a human. Write the file on every run, also on a re-run where nothing changed
+  (an older report is not read), and end your reply with the same line on a
+  line of its own.
 - New test files committed on the feature branch
 - All quality gates passing (tests, lint, build)
 - If any gate fails after max attempts → escalate via Telegram

@@ -223,6 +223,78 @@ def test_analysis_proceeds_when_no_questions(tmp_path):
     assert parse_agent_outcome("analysis", "", ws) == "default"
 
 
+# --- analysis re-entered after a human answer: the old questions file stays ---
+# A human reply re-enters analysis with the previous attempt's ba-questions.md
+# still on disk (the BA reads it to know what was answered and may not delete
+# files). Only a file this attempt wrote is a new question.
+
+def _questions_written_at(ws, mtime: float):
+    import os
+
+    questions = ws.reports_dir / "ba-questions.md"
+    questions.write_text("1. May the pipeline edit the release workflow?")
+    os.utime(questions, (mtime, mtime))
+
+
+def test_analysis_ignores_questions_an_earlier_attempt_wrote(tmp_path):
+    ws = _make_workspace(tmp_path, "ACME-10")
+    (ws.reports_dir / "ba.md").write_text("# Plan")
+    _questions_written_at(ws, 1_000.0)
+
+    assert parse_agent_outcome("analysis", "", ws, started_at=2_000.0) == "default"
+
+
+def test_analysis_escalates_questions_this_attempt_wrote(tmp_path):
+    ws = _make_workspace(tmp_path, "ACME-11")
+    (ws.reports_dir / "ba.md").write_text("# Plan")
+    _questions_written_at(ws, 3_000.0)
+
+    assert parse_agent_outcome("analysis", "", ws, started_at=2_000.0) == "unclear"
+
+
+@pytest.mark.asyncio
+async def test_reentered_analysis_that_asks_nothing_new_advances(tmp_path):
+    """Each answer re-ran the BA, which recorded it in ba.md, and the leftover
+    questions file escalated the same question again."""
+    import time
+
+    from orchestrator.pipeline.agent_stage import handle_agent_stage
+    from orchestrator.workflow_router import StageDefinition, WorkflowDefinition
+
+    ws = _make_workspace(tmp_path, "ACME-12", state=Stage.ANALYSIS)
+    _questions_written_at(ws, time.time() - 3600)
+
+    async def _execute(*args, **kwargs):
+        (ws.reports_dir / "ba.md").write_text("# Plan\n\nDecision: the human allowed the edit.")
+        return AgentResult(agent_id="ba-agent", success=True, output="done")
+
+    runtime = MagicMock()
+    runtime.execute = _execute
+    advanced: list[str] = []
+    workflow = WorkflowDefinition(
+        id="t", name="t",
+        stages={"analysis": StageDefinition(
+            id="analysis", agent="ba-agent", next="plan_review", on_unclear="escalate",
+        )},
+    )
+
+    await handle_agent_stage(
+        ws, "analysis", workflow.stages["analysis"],
+        workflow=workflow, agent_runtime=runtime, repo_config=None,
+        notifier=None, mode_handler=None, get_chat_id=lambda w: "",
+        dry_run=False, event_bus=None,
+        advance_to_stage_fn=lambda w, s: advanced.append(s),
+        on_ticket_done_fn=AsyncMock(),
+        build_gate_summary_fn=MagicMock(return_value=("", [])),
+        notify_verification_blocked_fn=AsyncMock(),
+        notify_deferred_fn=AsyncMock(),
+        notify_failed_fn=AsyncMock(),
+    )
+
+    assert advanced == ["plan_review"]
+    assert ws.state.current_state != Stage.BLOCKED
+
+
 # --- plan_review: a stale report must not be read as this attempt's verdict ---
 # `_write_agent_output` only ever appends, so on re-entry the previous
 # attempt's report is still on disk and stage_verifier's existence check is

@@ -9,6 +9,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import re
+import time
 from datetime import datetime, timedelta, timezone
 from typing import Any, Awaitable, Callable
 
@@ -155,8 +156,12 @@ def parse_agent_outcome(
     output: str,
     workspace: Workspace,
     gate_results: list[GateResult] | None = None,
+    started_at: float | None = None,
 ) -> str:
     """Parse agent output to determine outcome for routing.
+
+    started_at: when this attempt's agent run began (time.time()). With it,
+    a BA questions file counts only if this attempt wrote it.
 
     For `qa`, configured gate exit codes win over the agent's narrative: the
     agent has written "PASS for ticket scope" over a non-zero exit (PR #1530),
@@ -171,7 +176,11 @@ def parse_agent_outcome(
         # BA flagged decisions the ticket asked to align on before work starts.
         # Checked before ba.md: a plan can be complete and still rest on a
         # choice that was the author's to make (ACME-14795 shipped three).
-        if (workspace.reports_dir / REPORT_BA_QUESTIONS).exists():
+        # Re-entered after a human answer, the previous attempt's file is
+        # still here: the BA reads it to know what was answered and may not
+        # delete files. Only a file this attempt wrote is a new question.
+        questions = workspace.reports_dir / REPORT_BA_QUESTIONS
+        if questions.exists() and (started_at is None or questions.stat().st_mtime >= started_at):
             return "unclear"
         ba_plan = workspace.reports_dir / REPORT_BA
         # If ba.md exists, analysis is done — proceed regardless of keywords
@@ -273,6 +282,7 @@ async def handle_agent_stage(
     # failed attempt plus a cold-start retry.
     resumable = bool(getattr(stage_def, "resume_from_previous", False))
     resume = resumable and iteration_now > 1
+    started_at = time.time()
     result = await agent_runtime.execute(
         stage_def.agent, workspace, protected_files=protected,
         resume=resume, resumable=resumable,
@@ -374,7 +384,7 @@ async def handle_agent_stage(
             ))
 
     # Determine outcome from agent output
-    outcome = parse_agent_outcome(stage_id, result.output, workspace, gate_results)
+    outcome = parse_agent_outcome(stage_id, result.output, workspace, gate_results, started_at=started_at)
 
     # A test that greps production source cannot fail. Reject them before the
     # PR exists — 10 of the 21 test files the pipeline has written were of

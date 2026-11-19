@@ -2,9 +2,9 @@
 
 A reply the grammar knows word for word is checked and runs at once. Any other reply to a review or a re-check goes
 to the LLM fallback: its command is checked like the grammar's, echoed with Yes / No buttons, and runs only after
-Yes, within CONFIRM_TTL; an address message takes exact replies only. Every command runs against the job as the store
-has it at that moment, and a post or a push goes through Posting, the only module that posts. Every answer is a reply
-to the anchored message, anchored as it is.
+Yes, within CONFIRM_TTL; an address or a findings message takes exact replies only, and so does "fix". Every command
+runs against the job as the store has it at that moment, and a post or a push goes through Posting, the only module
+that posts. Every answer is a reply to the anchored message, anchored as it is.
 """
 from __future__ import annotations
 
@@ -17,6 +17,7 @@ from pathlib import Path
 from typing import Any
 
 from integrations.base.notifier import Button
+from orchestrator.reviewer.board import FIX_KINDS
 from orchestrator.reviewer.chat import ReviewerChat
 from orchestrator.reviewer.fix import PATCH_NAME
 from orchestrator.reviewer.grammar import ReplyCommand, check_command, describe, parse_reply
@@ -273,9 +274,13 @@ class ReviewerReplies:
                 await self._answer_each(to, answers)
         elif checked.action == "diff":
             await self._answer_each(to, _patch_parts(self._store.run(job.id)))
-        elif checked.action == "again":
+        elif checked.action in ("again", "fix"):
             if self._credential_failing("claude_login"):
                 await self._answer(to, tr(_NO_LOGIN))
+            elif checked.action == "fix":  # on a self-review's message: that review must be the PR's self-review
+                await self._answer(to, self._fix_findings(job, review_id=job.id))
+            elif job.kind == "findings":  # on the PR's self-review at its head, whichever that is now
+                await self._answer(to, self._fix_findings(job, instruction=checked.instruction))
             else:
                 await self._answer(to, self._address_again(job, checked.instruction))
         elif checked.action in ("edit", "draft"):
@@ -315,8 +320,8 @@ class ReviewerReplies:
         """The command as it runs against the job ("all confirmed" expanded), or why nothing is done."""
         if cmd.action in _PR_ACTIONS:
             return outdated_line(job.state, job.reason) if job.state in _OUTDATED else cmd
-        if cmd.action == "again":  # as "review again": a failed address job's line takes it too
-            if job.kind != "address":
+        if cmd.action == "again":  # as "review again": a failed fix job's line takes it too
+            if job.kind not in FIX_KINDS:
                 return check_command(cmd, job.kind, None, [], set(), set())
             return outdated_line(job.state, job.reason) if job.state in _OUTDATED else cmd
         if job.state not in POSTABLE_STATES:
@@ -341,11 +346,23 @@ class ReviewerReplies:
     def _address_again(self, job: Job, instruction: str) -> str:
         try:
             new = self._service.address_again(job.scope, job.number, instruction)
-        except ValueError:
-            return tr("A run on #{number} is already queued.", number=job.number)
+        except ValueError as e:
+            return _fix_refused(job.number, str(e))
         except LookupError:
             return tr("#{number} has no threads waiting on you any more; nothing was done.", number=job.number)
         return tr("Queued a new run on #{number} at {head}.", number=job.number, head=new.head_sha[:9])
+
+    def _fix_findings(self, job: Job, *, review_id: str | None = None, instruction: str | None = None) -> str:
+        """"fix" on a self-review's message (review_id: that review) or "again" on a findings message: a findings job
+        queued for the PR's self-review at its head, or why not."""
+        try:
+            new = self._service.fix_findings(job.scope, job.number, review_id=review_id, instruction=instruction)
+        except ValueError as e:
+            return _fix_refused(job.number, str(e))
+        except LookupError:
+            return tr("#{number} is not on the board any more; nothing was done.", number=job.number)
+        return tr('Fixing the findings of #{number} at {head}: the result comes here; nothing is pushed until you reply'
+                  ' "push".', number=job.number, head=new.head_sha[:9])
 
     def _skip(self, scope: str, number: int) -> str:
         try:
@@ -398,6 +415,20 @@ class ReviewerReplies:
             except Exception as e:
                 logger.warning("Reviewer answer not sent: %s", type(e).__name__)
                 return
+
+
+def _fix_refused(number: int, error: str) -> str:
+    """Why a fix of either kind was not queued, from the service's ValueError text (ReviewerService._pending_fix,
+    fix_findings): a "not fixable: <why>" reason is an N_() literal, translated here."""
+    if error == "a post is under way":
+        return tr("A push or a post of a fix of #{number} is under way; try again when it ends. Nothing was done.",
+                  number=number)
+    if error == "not the newest self-review":
+        return tr("This is not the newest self-review of #{number} at its head. Nothing was done.", number=number)
+    if error.startswith("not fixable: "):
+        why = error.removeprefix("not fixable: ")
+        return tr("Cannot fix the findings of #{number}: {why}. Nothing was done.", number=number, why=tr(why))
+    return tr("A run on #{number} is already queued.", number=number)
 
 
 def _too_old_line(sent_at: datetime, age: timedelta) -> str:

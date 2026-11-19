@@ -288,9 +288,10 @@ A reply runs at once only when every word in it is in the table below. Case does
 | `post replies 1 3` (re-check message) | `reply`, `answers`, `ответы`, `ответ`, `відповіді`, `відповідь` for `replies` | Posts those drafted replies (see [posting re-check replies](#posting-re-check-replies)) |
 | `review again` | `re-review`, `rereview`, `ревью заново`, `заново ревью`, `ревью ще раз`, `рев'ю заново` | Queues a review of the PR's current head, as **Review now** does: `Queued a review of #1712 at 26c4929c5.` |
 | `skip` | `пропусти`, `пропусть` | Skips the PR's current head, as **Skip** does: `Skipped #1712 at 26c4929c5: no automatic review of this head.` |
-| `push` (threads message of your own PR) | `commit and push`, `пуш`, `пушь`, `запушь`, `запуш`, `закоммить и запушь` | Commits the job's fix on the PR head the job ran on and pushes it to the PR branch, never forced and only while the branch is still at that head: `Pushed 9c2e41d07 to #1712: <commit url>`. Refused when the head moved, the branch is in a fork or is the base branch, the fix touches `reviewer.process.address_protected` files, it was pushed already, or a ticket of the pipeline still holds the PR |
-| `diff` (threads message) | `patch`, `дифф`, `диф`, `патч` | Sends the fix's patch, in up to 3 parts (cut with a note; the dashboard has all of it) |
-| `again` / `again: <instruction>` (threads message) | `redo`, `заново`, `переделай`, `наново` | A new run on the PR's current head, your instruction passed to the session as your own words; the old job is superseded. Works on a failed run's line too |
+| `push` (threads or findings message of your own PR) | `commit and push`, `пуш`, `пушь`, `запушь`, `запуш`, `закоммить и запушь` | Commits the job's fix on the PR head the job ran on and pushes it to the PR branch, never forced and only while the branch is still at that head: `Pushed 9c2e41d07 to #1712: <commit url>`. Refused when the head moved, the branch is in a fork or is the base branch, the fix touches `reviewer.process.address_protected` files, it was pushed already, or a ticket of the pipeline still holds the PR |
+| `diff` (threads or findings message) | `patch`, `дифф`, `диф`, `патч` | Sends the fix's patch, in up to 3 parts (cut with a note; the dashboard has all of it) |
+| `again` / `again: <instruction>` (threads or findings message) | `redo`, `заново`, `переделай`, `наново` | A new run on the PR's current head, your instruction passed to the session as your own words; the old job is superseded. Works on a failed run's line too. On a findings message it fixes the findings of the PR's self-review at its current head |
+| `fix` (review message of a self-review of your own PR) | `fix findings`, `пофикси`, `почини`, `фикс`, `пофікси`, `полагодь` | Claude fixes the self-review's confirmed findings (see [fixing the findings of a self-review](#fixing-the-findings-of-a-self-review)): `Fixing the findings of #1712 at 8f01a2b3c: the result comes here; nothing is pushed until you reply "push".` Only the whole reply: `fix 2` goes to the model fallback, which never runs it |
 
 Numbers need the post word: `approve 1 2`, or `post` with no number and no event, goes to the model fallback. An event alone takes only the joining words: `approve comments` goes to the fallback too, because a bare approve is never guessed. All of this works while reviews are paused; a review queued by `review again` starts once reviews run.
 
@@ -310,6 +311,8 @@ A reply that cannot run is answered, and nothing from it runs:
 | `A review of #1712 at this head is already queued.` | `review again` while a review of the current head is queued, running or deferred |
 | `#1712 is not on the board any more; nothing was done.` | `review again` or `skip` after the PR left the board |
 | `This is a re-check message: reply "post replies 1 3". Nothing was done.` | `post`, `edit` or `draft` on a re-check message (and the reverse for `post replies` on a review message) |
+| `"push" works on a fix message of your own PR (threads or self-review findings). Nothing was done.` | `push`, `diff` or `again` on a review or re-check message |
+| `"fix" works on the message of a self-review of your own PR. Nothing was done.` | `fix` on any message but a review's |
 | `The forge token is failing (see the dashboard): nothing posted.` | A post while credential health flags the repo's forge token |
 | `This reply is from 14:05 UTC; send it again to act on it. Nothing was done.` | The reply is older than 15 minutes (`20 Nov 14:05 UTC` past a day): say, sent while the daemon was down. Telegram delivers it at the next start, where it runs nothing |
 | `Reviewer mode is off on this daemon: nothing was done.` | No repo is reviewed by this daemon (no repo with `reviewer.enabled` and a forge token, or a dry run) |
@@ -402,6 +405,38 @@ Reply "post 2" to post it, or "edit 2: …" again.
 ```
 
 A draft becomes finding 7 under Questions, keeping its number (the Dropped line stays): `[acme/app] #1712: drafted as a question (nothing posted)`, its text, then `Reply "post 7" to post it.` On the dashboard, the findings and the raw report show the report as edited. A job that fails answers `[acme/app] #1712: edit of 2 failed — <reason>` (`draft of 7`), for instance `usage limit reached`, `claude login failing`, `the review is outdated`, `draft unreadable` or `interrupted (daemon restarted)`; ask again. With the claude login failing, nothing starts: `claude is not logged in on the host: nothing was started.`
+
+#### Fixing the findings of a self-review
+
+A review of your own PR (**Self-review** or **Review now** on it, see the [Reviews board](dashboard.md#board)) in a repo with `reviewer.process.address_doc` ends its reply hint with `· "fix"` when its report has a confirmed finding (🔴 🟠 🟡). Reply `fix` to that message, or use **Fix findings…** in the PR's panel: Claude (`reviewer.jobs.findings`, default `opus` at `xhigh`, 90 minutes) follows the address document for each confirmed finding of the self-review at the PR's head, the way it answers a reviewer's thread: it weighs the finding, fixes it in the PR's worktree when it holds and says why when it does not. ❓ questions and 🟣 pre-existing issues are not given to it. Nothing is built or tested on the host, and nothing is pushed until you reply `push`.
+
+`fix` is refused, and nothing is queued, when:
+
+| Answer | When |
+|---|---|
+| `Cannot fix the findings of #1712: <why>. Nothing was done.` | `no address_doc`, `not your PR`, `a ticket workspace holds it`, `held by a comparison`, `no finished self-review at this head` (the newest review at the PR's head is not done or posted) or `no confirmed findings` |
+| `This is not the newest self-review of #1712 at its head. Nothing was done.` | A newer review of the same head exists: reply to its message |
+| `A run on #1712 is already queued.` | A fix of the PR (of its threads or of its findings) is queued, running or deferred: one fix of a PR at a time. Fix now and `again` on a threads message refuse a findings fix the same way |
+| `A push or a post of a fix of #1712 is under way; try again when it ends. Nothing was done.` | A `push` (or a post of replies) of a fix of the PR is under way |
+| `#1712 is not on the board any more; nothing was done.` | The PR left the board |
+| `claude is not logged in on the host: nothing was started.` | The claude login is failing |
+
+The result is the findings message, numbered as in the self-review's message:
+
+```
+[acme/app] Self-review findings on your PR #108 "Fix cart sync"
+head 8f01a2b3c · 4 findings · fix: 3 files, +24 −7 — not built or tested here
+
+2. FIXED · CartRepo.kt:88 · null list from the server now handled
+3. WON'T FIX · CartView.kt:40 · the reload is intended
+5. FOLLOW-UP · Sync.kt:12 · retry policy belongs to ACME-120
+7. FIXED · CartRepo.kt:120 · renamed for clarity
+
+Reply to this message: "push" · "diff" · "again: …"
+https://github.com/acme/app/pull/108
+```
+
+Each line is the session's verdict line, else `<verdict> · <why>`. Without a patch the head line says `no code change` and only `"again: …"` is offered; a fix that touches protected files is named and not offered for `push`. Replies: `push` commits the fix as `fix(<ticket>): self-review findings on #108` (`fix: self-review findings on #108` without a ticket key) with the same checks as a threads fix, and answers without a `post replies` hint; `diff` sends the patch; `again: <instruction>` re-runs with your words on the PR's self-review at its current head (`again: leave 3 as it is`). Any other command answers `This is a findings message: reply "push", "diff" or "again: …". Nothing was done.`; text the grammar does not know answers `Not understood; nothing was done. Reply like "push", "diff" or "again: …".` (no model fallback). The session fails the job when it writes no `verdicts.json` (`no verdicts written`), or one without exactly one verdict per finding (`report unreadable: <why>`); Prepare fails it when the self-review's report is no longer there or is of another head (`the self-review's report is gone`). After a push the PR's head moved: nothing runs by itself, and **Self-review** is offered again.
 
 #### Replies to the other lines
 

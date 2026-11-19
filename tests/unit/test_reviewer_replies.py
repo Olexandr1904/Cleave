@@ -32,6 +32,7 @@ POSTED = PostOutcome("posted", "Posted …")
 REPLIES = [{"n": 1, "thread_id": "T1", "comment_id": 101, "body": "Fixed.", "resolve": True},
            {"n": 3, "review_id": 456, "body": "Agreed."}]
 EVERY_BUT_3 = ReplyCommand("post", (1, 2, 4, 5, 6))
+VERDICTS = [{"n": 1, "verdict": "FIXED", "why": "null check added"}]
 
 
 class FakeChat:
@@ -115,6 +116,15 @@ class FakeService:
         if self.skip_error is not None:
             raise self.skip_error
 
+    def fix_findings(self, scope, number, *, review_id=None, instruction=None):
+        self.calls.append(("fix_findings", scope, number, review_id, instruction))
+        if self.fix_error is not None:
+            raise self.fix_error
+        return Job("j-fix", scope, number, "findings", HEAD, f"{HEAD}:r1", "queued", "", T1.isoformat(),
+                   T1.isoformat())
+
+    fix_error = None
+
     def address_again(self, scope, number, instruction):
         self.calls.append(("address_again", scope, number, instruction))
         if self.again_error is not None:
@@ -147,7 +157,7 @@ class Rig:
                                credential_failing=self.failing.__contains__, now=lambda: self.clock[0])
 
     def add_job(self, kind, message_id, scope=SCOPE):
-        key = {"review": HEAD, "address": f"{HEAD}:T1"}.get(kind, f"recheck:{HEAD}")
+        key = {"review": HEAD, "address": f"{HEAD}:T1", "findings": f"{HEAD}:r1"}.get(kind, f"recheck:{HEAD}")
         job = self.store.add_job(scope, N, kind, HEAD, key, T0.isoformat())
         self.store.set_job_state(job.id, "done", "", T0.isoformat())
         job_dir = self.tmp / "rv" / "jobs" / job.id
@@ -156,6 +166,9 @@ class Rig:
             (job_dir / f"report_{HEAD[:9]}.md").write_text(REPORT, encoding="utf-8")
             run = JobRun(job.id, started_at=T0.isoformat(), job_dir=str(job_dir),
                          report=parse_report(REPORT, HEAD).to_dict(), message_ids=[message_id], message_sent=True)
+        elif kind == "findings":
+            run = JobRun(job.id, started_at=T0.isoformat(), job_dir=str(job_dir), verdicts=VERDICTS,
+                         request={"review": "r1"}, message_ids=[message_id], message_sent=True)
         else:
             run = JobRun(job.id, started_at=T0.isoformat(), job_dir=str(job_dir), replies=REPLIES,
                          message_ids=[message_id], message_sent=True)
@@ -692,11 +705,11 @@ async def test_again_works_on_a_failed_address_job_and_not_on_a_review(tmp_path)
     await rig.reply("again", 200)
     assert rig.last() == "Outdated: there is a newer review. Nothing was done." and len(rig.service.calls) == 1
     await rig.reply("again", 100)   # the review's message
-    assert rig.chat.sent[-1] == ('"again" works on a threads message of your own PR. Nothing was done.',
+    assert rig.chat.sent[-1] == ('"again" works on a fix message of your own PR (threads or self-review findings). Nothing was done.',
                                  rig.at(100, rig.review))
     for text in ("push", "diff"):
         await rig.reply(text, 100)
-        assert rig.last() == f'"{text}" works on a threads message of your own PR. Nothing was done.'
+        assert rig.last() == f'"{text}" works on a fix message of your own PR (threads or self-review findings). Nothing was done.'
     assert len(rig.service.calls) == 1 and rig.posting.calls == []
 
 async def test_push_and_diff_need_a_done_address_job(tmp_path):
@@ -704,3 +717,108 @@ async def test_push_and_diff_need_a_done_address_job(tmp_path):
     rig.store.set_job_state(rig.job.id, "failed", "the session failed", T1.isoformat())
     await rig.reply("push", 200)
     assert rig.posting.calls == [] and rig.last().startswith("This job ended failed")
+
+
+async def test_again_on_a_threads_message_while_a_post_is_under_way(tmp_path):
+    rig = address_rig(tmp_path)
+    rig.service.again_error = ValueError("a post is under way")
+    await rig.reply("again", 200)
+    assert rig.last() == f"A push or a post of a fix of #{N} is under way; try again when it ends. Nothing was done."
+
+
+# --- Findings jobs ---
+
+def findings_rig(tmp_path, patch=PATCH, **kw):
+    """The rig plus a done findings job of PR 1712 at HEAD, its message anchored at (CHAT, 300), its copy holding
+    `patch` as fix.patch (None: the session changed no code)."""
+    rig = Rig(tmp_path, **kw)
+    rig.review, rig.job = rig.job, rig.add_job("findings", 300)
+    if patch is not None:
+        (tmp_path / "rv" / "jobs" / rig.job.id / "fix.patch").write_text(patch, encoding="utf-8")
+        run = rig.store.run(rig.job.id)
+        run.fix = {"files": [{"path": "a.kt", "added": 1, "deleted": 1}], "protected": [], "bytes": len(patch)}
+        rig.store.save_run(run)
+    return rig
+
+FIXING = f'Fixing the findings of #{N} at {HEAD[:9]}: the result comes here; nothing is pushed until you reply "push".'
+
+async def test_fix_on_a_self_review_message_queues_a_findings_job(tmp_path):
+    rig = Rig(tmp_path)
+    for text in ("fix", "пофикси"):
+        await rig.reply(text, 100)
+        assert rig.chat.sent[-1] == (FIXING, rig.at(100))
+    assert rig.service.calls == [("fix_findings", SCOPE, N, rig.job.id, None)] * 2
+
+async def test_fix_answers_each_refusal(tmp_path):
+    rig = Rig(tmp_path)
+    for error, text in (
+        (ValueError("already queued"), f"A run on #{N} is already queued."),
+        (ValueError("a post is under way"),
+         f"A push or a post of a fix of #{N} is under way; try again when it ends. Nothing was done."),
+        (ValueError("not the newest self-review"),
+         f"This is not the newest self-review of #{N} at its head. Nothing was done."),
+        (ValueError("not fixable: no confirmed findings"),
+         f"Cannot fix the findings of #{N}: no confirmed findings. Nothing was done."),
+        (ValueError("not fixable: not your PR"), f"Cannot fix the findings of #{N}: not your PR. Nothing was done."),
+        (LookupError("no PR"), f"#{N} is not on the board any more; nothing was done."),
+    ):
+        rig.service.fix_error = error
+        await rig.reply("fix", 100)
+        assert rig.last() == text
+
+async def test_fix_needs_the_claude_login(tmp_path):
+    rig = Rig(tmp_path, failing=("claude_login",))
+    await rig.reply("fix", 100)
+    assert rig.last() == "claude is not logged in on the host: nothing was started." and rig.service.calls == []
+
+async def test_fix_on_an_outdated_review_message(tmp_path):
+    rig = Rig(tmp_path)
+    rig.store.set_job_state(rig.job.id, "superseded", "new review", T1.isoformat())
+    await rig.reply("fix", 100)
+    assert rig.last().startswith("Outdated") and rig.service.calls == []
+
+async def test_fix_is_refused_on_other_messages(tmp_path):
+    rig = findings_rig(tmp_path)
+    rig.add_job("address", 200)
+    for message_id in (200, 300):
+        await rig.reply("fix", message_id)
+        assert rig.last() == '"fix" works on the message of a self-review of your own PR. Nothing was done.'
+    assert rig.service.calls == []
+
+async def test_again_on_a_findings_message_queues_with_the_instruction(tmp_path):
+    rig = findings_rig(tmp_path)
+    await rig.reply("again: leave 3", 300)
+    assert rig.chat.sent[-1] == (FIXING, rig.at(300))
+    rig.store.set_job_state(rig.job.id, "failed", "no verdicts written", T1.isoformat())
+    await rig.reply("заново", 300)
+    assert rig.service.calls == [("fix_findings", SCOPE, N, None, "leave 3"), ("fix_findings", SCOPE, N, None, "")]
+    rig.store.set_job_state(rig.job.id, "superseded", "new findings fix", T1.isoformat())
+    await rig.reply("again", 300)
+    assert rig.last().startswith("Outdated") and len(rig.service.calls) == 2
+
+async def test_again_on_a_findings_message_needs_the_claude_login(tmp_path):
+    rig = findings_rig(tmp_path, failing=("claude_login",))
+    await rig.reply("again", 300)
+    assert rig.last() == "claude is not logged in on the host: nothing was started." and rig.service.calls == []
+
+async def test_push_and_diff_work_on_a_findings_job(tmp_path):
+    rig = findings_rig(tmp_path)
+    await rig.reply("diff", 300)
+    assert rig.chat.sent == [(PATCH, rig.at(300))]
+    rig.posting.outcome = PostOutcome("posted", "Pushed …")
+    await rig.reply("push", 300)
+    assert rig.posting.calls == [("push_fix", SCOPE, rig.job.id, None)]
+    assert rig.chat.sent[-2:] == [("Checking before pushing.", rig.at(300)), ("Pushed …", rig.at(300))]
+
+async def test_a_findings_message_refuses_post_text_edit_and_draft(tmp_path):
+    rig = findings_rig(tmp_path)
+    for text in ("post 1", "approve", "post replies 1", "text 1", "edit 1: shorter", "draft 1"):
+        await rig.reply(text, 300)
+        assert rig.last() == 'This is a findings message: reply "push", "diff" or "again: …". Nothing was done.'
+    assert rig.posting.calls == [] and rig.small.calls == []
+
+async def test_free_text_on_a_findings_message_is_not_parsed_by_the_model(tmp_path):
+    rig = findings_rig(tmp_path, parser=(ReplyCommand("push"),))
+    await rig.reply("давай пуш уже", 300)
+    assert rig.chat.sent == [(not_understood_line("findings"), rig.at(300))]
+    assert rig.parser.calls == [] and rig.posting.calls == []

@@ -31,6 +31,7 @@ CFG = ReviewerConfig(enabled=True, base_branch="develop", process=ProcessPartCon
 FIX = {"files": [{"path": "a.kt", "added": 1, "deleted": 1}], "protected": [], "bytes": 10}
 REPLIES = [{"n": 1, "thread_id": "T1", "body": "Fixed in {fix_sha}: null check.", "resolve": True, "fixed": True},
            {"n": 2, "thread_id": "T2", "body": "Intended.", "resolve": False}]
+VERDICTS = [{"n": 1, "verdict": "FIXED", "why": "null check added"}]
 
 
 def pr(head=HEAD, **kw):
@@ -83,18 +84,18 @@ class FakeForge:
 
 
 class Rig:
-    def __init__(self, tmp_path, *prs, fix=FIX, ticket="ACME-1234"):
+    def __init__(self, tmp_path, *prs, fix=FIX, ticket="ACME-1234", kind="address"):
         self.store = ReviewerStore(connect(tmp_path / "rv.db"))
         self.store.save_repo_state(RepoState(SCOPE, me="octo"))
         self.store.replace_board(SCOPE, {N: row()})
-        self.job = self.store.add_job(SCOPE, N, "address", HEAD, f"{HEAD}:T1", T0)
+        self.job = self.store.add_job(SCOPE, N, kind, HEAD, f"{HEAD}:T1" if kind == "address" else f"{HEAD}:r1", T0)
         self.store.set_job_state(self.job.id, "done", "", T0)
         job_dir = tmp_path / "jobs" / self.job.id
         job_dir.mkdir(parents=True)
         (job_dir / "fix.patch").write_text("the patch")
         self.job_dir = job_dir
-        self.store.save_run(JobRun(self.job.id, job_dir=str(job_dir), replies=REPLIES, fix=fix, ticket_key=ticket,
-                                   url=URL))
+        self.store.save_run(JobRun(self.job.id, job_dir=str(job_dir), replies=REPLIES if kind == "address" else [],
+                                   verdicts=[] if kind == "address" else VERDICTS, fix=fix, ticket_key=ticket, url=URL))
         self.clone, self.forge = FakeClone(), FakeForge(*(prs or (pr(), pr(NEW))))
         self.ctx = RepoContext("acme", "app", CFG, self.clone, SimpleNamespace(repo="acme-org/acme-app"), self.forge,
                                commit_author=("Cleave Bot", "cleave@pipeline.local"))
@@ -250,3 +251,43 @@ async def test_board_poll_during_a_push_queues_nothing(rig):
     during = _plan(row(NEW, threads=("T1",)), [rig.job], posting=frozenset({rig.job.id}))
     assert (during.queue, during.states) == ([], [])
     assert _plan(row(NEW, threads=("T1",)), [rig.job]).queue == [(N, "address", NEW, f"{NEW}:T1")]
+
+
+# --- Findings jobs ---
+
+async def test_push_of_a_findings_fix(tmp_path):
+    rig = Rig(tmp_path, kind="findings")
+    out = await rig.push()
+    assert (out.state, out.text) == (
+        "posted", f"Pushed {NEW[:9]} to #1712: https://github.com/acme-org/acme-app/commit/{NEW}")   # no "post replies"
+    assert rig.clone.pushed[0]["message"] == "fix(ACME-1234): self-review findings on #1712"
+    job = rig.store.job(rig.job.id)
+    assert (job.head_sha, job.key, job.state) == (NEW, f"{NEW}:r1", "done")
+    plain = Rig(tmp_path / "plain", kind="findings", ticket="")
+    await plain.push()
+    assert plain.clone.pushed[0]["message"] == "fix: self-review findings on #1712"
+
+
+async def test_push_refuses_a_findings_job_without_a_patch(tmp_path):
+    rig = Rig(tmp_path, kind="findings", fix={})
+    assert (await rig.push()).text == "This job changed no code: nothing to push."
+    assert rig.clone.pushed == [] and rig.forge.reads == 0
+
+
+async def test_board_poll_after_a_findings_push_keeps_the_job(tmp_path):
+    """GitHub's list lags the push: a poll that still shows the old head leaves the pushed job alone."""
+    rig = Rig(tmp_path, kind="findings")
+    await rig.push()
+    moved = rig.store.job(rig.job.id)
+
+    def pushed_from(job):   # as ReviewerService._pushed_from
+        push = rig.store.push_of(job)
+        return push.head_sha if push else ""
+
+    def poll(head):   # the operator's PR with no turn of theirs, at `head`
+        update = BoardUpdate({N: dataclasses.replace(row(head), my_turns=[])}, [], [])
+        return plan_jobs(SCOPE, update, {N: [moved]}, lambda n, h: False, CFG, True, NOW, False, pushed_from=pushed_from)
+
+    for head in (HEAD, NEW):
+        assert (poll(head).queue, poll(head).states) == ([], [])
+    assert poll(OTHER).states == [(moved.id, "superseded", "new head")]

@@ -77,6 +77,8 @@ TEXTS: dict[str, str] = {
         'Ця задача завершилась зі станом {state}: тут діють лише "review again" і "skip". Нічого не зроблено.',
     'Not understood; nothing was done. Reply like "post replies 1 3", "text 1" or "review again".':
         'Не зрозумів; нічого не зроблено. Відповідайте, наприклад, "post replies 1 3", "text 1" або "review again".',
+    'Not understood; nothing was done. Reply like "push", "diff" or "again: …".':
+        'Не зрозумів; нічого не зроблено. Відповідайте, наприклад, "push", "diff" або "again: …".',
     'Not understood; nothing was done. Reply like "push", "post replies 1 3", "text 2", "diff" or "again: …".':
         'Не зрозумів; нічого не зроблено. Відповідайте, наприклад, "push", "post replies 1 3", "text 2", "diff"'
         ' або "again: …".',
@@ -240,8 +242,13 @@ TEXTS: dict[str, str] = {
     'This is a threads message: reply "push", "post replies 1 3", "text 2", "diff" or "again: …". Nothing was done.':
         'Це повідомлення про треди: відповідайте "push", "post replies 1 3", "text 2", "diff" або "again: …".'
         ' Нічого не зроблено.',
-    '"{action}" works on a threads message of your own PR. Nothing was done.':
-        '"{action}" працює в повідомленні про треди вашого PR. Нічого не зроблено.',
+    '"{action}" works on a fix message of your own PR (threads or self-review findings). Nothing was done.':
+        '"{action}" працює в повідомленні про виправлення вашого PR (треди чи зауваження самоперевірки).'
+        ' Нічого не зроблено.',
+    'This is a findings message: reply "push", "diff" or "again: …". Nothing was done.':
+        'Це повідомлення про зауваження: відповідайте "push", "diff" або "again: …". Нічого не зроблено.',
+    '"fix" works on the message of a self-review of your own PR. Nothing was done.':
+        '"fix" працює в повідомленні самоперевірки вашого PR. Нічого не зроблено.',
     'Edit one number at a time: "edit 2: …". Nothing was done.':
         'Редагуйте по одному номеру: "edit 2: …". Нічого не зроблено.',
     'Name a number: "text 2". Nothing was done.': 'Вкажіть номер: "text 2". Нічого не зроблено.',
@@ -299,6 +306,15 @@ TEXTS: dict[str, str] = {
     "This job changed no code: there is no patch.": "Ця задача не змінила коду: патча немає.",
     "Patch cut: the dashboard shows all of it.": "Патч обрізано: на дашборді він повністю.",
     "A run on #{number} is already queued.": "Запуск для #{number} уже в черзі.",
+    "A push or a post of a fix of #{number} is under way; try again when it ends. Nothing was done.":
+        "Пуш або публікація виправлення #{number} ще триває; спробуйте, коли закінчиться. Нічого не зроблено.",
+    "This is not the newest self-review of #{number} at its head. Nothing was done.":
+        "Це не найновіша самоперевірка #{number} на його поточному коміті. Нічого не зроблено.",
+    "Cannot fix the findings of #{number}: {why}. Nothing was done.":
+        "Не можу виправити зауваження #{number}: {why}. Нічого не зроблено.",
+    'Fixing the findings of #{number} at {head}: the result comes here; nothing is pushed until you reply "push".':
+        'Виправляю зауваження #{number} на {head}: результат прийде сюди; нічого не буде запушено, доки ви не'
+        ' відповісте "push".',
     "#{number} has no threads waiting on you any more; nothing was done.":
         "У #{number} більше немає тредів, що чекають на вас; нічого не зроблено.",
     "Queued a new run on #{number} at {head}.": "Новий запуск для #{number} на {head} поставлено в чергу.",

@@ -149,7 +149,7 @@ def test_check_command_on_an_address_message():
     for kind in ("review", "recheck"):
         for action in ("push", "diff", "again"):
             assert check_command(C(action), kind, None, replies, set(), set()) == \
-                f'"{action}" works on a threads message of your own PR. Nothing was done.'
+                f'"{action}" works on a fix message of your own PR (threads or self-review findings). Nothing was done.'
 
 def test_describe_address_commands():
     assert [describe(C(a), HEAD) for a in ("push", "diff", "again")] == ["push", "diff", "again"]
@@ -159,3 +159,51 @@ def test_not_understood_on_an_address_message():
     from orchestrator.reviewer.lines import not_understood_line
     assert not_understood_line("address") == (
         'Not understood; nothing was done. Reply like "push", "post replies 1 3", "text 2", "diff" or "again: …".')
+
+
+# --- Findings jobs ---
+
+@pytest.mark.parametrize("text", ["fix", "Fix", "FIX.", "fix findings", "Fix Findings", "пофикси", "почини", "фикс",
+                                  "пофікси", "полагодь"])
+def test_fix_grammar(text):
+    assert parse_reply(text) == C("fix")
+
+
+@pytest.mark.parametrize("text", ["fix 2", "fix and push", "please fix", "fix findings 3", "fix: leave 2"])
+def test_fix_is_the_whole_reply_only(text):
+    assert parse_reply(text) is None
+
+
+FINDINGS_REFUSED = 'This is a findings message: reply "push", "diff" or "again: …". Nothing was done.'
+
+
+def test_check_command_on_a_findings_message():
+    for cmd in (C("push"), C("diff"), C("again"), C("again", instruction="leave 3")):
+        assert check_command(cmd, "findings", None, [], set(), set()) == cmd
+    for cmd in (C("post", (1,)), C("post", (), "APPROVE"), C("text", (1,)), C("post_replies", (1,)),
+                C("edit", (1,), instruction="x"), C("draft", (1,))):
+        assert check_command(cmd, "findings", None, [], set(), set()) == FINDINGS_REFUSED
+
+
+def test_fix_only_on_a_review_message():
+    report = parse_report(REPORT, HEAD)
+    assert check_command(C("fix"), "review", report, [], set(), set()) == C("fix")
+    for kind in ("recheck", "address", "findings"):
+        assert check_command(C("fix"), kind, None, [], set(), set()) == (
+            '"fix" works on the message of a self-review of your own PR. Nothing was done.')
+
+
+def test_push_diff_and_again_on_a_review_message_name_both_fix_messages():
+    report = parse_report(REPORT, HEAD)
+    for action in ("push", "diff", "again"):
+        assert check_command(C(action), "review", report, [], set(), set()) == (
+            f'"{action}" works on a fix message of your own PR (threads or self-review findings). Nothing was done.')
+
+
+def test_describe_fix():
+    assert describe(C("fix"), HEAD) == "fix"
+
+
+def test_not_understood_on_a_findings_message():
+    from orchestrator.reviewer.lines import not_understood_line
+    assert not_understood_line("findings") == 'Not understood; nothing was done. Reply like "push", "diff" or "again: …".'

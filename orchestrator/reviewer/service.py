@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Any
 
 from config.schemas import ReviewerConfig
-from orchestrator.reviewer.board import ADDRESS_ACTIONS, build_board
+from orchestrator.reviewer.board import ADDRESS_ACTIONS, FIX_KINDS, build_board
 from orchestrator.reviewer.clone import CloneError
 from orchestrator.reviewer.fix import PATCH_NAME
 from orchestrator.reviewer.forge_github import ForgeError
@@ -19,10 +19,10 @@ from orchestrator.reviewer.jobs import REVIEW_NOW_SUFFIX, Notice, held_prs, plan
 from orchestrator.reviewer.lines import doc_missing_line, poll_failed_line, readiness_failed_line
 from orchestrator.reviewer.models import BoardRow, BoardSnapshot, Job, JobRun, Post, RepoState
 from orchestrator.reviewer.readiness import ReadinessError
-from orchestrator.reviewer.report import Report
+from orchestrator.reviewer.report import Report, confirmed_findings
 from orchestrator.reviewer.store import ReviewerStore
 from orchestrator.switches import Switches, scope_of
-from orchestrator.tg_i18n import ENGLISH, telegram_language
+from orchestrator.tg_i18n import ENGLISH, N_, telegram_language
 
 logger = logging.getLogger(__name__)
 
@@ -159,11 +159,12 @@ def _review_info(job: Job, run: JobRun | None) -> dict:
 
 
 def _fix_info(job: Job, run: JobRun | None, pushed: bool, posting: bool) -> dict:
-    """What the board shows of a PR's newest address job, whatever job is newer: its state, whether it made a fix,
-    whether that fix was pushed and whether a post of it is under way (Fix now and Fix again… read these)."""
+    """What the board shows of a PR's newest fix job (address or findings), whatever job is newer: its kind and state,
+    whether it made a fix, whether that fix was pushed and whether a post of it is under way (Fix now, Fix findings…
+    and their "again" read these)."""
     run = run or JobRun(job.id)
-    return {"id": job.id, "state": job.state, "head": job.head_sha[:9], "started_at": run.started_at,
-            "fix": bool(run.fix), "pushed": pushed, "posting": posting}
+    return {"id": job.id, "kind": job.kind, "state": job.state, "head": job.head_sha[:9],
+            "started_at": run.started_at, "fix": bool(run.fix), "pushed": pushed, "posting": posting}
 
 
 def _why_not_fixable(cfg: ReviewerConfig, row: BoardRow, held: frozenset[int]) -> str:
@@ -178,6 +179,32 @@ def _why_not_fixable(cfg: ReviewerConfig, row: BoardRow, held: frozenset[int]) -
         return "a ticket workspace holds it"
     if row.number in held:
         return "held by a comparison"
+    return ""
+
+
+def _self_review(jobs: list[Job], head: str) -> Job | None:
+    """The newest review job at `head` (jobs newest first, as store.jobs lists them), whatever its state: on a PR of
+    the operator's every review is one they asked for (an author never has a review turn)."""
+    return next((j for j in jobs if j.kind == "review" and j.head_sha == head), None)
+
+
+def _why_no_findings_fix(
+    cfg: ReviewerConfig, row: BoardRow, held: frozenset[int], review: Job | None, run: JobRun | None,
+) -> str:
+    """Why Fix findings… does not apply to `row`, "" when it does. `review` is the row's _self_review, `run` its run.
+    The reasons are N_() literals: a Telegram answer translates them."""
+    if not cfg.process.address_doc:
+        return N_("no address_doc")
+    if "author" not in row.roles:
+        return N_("not your PR")
+    if row.pipeline:
+        return N_("a ticket workspace holds it")
+    if row.number in held:
+        return N_("held by a comparison")
+    if review is None or review.state not in ("done", "posted"):
+        return N_("no finished self-review at this head")
+    if not confirmed_findings((run or JobRun("")).report):
+        return N_("no confirmed findings")
     return ""
 
 
@@ -507,25 +534,66 @@ class ReviewerService:
     def address_now(self, scope: str, number: int) -> Job:
         """Fix now: queue an address job at the row's head at once, without the quiet window or an instruction, as
         address_again does. LookupError: the row is gone; ValueError: the PR is not fixable (plan_jobs's address
-        rule, "not fixable: <why>") or an address job of it is pending ("already queued")."""
+        rule, "not fixable: <why>"), a post of a fix of it is under way or a fix of it is pending (_pending_fix)."""
         row = self._row(scope, number)
+        why = _why_not_fixable(self._repo(scope).cfg, row, held_prs(self._store.board(scope),
+                                                                    self._compared_tickets(scope)))
+        if why:
+            raise ValueError(f"not fixable: {why}")
+        return self._queue_address(scope, row, None)
+
+    def fix_findings(
+        self, scope: str, number: int, *, review_id: str | None = None, instruction: str | None = None,
+    ) -> Job:
+        """Fix findings… and "fix": queue a findings job at the row's head for the confirmed findings of its
+        self-review (_self_review), after superseding the PR's findings jobs done, posted or stale; its run's request
+        names the review, and the instruction when given. LookupError: the row is gone or its repo is no longer
+        configured. ValueError: "not fixable: <why>" (_why_no_findings_fix), "not the newest self-review" (`review_id`,
+        the review a message is about, is not the self-review), or _pending_fix's reason."""
+        row = self._row(scope, number)
+        cfg = self._repo(scope).cfg
+        review = _self_review(self._store.jobs(scope, number), row.head_sha)
+        held = held_prs(self._store.board(scope), self._compared_tickets(scope))
+        why = _why_no_findings_fix(cfg, row, held, review, review and self._store.run(review.id))
+        if why:
+            raise ValueError(f"not fixable: {why}")
+        if review_id is not None and review_id != review.id:
+            raise ValueError("not the newest self-review")
+        if why := self._pending_fix(scope, number):
+            raise ValueError(why)
+        stamp = self._now().isoformat()
+        for job in self._store.jobs(scope, number):
+            if job.kind == "findings" and job.state in ("done", "posted", "stale"):
+                self._store.set_job_state(job.id, "superseded", "new findings fix", stamp)
+        job = self._store.add_job(scope, number, "findings", row.head_sha, f"{row.head_sha}:{review.id}", stamp)
+        request = {"review": review.id, **({"instruction": instruction} if instruction else {})}
+        self._store.save_run(JobRun(job.id, request=request))
+        return job
+
+    def _repo(self, scope: str) -> RepoContext:
         ctx = next((c for c in self._repos if c.scope == scope), None)
         if ctx is None:  # its board outlived its configuration
             raise LookupError(f"no repo {scope} with reviews")
-        why = _why_not_fixable(ctx.cfg, row, held_prs(self._store.board(scope), self._compared_tickets(scope)))
-        if why:
-            raise ValueError(f"not fixable: {why}")
+        return ctx
+
+    def _pending_fix(self, scope: str, number: int) -> str:
+        """Why no fix of the PR may be queued now, "" when one may: one fix (address or findings) of a PR at a time,
+        and none while a post of one is under way (a push moves its job to the new head only once GitHub shows it;
+        superseding the job would strand the post)."""
+        fixes = [j for j in self._store.jobs(scope, number) if j.kind in FIX_KINDS]
         posting = {post.job_id for post in self._store.posts_in_state("posting")}
-        if any(j.id in posting for j in self._store.jobs(scope, number) if j.kind == "address"):
-            raise ValueError("a post is under way")  # plan_jobs's rule too: superseding it would strand the post
-        return self._queue_address(scope, row, None)
+        if any(j.id in posting for j in fixes):
+            return "a post is under way"
+        if any(j.state in ("queued", "running", "deferred") for j in fixes):
+            return "already queued"
+        return ""
 
     def _queue_address(self, scope: str, row: BoardRow, instruction: str | None) -> Job:
         """An address job at `row`'s head, keyed as plan_jobs keys one, after superseding the PR's address jobs done,
-        posted or stale; with `instruction`, its run carries it. ValueError: an address job of the PR is pending."""
+        posted or stale; with `instruction`, its run carries it. ValueError: _pending_fix's reason."""
+        if why := self._pending_fix(scope, row.number):
+            raise ValueError(why)
         addresses = [j for j in self._store.jobs(scope, row.number) if j.kind == "address"]
-        if any(j.state in ("queued", "running", "deferred") for j in addresses):
-            raise ValueError("already queued")
         stamp = self._now().isoformat()
         for job in addresses:
             if job.state in ("done", "posted", "stale"):
@@ -558,8 +626,9 @@ class ReviewerService:
         """Per repo: its state, its board rows, the latest review, re-check or address job of each PR (an edit or a
         draft is never the row's job) with what the board shows of it (job_info, for the PRs on the board only), the
         PRs whose current head is skipped and the PRs too large to review automatically. For the board also the
-        project, the operator's login, each PR's newest review and newest address job whatever job is newer (reviews,
-        fixes) and the PRs Fix now applies to (fixable)."""
+        project, the operator's login, each PR's newest review and newest fix job of either kind (address, findings)
+        whatever job is newer (reviews, fixes), the PRs Fix now applies to (fixable) and those Fix findings… applies to
+        (findings_fixable)."""
         repos = []
         runs: dict[str, JobRun | None] = {}
         posting = frozenset(post.job_id for post in self._store.posts_in_state("posting"))
@@ -574,16 +643,23 @@ class ReviewerService:
             latest: dict[int, Job] = {}
             reviews: dict[int, Job] = {}
             fixes: dict[int, Job] = {}
+            by_number: dict[int, list[Job]] = {}
             for job in self._store.jobs(ctx.scope):  # newest first
+                by_number.setdefault(job.number, []).append(job)
                 if job.kind in ("review", "recheck", "address"):
                     latest.setdefault(job.number, job)
                 if job.kind == "review":
                     reviews.setdefault(job.number, job)
-                if job.kind == "address":
+                if job.kind in FIX_KINDS:
                     fixes.setdefault(job.number, job)
             board = self._store.board(ctx.scope)
             rows = list(board.values())
             held = held_prs(board, self._compared_tickets(ctx.scope))
+            findings_fixable = set()
+            for r in rows:
+                review = _self_review(by_number.get(r.number, []), r.head_sha)
+                if not _why_no_findings_fix(ctx.cfg, r, held, review, review and run_of(review)):
+                    findings_fixable.add(r.number)
 
             repos.append({
                 "scope": ctx.scope, "project_id": ctx.project_id, "me": state.me,
@@ -595,6 +671,7 @@ class ReviewerService:
                 "reviews": {r.number: _review_info(reviews[r.number], run_of(reviews[r.number]))
                             for r in rows if r.number in reviews},
                 "fixable": {r.number for r in rows if not _why_not_fixable(ctx.cfg, r, held)},
+                "findings_fixable": findings_fixable,
                 "fixes": {r.number: _fix_info(job, run_of(job), self._store.push_of(job) is not None, job.id in posting)
                           for r in rows if (job := fixes.get(r.number)) is not None},
                 "skipped": {r.number for r in rows
@@ -604,9 +681,10 @@ class ReviewerService:
         return repos
 
     def detail(self, scope: str, number: int) -> dict:
-        """One PR: its board row, its jobs (newest first), the newest review report and the replies
-        of the newest re-check or address job that drafted a plan (an address job's fix, patch and pushed commit
-        too), each number's state (posted, ticked or open) and the PR's posts (newest first). Read-only."""
+        """One PR: its board row, its jobs (newest first), the newest review report, the replies of the newest
+        re-check or address job that drafted a plan, the verdicts of the newest findings job that wrote them, each
+        number's state (posted, ticked or open) and the PR's posts (newest first). The fix, patch and pushed commit
+        are the newer of that address job and that findings job's. Read-only."""
         row = self._store.board(scope).get(number)
         jobs = self._store.jobs(scope, number)
         if row is None and not jobs:
@@ -627,8 +705,12 @@ class ReviewerService:
         recheck = next(  # a re-check or an address job
             (j for j in jobs if j.kind in ("recheck", "address") and _has_plan(j, runs[j.id])), None
         )
-        address = recheck is not None and recheck.kind == "address"
-        pushed = self._store.push_of(recheck) if address else None
+        verdicts = next(  # a failed one is left out, as _has_plan leaves out a failed address job
+            (j for j in jobs if j.kind == "findings" and j.state != "failed" and (runs[j.id] or no_run).verdicts), None
+        )
+        # The newest fix job of either kind: jobs are newest first.
+        fix_job = next((j for j in jobs if j in (verdicts, recheck) and j.kind in FIX_KINDS), None)
+        pushed = self._store.push_of(fix_job) if fix_job else None
         posts = self._store.posts(scope, number)
         number_states, reply_states = {}, {}
         if report_job is not None and report_run.report:
@@ -654,7 +736,9 @@ class ReviewerService:
             "number_states": number_states,
             "reply_states": reply_states,
             "posts": [_post_detail(p) for p in posts],
-            "fix": (runs[recheck.id].fix or None) if address else None,
-            "fix_patch": _patch_text(runs[recheck.id]) if address else None,
+            "verdicts_job": verdicts.id if verdicts else None,
+            "verdicts": runs[verdicts.id].verdicts if verdicts else [],
+            "fix": (runs[fix_job.id].fix or None) if fix_job else None,
+            "fix_patch": _patch_text(runs[fix_job.id]) if fix_job else None,
             "pushed_sha": pushed.sha if pushed else None,
         }

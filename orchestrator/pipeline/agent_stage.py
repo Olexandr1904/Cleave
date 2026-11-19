@@ -271,9 +271,11 @@ async def handle_agent_stage(
     # Resume only on re-entry: the first run of a stage has nothing to resume,
     # and passing --resume for a session that was never created just costs a
     # failed attempt plus a cold-start retry.
-    resume = bool(getattr(stage_def, "resume_from_previous", False)) and iteration_now > 1
+    resumable = bool(getattr(stage_def, "resume_from_previous", False))
+    resume = resumable and iteration_now > 1
     result = await agent_runtime.execute(
-        stage_def.agent, workspace, protected_files=protected, resume=resume,
+        stage_def.agent, workspace, protected_files=protected,
+        resume=resume, resumable=resumable,
     )
     logger.info(
         "Stage exit: stage=%s ticket=%s agent=%s success=%s "

@@ -236,10 +236,10 @@ def _plan_review_stage_def():
     return stage_def
 
 
-async def _run_plan_review(ws, runtime, advanced):
+async def _run_plan_review(ws, runtime, advanced, stage_def=None):
     from orchestrator.pipeline.agent_stage import handle_agent_stage
     await handle_agent_stage(
-        ws, "plan_review", _plan_review_stage_def(),
+        ws, "plan_review", stage_def or _plan_review_stage_def(),
         workflow=MagicMock(), agent_runtime=runtime, repo_config=None,
         notifier=None, mode_handler=None, get_chat_id=lambda w: "",
         dry_run=False, event_bus=None,
@@ -322,3 +322,23 @@ async def test_plan_review_fresh_report_still_decides_the_outcome(tmp_path):
     )
 
     assert advanced == ["dev"]
+
+
+# --- CLI session naming: only a stage that resumes may name its session ---
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("resumes", [True, False])
+async def test_stage_tells_the_runtime_whether_its_session_is_resumed(tmp_path, resumes):
+    """The runtime names the CLI session only when a later entry will resume it:
+    the CLI refuses to start a second run under a name it already holds."""
+    ws = _make_workspace(tmp_path, "T-30", state=Stage.PLAN_REVIEW)
+    stage_def = _plan_review_stage_def()
+    stage_def.resume_from_previous = resumes
+    runtime = MagicMock()
+    runtime.execute = AsyncMock(return_value=AgentResult(
+        agent_id="plan-review-agent", success=True, output="done",
+    ))
+
+    await _run_plan_review(ws, runtime, [], stage_def=stage_def)
+
+    assert runtime.execute.call_args.kwargs["resumable"] is resumes

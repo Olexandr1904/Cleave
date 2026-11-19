@@ -354,6 +354,7 @@ class AgentRuntime:
         extra_context: dict[str, str] | None = None,
         protected_files: list[str] | None = None,
         resume: bool = False,
+        resumable: bool = False,
     ) -> AgentResult:
         """Execute an agent against a workspace.
 
@@ -394,7 +395,7 @@ class AgentRuntime:
             if ClaudeCodeAdapter is not None and isinstance(self._llm, ClaudeCodeAdapter):
                 result = await self._execute_cli(
                     agent_id, user_prompt, model, workspace, allowed_tools, budget,
-                    system=system_prompt, resume=resume,
+                    system=system_prompt, resume=resume, resumable=resumable,
                 )
             elif allowed_tools:
                 result = await self._execute_with_tools(
@@ -509,6 +510,7 @@ class AgentRuntime:
         budget: AgentBudget,
         system: str = "",
         resume: bool = False,
+        resumable: bool = False,
     ) -> AgentResult:
         """Execute agent via Claude Code CLI (subprocess).
 
@@ -543,7 +545,10 @@ class AgentRuntime:
                     prompt=prompt,
                     system=system,
                     effort=budget.effort,
-                    session_id=session_id_for(ticket_id, agent_id),
+                    # Named only when a later run resumes it: the CLI keeps a
+                    # named session after the run and refuses a second
+                    # --session-id under the same name.
+                    session_id=session_id_for(ticket_id, agent_id) if resumable else "",
                     resume=resume,
                     cwd=str(workspace.source_dir),
                     add_dirs=[str(workspace.meta_dir)],

@@ -791,6 +791,39 @@ class TestSessionId:
 
         assert str(uuid.UUID(session_id_for("T-1", "dev-agent"))) == session_id_for("T-1", "dev-agent")
 
+    @staticmethod
+    async def _dispatch(registry, workspace, **execute_kwargs) -> dict:
+        from integrations.llm.claude_code_adapter import ClaudeCodeAdapter
+        from integrations.llm.llm_interface import LLMResponse
+
+        captured: dict = {}
+
+        class StubAdapter(ClaudeCodeAdapter):
+            def __init__(self):
+                pass
+
+            async def execute_in_workspace(self, *args, **kwargs):
+                captured.update(kwargs)
+                return LLMResponse(content="ok", input_tokens=10, output_tokens=5, model="m")
+
+        await AgentRuntime(registry, StubAdapter()).execute("dev-agent", workspace, **execute_kwargs)
+        return captured
+
+    async def test_run_that_is_never_resumed_does_not_name_its_session(self, registry, workspace):
+        """The CLI keeps a named session after the run ends and refuses a second
+        --session-id with the same name, so a cold stage re-entered under the
+        derived id never starts ("Session ID ... is already in use")."""
+        captured = await self._dispatch(registry, workspace)
+
+        assert captured["session_id"] == ""
+
+    async def test_resumable_run_names_its_session(self, registry, workspace):
+        from orchestrator.agent_runtime import session_id_for
+
+        captured = await self._dispatch(registry, workspace, resumable=True)
+
+        assert captured["session_id"] == session_id_for(workspace.state.ticket_id, "dev-agent")
+
 
 class TestAgentExecutionDetailAttribution:
     """Verify agent_execution_detail events carry correct ticket and project attribution."""

@@ -1204,7 +1204,7 @@ span.reviews-ticket { color: #6e7681; }
   display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
 }
 .reviews-findings { margin-top: 8px; }
-.reviews-findings.is-older { opacity: .55; }
+.reviews-findings.is-older, .reviews-findings.is-stale { opacity: .55; }
 .reviews-src { margin-bottom: 4px; color: #6e7681; font-size: 10.5px; }
 .reviews-sbar { display: flex; gap: 2px; height: 5px; max-width: 100%; }
 .reviews-sbar i { display: block; min-width: 3px; border-radius: 3px; background: var(--sev); }

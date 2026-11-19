@@ -226,7 +226,7 @@ test('shortAge: minutes, hours, days; old from 48 hours', () => {
   assert.deepEqual(B.shortAge(ago(48), NOW), { text: '2d', old: true });
 });
 
-test('findingsHtml: severity in words on a shared scale; nothing without a done or posted review', () => {
+test('findingsHtml: severity in words on a shared scale; nothing without a done, posted or stale review', () => {
   const html = B.findingsHtml(byNumber(13), 25);
   for (const part of ['15 critical', '3 minor', '7 questions', 'self-review · 18 Nov 10:00', 'report in Telegram']) {
     assert.ok(html.includes(part), part);
@@ -234,10 +234,19 @@ test('findingsHtml: severity in words on a shared scale; nothing without a done 
   assert.ok(!html.includes('pre-existing'));
   assert.ok(B.findingsHtml(byNumber(15), 25).includes('posted'));
   assert.ok(!B.findingsHtml(byNumber(15), 25).includes('self-review'));
-  assert.equal(B.findingsHtml(byNumber(16), 25), '');   // stale
   assert.equal(B.findingsHtml(byNumber(11), 25), '');   // no review
+  assert.equal(B.findingsHtml(pr(1, { review: review({ critical: 1 }, { state: 'superseded' }) }), 25), '');
   const older = { ...byNumber(13), review: { ...byNumber(13).review, head: 'bbbbbbbbb' } };
   assert.ok(B.findingsHtml(older, 25).includes('on an older commit'));
+});
+
+test('findingsHtml: a report your turn left (stale) still shows its findings, dimmed, and says turn gone', () => {
+  const html = B.findingsHtml(byNumber(16), 25);
+  for (const part of ['1 critical', '1 question', 'turn gone', 'reviews-findings is-stale']) assert.ok(html.includes(part), part);
+  assert.ok(!html.includes('report in Telegram'));  // Telegram refuses to post from a stale report
+  assert.ok(!html.includes('on an older commit'));
+  const older = { ...byNumber(16), review: { ...byNumber(16).review, head: 'bbbbbbbbb' } };
+  assert.ok(B.findingsHtml(older, 25).includes('turn gone · on an older commit'));
 });
 
 test('jobLineHtml: only while something is happening', () => {

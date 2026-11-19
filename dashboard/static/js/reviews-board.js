@@ -21,7 +21,7 @@ const WORDS = {
 };
 const PENDING = ['queued', 'running', 'deferred'];
 const REPORTED = ['done', 'posted', 'stale'];  // a report of its head exists: Review now would supersede it
-const SHOWN = ['done', 'posted'];  // a report the board shows
+const SHOWN = ['done', 'posted', 'stale'];  // a report the board shows; a stale one (my turn left) dimmed
 // The finding kinds the card counts, in severity order: [key, class, word for 1, word for more].
 const KINDS = [
   ['critical', 'c', 'critical', 'critical'], ['major', 'mj', 'major', 'major'],
@@ -221,8 +221,10 @@ export function findingsHtml(pr, scale) {
     Math.max(4, Math.round(total / scale * 100))}%">${kinds.map(([key, cls]) => `<i class="sev-${cls}" style="flex:${f[key]}"></i>`).join('')}</div>` : '';
   const when = fmtWhen(r.started_at);
   const source = isMine(pr) ? `<div class="reviews-src">self-review${when ? ` · ${esc(when)}` : ''}</div>` : '';
-  const state = r.state === 'posted' ? 'posted' : r.message_sent ? 'report in Telegram' : 'not delivered yet';
-  return `<div class="reviews-findings${older ? ' is-older' : ''}">${source}${bar}<div class="reviews-sev">${
+  // A stale report (the PR is on the board, so my turn left it) is not postable from Telegram any more.
+  const stale = r.state === 'stale';
+  const state = r.state === 'posted' ? 'posted' : stale ? 'turn gone' : r.message_sent ? 'report in Telegram' : 'not delivered yet';
+  return `<div class="reviews-findings${older ? ' is-older' : ''}${stale ? ' is-stale' : ''}">${source}${bar}<div class="reviews-sev">${
     words.join('') || '<span>no findings</span>'}<span class="reviews-sev-x">· ${state}${older ? ' · on an older commit' : ''}</span></div></div>`;
 }
 

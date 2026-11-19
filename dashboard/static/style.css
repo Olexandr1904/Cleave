@@ -1229,17 +1229,24 @@ span.reviews-ticket { color: #6e7681; }
 .reviews-avatar + .reviews-avatar { margin-left: -5px; box-shadow: 0 0 0 2px #161b22; }
 .reviews-avatar img { position: absolute; inset: 0; width: 100%; height: 100%; }
 .reviews-avatar-more { margin-left: 4px; color: #8b949e; font-size: 11px; }
-/* The buttons cover the bottom line while the card is hovered, focused or open: no layout shift */
+/* The buttons never cover the card's bottom line (who moves, what to do). With the keyboard focus they get a row
+   of their own (a discrete move: the row may push the cards below); on a mouse hover they float over the header's
+   right end, so moving the pointer down a column shifts nothing; the open card has none: its panel has them.
+   Touch screens always show the row. */
 .reviews-card .reviews-actions {
-  position: absolute; right: 8px; bottom: 6px; padding-left: 18px; justify-content: flex-end;
-  background: linear-gradient(90deg, transparent, #161b22 18px); opacity: 0; pointer-events: none; transition: opacity .12s;
+  display: none; justify-content: flex-start; flex-wrap: wrap;
+  margin-top: 8px; padding-top: 8px; border-top: 1px solid #21262d;
 }
-.reviews-card:hover .reviews-actions, .reviews-card.focus .reviews-actions, .reviews-card.open .reviews-actions,
-.reviews-card:focus-within .reviews-actions { opacity: 1; pointer-events: auto; }
+.reviews-card.focus .reviews-actions, .reviews-card:focus-within .reviews-actions { display: flex; }
+@media (hover: hover) {
+  .reviews-card:hover:not(.focus):not(:focus-within):not(.open) .reviews-actions {
+    display: flex; position: absolute; top: 5px; right: 8px; margin: 0; padding: 0 0 0 18px; border: 0;
+    background: linear-gradient(90deg, transparent, #161b22 18px);
+  }
+}
+.reviews-card.open .reviews-actions { display: none; }
+@media (hover: none) { .reviews-card:not(.open) .reviews-actions { display: flex; } }
 .reviews-card .reviews-btn { padding: 2px 8px; font-size: 11.5px; }
-@media (hover: none) {  /* touch: the buttons are always there, under the card's text */
-  .reviews-card .reviews-actions { position: static; margin-top: 8px; padding-left: 0; background: none; opacity: 1; pointer-events: auto; justify-content: flex-start; }
-}
 
 .reviews-num {
   color: #58a6ff; text-decoration: none;
@@ -1362,6 +1369,8 @@ span.reviews-ticket { color: #6e7681; }
   .reviews-search { width: 100%; }
   .reviews-tiles { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .reviews-board { grid-template-columns: minmax(0, 1fr); }  /* the columns stack, in the same order */
+}
+@media (max-width: 760px) and (hover: none) {  /* touch targets */
   .reviews-btn, .reviews-repo-chip { min-height: 40px; }
 }
 

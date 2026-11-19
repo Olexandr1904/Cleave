@@ -34,6 +34,7 @@ def _pr(row: BoardRow, repo: dict) -> dict:
         "large": row.number in repo["large"],  # not reviewed automatically
         "review": repo["reviews"].get(row.number),  # the newest review, whatever job is newer
         "can_fix": row.number in repo["fixable"],  # Fix now applies
+        "fix": repo["fixes"].get(row.number),  # the newest address job, whatever job is newer
     }
 
 

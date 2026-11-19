@@ -208,7 +208,7 @@ function panelHeadHtml(target, pr) {
     <div class="review-panel-row">${back}
       <a class="reviews-num" href="${esc(pr.url)}" target="_blank" rel="noopener"
         data-fk="num:panel:${esc(rowKey(target.scope, pr.number))}" aria-label="Open #${esc(pr.number)} on GitHub">#${esc(pr.number)}</a>
-      ${ticketLinkHtml(pr.ticket_key, repo?.jira_url, 'panel')}
+      ${ticketLinkHtml(pr.ticket_key, repo?.jira_url, 'panel', rowKey(target.scope, pr.number))}
       <span class="reviews-sub">${esc(pr.changed_files)} files</span>${flags}
     </div>
     <h3 class="review-panel-title" id="review-panel-title">${esc(cardTitle(pr.title, pr.ticket_key))}</h3>
@@ -550,6 +550,8 @@ function onClick(view, e) {
     if (kind.endsWith('-again') && pr) {  // it replaces a report or a fix of the same commit: ask first
       const ask = againConfirm(pr, kind);
       showConfirmDialog(ask.title, ask.bodyHtml, ask.label, () => runAction(view, action, inPanel));
+      // The dialog takes the focus: Enter on the button behind it would open a second one.
+      document.querySelector('.dialog-overlay #dlg-cancel')?.focus();
     } else {
       runAction(view, action, inPanel);  // a PR that left the board: the server answers why
     }

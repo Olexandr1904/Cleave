@@ -23,7 +23,7 @@ HEAD = "0123456789abcdef0123456789abcdef01234567"
 STAMP = "2026-11-12T10:00:00+00:00"
 PR_KEYS = {
     "number", "title", "url", "ticket_key", "roles", "my_turns", "other_turns", "pipeline",
-    "draft", "changed_files", "head", "job", "last_change", "skipped", "large", "review", "can_fix",
+    "draft", "changed_files", "head", "job", "last_change", "skipped", "large", "review", "can_fix", "fix",
 }
 QUEUED_INFO = {"retry_at": "", "started_at": "", "reason": "", "message_sent": False, "findings": None}
 # A PR's newest review as the service gives it (ReviewerService._review_info), passed through.
@@ -32,6 +32,9 @@ REVIEW_INFO = {
     "duration_s": 3610, "cost_usd": 28.93, "message_sent": True,
     "findings": {"critical": 2, "major": 0, "minor": 1, "question": 3, "preexisting": 0, "dropped": 1},
 }
+# A PR's newest address job as the service gives it (ReviewerService._fix_info), passed through.
+FIX_INFO = {"id": "a2", "state": "done", "head": HEAD[:9], "started_at": STAMP, "fix": True, "pushed": False,
+            "posting": False}
 
 
 def _row(number, my_turns=(), other_turns=(), pipeline=False):
@@ -71,7 +74,7 @@ class FakeService:
             "scope": "acme/app", "project_id": "acme", "me": "octo", "status": "ok", "reason": "",
             "last_poll_at": STAMP, "next_poll_at": "2026-11-12T10:05:00+00:00",
             "rows": self.rows, "jobs": {1: _job(1)}, "job_info": {1: QUEUED_INFO},
-            "skipped": set(), "large": {3}, "reviews": {1: REVIEW_INFO}, "fixable": {2},
+            "skipped": set(), "large": {3}, "reviews": {1: REVIEW_INFO}, "fixable": {2}, "fixes": {2: FIX_INFO},
         }]
 
     def address_now(self, scope, number):
@@ -150,6 +153,7 @@ def test_get_reviews_groups_and_trims(client):
     assert (pr["review"], pr["can_fix"]) == (REVIEW_INFO, False)
     assert repo["waiting"][0]["review"] is None
     assert repo["my_turn"][0]["can_fix"] is True
+    assert (repo["my_turn"][0]["fix"], pr["fix"]) == (FIX_INFO, None)
     assert repo["my_turn"][0]["large"] is False
     assert pr["large"] is False
 

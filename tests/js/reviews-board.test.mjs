@@ -1,5 +1,5 @@
 // The Reviews board's model (dashboard/static/js/reviews-board.js): columns, tiles, cards, buttons.
-// Run: node --test tests/js/
+// Run: node --test 'tests/js/*.test.mjs'
 process.env.TZ = 'UTC';
 
 import { test } from 'node:test';
@@ -16,7 +16,7 @@ function pr(number, fields = {}) {
     number, title: `ACME-${number}: change ${number}`, url: `https://github.com/acme-org/acme-app/pull/${number}`,
     ticket_key: `ACME-${number}`, roles: ['reviewer'], my_turns: [], other_turns: [], pipeline: false,
     draft: false, changed_files: 3, head: H, job: null, last_change: ago(24), skipped: false, large: false,
-    review: null, can_fix: false, ...fields,
+    review: null, can_fix: false, fix: null, ...fields,
   };
 }
 
@@ -30,6 +30,8 @@ function review(counts = {}, fields = {}) {
 }
 
 const other = (login, action) => ({ login, action });
+const fixJob = (fields = {}) => ({ id: 'a1', state: 'done', head: H, started_at: ago(2), fix: true, pushed: false,
+  posting: false, ...fields });
 
 // Seven PRs shaped like a live board: three of my moves, four waiting on someone else.
 const FIXTURE = [
@@ -119,8 +121,18 @@ test('moveText: my actions in words, what is left to post, or who holds the move
   assert.equal(B.moveText(pr(1), 'others', 'octo').text, "nobody's turn");
   const toPost = pr(1, { my_turns: ['review'], review: review({ critical: 1 }) });
   assert.equal(B.moveText(toPost, 'review', 'octo').text, 'post the review from Telegram');
-  const fixed = pr(1, { roles: ['author'], my_turns: ['answer_threads'], job: { kind: 'address', state: 'done', fix: true } });
+  const fixed = pr(1, { roles: ['author'], my_turns: ['answer_threads'], fix: fixJob() });
   assert.equal(B.moveText(fixed, 'fix', 'octo').text, 'fix ready: push from Telegram');
+  assert.equal(B.moveText({ ...fixed, fix: fixJob({ pushed: true }) }, 'fix', 'octo').text,
+    'fix pushed: post the replies from Telegram');
+  assert.equal(B.moveText({ ...fixed, fix: fixJob({ fix: false }) }, 'fix', 'octo').text,
+    'replies ready: post from Telegram');
+  // A self-review queued after the fix is the row's job now: the fix still says what is left.
+  assert.equal(B.moveText({ ...fixed, job: { kind: 'review', state: 'queued', head: H } }, 'fix', 'octo').text,
+    'fix ready: push from Telegram');
+  // A report not delivered yet cannot be posted from Telegram.
+  const undelivered = pr(1, { my_turns: ['review'], review: review({ critical: 1 }, { message_sent: false }) });
+  assert.equal(B.moveText(undelivered, 'review', 'octo').text, 'review');
 });
 
 test('avatarsHtml: two avatars then +N; a GitHub picture over initials only on GitHub', () => {
@@ -139,10 +151,15 @@ test('buttonsHtml: no button on my card unless Fix now applies; Self-review only
   assert.equal(B.buttonsHtml('acme/app', byNumber(12), 'card'), '');
   const fixable = { ...byNumber(12), can_fix: true };
   assert.match(B.buttonsHtml('acme/app', fixable, 'card'), /data-review-action="fix-now"[^>]*>Fix now</);
-  const fixed = { ...fixable, job: { kind: 'address', state: 'done', head: H } };
+  const fixed = { ...fixable, fix: fixJob() };
   assert.match(B.buttonsHtml('acme/app', fixed, 'card'), /data-review-action="fix-again"[^>]*>Fix again…</);
-  const fixing = { ...fixable, job: { kind: 'address', state: 'running', head: H } };
+  // A self-review newer than the fix does not turn Fix again… back into a plain Fix now.
+  const reviewedSince = { ...fixed, job: { kind: 'review', state: 'queued', head: H } };
+  assert.match(B.buttonsHtml('acme/app', reviewedSince, 'card'), /data-review-action="fix-again"/);
+  const fixing = { ...fixable, fix: fixJob({ state: 'running' }), job: { kind: 'review', state: 'queued', head: H } };
   assert.match(B.buttonsHtml('acme/app', fixing, 'card'), /disabled[^>]*>Fixing</);
+  const posting = { ...fixable, fix: fixJob({ posting: true }) };
+  assert.match(B.buttonsHtml('acme/app', posting, 'card'), /disabled[^>]*>Posting</);
   assert.match(B.buttonsHtml('acme/app', byNumber(13), 'panel'), /data-review-action="self-review-again"[^>]*>Self-review again…</);
   assert.match(B.buttonsHtml('acme/app', byNumber(11), 'panel'), /data-review-action="self-review"[^>]*>Self-review</);
 });
@@ -169,10 +186,12 @@ test('againConfirm names the last run before replacing its report or fix', () =>
   const other15 = B.againConfirm(byNumber(15), 'review-again');
   assert.equal(other15.title, 'Review #15 again at the same commit?');
   assert.equal(other15.label, 'Review again');
-  const fix = B.againConfirm({ ...byNumber(12), job: { kind: 'address', state: 'done', started_at: ago(2) } }, 'fix-again');
+  const fix = B.againConfirm({ ...byNumber(12), fix: fixJob() }, 'fix-again');
   assert.equal(fix.title, 'Run the fix of #12 again?');
   assert.ok(fix.bodyHtml.includes('push it from Telegram first'));
   assert.equal(fix.label, 'Run again');
+  const pushed = B.againConfirm({ ...byNumber(12), fix: fixJob({ pushed: true }) }, 'fix-again');
+  assert.ok(pushed.bodyHtml.includes('was pushed') && !pushed.bodyHtml.includes('push it from Telegram first'));
 });
 
 test('shortAge: minutes, hours, days; old from 48 hours', () => {
@@ -202,6 +221,11 @@ test('jobLineHtml: only while something is happening', () => {
   assert.ok(B.jobLineHtml(running, NOW).includes('Cleave review running · 12 min'));
   const fixing = pr(1, { roles: ['author'], job: { kind: 'address', state: 'running', started_at: ago(0.2), head: H } });
   assert.ok(B.jobLineHtml(fixing, NOW).includes('Claude fixing · 12 min'));
+  // A fix still running under a newer self-review: both lines.
+  const both = pr(1, { roles: ['author'], job: { id: 'r2', kind: 'review', state: 'queued', head: H },
+    fix: fixJob({ state: 'running', started_at: ago(0.2) }) });
+  const html = B.jobLineHtml(both, NOW);
+  assert.ok(html.includes('Cleave review queued') && html.includes('Claude fixing · 12 min'), html);
   const failed = pr(1, { job: { kind: 'review', state: 'failed', reason: 'boom', head: H } });
   assert.ok(B.jobLineHtml(failed, NOW).includes('failed: boom'));
   assert.ok(B.jobLineHtml(pr(1, { skipped: true }), NOW).includes('skipped'));
@@ -215,6 +239,10 @@ test('cardHtml: links to GitHub and Jira, the title without its key, every value
   assert.ok(html.includes('data-review-row="acme/app#11"'));
   const plain = B.cardHtml('acme/app', byNumber(11), { ...VIEW, jiraUrl: '' });
   assert.ok(!plain.includes('atlassian') && plain.includes('ACME-11'));
+  // Two PRs of one ticket (a skill-flow comparison): their ticket links keep distinct focus keys.
+  const twin = B.cardHtml('acme/app', pr(21, { ticket_key: 'ACME-11' }), VIEW);
+  const fk = h => h.match(/class="reviews-ticket"[^>]*data-fk="([^"]+)"/)[1];
+  assert.notEqual(fk(html), fk(twin));
   const evil = B.cardHtml('acme/app', pr(20, { title: '<script>x</script>', ticket_key: '' }), VIEW);
   assert.ok(evil.includes('&lt;script&gt;') && !evil.includes('<script>'));
 });

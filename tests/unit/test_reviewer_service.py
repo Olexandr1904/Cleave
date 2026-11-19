@@ -1187,3 +1187,42 @@ async def test_address_now_refuses(tmp_path):
     with pytest.raises(ValueError, match="not fixable: no address_doc"):
         rig.service.address_now("acme/app", 1)
     assert rig.store.jobs("acme/app") == []
+
+
+async def test_overview_carries_the_newest_address_job_whatever_job_is_newer(tmp_path):
+    c = address_ctx(tmp_path, ADDR_CFG)
+    rig = Rig(tmp_path, c)
+    await rig.service.poll(c)
+    now = T0.isoformat()
+    fix = rig.store.add_job("acme/app", 1, "address", A, f"{A}:T1,T2", now)
+    rig.store.set_job_state(fix.id, "done", "", now)
+    rig.store.save_run(JobRun(fix.id, started_at=now, fix={"files": [], "protected": [], "bytes": 9}))
+    rig.service.review_now("acme/app", 1)   # a self-review after the fix: the row's job is the review now
+    [repo] = rig.service.overview()
+    assert repo["jobs"][1].kind == "review"
+    assert repo["fixes"][1] == {"id": fix.id, "state": "done", "head": A[:9], "started_at": now, "fix": True,
+                                "pushed": False, "posting": False}
+    post(rig, "p1", fix, "posted", kind="push")
+    post(rig, "p2", fix, "posting", kind="replies")
+    assert {k: rig.service.overview()[0]["fixes"][1][k] for k in ("pushed", "posting")} == {
+        "pushed": True, "posting": True}
+
+
+async def test_address_now_refuses_while_a_post_of_its_fix_is_under_way(tmp_path):
+    c = address_ctx(tmp_path, ADDR_CFG)
+    rig = Rig(tmp_path, c)
+    await rig.service.poll(c)
+    now = T0.isoformat()
+    fix = rig.store.add_job("acme/app", 1, "address", A, f"{A}:T1,T2", now)
+    rig.store.set_job_state(fix.id, "done", "", now)
+    post(rig, "p1", fix, "posting", kind="replies")
+    with pytest.raises(ValueError, match="a post is under way"):
+        rig.service.address_now("acme/app", 1)
+    assert rig.store.job(fix.id).state == "done"
+
+
+async def test_address_now_refuses_a_repo_no_longer_configured(tmp_path):
+    c = address_ctx(tmp_path, ADDR_CFG)
+    await Rig(tmp_path, c).service.poll(c)   # its board stays in the store
+    with pytest.raises(LookupError):
+        Rig(tmp_path).service.address_now("acme/app", 1)

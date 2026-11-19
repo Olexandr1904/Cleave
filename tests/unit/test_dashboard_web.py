@@ -237,3 +237,11 @@ class TestTitleBackfill:
         # But state.json on disk is NOT polluted with ticket_id-as-title
         on_disk = json.loads((ws / "state.json").read_text())
         assert "title" not in on_disk or on_disk["title"] == ""
+
+
+def test_static_files_are_revalidated(client):
+    """A deploy changes the ES modules together: a browser must not link a cached old module to a new one (a
+    missing export blanks the whole app until a hard reload), so every static file is revalidated."""
+    r = client.get("/static/js/app.js")
+    assert r.status_code == 200
+    assert r.headers["cache-control"] == "no-cache"

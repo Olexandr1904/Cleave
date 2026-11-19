@@ -71,11 +71,13 @@ export function reviewPending(pr) {
   return r && r.head === pr.head && PENDING.includes(r.state) ? r.state : '';
 }
 
+// From the PR's newest address job (pr.fix), whatever job is newer: a self-review after a fix must not hide it.
 export function fixState(pr) {
-  const job = pr.job;
-  if (!job || job.kind !== 'address') return 'none';
-  if (PENDING.includes(job.state)) return 'pending';
-  return REPORTED.includes(job.state) ? 'again' : 'none';
+  const fix = pr.fix;
+  if (!fix) return 'none';
+  if (fix.posting) return 'posting';  // a push or a post of its replies is under way: the server refuses Fix now
+  if (PENDING.includes(fix.state)) return 'pending';
+  return REPORTED.includes(fix.state) ? 'again' : 'none';
 }
 
 export function shortAge(iso, now) {
@@ -154,13 +156,17 @@ export function moveText(pr, column, me) {
     return { logins, text: logins.map(login => `${login}: ${of(login).join(', ')}`).join('; ') };
   }
   const job = pr.job;
+  const fix = pr.fix;
   let text = [...new Set(pr.my_turns.map(actionWords))].join(', ');
-  if (column === 'review' && job && job.kind === 'recheck' && job.state === 'done') {
+  // Posting is done from the Telegram message: only once it was delivered.
+  if (column === 'review' && job && job.kind === 'recheck' && job.state === 'done' && job.message_sent) {
     text = 'post the replies from Telegram';
-  } else if (column === 'review' && pr.review && pr.review.state === 'done' && pr.review.head === pr.head) {
+  } else if (column === 'review' && pr.review && pr.review.state === 'done' && pr.review.head === pr.head
+    && pr.review.message_sent) {
     text = 'post the review from Telegram';
-  } else if (column === 'fix' && job && job.kind === 'address' && job.state === 'done') {
-    text = job.fix ? 'fix ready: push from Telegram' : 'replies ready: post from Telegram';
+  } else if (column === 'fix' && fix && fix.state === 'done') {
+    text = fix.pushed ? 'fix pushed: post the replies from Telegram'
+      : fix.fix ? 'fix ready: push from Telegram' : 'replies ready: post from Telegram';
   }
   return { logins: me ? [me] : [], text };
 }
@@ -181,11 +187,12 @@ export function avatarsHtml(logins, prUrl) {
   return `<span class="reviews-avatars">${shown.join('')}${more}</span>`;
 }
 
-export function ticketLinkHtml(key, jiraUrl, where = 'row') {
+// `id` names the PR in the focus key: the two PRs of a skill-flow comparison share a ticket.
+export function ticketLinkHtml(key, jiraUrl, where = 'row', id = key) {
   if (!key) return '';
   if (!jiraUrl) return `<span class="reviews-ticket">${esc(key)}</span>`;
   return `<a class="reviews-ticket" href="${esc(jiraUrl)}/browse/${esc(encodeURIComponent(key))}" target="_blank"
-    rel="noopener" data-fk="tk:${esc(where)}:${esc(key)}">${esc(key)}</a>`;
+    rel="noopener" data-fk="tk:${esc(where)}:${esc(id)}">${esc(key)}</a>`;
 }
 
 export function findingsHtml(pr, scale) {
@@ -208,24 +215,29 @@ export function findingsHtml(pr, scale) {
 
 const JOB_NAME = { review: 'Cleave review', recheck: 'Cleave re-check', address: 'Claude fix' };
 
-// The job line: only while something is happening, or when the head is skipped.
-export function jobLineHtml(pr, now) {
-  const job = pr.job;
-  const line = (state, text) => `<div class="reviews-jobline is-${state}"><span class="reviews-dot"></span>${esc(text)}</div>`;
-  if (job && [...PENDING, 'failed'].includes(job.state)) {
-    const name = JOB_NAME[job.kind] || job.kind;
-    if (job.state === 'running') {
-      const t = ms(job.started_at);
-      const min = isNaN(t) ? '' : ` · ${Math.max(0, Math.floor((now - t) / 60000))} min`;
-      return line('running', `${job.kind === 'address' ? 'Claude fixing' : `${name} running`}${min}`);
-    }
-    if (job.state === 'deferred') {
-      return line('deferred', `${name} deferred${job.retry_at ? ` · next try ${fmtClock(job.retry_at)}` : ''}`);
-    }
-    if (job.state === 'failed') return line('failed', `${name} failed${job.reason ? `: ${job.reason}` : ''}`);
-    return line('queued', `${name} queued`);
+const jobLine = (state, text) => `<div class="reviews-jobline is-${state}"><span class="reviews-dot"></span>${esc(text)}</div>`;
+
+// One job's line while it is queued, running, deferred or failed; '' otherwise.
+function oneJobLine(job, now) {
+  if (!job || ![...PENDING, 'failed'].includes(job.state)) return '';
+  const name = JOB_NAME[job.kind] || job.kind;
+  if (job.state === 'running') {
+    const t = ms(job.started_at);
+    const min = isNaN(t) ? '' : ` · ${Math.max(0, Math.floor((now - t) / 60000))} min`;
+    return jobLine('running', `${job.kind === 'address' ? 'Claude fixing' : `${name} running`}${min}`);
   }
-  return pr.skipped ? line('skipped', 'skipped') : '';
+  if (job.state === 'deferred') {
+    return jobLine('deferred', `${name} deferred${job.retry_at ? ` · next try ${fmtClock(job.retry_at)}` : ''}`);
+  }
+  if (job.state === 'failed') return jobLine('failed', `${name} failed${job.reason ? `: ${job.reason}` : ''}`);
+  return jobLine('queued', `${name} queued`);
+}
+
+// The job lines: the row's job, and the newest fix when it is pending under a newer job; else skipped or nothing.
+export function jobLineHtml(pr, now) {
+  const fix = pr.fix && PENDING.includes(pr.fix.state) && pr.fix.id !== pr.job?.id ? { ...pr.fix, kind: 'address' } : null;
+  const lines = oneJobLine(pr.job, now) + oneJobLine(fix, now);
+  return lines || (pr.skipped ? jobLine('skipped', 'skipped') : '');
 }
 
 const PENDING_LABEL = { review: { queued: 'Queued', running: 'Running', deferred: 'Deferred' },
@@ -256,7 +268,8 @@ export function buttonsHtml(scope, pr, where) {
   }
   if (mine && pr.can_fix) {
     const state = fixState(pr);
-    if (state === 'pending') out.push(disabled(PENDING_LABEL.fix[pr.job.state], `A fix of this PR is ${pr.job.state}`));
+    if (state === 'posting') out.push(disabled('Posting', 'A push or a post of this fix is under way'));
+    else if (state === 'pending') out.push(disabled(PENDING_LABEL.fix[pr.fix.state], `A fix of this PR is ${pr.fix.state}`));
     else if (state === 'again') out.push(button('fix-again', 'Fix again…'));
     else out.push(button('fix-now', 'Fix now', true));
   }
@@ -275,9 +288,12 @@ function andList(parts) {
 // The confirmation before a run that replaces a report or a fix of the same commit.
 export function againConfirm(pr, action) {
   if (action === 'fix-again') {
-    const when = pr.job && fmtWhen(pr.job.started_at);
+    const fix = pr.fix || {};
+    const what = fmtWhen(fix.started_at) ? `The fix from ${fmtWhen(fix.started_at)}` : 'The current fix';
     return { title: `Run the fix of #${pr.number} again?`, label: 'Run again',
-      bodyHtml: esc(`${when ? `The fix from ${when}` : 'The current fix'} is replaced; push it from Telegram first if you want it.`) };
+      bodyHtml: esc(fix.pushed
+        ? `${what} was pushed; a new run replaces its drafted replies, so post them from Telegram first if you want them.`
+        : `${what} is replaced; push it from Telegram first if you want it.`) };
   }
   const self = action === 'self-review-again';
   const r = pr.review || {};
@@ -308,7 +324,7 @@ export function cardHtml(scope, pr, view) {
       data-scope="${esc(scope)}" data-number="${esc(pr.number)}">
     <div class="reviews-card-head"><span class="reviews-tag${isMine(pr) ? ' is-mine' : ''}">${isMine(pr) ? 'Your PR' : 'Reviewing'}</span>
       <a class="reviews-num" href="${esc(pr.url)}" target="_blank" rel="noopener" data-fk="num:row:${esc(key)}"
-        aria-label="Open #${esc(pr.number)} on GitHub">#${esc(pr.number)}</a>${ticketLinkHtml(pr.ticket_key, view.jiraUrl)}${flags}${
+        aria-label="Open #${esc(pr.number)} on GitHub">#${esc(pr.number)}</a>${ticketLinkHtml(pr.ticket_key, view.jiraUrl, 'row', key)}${flags}${
       view.repoLabel ? `<span class="reviews-repo-label">${esc(view.repoLabel)}</span>` : ''}</div>
     <div class="reviews-card-title" title="${esc(pr.title)}">${esc(title)}</div>
     ${findingsHtml(pr, view.scale)}${jobLineHtml(pr, view.now)}

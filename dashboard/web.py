@@ -13,7 +13,7 @@ from typing import Any
 import aiosqlite
 from starlette.applications import Starlette
 from starlette.requests import Request
-from starlette.responses import HTMLResponse, JSONResponse, PlainTextResponse
+from starlette.responses import HTMLResponse, JSONResponse, PlainTextResponse, Response
 from starlette.routing import Route
 from starlette.staticfiles import StaticFiles
 
@@ -337,6 +337,16 @@ async def validate_step(request: Request) -> JSONResponse:
     return JSONResponse({"ok": True, "checks": []})
 
 
+class _RevalidatedStaticFiles(StaticFiles):
+    """Static files the browser revalidates each time (their ETag keeps that cheap): the dashboard's ES modules
+    change together, and a heuristically cached old module linked to a new one blanks the whole app."""
+
+    def file_response(self, *args: Any, **kwargs: Any) -> Response:
+        response = super().file_response(*args, **kwargs)
+        response.headers["Cache-Control"] = "no-cache"
+        return response
+
+
 def create_app(
     bus: EventBus,
     store: EventStore,
@@ -548,5 +558,5 @@ def create_app(
 
     static_dir = str(Path(__file__).parent / "static")
     app = Starlette(routes=routes)
-    app.mount("/static", StaticFiles(directory=static_dir), name="static")
+    app.mount("/static", _RevalidatedStaticFiles(directory=static_dir), name="static")
     return app

@@ -2,9 +2,15 @@
 
 from __future__ import annotations
 
+import json
+import logging
+from datetime import datetime, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from telegram import Update
+from telegram.error import BadRequest
+from telegram.ext import Application, ExtBot, Updater
 
 from integrations.base.notifier import Button
 from integrations.telegram.telegram_adapter import TelegramAdapter
@@ -176,3 +182,162 @@ class TestLocalizedSend:
 
             assert bot_instance.send_message.call_args.kwargs["text"] == "Plain text"
             assert translator.asked == []
+
+
+_LOGGER = "integrations.telegram.telegram_adapter"
+_SENT = datetime(2026, 11, 20, 10, 0, tzinfo=timezone.utc)
+_CHAT = {"id": 12345, "type": "private"}
+_OCTO = {"id": 777, "is_bot": False, "first_name": "Octo", "username": "octo"}
+
+
+def _traffic(caplog) -> list[tuple[str, str, dict]]:
+    """The traffic lines logged, each as (direction, kind, fields)."""
+    lines = []
+    for record in caplog.records:
+        line = record.getMessage()
+        if line.startswith("TG "):
+            assert "\n" not in line  # one exchange, one line
+            _, direction, kind, fields = line.split(" ", 3)
+            lines.append((direction, kind, json.loads(fields)))
+    return lines
+
+
+def _message(message_id: int, **fields) -> dict:
+    return {"message_id": message_id, "date": int(_SENT.timestamp()), "chat": _CHAT, "from": _OCTO, **fields}
+
+
+def _adapter(bot: AsyncMock) -> TelegramAdapter:
+    with patch("integrations.telegram.telegram_adapter.Bot", return_value=bot):
+        return TelegramAdapter(bot_token="fake-token")
+
+
+class TestOutgoingTrafficLog:
+    async def test_a_sent_message_is_logged_whole_on_one_line(self, caplog):
+        bot = AsyncMock()
+        bot.send_message = AsyncMock(return_value=MagicMock(message_id=99))
+        text = "[acme/app] #12: review ready\n" + "знахідка " * 60
+
+        with caplog.at_level(logging.INFO, logger=_LOGGER):
+            await _adapter(bot).send_message(
+                "123", text, buttons=[Button(label="Approve", action="approve:ACME-1")], reply_to_message_id=42,
+            )
+
+        assert _traffic(caplog) == [("out", "send", {
+            "chat_id": "123", "message_id": 99, "reply_to": 42, "buttons": {"Approve": "approve:ACME-1"},
+            "text": text,
+        })]
+
+    async def test_a_plain_send_logs_no_empty_fields(self, caplog):
+        bot = AsyncMock()
+        bot.send_message = AsyncMock(return_value=MagicMock(message_id=101))
+
+        with caplog.at_level(logging.INFO, logger=_LOGGER):
+            await _adapter(bot).send_message("123", "Plain text")
+
+        assert _traffic(caplog) == [("out", "send", {"chat_id": "123", "message_id": 101, "text": "Plain text"})]
+
+    async def test_the_logged_text_is_the_translated_one_telegram_got(self, caplog):
+        from orchestrator.tg_i18n import model_text, telegram_language
+
+        bot = AsyncMock()
+        bot.send_message = AsyncMock(return_value=MagicMock(message_id=7))
+        adapter = _adapter(bot)
+        adapter.set_translator(_UkrainianTranslator())
+
+        with caplog.at_level(logging.INFO, logger=_LOGGER), telegram_language("uk"):
+            await adapter.send_message("123", f"Причина: {model_text('disk full')}")
+
+        assert _traffic(caplog)[0][2]["text"] == "Причина: УК disk full"
+
+    async def test_a_send_telegram_refused_is_logged_with_its_error_and_raised(self, caplog):
+        bot = AsyncMock()
+        bot.send_message = AsyncMock(side_effect=BadRequest("Message is too long"))
+
+        with caplog.at_level(logging.INFO, logger=_LOGGER), pytest.raises(BadRequest):
+            await _adapter(bot).send_message("123", "Gate summary")
+
+        assert _traffic(caplog) == [("out", "send", {
+            "chat_id": "123", "text": "Gate summary", "error": "BadRequest: Message is too long",
+        })]
+
+    async def test_an_edit_is_logged_with_its_new_text(self, caplog):
+        with caplog.at_level(logging.INFO, logger=_LOGGER):
+            await _adapter(AsyncMock()).edit_message("123", 7, "Done.")
+
+        assert _traffic(caplog) == [("out", "edit", {"chat_id": "123", "message_id": 7, "text": "Done."})]
+
+    async def test_a_delete_is_logged(self, caplog):
+        with caplog.at_level(logging.INFO, logger=_LOGGER):
+            await _adapter(AsyncMock()).delete_message("123", 7)
+
+        assert _traffic(caplog) == [("out", "delete", {"chat_id": "123", "message_id": 7})]
+
+
+class TestIncomingTrafficLog:
+    async def test_a_reply_is_logged_whole_with_the_message_it_answers(self, caplog):
+        text = "again: leave 3 as it is\n" + "бо так треба " * 30
+        update = Update.de_json({"update_id": 1, "message": _message(
+            501, text=text, reply_to_message=_message(99, text="[acme/app] #12: review ready"),
+        )})
+
+        with caplog.at_level(logging.INFO, logger=_LOGGER):
+            await _adapter(AsyncMock())._log_update(update, None)
+
+        assert _traffic(caplog) == [("in", "message", {
+            "chat_id": "12345", "message_id": 501, "user": "octo", "reply_to": 99, "sent": _SENT.isoformat(),
+            "text": text,
+        })]
+
+    async def test_an_edited_message_is_logged_as_edited(self, caplog):
+        update = Update.de_json({"update_id": 1, "edited_message": _message(501, text="status")})
+
+        with caplog.at_level(logging.INFO, logger=_LOGGER):
+            await _adapter(AsyncMock())._log_update(update, None)
+
+        assert [(direction, kind, fields["text"]) for direction, kind, fields in _traffic(caplog)] == [
+            ("in", "edited_message", "status"),
+        ]
+
+    async def test_a_button_press_is_logged_with_its_action_and_message(self, caplog):
+        update = Update.de_json({"update_id": 1, "callback_query": {
+            "id": "1", "from": _OCTO, "chat_instance": "1", "data": "approve:ACME-1",
+            "message": _message(99, text="Gate summary"),
+        }})
+
+        with caplog.at_level(logging.INFO, logger=_LOGGER):
+            await _adapter(AsyncMock())._log_update(update, None)
+
+        assert _traffic(caplog) == [("in", "callback", {
+            "chat_id": "12345", "message_id": 99, "user": "octo", "data": "approve:ACME-1",
+        })]
+
+    async def test_an_update_without_text_is_logged_as_telegram_sent_it(self, caplog):
+        photo = {"file_id": "f", "file_unique_id": "u", "width": 1, "height": 1}
+        update = Update.de_json({"update_id": 1, "message": _message(502, photo=[photo], caption="see this")})
+
+        with caplog.at_level(logging.INFO, logger=_LOGGER):
+            await _adapter(AsyncMock())._log_update(update, None)
+
+        [(direction, kind, fields)] = _traffic(caplog)
+        assert (direction, kind) == ("in", "update")
+        assert fields["message"]["caption"] == "see this"
+        assert fields["message"]["photo"][0]["file_id"] == "f"
+
+    async def test_polling_logs_an_update_and_still_routes_it(self, caplog):
+        adapter = TelegramAdapter(bot_token="123:fake")
+        handler = AsyncMock()
+        adapter.set_command_handler(handler)
+        # Offline: nothing asks Telegram who the bot is, and nothing fetches updates.
+        with patch.object(ExtBot, "get_me", AsyncMock()), patch.object(Application, "start", AsyncMock()), \
+                patch.object(Updater, "start_polling", AsyncMock()):
+            await adapter.start_polling()
+        try:
+            with caplog.at_level(logging.INFO, logger=_LOGGER):
+                await adapter._app.process_update(
+                    Update.de_json({"update_id": 1, "message": _message(501, text="status")}),
+                )
+        finally:
+            await adapter._app.shutdown()
+
+        assert [(direction, kind) for direction, kind, _ in _traffic(caplog)] == [("in", "message")]
+        handler.handle_message.assert_called_once_with("status", "12345")

@@ -476,6 +476,34 @@ The `/status` reply always shows the current mode in its header.
 
 ---
 
+## Traffic log
+
+Every exchange with Telegram is one `INFO` line of the daemon log (`<logging.dir>/cleave-daemon.log`), `TG <in|out> <kind> <JSON>`, with the text whole (a line break in it is `\n`):
+
+```
+… TG out send {"message_id": 1310, "chat_id": "123456", "buttons": {"Approve": "approve:ACME-123"}, "text": "[acme/app] ACME-123: …"}
+… TG in callback {"message_id": 1310, "chat_id": "123456", "user": "octo", "data": "approve:ACME-123"}
+… TG in message {"message_id": 1311, "chat_id": "123456", "user": "octo", "reply_to": 1310, "sent": "2026-11-20T10:00:00+00:00", "text": "push"}
+```
+
+| Line | What it is |
+|---|---|
+| `TG out send` | A message Cleave sent, as Telegram got it (after translation): its id, the message it replies to, its buttons (label and action) |
+| `TG out edit`, `TG out delete` | A message Cleave changed or removed |
+| `TG in message`, `TG in edited_message` | A text message: who wrote it, the message it replies to, and `sent`, Telegram's time of it (the line's own time is when Cleave got it; the two differ after a restart). Cleave acts on a message, never on an edit of one |
+| `TG in callback` | A button press: `data` is the button's action, `message_id` the message it is on |
+| `TG in update` | Anything else (a photo, a voice message, the bot added to a chat), as Telegram sent it. Cleave does nothing with these |
+
+A call Telegram refused has an `error` field (`"error": "BadRequest: Message is too long"`) and, for a send, no `message_id`. The typing indicator and the acknowledgement of a button press are not logged, nor is the `Hello World` the dashboard's setup wizard sends to check a token.
+
+```bash
+grep ': TG ' ~/Library/Logs/cleave/cleave-daemon.log
+# One JSON object per line, with the time, direction and kind, for jq:
+sed -En 's/^(.{23}).*: TG (in|out) ([a-z_]+) \{/{"at":"\1","dir":"\2","kind":"\3",/p' ~/Library/Logs/cleave/cleave-daemon.log | jq -c .
+```
+
+---
+
 ## See also
 
 - [docs/features/telegram-notifications.md](features/telegram-notifications.md) — implementation spec, change log, FRs

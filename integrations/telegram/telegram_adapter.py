@@ -3,17 +3,27 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
+from collections.abc import Awaitable
 from typing import Any
 
 from telegram import Bot, InlineKeyboardButton, InlineKeyboardMarkup, Update
-from telegram.ext import Application, CallbackQueryHandler, MessageHandler, filters
+from telegram.ext import Application, CallbackQueryHandler, MessageHandler, TypeHandler, filters
 from telegram.request import HTTPXRequest
 
 from integrations.base.notifier import Button, NotifierInterface
 from orchestrator.tg_translate import Translator, localize
 
 logger = logging.getLogger(__name__)
+
+
+def _traffic(direction: str, kind: str, /, **fields: Any) -> None:
+    """Log one exchange with Telegram as `TG <in|out> <kind> <JSON fields>`. The text is whole and
+    JSON-escaped, so an exchange is one line whatever it holds; a field without a value is left out."""
+    logger.info("TG %s %s %s", direction, kind, json.dumps(
+        {name: value for name, value in fields.items() if value is not None}, ensure_ascii=False, default=str,
+    ))
 
 
 class TelegramAdapter(NotifierInterface):
@@ -75,8 +85,10 @@ class TelegramAdapter(NotifierInterface):
         if reply_to_message_id:
             kwargs["reply_to_message_id"] = reply_to_message_id
 
-        msg = await self._bot.send_message(**kwargs)
-        logger.info("Sent Telegram message %d to chat %s", msg.message_id, chat_id)
+        msg = await self._call(
+            "send", self._bot.send_message(**kwargs), chat_id=chat_id, reply_to=reply_to_message_id,
+            buttons={b.label: b.action for b in buttons} if buttons else None, text=message,
+        )
         if self._events:
             self._events.emit("tg_message_sent", f"Sent message to chat {chat_id}: {message[:80]}", data={"chat_id": chat_id, "text_preview": message[:200]})
         return msg.message_id
@@ -84,10 +96,14 @@ class TelegramAdapter(NotifierInterface):
     async def edit_message(self, chat_id: str, message_id: int, text: str) -> None:
         """Edit an existing message (its marked text translated as in send_message)."""
         text = await localize(text, self._translator)
-        await self._bot.edit_message_text(
-            chat_id=chat_id,
-            message_id=message_id,
-            text=text,
+        await self._call(
+            "edit",
+            self._bot.edit_message_text(
+                chat_id=chat_id,
+                message_id=message_id,
+                text=text,
+            ),
+            chat_id=chat_id, message_id=message_id, text=text,
         )
 
     async def send_typing(self, chat_id: str) -> None:
@@ -96,7 +112,21 @@ class TelegramAdapter(NotifierInterface):
 
     async def delete_message(self, chat_id: str, message_id: int) -> None:
         """Delete a message."""
-        await self._bot.delete_message(chat_id=chat_id, message_id=message_id)
+        await self._call(
+            "delete", self._bot.delete_message(chat_id=chat_id, message_id=message_id),
+            chat_id=chat_id, message_id=message_id,
+        )
+
+    async def _call(self, kind: str, api_call: Awaitable[Any], **fields: Any) -> Any:
+        """Await a Bot API call and log it as a `TG out` line, with the error when it failed (and raise it)."""
+        try:
+            result = await api_call
+        except Exception as e:
+            _traffic("out", kind, **fields, error=f"{type(e).__name__}: {e}")
+            raise
+        # The id of a sent message is in Telegram's answer; an edit and a delete name theirs.
+        _traffic("out", kind, **{"message_id": getattr(result, "message_id", None), **fields})
+        return result
 
     async def wait_for_reply(
         self, chat_id: str, message_id: int, timeout_seconds: int = 0
@@ -118,6 +148,28 @@ class TelegramAdapter(NotifierInterface):
             return None
         finally:
             self._pending_replies.pop(message_id, None)
+
+    async def _log_update(self, update: Update, context: object) -> None:
+        """Log an update as a `TG in` line: a text message and a button press by their fields, anything
+        else (a photo, a voice message, …) as Telegram sent it. Polling passes every update here before
+        it is routed."""
+        message, query, user = update.effective_message, update.callback_query, update.effective_user
+        if not message or not (query or message.text):
+            _traffic("in", "update", **update.to_dict())
+            return
+        fields = {
+            "message_id": message.message_id,
+            "chat_id": str(message.chat.id),
+            "user": (user.username or user.id) if user else None,
+        }
+        if query:
+            _traffic("in", "callback", **fields, data=query.data)
+        else:
+            _traffic(
+                "in", "edited_message" if update.edited_message else "message", **fields,
+                reply_to=message.reply_to_message.message_id if message.reply_to_message else None,
+                sent=message.date.isoformat(), text=message.text,
+            )
 
     async def _handle_incoming(self, update: Update, context: object) -> None:
         """Handle all incoming messages. Routes replies to futures, others to CommandHandler."""
@@ -182,6 +234,8 @@ class TelegramAdapter(NotifierInterface):
     async def start_polling(self) -> None:
         """Start the bot's polling loop for receiving messages."""
         self._app = Application.builder().token(self._bot.token).build()
+        # Group -1 runs before the routing handlers of group 0, and for every update, whatever its type.
+        self._app.add_handler(TypeHandler(Update, self._log_update), group=-1)
         self._app.add_handler(
             MessageHandler(filters.TEXT, self._handle_incoming)
         )

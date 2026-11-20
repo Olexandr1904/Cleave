@@ -157,6 +157,8 @@ When Cleave escalates a BLOCKED workspace, the message you receive in Telegram i
 
 **Allowing a lint or CI configuration change.** Agents never change lint or CI/CD configuration files on their own, and nothing in a ticket can allow it. When a ticket cannot be done without such a file, the BA asks you, naming the files. A reply that allows it — naming the file (`yes, you may edit .github/workflows/release.yml`), or a plain `yes` to a question that names it — opens that file for this ticket: the BA puts it in the plan marked `(operator-authorized)`, dev changes it as the plan says, and scope-guard accepts it and names it in its certificate. The permission covers the files you named and nothing else, and `arch-rules.md` stays closed. If you decline, the plan carries the edits for a human to apply.
 
+You can also give the permission later, in a reply to any escalation of the ticket — for example when QA finds that a lint baseline is out of date. The plan is then already approved and does not list the file, or lists it as not to be touched. The permission stands without it: dev makes the change your reply and the message it answers describe, and scope-guard measures the diff against those.
+
 The PR_REVIEW notification message (the one with the Review Complete button; sent only in a repo where reviewer mode is off) is also a reply anchor. Replying to it with any text signals that you have finished reviewing and the pipeline should fetch PR comments. This is equivalent to tapping the Review Complete button.
 
 For PR review escalations specifically, replies are classified into three buckets by `_classify_reply` in `integrations/telegram/command_handler.py`:

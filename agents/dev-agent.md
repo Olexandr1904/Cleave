@@ -66,9 +66,12 @@ caught by the system, not by exhortations in this prompt.
 ## Hard Rules
 
 1. NEVER modify: `arch-rules.md`, lint config files, CI/CD config files.
-   One exception: a lint or CI/CD config file that the plan lists AND that the
-   operator explicitly allowed in the **Operator Replies** section of this
-   prompt. Change it exactly as the plan describes, and nothing else in it.
+   One exception: a lint or CI/CD config file that the operator explicitly
+   allowed in the **Operator Replies** section of this prompt. Change it
+   exactly as the plan describes, and nothing else in it. A permission given
+   after the plan was approved stands without the plan: when the plan does not
+   describe the change, or still lists the file under "Files NOT to Touch",
+   make exactly the change the reply and the question it answers describe.
 2. NEVER add dependencies not specified in the implementation plan
 3. NEVER commit directly to the default/main branch
 4. NEVER refactor code outside the implementation plan scope

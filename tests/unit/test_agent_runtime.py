@@ -284,6 +284,32 @@ class TestAssemblePrompt:
 
         assert "Operator Replies" in own_instructions
 
+    # --- A permission given after the plan was approved ---
+    # On ACME-14794 QA found the lint baseline out of date and the ticket blocked. The operator answered
+    # "I allow editing config/detekt-baseline.xml" and dev made the two-line edit. Scope-guard failed it
+    # twice: the exception asked for the file in the plan as well, the plan still listed it under "Files NOT
+    # to Touch", and no stage between scope check and dev may amend a plan. The ticket blocked on a fix
+    # nobody on its route could make.
+
+    @pytest.mark.parametrize("agent_id", ["dev-agent", "scope-guard-agent"])
+    def test_an_operators_permission_stands_without_the_plan(self, registry, mock_llm, workspace, agent_id):
+        """The agent that makes the change, the one that judges it and the hard rules both are bound by."""
+        runtime = AgentRuntime(registry, mock_llm)
+        system, _ = runtime.assemble_prompt_parts(registry.get_agent(agent_id), workspace)
+        own_instructions, hard_rules = system.split("## HARD SAFETY RULES")
+
+        for rules in (own_instructions, hard_rules):
+            assert "after the plan was approved" in rules
+            assert "the question it answers" in rules  # what the change is measured against instead
+
+    def test_scope_guard_does_not_send_an_allowed_config_file_back_for_a_plan_amendment(self, registry):
+        prompt = Path(registry.get_agent("scope-guard-agent").file_path).read_text(encoding="utf-8")
+        exception = prompt.split("**Operator-authorized exception")[1].split("### Step 4")[0]
+
+        assert "checks 1, 2 and 3" in exception  # not in the plan, protected by it, a lint or CI config
+        assert "Files NOT to Touch" in exception
+        assert "both hold" not in exception  # the plan listing the file was the second condition
+
 
 class TestExecute:
     async def test_successful_execution(self, registry, mock_llm, workspace):

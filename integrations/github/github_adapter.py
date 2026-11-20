@@ -178,7 +178,7 @@ class GitHubAdapter(VCSInterface):
     async def open_pr(
         self, title: str, body: str, head_branch: str, base_branch: str, draft: bool = False
     ) -> tuple[int, str]:
-        """Open a pull request, as a draft when asked."""
+        """Open a pull request, as a draft when asked, assigned to the token's owner."""
         payload: dict[str, Any] = {
             "title": title,
             "body": body,
@@ -191,6 +191,14 @@ class GitHubAdapter(VCSInterface):
         pr_number = data["number"]
         pr_url = data["html_url"]
         logger.info("Opened PR #%d: %s", pr_number, pr_url)
+        # The PR stands: an assignment that fails is logged, never raised, so no caller opens it again.
+        try:
+            login = (await self._request("GET", "/user"))["login"]
+            await self._request(
+                "POST", f"{self._repo_path}/issues/{pr_number}/assignees", json={"assignees": [login]},
+            )
+        except Exception as e:
+            logger.warning("PR #%d not assigned to the token's owner: %s", pr_number, e)
         return pr_number, pr_url
 
     async def find_pr_by_branch(self, branch: str) -> tuple[int, str] | None:

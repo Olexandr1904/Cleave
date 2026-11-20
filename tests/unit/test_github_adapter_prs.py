@@ -23,6 +23,20 @@ async def test_open_pr_default_sends_no_draft_flag(adapter):
     assert "draft" not in json.loads(route.calls[0].request.content)
 
 @respx.mock
+async def test_open_pr_assigns_the_token_owner(adapter):
+    respx.post(f"{API}/pulls").respond(201, json={"number": 5, "html_url": "u"})
+    respx.get("https://api.github.com/user").respond(200, json={"login": "octo"})
+    route = respx.post(f"{API}/issues/5/assignees").respond(201, json={})
+    await adapter.open_pr("T", "B", "h", "develop")
+    assert json.loads(route.calls[0].request.content) == {"assignees": ["octo"]}
+
+@respx.mock
+async def test_open_pr_returns_the_pr_when_the_assignment_fails(adapter):
+    respx.post(f"{API}/pulls").respond(201, json={"number": 5, "html_url": "u"})
+    respx.get("https://api.github.com/user").respond(403, json={"message": "Resource not accessible"})
+    assert await adapter.open_pr("T", "B", "h", "develop") == (5, "u")
+
+@respx.mock
 async def test_open_prs_for_key(adapter):
     respx.get(f"{API}/pulls", params={"state": "open", "per_page": "100"}).respond(200, json=[
         {"number": 1, "title": "ACME-1: old try", "head": {"ref": "feature/x"}},

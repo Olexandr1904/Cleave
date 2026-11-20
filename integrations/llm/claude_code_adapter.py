@@ -16,6 +16,8 @@ import logging
 import os
 import re
 import shutil
+import signal
+import subprocess
 import time
 from collections import deque
 from collections.abc import Mapping
@@ -165,6 +167,49 @@ API_KEY_VARS = ("ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "CLAUDE_CODE_USE_BE
 # Claude Code's Bash tool gives a foreground command 2 minutes by default and 10 at most; a Gradle build outlasts
 # both. The ceiling stays under IDLE_STALL_SECONDS, because a running command prints nothing to the stream.
 BASH_TIMEOUT_DEFAULTS = {"BASH_DEFAULT_TIMEOUT_MS": "900000", "BASH_MAX_TIMEOUT_MS": "1500000"}
+
+
+def descendant_groups(pid: int) -> set[int]:
+    """The process groups of the descendants of `pid`, a process this one started; its own group aside.
+
+    Claude Code makes each shell command the leader of a process group of its own, so killing the CLI's group
+    leaves a command the agent started in the background running. Take the groups before the kill: an orphan
+    is launchd's child and nobody's descendant. A `pid` that is not this process's child has none: the groups
+    are killed with no further question.
+    """
+    try:
+        rows = subprocess.run(
+            ["ps", "-axo", "pid=,ppid=,pgid="], capture_output=True, text=True, timeout=5,
+        ).stdout.splitlines()
+    except (OSError, subprocess.SubprocessError):
+        return set()
+    children: dict[int, list[tuple[int, int]]] = {}
+    own: tuple[int, int] | None = None
+    for row in rows:
+        try:
+            process, parent, group = (int(field) for field in row.split())
+        except ValueError:
+            continue
+        children.setdefault(parent, []).append((process, group))
+        if process == pid:
+            own = (parent, group)
+    if own is None or own[0] != os.getpid():
+        return set()
+    groups: set[int] = set()
+    todo = [pid]
+    while todo:
+        for process, group in children.get(todo.pop(), []):
+            groups.add(group)
+            todo.append(process)
+    return groups - {own[1], os.getpgrp()}
+
+
+def kill_groups(groups: set[int]) -> None:
+    for group in groups:
+        try:
+            os.killpg(group, signal.SIGKILL)
+        except (ProcessLookupError, PermissionError):
+            pass
 
 
 def claude_env(env: Mapping[str, str] | None) -> dict[str, str]:
@@ -620,12 +665,15 @@ class ClaudeCodeAdapter(LLMInterface):
                         f"last_tool={progress.last_tool!r} "
                         f"since_last_event={progress.since_last_activity():.1f}s",
                     )
-                # Kill the whole process group; reap so pipes don't leak.
+                # Kill the whole process group, and the groups of the shell commands the CLI left running
+                # (taken first, while the CLI is still their ancestor); reap so pipes don't leak.
+                background = descendant_groups(proc.pid) if proc.pid else set()
                 try:
                     if proc.pid:
                         os.killpg(os.getpgid(proc.pid), 9)
                 except (ProcessLookupError, PermissionError):
                     proc.kill()
+                kill_groups(background)
                 try:
                     await asyncio.wait_for(proc.wait(), timeout=5)
                 except asyncio.TimeoutError:

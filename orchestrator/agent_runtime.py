@@ -157,6 +157,8 @@ class AgentRuntime:
         import os
         import signal
 
+        from integrations.llm.claude_code_adapter import descendant_groups, kill_groups
+
         info = self._running.pop(ticket_id, None)
         if info is None:
             return False
@@ -193,9 +195,13 @@ class AgentRuntime:
             except PermissionError:
                 return True  # exists but we lack permission; assume alive
 
+        # The shell commands the CLI left running lead process groups of their own and would outlive it: taken
+        # now, while the CLI is still their ancestor.
+        background = descendant_groups(pid)
         if not _send(signal.SIGTERM):
             logger.info("Agent %s (pid=%d) for %s already gone", agent_id, pid, ticket_id)
             return True
+        kill_groups(background)
         logger.info("Sent SIGTERM to agent %s (pid=%d) for %s", agent_id, pid, ticket_id)
 
         # Poll for exit. We can't waitpid() because the subprocess.Process is

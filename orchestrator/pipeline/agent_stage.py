@@ -141,6 +141,22 @@ def _parse_plan_review_outcome(workspace: Workspace) -> str:
     return _verdict_in(block) or "fail"
 
 
+def _orchestrator_rejection(
+    workspace: Workspace, gate_results: list[GateResult], fake_tests: list[str],
+) -> str | None:
+    """Why the orchestrator failed QA over the agent's own verdict, or None when the verdict is the agent's."""
+    reports = f"ai_pipeline/{workspace.state.ticket_id}"
+    failing = failing_hard_gates(gate_results)
+    if failing:
+        return "; ".join(
+            f"gate `{gate.name}` failed (exit {gate.exit_code}): `{gate.command}`" for gate in failing
+        ) + f". Output: {reports}/qa-gates.md"
+    if fake_tests:
+        return (f"{len(fake_tests)} test(s) read a source file's text instead of running the code: "
+                f"{reports}/qa-rejected-tests.md")
+    return None
+
+
 def rollback_iteration(workspace: Workspace, stage_id: str) -> None:
     """Undo the iteration counter increment for an aborted stage run.
 
@@ -387,6 +403,7 @@ async def handle_agent_stage(
     # A test that greps production source cannot fail. Reject them before the
     # PR exists — 10 of the 21 test files the pipeline has written were of
     # this shape. Overrides a PASS: green gates over a fake test is not green.
+    fake_tests: list[str] = []
     if stage_id == "qa":
         fake_tests = detect_source_reading_tests(
             workspace.source_dir, git_diff_files_vs_base(workspace),
@@ -451,6 +468,23 @@ async def handle_agent_stage(
         return
 
     next_stage = get_next_stage(stage_id, workflow, outcome)
+
+    # A rejection on the judge's last allowed attempt stops the ticket here, on
+    # that verdict. Sent on to be fixed, the fix had no attempt left to be
+    # judged in: the ticket blocked on its way back, and the operator was shown
+    # the rejection of work that had since been redone.
+    if (outcome == "fail" and next_stage and 0 < stage_def.max_iterations <= iteration_now
+            and get_next_stage(stage_id, workflow, "max_iterations") == "escalate"):
+        _log_pipeline(
+            workspace,
+            f"BLOCKED — {stage_id} rejected the work on attempt {iteration_now} of {stage_def.max_iterations}",
+        )
+        await handle_escalate(
+            workspace, notifier, get_chat_id(workspace) if notifier else "",
+            workflow=workflow, event_bus=event_bus, fix_stage=next_stage,
+            reason=_orchestrator_rejection(workspace, gate_results, fake_tests),
+        )
+        return
 
     # Reset scope_check bounce counter on pass so max_iterations tracks
     # consecutive failures only, not lifetime runs.

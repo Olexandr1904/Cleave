@@ -221,6 +221,42 @@ async def test_qa_gate_that_could_not_run_blocks_with_the_gate_named(orchestrato
     assert "is ambiguous in project" in ws.state.error
 
 
+@pytest.mark.asyncio
+async def test_a_failed_gate_on_the_last_qa_attempt_is_what_the_operator_is_shown(orchestrator_with_stubs, tmp_path):
+    """QA's last attempt: the agent wrote PASS and a hard gate failed. The ticket stops there, and the reason is
+    the gate: the agent's reply, quoted as the reason, would show the operator a PASS."""
+    from pathlib import Path
+
+    from orchestrator.workflow_router import load_workflow
+
+    orch = orchestrator_with_stubs
+    orch._workflow = load_workflow(str(Path(__file__).parent.parent.parent / "workflows" / "default-workflow.yaml"))
+    orch._notifier.send_message = AsyncMock(return_value=7)
+    ws = _make_workspace(tmp_path, "ACME-23", state=Stage.QA)
+    ws.state.stage_iterations = {"dev": 2, "qa": 1}
+    (ws.reports_dir / "qa-agent-output.md").write_text("## Status: PASS")
+    orch._agent_runtime.execute = AsyncMock(return_value=AgentResult(
+        agent_id="qa-agent", success=True, output="## Status: PASS",
+    ))
+    repo_config = MagicMock()
+    repo_config.telegram.default_chat_id = "chat-1"
+    orch._get_repo_config = MagicMock(return_value=repo_config)
+
+    with patch(
+        "orchestrator.pipeline.agent_stage.run_gates",
+        return_value=[_gate("tests", 1), _gate("build", 0)],
+    ):
+        await orch._handle_agent_stage(ws, "qa", orch._workflow.stages["qa"])
+
+    assert (ws.state.current_state, ws.state.previous_state) == (Stage.BLOCKED, Stage.QA)
+    assert ws.state.rejected_at == Stage.QA
+    message = orch._notifier.send_message.await_args.args[1]
+    assert "QA — rejected 2 of 2 times" in message
+    assert "gate tests failed (exit 1)" in message
+    assert "qa-gates.md" in message
+    assert "Status: PASS" not in message
+
+
 def test_qa_falls_back_to_the_agents_verdict_when_no_gates_configured(tmp_path):
     ws = _make_workspace(tmp_path, "ACME-3")
     (ws.reports_dir / "qa.md").write_text("## Status: FAIL")

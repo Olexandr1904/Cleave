@@ -289,6 +289,28 @@ async def advance_workspace(
         logger.warning("No stage definition for '%s'", stage_id)
         return
 
+    # The judge here rejected this work on its last allowed attempt and the
+    # ticket stopped on that verdict (see handle_agent_stage). The operator's
+    # go-ahead brought it back: the work goes to be fixed, with fresh attempts
+    # for the fix and for everything after it. Judged again unchanged, it
+    # would only be rejected again.
+    if state.rejected_at == current:
+        fix_stage = get_next_stage(stage_id, workflow, "fail")
+        workspace.update_state(rejected_at=None)
+        _log_pipeline(workspace, f"{stage_id} rejected this work for the last time — {fix_stage} reworks it")
+        reset_attempts_from(workspace, _stage_to_state(fix_stage))
+        advance_to_stage(workspace, fix_stage)
+        await advance_workspace(
+            workspace,
+            workflow=workflow,
+            mode_handler=mode_handler,
+            handle_agent_stage_fn=handle_agent_stage_fn,
+            handle_action_stage_fn=handle_action_stage_fn,
+            handle_escalate_fn=handle_escalate_fn,
+            _resume_depth=_resume_depth,
+        )
+        return
+
     # Check iteration cap -> escalate. A workflow that loops back into an
     # earlier stage with a stale at-max counter must clear
     # state.stage_iterations[<stage_id>] explicitly at transition time —

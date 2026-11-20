@@ -83,6 +83,23 @@ def build_max_iterations_hint(
     )
 
 
+def build_rejected_hint(fix_stage: str, *, sep: str) -> str:
+    """Operator options for a ticket a judge rejected on its last allowed attempt.
+
+    `fix_stage` is the stage that reworks what the judge rejects. Nothing ran after the verdict, so a go-ahead
+    sends the work there: the judge would only repeat itself.
+    """
+    return (
+        f"\n{sep}\n"
+        + tr("Nothing has changed since this verdict: the ticket stopped on it.\n\n"
+             "Options:\n"
+             "  Reply with context — {fix_stage} reworks it with your input, then it is checked again\n"
+             "  Reply \"retry\" — the same, without your input\n"
+             "  Reply \"skip\" — accept the work as it is and go on to the next stage",
+             fix_stage=fix_stage.upper())
+    )
+
+
 async def build_blocked_reason(workspace: Any, stage_id: str) -> str:
     """Extract a human-readable reason for why a workspace is blocked.
 
@@ -158,8 +175,15 @@ async def handle_escalate(
     workflow: Any = None,
     event_bus: Any = None,
     is_max_iterations: bool = False,
+    fix_stage: str = "",
+    reason: str | None = None,
 ) -> None:
-    """Send escalation notification and block workspace."""
+    """Send escalation notification and block workspace.
+
+    fix_stage: set when the judge at this stage rejected the work on its last allowed attempt — the stage that
+    reworks what it rejects. The block is then marked (WorkspaceState.rejected_at) so that a resume goes there.
+    reason: what to tell the operator, when it is not the stage agent's own last reply.
+    """
     state = workspace.state
 
     if not notifier:
@@ -180,10 +204,14 @@ async def handle_escalate(
     hdr = tg_format.tg_header("🔔", state.company_id, state.ticket_id, title)
     stage_id_str = stage.lower() if isinstance(stage, str) else str(stage).lower()
     is_agent_stage = stage_id_str in STAGE_RUNTIME_OUTPUT
-    if is_max_iterations:
+    if is_max_iterations or fix_stage:
         stage_def = workflow.stages.get(stage_id_str) if workflow else None
         cap = stage_def.max_iterations if stage_def else "?"
         iterations = state.stage_iterations.get(stage_id_str, 0)
+    if fix_stage:
+        header = f"{hdr}\n" + tr("Stage: {stage} — rejected {iterations} of {cap} times",
+                                 stage=stage, iterations=iterations, cap=cap) + "\n"
+    elif is_max_iterations:
         header = f"{hdr}\n" + tr("Stage: {stage} — stuck after {iterations}/{cap} attempts",
                                  stage=stage, iterations=iterations, cap=cap) + "\n"
     else:
@@ -191,9 +219,11 @@ async def handle_escalate(
 
     # Stored in English (the agent reads it on resume); Telegram gets it marked for translation.
     reason = tg_format.strip_markdown(
-        await build_blocked_reason(workspace, stage_id_str)
+        reason or await build_blocked_reason(workspace, stage_id_str)
     )
-    if is_max_iterations:
+    if fix_stage:
+        hint = build_rejected_hint(fix_stage, sep=sep)
+    elif is_max_iterations:
         runtime_name = STAGE_RUNTIME_OUTPUT.get(stage_id_str)
         has_output = bool(runtime_name) and (workspace.reports_dir / runtime_name).exists()
         hint = build_max_iterations_hint(
@@ -222,7 +252,7 @@ async def handle_escalate(
     try:
         msg_id = await notifier.send_message(chat_id, message)
         workspace.transition(Stage.BLOCKED)
-        workspace.update_state(human_input_question=reason)
+        workspace.update_state(human_input_question=reason, **({"rejected_at": stage} if fix_stage else {}))
         workspace.state.escalation_msg_id = msg_id
         workspace.state.escalation_chat_id = chat_id
         workspace.save_state()

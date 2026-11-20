@@ -33,7 +33,7 @@ def _ws(state):
     ws = MagicMock()
     ws.state = SimpleNamespace(
         ticket_id="T-1", company_id="acme", current_state=state,
-        stage_iterations={}, previous_state="",
+        stage_iterations={}, previous_state="", rejected_at=None,
     )
     ws.transition = MagicMock()
     ws.update_state = MagicMock()

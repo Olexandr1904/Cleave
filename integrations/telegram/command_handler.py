@@ -544,6 +544,9 @@ class CommandHandler:
                     processing_msg_id,
                 )
                 return
+            # The stage the operator names is the one that runs, also a judge
+            # that has just rejected the work for the last time.
+            ws.state.rejected_at = None
         else:
             # Smart retry: detect furthest completed stage from artifacts
             reports = Path(ws.reports_dir) if hasattr(ws, 'reports_dir') else Path(ws.state.workspace_root) / "reports"

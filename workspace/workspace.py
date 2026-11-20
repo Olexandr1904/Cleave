@@ -69,6 +69,10 @@ class WorkspaceState:
     pr_url: str | None = None
     current_state: str = "NEW"
     previous_state: str | None = None
+    # The judging state that rejected the work on its last allowed attempt, while the ticket is BLOCKED on
+    # that verdict. Resumed at that state, the ticket goes to the stage that fixes the work, not to the
+    # judge again (pipeline/driver.py). Any other way out of the block drops it (transition()).
+    rejected_at: str | None = None
     stage_iterations: dict[str, int] = field(default_factory=dict)
     human_input_pending: bool = False
     human_input_question: str | None = None
@@ -230,6 +234,10 @@ class Workspace:
             updates["previous_state"] = None
             updates["human_input_pending"] = False
             updates["human_input_question"] = None
+            # A final rejection stands for a resume at the judge that made it.
+            # Skipped past, or restarted from another stage, the ticket owes it nothing.
+            if new_state != self.state.rejected_at:
+                updates["rejected_at"] = None
 
         # retry_at is meaningful only while in DEFERRED; clear on any other target
         if new_state != Stage.DEFERRED:

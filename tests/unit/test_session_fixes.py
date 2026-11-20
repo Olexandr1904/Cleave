@@ -45,7 +45,7 @@ class TestIterationCapEscalates:
         ws = MagicMock()
         ws.state = SimpleNamespace(
             ticket_id="T-1", company_id="acme", repo_id="app",
-            current_state=Stage.QA, previous_state=None,
+            current_state=Stage.QA, previous_state=None, rejected_at=None,
             stage_iterations={"qa": 2},  # At max
             error=None, branch="feature/t-1",
         )

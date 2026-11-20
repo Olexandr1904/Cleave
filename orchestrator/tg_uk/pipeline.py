@@ -74,6 +74,15 @@ TEXTS: dict[str, str] = {
         "запустити знову\n  Надіслати \"retry {ticket_id} from dev\" — перезапустити dev-агента з нуля",
     "Stage: {stage} — stuck after {iterations}/{cap} attempts":
         "Етап: {stage} — застряг після {iterations}/{cap} спроб",
+    "Stage: {stage} — rejected {iterations} of {cap} times":
+        "Етап: {stage} — відхилено {iterations} з {cap} разів",
+    "Nothing has changed since this verdict: the ticket stopped on it.\n\nOptions:\n  Reply with context — "
+    "{fix_stage} reworks it with your input, then it is checked again\n  Reply \"retry\" — the same, without "
+    "your input\n  Reply \"skip\" — accept the work as it is and go on to the next stage":
+        "Після цього вердикту нічого не змінювалося: тікет зупинився на ньому.\n\nЩо можна зробити:\n  "
+        "Відповідь із контекстом — {fix_stage} переробить роботу з вашими вказівками, потім її перевірять знову\n"
+        "  Відповідь \"retry\" — те саме, без ваших вказівок\n  Відповідь \"skip\" — прийняти роботу як є і "
+        "перейти до наступного етапу",
     "Stage: {stage}": "Етап: {stage}",
     "Options:\n  Reply \"skip\" — advance past this stage to the next one\n  Reply \"retry\" — re-run this stage\n  "
     "Send \"retry {ticket_id}\" to retry from this stage\n  Send \"retry {ticket_id} from dev\" to restart from an "

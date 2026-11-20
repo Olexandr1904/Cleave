@@ -135,6 +135,29 @@ class TestCallbackQueryRouting:
             handler.handle_callback.assert_called_once_with("approve", "T-1", "12345", 42)
             update.callback_query.answer.assert_called_once()
 
+    async def test_a_press_telegram_no_longer_takes_an_answer_for_is_still_acted_on(self, caplog):
+        """The operator pressed "Retry now" on a deferred ticket twice in half an hour and nothing happened.
+        Answering a press only stops the spinner on the button. Telegram refused the answer as too late, the
+        refusal was raised out of the handler, and the press was dropped before the command handler saw it."""
+        with patch("integrations.telegram.telegram_adapter.Bot"):
+            adapter = TelegramAdapter(bot_token="fake-token")
+            handler = AsyncMock()
+            handler.handle_callback = AsyncMock()
+            adapter.set_command_handler(handler)
+
+            update = MagicMock()
+            update.callback_query.data = "retry:ACME-1"
+            update.callback_query.message.chat.id = 12345
+            update.callback_query.message.message_id = 42
+            update.callback_query.answer = AsyncMock(side_effect=BadRequest(
+                "Query is too old and response timeout expired or query id is invalid"))
+
+            with caplog.at_level(logging.WARNING, logger="integrations.telegram.telegram_adapter"):
+                await adapter._handle_callback(update, None)
+
+            handler.handle_callback.assert_called_once_with("retry", "ACME-1", "12345", 42)
+            assert "Query is too old" in caplog.text
+
 
 class _UkrainianTranslator:
     """Translates every marked text by prefixing it; records what it was asked."""

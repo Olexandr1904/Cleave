@@ -9,6 +9,7 @@ from collections.abc import Awaitable
 from typing import Any
 
 from telegram import Bot, InlineKeyboardButton, InlineKeyboardMarkup, Update
+from telegram.error import TelegramError
 from telegram.ext import Application, CallbackQueryHandler, MessageHandler, TypeHandler, filters
 from telegram.request import HTTPXRequest
 
@@ -223,7 +224,12 @@ class TelegramAdapter(NotifierInterface):
         chat_id = str(query.message.chat.id)
         message_id = query.message.message_id
 
-        await query.answer()
+        # The answer only stops the spinner on the button. Telegram refuses one that comes late ("Query is too
+        # old"); the press itself still stands.
+        try:
+            await query.answer()
+        except TelegramError as e:
+            logger.warning("Button press %s not answered, acting on it: %s", query.data, e)
 
         if self._command_handler and hasattr(self._command_handler, "handle_callback"):
             try:

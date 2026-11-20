@@ -257,6 +257,34 @@ async def test_a_failed_gate_on_the_last_qa_attempt_is_what_the_operator_is_show
     assert "Status: PASS" not in message
 
 
+@pytest.mark.asyncio
+async def test_the_qa_agent_is_given_the_commands_the_orchestrator_measures_with(orchestrator_with_stubs, tmp_path):
+    from pathlib import Path
+
+    from orchestrator.workflow_router import load_workflow
+
+    orch = orchestrator_with_stubs
+    orch._workflow = load_workflow(str(Path(__file__).parent.parent.parent / "workflows" / "default-workflow.yaml"))
+    ws = _make_workspace(tmp_path, "ACME-24", state=Stage.QA)
+    (ws.reports_dir / "qa-agent-output.md").write_text("## Status: PASS")
+    orch._agent_runtime.execute = AsyncMock(return_value=AgentResult(
+        agent_id="qa-agent", success=True, output="## Status: PASS",
+    ))
+    repo_config = MagicMock()
+    repo_config.telegram.default_chat_id = "chat-1"
+    repo_config.testing.run_command = "./gradlew :app:testGlobalDebugUnitTest --init-script heap.gradle"
+    repo_config.testing.hard_gate = True
+    repo_config.linting.run_command = ""
+    repo_config.build.check_command = ""
+    orch._get_repo_config = MagicMock(return_value=repo_config)
+
+    with patch("orchestrator.pipeline.agent_stage.run_gates", return_value=[_gate("tests", 0)]):
+        await orch._handle_agent_stage(ws, "qa", orch._workflow.stages["qa"])
+
+    given = orch._agent_runtime.execute.await_args.kwargs["extra_context"]["quality_gates"]
+    assert given == "- tests (hard gate): `./gradlew :app:testGlobalDebugUnitTest --init-script heap.gradle`"
+
+
 def test_qa_falls_back_to_the_agents_verdict_when_no_gates_configured(tmp_path):
     ws = _make_workspace(tmp_path, "ACME-3")
     (ws.reports_dir / "qa.md").write_text("## Status: FAIL")

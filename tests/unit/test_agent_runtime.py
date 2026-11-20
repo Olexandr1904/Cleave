@@ -311,6 +311,17 @@ class TestAssemblePrompt:
         assert "both hold" not in exception  # the plan listing the file was the second condition
 
 
+    def test_the_qa_agent_reads_the_gate_commands_in_its_own_instructions(self, registry, mock_llm, workspace):
+        """It was told to run "`testing.run_command` from repo config": a config it is never shown."""
+        runtime = AgentRuntime(registry, mock_llm)
+        system, _ = runtime.assemble_prompt_parts(
+            registry.get_agent("qa-agent"), workspace, {"quality_gates": "- tests (hard gate): `make test`"},
+        )
+
+        assert "- tests (hard gate): `make test`" in system
+        assert "from repo config" not in system
+
+
 class TestExecute:
     async def test_successful_execution(self, registry, mock_llm, workspace):
         """AC3 (4.3): Response written to workspace context."""

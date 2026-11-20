@@ -60,21 +60,39 @@ class GateResult:
         return match.group(0).strip()[:300] if match else ""
 
 
+def _configured_gates(repo_config: Any) -> list[tuple[str, str, bool]]:
+    """(name, command, hard_gate) of each gate the repo configures, in the order they run."""
+    specs = (
+        ("tests", repo_config.testing.run_command, repo_config.testing.hard_gate),
+        ("lint", repo_config.linting.run_command, repo_config.linting.hard_gate),
+        ("build", repo_config.build.check_command, repo_config.build.hard_gate),
+    )
+    return [spec for spec in specs if spec[1].strip()]
+
+
+def describe_gates(repo_config: Any) -> str:
+    """The configured gate commands, word for word, as a list for an agent's prompt.
+
+    The QA agent was told to run "`testing.run_command` from repo config" and never shown the config. Its own
+    guess at the test command lacked the heap setting of the configured one and ran out of memory.
+    """
+    gates = _configured_gates(repo_config) if repo_config is not None else []
+    if not gates:
+        return ("None are configured for this repository: use the test, lint and build commands its own "
+                "documentation gives.")
+    return "\n".join(
+        f"- {name} ({'hard' if hard_gate else 'soft'} gate): `{command}`" for name, command, hard_gate in gates
+    )
+
+
 def run_gates(
     source_dir: Path,
     repo_config: Any,
     timeout: int = 3600,
 ) -> list[GateResult]:
     """Run every configured gate command in source_dir. Unconfigured gates are skipped."""
-    specs = (
-        ("tests", repo_config.testing.run_command, repo_config.testing.hard_gate),
-        ("lint", repo_config.linting.run_command, repo_config.linting.hard_gate),
-        ("build", repo_config.build.check_command, repo_config.build.hard_gate),
-    )
     results: list[GateResult] = []
-    for name, command, hard_gate in specs:
-        if not command.strip():
-            continue
+    for name, command, hard_gate in _configured_gates(repo_config):
         try:
             proc = subprocess.run(
                 command, shell=True, cwd=str(source_dir),

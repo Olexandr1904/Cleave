@@ -28,7 +28,7 @@ from orchestrator.escalation import handle_escalate
 from orchestrator.git_ops import git_diff_files_vs_base, git_head_sha
 from orchestrator.agent_failure_summarizer import summarize_agent_failure
 from orchestrator.fake_test_detector import detect_source_reading_tests
-from orchestrator.quality_gates import GateResult, failing_hard_gates, run_gates
+from orchestrator.quality_gates import GateResult, describe_gates, failing_hard_gates, run_gates
 from orchestrator.tg_i18n import tr
 from orchestrator.workflow_router import WorkflowDefinition, get_next_stage
 from workspace.workspace import Stage, Workspace
@@ -296,6 +296,7 @@ async def handle_agent_stage(
     result = await agent_runtime.execute(
         stage_def.agent, workspace, protected_files=protected,
         resume=resume, resumable=resumable,
+        extra_context={"quality_gates": describe_gates(repo_config)},
     )
     logger.info(
         "Stage exit: stage=%s ticket=%s agent=%s success=%s "

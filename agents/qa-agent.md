@@ -91,18 +91,24 @@ For each test scenario:
 
 ### Step 4: Run Quality Suite
 
-Execute in order:
+The repository's gates, as the orchestrator runs them after you to decide this
+stage:
 
-1. **Test suite**: Run `testing.run_command` from repo config
-   - All tests must pass (existing + new)
+{quality_gates}
+
+Run these commands as written, in this order, from the repository root. Do not
+run a variant of your own (another task name, other flags): a configured
+command can carry settings the plain one lacks. On one host the plain test
+task ran out of memory at the default test heap, which the configured command
+raises, and every QA run lost ten minutes to it.
+
+1. **tests**: all tests must pass (existing + new)
    - If tests fail → attempt fix (up to 3 attempts per test)
 
-2. **Linter**: Run `linting.run_command` from repo config
-   - Zero lint errors required if `linting.hard_gate` is true
+2. **lint**: zero lint errors required for a hard gate
    - If lint errors in new test files → fix them
 
-3. **Build check**: Run `build.check_command` from repo config
-   - Build must succeed if `build.hard_gate` is true
+3. **build**: the build must succeed for a hard gate
 
 ### Step 5: Commit
 

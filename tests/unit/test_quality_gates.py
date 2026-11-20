@@ -4,7 +4,7 @@ from pathlib import Path
 
 from config.schemas import BuildConfig, LintConfig, RepoConfig
 from config.schemas import TestConfig as GateTestConfig  # aliased: pytest tries to collect Test*
-from orchestrator.quality_gates import GateResult, failing_hard_gates, run_gates
+from orchestrator.quality_gates import GateResult, describe_gates, failing_hard_gates, run_gates
 
 
 def _config(test_cmd: str = "", lint_cmd: str = "", build_cmd: str = "") -> RepoConfig:
@@ -108,3 +108,25 @@ def test_a_command_the_shell_cannot_find_could_not_run(tmp_path: Path):
     [result] = run_gates(tmp_path, _config(test_cmd="cleave-no-such-command-for-this-test"))
     assert result.exit_code == 127
     assert result.could_not_run
+
+
+# --- the QA agent runs the gates' own commands ---
+# Its prompt said "Run `testing.run_command` from repo config", and the agent was never shown that config. It made
+# up a test command of its own, without the heap setting the configured one carries, and each QA run lost ten
+# minutes to an out-of-memory failure before the orchestrator measured the same branch green.
+
+def test_the_configured_commands_are_listed_for_the_agent_word_for_word():
+    cfg = _config(test_cmd="./gradlew :app:testGlobalDebugUnitTest --init-script heap.gradle",
+                  build_cmd="./gradlew :app:assembleGlobalDebug")
+    cfg.build.hard_gate = False
+
+    listing = describe_gates(cfg)
+
+    assert "- tests (hard gate): `./gradlew :app:testGlobalDebugUnitTest --init-script heap.gradle`" in listing
+    assert "- build (soft gate): `./gradlew :app:assembleGlobalDebug`" in listing
+    assert "lint" not in listing  # not configured, not listed
+
+
+def test_a_repo_without_gates_tells_the_agent_there_are_none():
+    assert describe_gates(_config()).startswith("None are configured")
+    assert describe_gates(None) == describe_gates(_config())

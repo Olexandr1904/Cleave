@@ -433,3 +433,51 @@ def test_set_reviewed_repos():
     orch = SimpleNamespace()
     Orchestrator.set_reviewed_repos(orch, frozenset({"test-co/test-repo"}))
     assert orch._reviewed_repos == frozenset({"test-co/test-repo"})
+
+
+async def test_a_push_the_remote_refused_is_escalated_with_the_remotes_reason(tmp_path):
+    """GitHub refused a push that changed a workflow file: the token had no `workflow` scope. The operator was
+    told "Pipeline stuck at pushed. Check pipeline logs for details." The refusal, which names the scope to
+    add, was on the ticket's state all along."""
+    from pathlib import Path
+
+    from orchestrator.pipeline.action_stage import handle_action_stage
+    from orchestrator.workflow_router import load_workflow
+    from workspace.workspace import Workspace, WorkspaceState
+
+    workflow = load_workflow(str(Path(__file__).parent.parent.parent / "workflows" / "default-workflow.yaml"))
+    root = tmp_path / "ACME-1"
+    for name in ("meta", "logs", "source"):
+        (root / name).mkdir(parents=True)
+    ws = Workspace(str(root), WorkspaceState(
+        ticket_id="ACME-1", company_id="acme", repo_id="app", workspace_root=str(root),
+        current_state=Stage.PUSHED,
+    ))
+    ws.save_state()
+    refusal = (
+        "Git command failed: git push -u origin feature/ACME-1\n"
+        " ! [remote rejected] feature/ACME-1 -> feature/ACME-1 (refusing to allow a Personal Access Token to "
+        "create or update workflow `.github/workflows/release.yml` without `workflow` scope)"
+    )
+    notifier = AsyncMock()
+    notifier.send_message = AsyncMock(return_value=7)
+
+    with patch("orchestrator.pipeline.action_stage.stage_verifier") as verifier:
+        verifier.capture_stage_start = MagicMock(return_value="abc123")
+        await handle_action_stage(
+            ws, "push", workflow.stages["push"],
+            workflow=workflow, notifier=notifier, mode_handler=None, get_chat_id=lambda: "1",
+            dry_run=False, event_bus=None,
+            action_push_and_open_pr=AsyncMock(return_value=ActionResult(
+                success=False, next_state="", error=refusal, metadata={},
+            )),
+            action_fetch_pr_comments=AsyncMock(), action_finalize=AsyncMock(),
+            advance_to_stage_fn=MagicMock(), on_ticket_done_fn=AsyncMock(),
+            build_gate_summary_fn=MagicMock(return_value=("", [])),
+        )
+
+    message = notifier.send_message.await_args.args[1]
+    assert "without `workflow` scope" in message or "without workflow scope" in message
+    assert "Check pipeline logs" not in message
+    assert (ws.state.current_state, ws.state.previous_state) == (Stage.BLOCKED, Stage.PUSHED)
+    assert "workflow" in ws.state.human_input_question

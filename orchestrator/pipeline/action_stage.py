@@ -7,7 +7,7 @@ from typing import Any, Awaitable, Callable
 from integrations.base.notifier import Button, NotifierInterface
 from orchestrator import stage_verifier, tg_format
 from orchestrator.approval_gate import should_approval_gate
-from orchestrator.escalation import handle_escalate
+from orchestrator.escalation import handle_escalate, truncate_reason
 from orchestrator.pipeline.agent_stage import _emit, _log_pipeline, rollback_iteration
 from orchestrator.tg_i18n import tr
 from orchestrator.workflow_router import WorkflowDefinition, get_next_stage
@@ -95,6 +95,8 @@ async def handle_action_stage(
                 workspace, notifier, get_chat_id() if notifier else "",
                 workflow=workflow,
                 event_bus=event_bus,
+                # No agent ran, so there is no agent's reply to show: the failure itself is the reason.
+                reason=truncate_reason(result.error) if result.error else None,
             )
         else:
             workspace.transition(Stage.FAILED)

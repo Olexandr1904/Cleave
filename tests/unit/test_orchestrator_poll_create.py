@@ -57,7 +57,7 @@ def _make_orchestrator(
     return orc
 
 
-async def _poll(orc):
+async def _poll(orc, on_polled=None):
     """Bridge — call the module function with deps from orc."""
     from orchestrator.ingest import poll_and_create_workspaces
     new_workspaces = await poll_and_create_workspaces(
@@ -72,6 +72,7 @@ async def _poll(orc):
         dry_run=orc._dry_run,
         event_bus=orc._events,
         create_workspace_fn=orc._create_workspace_for_ticket,
+        on_polled=on_polled,
     )
     orc._active_workspaces.extend(new_workspaces)
 
@@ -226,3 +227,33 @@ async def test_poll_dry_run_no_create(tmp_path: Path) -> None:
 
     tracker.poll_tickets.assert_awaited_once()
     orc._create_workspace_for_ticket.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_poll_reports_a_tracker_that_answered(tmp_path: Path) -> None:
+    """A poll the tracker answered, even with no tickets, is reported: /status counts from it."""
+    tracker = AsyncMock()
+    tracker.poll_tickets.return_value = []
+    orc = _make_orchestrator(
+        tracker=tracker, projects={"acme": _project("android", "android")}, workspaces_base=tmp_path,
+    )
+    on_polled = MagicMock()
+
+    await _poll(orc, on_polled=on_polled)
+
+    on_polled.assert_called_once_with()
+
+
+@pytest.mark.asyncio
+async def test_poll_does_not_report_a_tracker_that_failed(tmp_path: Path) -> None:
+    """A poll that raised is not a poll: /status keeps counting from the last one that worked."""
+    tracker = AsyncMock()
+    tracker.poll_tickets.side_effect = RuntimeError("503 from the tracker")
+    orc = _make_orchestrator(
+        tracker=tracker, projects={"acme": _project("android", "android")}, workspaces_base=tmp_path,
+    )
+    on_polled = MagicMock()
+
+    await _poll(orc, on_polled=on_polled)
+
+    on_polled.assert_not_called()

@@ -5,9 +5,10 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 import yaml
@@ -33,6 +34,7 @@ from orchestrator.skillflow.keeper import ComparisonKeeper
 from orchestrator.skillflow.replies import SkillOff, SkillReplies
 from orchestrator.skillflow.sides import Workspaces
 from orchestrator.skillflow.store import SkillStore
+from orchestrator.switches import Switches
 from tests.unit.test_main_startup import _MINIMAL_GLOBAL_YAML
 from workspace.workspace import Stage
 
@@ -460,6 +462,22 @@ def test_skill_off_with_old_anchors(main_rig):
 
 def test_no_skill_off_on_a_daemon_that_never_used_it(main_rig):
     assert main_rig.wired(both=[]).command_handler._skill is None
+
+
+# --- /status of the wired daemon ---
+
+def test_status_counts_from_the_last_tracker_poll_not_from_the_start(main_rig, tmp_path):
+    # Tickets on, as an earlier "/tickets on" left them: a first boot has them paused, and nothing is polled.
+    Switches(connect(tmp_path / "rv" / "reviewer.db")).set("tickets", "running")
+    wired = main_rig.wired(both=[])
+    handler = wired.command_handler
+    handler._last_poll_time -= 3600   # the daemon started an hour ago
+    assert "Last Jira poll: 1h 0m ago" in handler._summary_text([])
+    wired.orchestrator._trackers["acme"] = SimpleNamespace(poll_tickets=AsyncMock(return_value=[]))
+
+    asyncio.run(wired.orchestrator._poll_and_create_workspaces())
+
+    assert re.search(r"Last Jira poll: \ds ago", handler._summary_text([]))
 
 
 # --- the code-review fix wave ---

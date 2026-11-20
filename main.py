@@ -1066,6 +1066,7 @@ def main(argv: list[str] | None = None) -> int:
                 skill=skill_replies,
             )
             command_handler._wake_fn = lambda: orchestrator._wake_event.set()
+            orchestrator.set_poll_listener(command_handler.update_last_poll_time)
             notifier.set_command_handler(command_handler)
             print(
                 f"  Telegram CommandHandler wired (allowlist: {len(allowed_chat_ids)} chat id(s))"

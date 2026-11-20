@@ -154,10 +154,14 @@ async def poll_and_create_workspaces(
     event_bus: Any | None,
     create_workspace_fn: Any = None,
     is_repo_running: Callable[[str, str], bool] | None = None,
+    on_polled: Callable[[], None] | None = None,
 ) -> list[Workspace]:
     """Poll each project's tracker for new tickets and create workspaces.
 
     Returns the newly created workspaces (caller appends to active list).
+
+    `on_polled`: called each time a tracker answered a poll (not when the poll
+    raised, nor for a project that was not polled).
 
     `create_workspace_fn`: optional callable used to create a workspace for a
     routed ticket. Defaults to the module-level `create_workspace_for_ticket`.
@@ -195,6 +199,8 @@ async def poll_and_create_workspaces(
                 project_id, tracker_cfg.provider, e,
             )
             continue
+        if on_polled is not None:
+            on_polled()
 
         if not tickets:
             continue

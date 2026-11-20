@@ -252,6 +252,10 @@ class Orchestrator:
         """Attach the ComparisonStore that says which tickets are compared with the skill flow."""
         self._comparisons = comparisons
 
+    def set_poll_listener(self, on_polled: Callable[[], None]) -> None:
+        """Call `on_polled` each time a tracker answers a poll (/status counts "Last Jira poll" from it)."""
+        self._on_polled = on_polled
+
     def _is_compared(self, workspace: Workspace) -> bool:
         """True when the workspace's repo is on ticket_flow "both" and a comparison row exists for this
         workspace that is not closed. A store error propagates: the stage fails rather than open a non-draft
@@ -365,6 +369,7 @@ class Orchestrator:
             event_bus=getattr(self, "_events", None),
             create_workspace_fn=self._create_workspace,
             is_repo_running=self._tickets_running,
+            on_polled=getattr(self, "_on_polled", None),
         )
         self._active_workspaces.extend(new_workspaces)
 

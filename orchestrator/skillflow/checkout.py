@@ -1,7 +1,9 @@
-"""The skill checkout: the operator's long-lived clone of the target repo, in which the skill session makes one
-worktree per ticket, and every git call Cleave itself makes there and in its courier."""
+"""The skill checkout: the operator's long-lived clone of the target repo, of which every skill run gets a checkout
+of its own (a worktree) in which the skill session makes the ticket's worktree; and every git call Cleave itself
+makes there and in its courier."""
 from __future__ import annotations
 
+import asyncio
 import re
 import shutil
 from contextlib import suppress
@@ -91,9 +93,12 @@ def _reason(stderr: str) -> str:
 
 
 class SkillCheckout:
-    """The clone at `path`, made once by hand; Cleave moves it to origin/<base_branch> (detached) before each
-    ticket and never forces anything in it: a checkout, a push or a worktree removal git refuses is reported,
-    not overridden.
+    """The clone at `path`, made once by hand. Cleave fetches it before each run and never moves it: each run
+    works in a checkout of its own, a worktree of this one at origin/<base_branch> (detached), which shares its
+    objects, branches and config. Cleave never forces anything: a checkout, a push or a worktree removal git
+    refuses is reported, not overridden. The calls that change what every run shares (the fetch, the courier,
+    the push, a worktree made or removed) and the reads of the fetched branches take turns (one lock), as runs
+    of the repo work at once.
 
     The session can write the checkout's .git/config, and git runs the programs it names (hooks, drivers,
     ssh), so the forge token never meets that file. The fetch and the push run in the courier, a bare
@@ -108,10 +113,10 @@ class SkillCheckout:
         self._token = token
         self._timeout = timeout
         self._courier = self.path.parent / (self.path.name + ".courier.git")
+        self._lock = asyncio.Lock()
 
     async def prepare(self) -> str:
-        """Fetch every branch, move the checkout to origin/<base> detached, and return the base sha. Untracked
-        files (local.properties, say) stay; local changes the new base would overwrite stop it."""
+        """Fetch every branch and return origin/<base>'s sha. The checkout itself stays where it is."""
         if not (self.path / ".git").exists():
             raise CheckoutError(f"the skill checkout is missing at {self.path}: "
                                 "clone it by hand (deploy/README.md)")
@@ -119,36 +124,72 @@ class SkillCheckout:
         # shallow file.
         if (self.path / ".git" / "shallow").exists():
             raise CheckoutError("the skill checkout is a shallow clone: clone it in full (deploy/README.md)")
-        # Made anew: refs left from an earlier run can clash with the checkout's or name objects it no longer
-        # has, and would stop this fetch every time.
-        await self._courier_ready()
-        # The courier starts from the checkout's branches, so the fetch asks the forge only for what is new.
-        # Not its tags: those would travel back, and a tag deleted in the checkout would return.
-        await self._git("fetch", ["fetch", "--prune", "--no-tags", str(self.path), _ORIGIN_REFS], _Courier.LOCAL)
-        await self._git("fetch", ["fetch", "--prune", self._url, "+refs/heads/*:refs/remotes/origin/*"],
-                        _Courier.FORGE)
-        # A submodule's own fetch would run here without the token, and read that submodule's config.
-        await self._git("fetch", ["fetch", "--prune", "--no-recurse-submodules", str(self._courier), _ORIGIN_REFS],
-                        self.path)
-        try:
-            await self._git("checkout", ["-c", "advice.detachedHead=false", "checkout", "--detach",
-                                         f"refs/remotes/origin/{self.base_branch}"], self.path)
-        except CheckoutError as e:
-            raise CheckoutError(f"the skill checkout could not move to origin/{self.base_branch}: {e}") \
-                from None
-        return (await self._git("rev-parse", ["rev-parse", "HEAD"], self.path)).strip()
+        async with self._lock:
+            # Made anew: refs left from an earlier run can clash with the checkout's or name objects it no
+            # longer has, and would stop this fetch every time.
+            await self._courier_ready()
+            # The courier starts from the checkout's branches, so the fetch asks the forge only for what is new.
+            # Not its tags: those would travel back, and a tag deleted in the checkout would return.
+            await self._git("fetch", ["fetch", "--prune", "--no-tags", str(self.path), _ORIGIN_REFS],
+                            _Courier.LOCAL)
+            await self._git("fetch", ["fetch", "--prune", self._url, "+refs/heads/*:refs/remotes/origin/*"],
+                            _Courier.FORGE)
+            # A submodule's own fetch would run here without the token, and read that submodule's config.
+            await self._git("fetch", ["fetch", "--prune", "--no-recurse-submodules", str(self._courier),
+                                      _ORIGIN_REFS], self.path)
+            return (await self._git("rev-parse", ["rev-parse", f"refs/remotes/origin/{self.base_branch}"],
+                                    self.path)).strip()
+
+    async def make_run_checkout(self, dest: Path) -> None:
+        """Make dest the run's own checkout: a worktree of this checkout, detached at origin/<base>. One made
+        there before (a prepare Approve runs again) is moved to origin/<base>, never forced: untracked files
+        stay, local changes the new base would overwrite stop it. Anything else at dest stops it, untouched."""
+        dest = Path(dest).absolute()
+        base = f"refs/remotes/origin/{self.base_branch}"
+        async with self._lock:
+            if await self._has_worktree(dest):
+                try:
+                    await self._git("checkout", ["-c", "advice.detachedHead=false", "checkout", "--detach", base],
+                                    dest)
+                except CheckoutError as e:
+                    raise CheckoutError(f"the run's checkout could not move to origin/{self.base_branch}: {e}") \
+                        from None
+                return
+            try:
+                dest.parent.mkdir(parents=True, exist_ok=True)
+                await self._git("worktree add", ["worktree", "add", "--detach", str(dest), base], self.path)
+            except (CheckoutError, OSError) as e:
+                raise CheckoutError(f"the run's checkout could not be made at {dest}: {e}"[:_REASON_LIMIT]) \
+                    from None
 
     def missing_files(self, required: list[str]) -> list[str]:
         return [rel for rel in required if not (self.path / rel).exists()]
 
-    def write_ticket(self, source: Path, notes_rel: str) -> Path:
-        """Copy the ticket's files (source/*) into <path>/<notes_rel>/ticket and return that directory. An
+    def copy_files(self, root: Path, required: list[str]) -> None:
+        """Copy each of the required files from this checkout to the same place in the checkout at root,
+        replacing an earlier copy; never through a symlink there."""
+        for rel in required:
+            source = self.path / rel
+            if not source.is_file():
+                raise CheckoutError(f"required file {rel} in the skill checkout is not a file")
+            if (root / rel).is_symlink():
+                raise CheckoutError(f"{rel} in the run's checkout is a symlink: no file is copied through one")
+            dest = self._inside(root, rel)
+            try:
+                dest.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(source, dest)
+            except OSError as e:
+                raise CheckoutError(f"{rel} could not be copied to the run's checkout: {e}"[:_REASON_LIMIT]) \
+                    from None
+
+    def write_ticket(self, root: Path, source: Path, notes_rel: str) -> Path:
+        """Copy the ticket's files (source/*) into <root>/<notes_rel>/ticket and return that directory. An
         earlier copy there is removed first, so no stale file stays; the rest of the notes directory is the
         session's."""
-        dest = self._inside(notes_rel) / "ticket"
+        dest = self._inside(root, notes_rel) / "ticket"
         try:
             if dest.is_symlink():
-                raise CheckoutError(f"{notes_rel}/ticket in the skill checkout is a symlink: no ticket is "
+                raise CheckoutError(f"{notes_rel}/ticket in the run's checkout is a symlink: no ticket is "
                                     "written through one")
             if dest.exists():
                 shutil.rmtree(dest)
@@ -160,19 +201,23 @@ class SkillCheckout:
 
     async def branches_with(self, key: str) -> list[str]:
         """The fetched branches that hold the key as a whole key (carries_key), as open PRs are matched."""
-        out = await self._git("for-each-ref", ["for-each-ref", "--format=%(refname:lstrip=3)",
-                                               "refs/remotes/origin/"], self.path)
+        async with self._lock:
+            out = await self._git("for-each-ref", ["for-each-ref", "--format=%(refname:lstrip=3)",
+                                                   "refs/remotes/origin/"], self.path)
         return [name for name in out.splitlines() if name != "HEAD" and carries_key(name, key)]
 
     async def on_forge(self, branch: str) -> bool:
         """Whether the branch was on the forge at the last fetch: refs/remotes/origin/<branch> in the checkout."""
         ref = f"refs/remotes/origin/{branch}"
         # A pattern also matches the refs below it (origin/release matches origin/release/2.0): only the whole name.
-        out = await self._git("for-each-ref", ["for-each-ref", "--format=%(refname)", ref], self.path)
+        # Not read while another run's fetch moves the refs.
+        async with self._lock:
+            out = await self._git("for-each-ref", ["for-each-ref", "--format=%(refname)", ref], self.path)
         return ref in out.splitlines()
 
-    def worktree(self, rel: str) -> Path:
-        return self._inside(rel)
+    def worktree(self, root: Path, rel: str) -> Path:
+        """The ticket's worktree, rel inside the checkout at root (the run's own)."""
+        return self._inside(root, rel)
 
     async def has_change(self, worktree: Path) -> bool:
         """Whether the worktree exists and holds anything new: a change not committed, or a commit past the
@@ -227,30 +272,33 @@ class SkillCheckout:
             raise CheckoutError(f"the commit {sha} is not on {branch}") from None
         staged = f"refs/skill/{branch}"
         try:
-            # Made anew as well: a ref seeded at prepare time can dangle by now (the branch deleted on the forge,
-            # then a prune and a gc in the checkout), and would stop this push every time. So no staging ref is
-            # left from an earlier push either: a rewritten branch reaches the forge, to be refused there.
-            await self._courier_ready()
-            # The courier takes no signed push, so a push.gpgSign the checkout holds would stop this one; and the
-            # checkout's submodules are not the branch's to push.
-            await self._git("push", ["push", "--no-signed", "--recurse-submodules=no", str(self._courier),
-                                     f"{commit}:{staged}"], self.path)
-            try:
-                await self._git("push", ["push", self._url, f"{staged}:refs/heads/{branch}"], _Courier.FORGE)
-            finally:
-                # The staging ref is for this push only. Best effort: the push's own result or error is what
-                # counts.
-                with suppress(CheckoutError):
-                    await self._git("update-ref", ["update-ref", "-d", staged], _Courier.LOCAL)
+            async with self._lock:
+                # Made anew as well: a ref seeded at prepare time can dangle by now (the branch deleted on the
+                # forge, then a prune and a gc in the checkout), and would stop this push every time. So no staging
+                # ref is left from an earlier push either: a rewritten branch reaches the forge, to be refused
+                # there.
+                await self._courier_ready()
+                # The courier takes no signed push, so a push.gpgSign the checkout holds would stop this one; and
+                # the checkout's submodules are not the branch's to push.
+                await self._git("push", ["push", "--no-signed", "--recurse-submodules=no", str(self._courier),
+                                         f"{commit}:{staged}"], self.path)
+                try:
+                    await self._git("push", ["push", self._url, f"{staged}:refs/heads/{branch}"], _Courier.FORGE)
+                finally:
+                    # The staging ref is for this push only. Best effort: the push's own result or error is what
+                    # counts.
+                    with suppress(CheckoutError):
+                        await self._git("update-ref", ["update-ref", "-d", staged], _Courier.LOCAL)
         except CheckoutError as e:
             raise CheckoutError(f"push rejected: {e}") from None
 
     async def remove_worktree(self, worktree: Path) -> str:
-        """Remove the worktree: "" once removed or when none is registered there, else why not. A worktree git
-        refuses to remove (changes, untracked files) is left as it is."""
+        """Remove the worktree (the ticket's, or a run's checkout): "" once removed or when none is registered
+        there, else why not. A worktree git refuses to remove (changes, untracked files) is left as it is."""
         try:
-            if await self._has_worktree(worktree):
-                await self._git("worktree remove", ["worktree", "remove", str(worktree)], self.path)
+            async with self._lock:
+                if await self._has_worktree(worktree):
+                    await self._git("worktree remove", ["worktree", "remove", str(worktree)], self.path)
         except CheckoutError as e:
             return str(e)
         except (RuntimeError, OSError) as e:   # a symlink loop in the path
@@ -261,28 +309,34 @@ class SkillCheckout:
         """text with the token masked, so callers can clean output without holding the token."""
         return redact(text, [self._token])
 
-    def _inside(self, rel: str) -> Path:
-        """<path>/<rel>, which must lead inside the checkout: not absolute, not out through `..` or a
+    def _inside(self, root: Path, rel: str) -> Path:
+        """<root>/<rel>, which must lead inside the checkout at root: not absolute, not out through `..` or a
         symlink."""
         try:
-            target, root = (self.path / rel).resolve(), self.path.resolve()
+            target, resolved = (root / rel).resolve(), root.resolve()
         except (RuntimeError, OSError) as e:   # a symlink loop: RuntimeError up to Python 3.12, OSError after
-            raise CheckoutError(f"{rel!r} in the skill checkout cannot be resolved: {e}"[:_REASON_LIMIT]) \
+            raise CheckoutError(f"{rel!r} in the checkout at {root} cannot be resolved: {e}"[:_REASON_LIMIT]) \
                 from None
-        if target == root or not target.is_relative_to(root):
-            raise CheckoutError(f"{rel!r} is not inside the skill checkout at {self.path}")
-        return self.path / rel
+        if target == resolved or not target.is_relative_to(resolved):
+            raise CheckoutError(f"{rel!r} is not inside the checkout at {root}")
+        return root / rel
 
     async def _commits_ahead(self, worktree: Path) -> int:
         args = ["rev-list", "--count", f"refs/remotes/origin/{self.base_branch}..HEAD"]
         return int((await self._git("rev-list", args, worktree)).strip())
 
     async def _has_worktree(self, worktree: Path) -> bool:
+        """Whether a worktree is registered at the path. One whose directory is gone (removed by hand) is pruned
+        and reads as none: git would neither move nor remove it."""
+        target = Path(worktree).resolve()   # first: a symlink loop in the path raises, as it did before
+        if not target.exists():
+            await self._git("worktree prune", ["worktree", "prune"], self.path)
+            return False
         out = await self._git("worktree list", ["worktree", "list", "--porcelain"], self.path)
         # git lists real paths; worktree may reach the same directory through a symlink (/var vs /private/var).
         listed = {Path(line.removeprefix("worktree ")).resolve()
                   for line in out.splitlines() if line.startswith("worktree ")}
-        return Path(worktree).resolve() in listed
+        return target in listed
 
     async def _courier_ready(self) -> None:
         """Make the courier anew, pointing at the checkout's objects. Only a directory holding _COURIER_MARK, or

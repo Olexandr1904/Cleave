@@ -1,14 +1,16 @@
-"""The skill runner: takes the queued skill runs one at a time, from the checkout's prepare through the session's
-turns to how each turn ended, and sends every run's messages from its outbox. A change is committed by the session,
-checked, gated, pushed and opened as a draft PR (the steps in publish.py); a dropped or released run's worktree is
-removed. A run parks where the operator moves it on, is deferred over a usage limit or a failing login, and is
-interrupted by a restart. Every message it builds is in the language of the run's project (language_of)."""
+"""The skill runner: works the queued skill runs, up to max_parallel at once and each in a checkout of its own,
+from the checkout's prepare through the session's turns to how each turn ended, and sends every run's messages
+from its outbox. A change is committed by the session, checked, gated, pushed and opened as a draft PR (the steps
+in publish.py); a dropped or released run's worktree and checkout are removed. A run parks where the operator moves
+it on, is deferred over a usage limit or a failing login, and is interrupted by a restart. Every message it builds
+is in the language of the run's project (language_of)."""
 from __future__ import annotations
 
 import asyncio
 import logging
 import os
 from collections.abc import Callable, Mapping
+from contextlib import nullcontext
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -17,8 +19,10 @@ from uuid import uuid4
 
 from config.schemas import RepoConfig
 from orchestrator.reviewer.service import _where, utcnow
+from orchestrator.skillflow.build_slot import BuildSlotServer, build_tools, hook_command
 from orchestrator.skillflow.chat import SendError, SkillChat
 from orchestrator.skillflow.checkout import CheckoutError, SkillCheckout
+from orchestrator.skillflow.gates import gate_commands
 from orchestrator.skillflow.messages import (
     cleave_stop_message,
     deferred_line,
@@ -66,10 +70,12 @@ class SkillRepo:
 
 
 class SkillRunner(PublishSteps):
-    """Works one skill run at a time. A reply handler shares the store: the runner takes a run only with a claim,
-    saves it freely while it is running or in its gates (no reply takes it there), and saves it for the last time
-    when it moves it on; from then on a reply may have it. The build slot is held only while a turn or the gates
-    run."""
+    """Works up to max_parallel skill runs at once, each as a task of its own (a job). A reply handler shares the
+    store: the runner takes a run only with a claim, saves it freely while it is running or in its gates (no reply
+    takes it there), and saves it for the last time when it moves it on; from then on a reply may have it. The
+    build slot is held while the gates run and while a session's build runs (build_slot), or, where the sessions'
+    builds cannot take it, while a turn runs. What a job keeps about its run is the run object or is keyed by the
+    run's id: jobs share nothing else but the usage-limit or login wait."""
 
     def __init__(
         self,
@@ -89,6 +95,8 @@ class SkillRunner(PublishSteps):
         environ: Mapping[str, str] = os.environ,
         idle_seconds: float = 30.0,
         language_of: Callable[[str], str] = lambda scope: ENGLISH,
+        max_parallel: int = 3,
+        build_slot: BuildSlotServer | None = None,
     ) -> None:
         self._repos = {repo.scope: repo for repo in repos}
         self._store = store
@@ -105,12 +113,17 @@ class SkillRunner(PublishSteps):
         self._environ = environ
         self._idle = idle_seconds
         self._language_of = language_of  # (scope): the Telegram language of the run's project
+        self._max_parallel = max_parallel
+        self._build_slot = build_slot   # what serves `slot` to the sessions' builds, started and closed by main
         self._woken = asyncio.Event()
         # The end of the current usage-limit or login wait: no run starts before it.
         self._wait_until: datetime | None = None
-        # Whether the run of the current job was taken from deferred and has ended no turn ok since: the operator
-        # already knows of its wait.
-        self._from_deferred = False
+        # The runs whose job took them from deferred and that have ended no turn ok since: the operator already
+        # knows of their wait.
+        self._from_deferred: set[str] = set()
+        self._in_flight: dict[str, asyncio.Task] = {}   # run id -> the task of its job
+        # run id -> when a run whose job raised before it took the run may start again: not at once, in a loop.
+        self._held: dict[str, datetime] = {}
 
     def wake(self) -> None:
         self._woken.set()
@@ -123,25 +136,52 @@ class SkillRunner(PublishSteps):
             logger.warning("Skill runs not recovered: %s", _where(e))
 
     async def loop(self, stop: asyncio.Event) -> None:
-        """The outboxes, then the next run, until `stop`; with none to run, the dropped runs' worktrees, then it
-        waits for wake(), idle_seconds or `stop`. Never raises (cancellation aside)."""
-        while not stop.is_set():
-            self._woken.clear()  # before the read: a run queued from here on wakes the wait below
-            try:
-                await self.flush_outbox()
-                run = self.next_run()
-                if run is not None:
-                    await self.run_job(run)
-                    continue
-                await self.sweep_dropped()
-            except Exception as e:
-                logger.warning("Skill-run cycle failed: %s", _where(e))
-            await self._idle_wait(stop)
+        """The outboxes, then a job for each next run while fewer than max_parallel work, until `stop`; with none
+        started, the dropped runs' worktrees; then it waits for wake(), a job's end, idle_seconds or `stop`. Stopped,
+        it waits for the jobs in flight; cancelled, it cancels them first: no job outlives it. Never raises
+        (cancellation aside)."""
+        try:
+            while not stop.is_set():
+                self._woken.clear()  # before the read: a run queued from here on wakes the wait below
+                try:
+                    await self.flush_outbox()
+                    if not self._start_jobs():
+                        await self.sweep_dropped()
+                except Exception as e:
+                    logger.warning("Skill-run cycle failed: %s", _where(e))
+                await self._idle_wait(stop)
+            if self._in_flight:
+                await asyncio.wait(list(self._in_flight.values()))
+        finally:
+            jobs = list(self._in_flight.values())
+            for job in jobs:
+                job.cancel()
+            if jobs:
+                await asyncio.gather(*jobs, return_exceptions=True)
+
+    def _start_jobs(self) -> int:
+        """A job for next_run() while there is room; the number started."""
+        started = 0
+        while len(self._in_flight) < self._max_parallel and (run := self.next_run()) is not None:
+            self._in_flight[run.id] = asyncio.create_task(self._job_task(run))
+            started += 1
+        return started
+
+    async def _job_task(self, run: SkillRun) -> None:
+        try:
+            await self.run_job(run)
+        except Exception as e:  # run_job's own handling failed: logged here
+            logger.warning("Skill run %s (%s %s) failed: %s", run.id, run.scope, run.ticket_id, _where(e))
+            # A run still queued would be taken again as soon as this task ends, and fail the same way.
+            self._held[run.id] = self._now() + timedelta(seconds=self._idle)
+        finally:
+            self._in_flight.pop(run.id, None)
 
     async def _idle_wait(self, stop: asyncio.Event) -> None:
         waits = [asyncio.ensure_future(stop.wait()), asyncio.ensure_future(self._woken.wait())]
         try:
-            await asyncio.wait(waits, timeout=self._idle, return_when=asyncio.FIRST_COMPLETED)
+            await asyncio.wait([*waits, *self._in_flight.values()], timeout=self._idle,
+                               return_when=asyncio.FIRST_COMPLETED)
         finally:
             for wait in waits:
                 wait.cancel()
@@ -163,14 +203,18 @@ class SkillRunner(PublishSteps):
 
     def next_run(self) -> SkillRun | None:
         """The oldest run that is queued, or deferred and due, whose repo is configured, has tickets running and
-        its forge credential not failing; None while the claude login fails or a usage-limit or login wait is
-        on."""
+        its forge credential not failing, and that no job has yet; None while the claude login fails or a
+        usage-limit or login wait is on."""
         now = self._now()
         if self._credential_failing("claude_login"):
             return None
         if self._wait_until is not None and now < self._wait_until:
             return None
+        self._held = {run_id: until for run_id, until in self._held.items() if until > now}
         for run in self._store.in_states(("queued", "deferred")):
+            # Its job's claim comes once its task runs: until then it reads as queued.
+            if run.id in self._in_flight or run.id in self._held:
+                continue
             try:
                 if self._runnable(run, now):
                     return run
@@ -191,12 +235,13 @@ class SkillRunner(PublishSteps):
         unexpected fails it (cancellation aside: recover() interrupts it then)."""
         with telegram_language(self._language_of(run.scope)):
             repo = self._repos[run.scope]
-            # Only the runner moves a run into or out of deferred, so the state next_run read is the one it is taken
-            # from (or the claim finds it dropped).
-            self._from_deferred = run.state == "deferred"
             taken = self._store.claim(run.id, ("queued", "deferred"), self._stamp(), "running", reason="", retry_at="")
             if taken is None:  # a reply or a drop has it
                 return
+            # Only the runner moves a run into or out of deferred, so the state next_run read is the one it is taken
+            # from.
+            if run.state == "deferred":
+                self._from_deferred.add(run.id)
             self._emit(taken)
             try:
                 await self._job(repo, taken)
@@ -205,6 +250,8 @@ class SkillRunner(PublishSteps):
             except Exception as e:
                 logger.warning("Skill run %s (%s %s): %s", taken.id, taken.scope, taken.ticket_id, _where(e))
                 await self._fail(taken, f"internal error: {type(e).__name__}")
+            finally:
+                self._from_deferred.discard(run.id)
 
     async def _job(self, repo: SkillRepo, run: SkillRun) -> None:
         """The run from its phase on. Cleave's own stop parks here, inside run_job's try: a save that raises while
@@ -219,16 +266,22 @@ class SkillRunner(PublishSteps):
             await self._park(run, "stopped", str(e), lambda r: cleave_stop_message(r, detail), buttons=True)
 
     async def flush_outbox(self) -> None:
-        """Send every run's outbox in order, each entry dropped from the store once it is out; a failed send
-        leaves that run's rest for the next call. It has one caller at a time, the runner's own task (the loop and
-        the job it runs): two flushes at once would both send an entry before either dropped it."""
+        """Send the outbox of every run no job works, in order, each entry dropped from the store once it is out; a
+        failed send leaves that run's rest for the next call. A run's outbox has one sender at a time: this, the
+        loop's, for a run no job has, and the run's own job (_flush) for its run. Two at once would both send an
+        entry before either dropped it, and a job's next save would bring back what another sent."""
+        working = set(self._in_flight)   # before the read: a job started later starts after this flush
         for run in self._store.unsent_runs():
-            try:
-                # The buttons are built here, for whichever run's outbox this is: in that run's language.
-                with telegram_language(self._language_of(run.scope)):
-                    await self._send_outbox(run)
-            except Exception as e:  # an outbox of a wrong shape holds back only its own run
-                logger.warning("Skill run %s: outbox not sent: %s", run.id, type(e).__name__)
+            if run.id not in working:
+                await self._send_run(run)
+
+    async def _send_run(self, run: SkillRun) -> None:
+        try:
+            # The buttons are built here, for whichever run's outbox this is: in that run's language.
+            with telegram_language(self._language_of(run.scope)):
+                await self._send_outbox(run)
+        except Exception as e:  # an outbox of a wrong shape holds back only its own run
+            logger.warning("Skill run %s: outbox not sent: %s", run.id, type(e).__name__)
 
     async def _send_outbox(self, run: SkillRun) -> None:
         for entry in run.outbox:
@@ -247,9 +300,9 @@ class SkillRunner(PublishSteps):
             self._store.drop_sent(run.id, 1, self._stamp(), ask_message_ids=asked)
 
     async def sweep_dropped(self) -> None:
-        """Remove the worktree of each dropped run, and of each open PR the comparison released, not cleaned yet,
-        once; a worktree git refuses to remove is left as it is and the operator told. It runs in the runner's own
-        task, as all of Cleave's git in the checkout does; a run that cannot be handled holds back only itself."""
+        """Remove the worktree and then the checkout of each dropped run, and of each open PR the comparison
+        released, not cleaned yet, once; a worktree git refuses to remove is left as it is and the operator told.
+        No job works such a run; a run that cannot be handled holds back only itself."""
         for run in self._store.in_states(("dropped", "pr_open")):
             if run.cleaned or not (run.state == "dropped" or run.released):
                 continue
@@ -264,16 +317,38 @@ class SkillRunner(PublishSteps):
             if repo is None:  # its repo runs no skill flow on this daemon now
                 return
             changes: dict[str, Any] = {"cleaned": True}
-            # The worktree is the ticket's, not the run's: another run of the ticket that has not ended works in it.
-            if not any(other.id != run.id and other.state not in ENDED_STATES
-                       for other in self._store.runs_for_ticket(run.scope, run.ticket_id)):
-                worktree = self._worktree(repo, run)
-                if why := await repo.checkout.remove_worktree(worktree):
+            # A run never prepared made nothing; no other run works in a run's own checkout.
+            if run.checkout or (run.session_id and not self._shares_worktree(run)):
+                left = self._worktree(repo, run)
+                why = await repo.checkout.remove_worktree(left)
+                # The run's own checkout after the worktree inside it, never instead of it; an earlier version's
+                # run worked in the skill checkout itself, which stays.
+                if not why and run.checkout:
+                    left = Path(run.checkout)
+                    why = await repo.checkout.remove_worktree(left)
+                if why:
                     # The outbox as it is after the removal's await: an entry sent meanwhile must not come back.
                     outbox = self._store.run(run.id).outbox
-                    changes["outbox"] = [*outbox, {"text": worktree_left_line(run, worktree, why), "buttons": False}]
+                    changes["outbox"] = [*outbox, {"text": worktree_left_line(run, left, why), "buttons": False}]
             # A dropped run and a released open PR are final for the replies: this claim can take it from no one.
             self._store.claim(run.id, (run.state,), self._stamp(), run.state, **changes)
+
+    def _shares_worktree(self, run: SkillRun) -> bool:
+        """Whether another run of the ticket that an earlier version prepared, not ended, works in this run's
+        worktree: such runs all worked in the ticket's worktree in the skill checkout itself."""
+        return any(other.id != run.id and other.session_id and not other.checkout and other.state not in ENDED_STATES
+                   for other in self._store.runs_for_ticket(run.scope, run.ticket_id))
+
+    async def _free_ticket(self, run: SkillRun) -> None:
+        """Remove the worktree and checkout of the ticket's earlier runs that ended, not cleaned yet (never
+        forced): such a worktree keeps the ticket's branch checked out, and this run's skill could not check it out.
+        One that cannot be removed is left, with its line."""
+        for other in self._store.runs_for_ticket(run.scope, run.ticket_id):
+            if other.id != run.id and other.state in ENDED_STATES and not other.cleaned:
+                try:
+                    await self._clean(other)
+                except Exception as e:
+                    logger.warning("Skill run %s: worktree not cleaned: %s", other.id, type(e).__name__)
 
     async def _work(self, repo: SkillRepo, run: SkillRun) -> None:
         """The work phase: a run without a session is prepared; then a turn, and what its end means."""
@@ -290,16 +365,23 @@ class SkillRunner(PublishSteps):
         await self._read_turn(repo, run, outcome.text)
 
     async def _prepare(self, repo: SkillRepo, run: SkillRun) -> None:
-        """Move the checkout to the base, check it and the build's variables, copy the ticket in and read the host
-        facts; then give the run its session. A failure stops the run with none of it kept: Approve prepares
-        again."""
+        """Fetch, make the run's own checkout at the base, copy the required files and the ticket into it, check
+        the build's variables and read the host facts; then give the run its session. A failure stops the run with
+        none of it kept but its checkout: Approve prepares again, in the same checkout."""
         checkout, flow, key = repo.checkout, repo.cfg.skill_flow, run.ticket_id
+        own = self._runs_dir / run.id / "checkout"
+        # Kept before it is made: a run dropped from here on has it removed.
+        run.checkout = str(own)
+        self._save(run)
+        await self._free_ticket(run)
         try:
             await checkout.prepare()
+            await checkout.make_run_checkout(own)
             if missing := checkout.missing_files(flow.required_files):
                 raise Stop(f"required file missing in the skill checkout: {', '.join(missing)}")
+            checkout.copy_files(own, flow.required_files)
             self._env(repo)
-            checkout.write_ticket(self._runs_dir / run.id / "ticket", self._notes_rel(repo, run))
+            checkout.write_ticket(own, self._runs_dir / run.id / "ticket", self._notes_rel(repo, run))
         except CheckoutError as e:
             raise Stop(str(e)) from None
         # Cleave's own staged branch and its PR are not someone else's work on the ticket.
@@ -332,10 +414,14 @@ class SkillRunner(PublishSteps):
         return first_prompt(run, repo.cfg.skill_flow, facts)
 
     async def _turn(self, repo: SkillRepo, run: SkillRun, prompt: str, resume: bool) -> TurnOutcome:
-        """One session turn, in the slot, its usage added to the run; an ok or failed outcome. A usage limit or a
-        failing login defers the run (Deferred)."""
+        """One session turn, its usage added to the run; an ok or failed outcome. A usage limit or a failing
+        login defers the run (Deferred). The turn's builds take the slot themselves (build_slot); a turn whose
+        builds cannot (the slot not served, or no build tool known from the gate commands) holds it throughout."""
         env = self._env(repo)
-        async with self._slot:
+        tools = build_tools(gate_commands(repo.cfg).values())
+        served = self._build_slot is not None and self._build_slot.serving
+        hook = hook_command(self._build_slot.path, tools) if served and tools else ""
+        async with nullcontext() if hook else self._slot:
             # Saved once the slot is held, right before the CLI starts: whatever ends this turn other than ok (a
             # limit, a login, a failure, a restart), the session may hold it half-done, and the next turn must
             # continue it, not start it again. A restart while the run only waited for the slot cut no turn.
@@ -343,9 +429,10 @@ class SkillRunner(PublishSteps):
             run.turn_count += 1
             self._save(run)
             outcome = await run_turn(
-                self._llm, checkout_dir=repo.checkout.path, session_dir=self._runs_dir / run.id / "session",
-                prompt=prompt, session_id=run.session_id, resume=resume, model=run.model, cfg=repo.cfg.skill_flow,
-                secret_paths=self._secret_paths, env=env, turn=run.turn_count,
+                self._llm, checkout_dir=self._checkout_dir(repo, run),
+                session_dir=self._runs_dir / run.id / "session", prompt=prompt, session_id=run.session_id,
+                resume=resume, model=run.model, cfg=repo.cfg.skill_flow, secret_paths=self._secret_paths, env=env,
+                turn=run.turn_count, slot_hook=hook,
             )
         run.cost_usd += outcome.cost_usd
         run.turns += outcome.turns
@@ -357,7 +444,7 @@ class SkillRunner(PublishSteps):
             run.session_started, run.cut, run.deferrals = True, False, 0
             run.pending, run.approved = "", False
             # The wait the operator was told of is over: a new deferral in this job is a new one to tell.
-            self._from_deferred = False
+            self._from_deferred.discard(run.id)
         self._save(run)
         return outcome
 
@@ -373,11 +460,13 @@ class SkillRunner(PublishSteps):
         else:
             retry_at, reason = now + LOGIN_BACKOFF, "claude login failing"
         retry_at = retry_at.astimezone(timezone.utc)
-        self._wait_until = retry_at  # every run would meet the same limit or login
+        # Every run would meet the same limit or login; an earlier wait that ends later still holds.
+        if self._wait_until is None or self._wait_until < retry_at:
+            self._wait_until = retry_at
         run.deferrals += 1
         if run.deferrals >= MAX_DEFERRALS:
             raise Stop(_DEFERRED_TOO_OFTEN)
-        await self._park(run, "deferred", reason, None if self._from_deferred else deferred_line,
+        await self._park(run, "deferred", reason, None if run.id in self._from_deferred else deferred_line,
                          retry_at=retry_at.isoformat())
         raise Deferred
 
@@ -385,7 +474,7 @@ class SkillRunner(PublishSteps):
         """What the turn's end means: a question parks the run as waiting, the skill's stop as stopped; a result
         without a change ends it as no_change, one with a change goes on to the commit."""
         end = read_turn_end(text, run.ticket_id)
-        notes = repo.checkout.path / self._notes_rel(repo, run)
+        notes = self._checkout_dir(repo, run) / self._notes_rel(repo, run)
         if end.kind == "waiting":
             await self._park(run, "waiting", "", lambda r: waiting_message(r, text, notes), buttons=True)
             return
@@ -435,7 +524,9 @@ class SkillRunner(PublishSteps):
         await self._flush(run)
 
     async def _flush(self, run: SkillRun) -> None:
-        await self.flush_outbox()
+        """Send the job's own run's outbox, as stored (see flush_outbox)."""
+        if (stored := self._store.run(run.id)) is not None and stored.unsent:
+            await self._send_run(stored)
         # What went out is gone from the stored outbox: a later save of this object must not bring it back.
         if (stored := self._store.run(run.id)) is not None:
             run.outbox, run.unsent, run.ask_message_ids = stored.outbox, stored.unsent, stored.ask_message_ids
@@ -459,7 +550,13 @@ class SkillRunner(PublishSteps):
         return fill(repo.cfg.skill_flow.notes_dir, run.ticket_id)
 
     def _worktree(self, repo: SkillRepo, run: SkillRun) -> Path:
-        return repo.checkout.worktree(fill(repo.cfg.skill_flow.worktree_dir, run.ticket_id))
+        return repo.checkout.worktree(self._checkout_dir(repo, run), fill(repo.cfg.skill_flow.worktree_dir,
+                                                                          run.ticket_id))
+
+    def _checkout_dir(self, repo: SkillRepo, run: SkillRun) -> Path:
+        """Where the run's session works: its own checkout, or, for a run an earlier version prepared, the skill
+        checkout itself (--resume finds a session only from the directory it started in)."""
+        return Path(run.checkout) if run.checkout else repo.checkout.path
 
     def _emit(self, run: SkillRun) -> None:
         if self._event_bus is None:

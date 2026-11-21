@@ -113,3 +113,22 @@ async def test_a_missing_session_is_read_from_the_clis_own_error_text(tmp_path):
     error = CLIError("x", result_error="No conversation found with session ID: sid")
     out = await turn(FakeLLM([error]), tmp_path, resume=True)
     assert (out.kind, out.no_session) == ("failed", True)
+
+
+def test_settings_put_the_build_slot_hook_on_bash(tmp_path):
+    settings = skill_settings_json([], slot_hook="/py -I /cleave/build_slot.py hook /s.sock gradlew")
+    assert settings["hooks"] == {"PreToolUse": [{"matcher": "Bash", "hooks": [
+        {"type": "command", "command": "/py -I /cleave/build_slot.py hook /s.sock gradlew", "timeout": 10}]}]}
+    assert settings["permissions"]["deny"] == skill_settings_json([])["permissions"]["deny"]
+    assert "hooks" not in skill_settings_json([])
+
+
+async def test_a_turn_writes_the_hook_it_is_given(tmp_path):
+    llm = FakeLLM([Response("done"), Response("done")])
+    await run_turn(llm, checkout_dir=tmp_path / "checkout", session_dir=tmp_path / "session", prompt="p",
+                   session_id="sid", resume=False, model="m", cfg=SkillFlowConfig(), secret_paths=[], env={},
+                   turn=1, slot_hook="the hook")
+    settings = tmp_path / "session" / "settings.json"
+    assert json.loads(settings.read_text())["hooks"]["PreToolUse"][0]["hooks"][0]["command"] == "the hook"
+    await turn(llm, tmp_path, resume=True)                  # a turn without one
+    assert "hooks" not in json.loads(settings.read_text())

@@ -60,6 +60,9 @@ class SkillRun:
     tokens_out: int = 0
     turn_count: int = 0
     started_at: str = ""
+    # The run's own checkout (a worktree of the skill checkout), set by its first prepare. "" for a run an earlier
+    # version prepared: its session works in the skill checkout itself.
+    checkout: str = ""
     cleaned: bool = False           # a dropped or released run's worktree was removed, or the refusal reported
     # The comparison has its verdict: the worktree is no longer kept for it (the sweep removes it).
     released: bool = False

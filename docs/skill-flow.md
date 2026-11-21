@@ -71,31 +71,45 @@ skill_flow:
 | `ticket_flow` | `staged` | `staged`: only the staged flow. `both`: the skill flow too, and the comparison of the two. `both` works on GitHub repos only and needs a `skill_flow` section. |
 | `bug_skill`, `task_skill` | — | The skill names the session calls with the Skill tool. A letter or digit, then letters, digits, `_`, `:` or `-` (`plugin:skill` works). |
 | `bug_types` | `[Bug]` | The issue types that get `bug_skill`. A list. |
-| `notes_dir` | — | The skill's notes directory for a ticket, relative to the checkout. Must hold `{key}` (the ticket key) and no other placeholder, no `..`. Cleave writes the ticket's files to `<notes_dir>/ticket/` and reads the PR description from `<notes_dir>/PR_DESCRIPTION.md`. |
-| `worktree_dir` | — | The ticket's worktree, relative to the checkout, as the skill makes it. Same rules as `notes_dir`, and apart from it: the same directory as `notes_dir`, or one inside the other, is refused (in any case of letters), since the ticket's copy would land in the worktree and be published, or the worktree could not be made. |
-| `required_files` | `[]` | Files that must exist in the checkout before a run (a local build properties file, say). Relative, no `..`. |
+| `notes_dir` | — | The skill's notes directory for a ticket, relative to the run's checkout. Must hold `{key}` (the ticket key) and no other placeholder, no `..`. Cleave writes the ticket's files to `<notes_dir>/ticket/` and reads the PR description from `<notes_dir>/PR_DESCRIPTION.md`. |
+| `worktree_dir` | — | The ticket's worktree, relative to the run's checkout, as the skill makes it. Same rules as `notes_dir`, and apart from it: the same directory as `notes_dir`, or one inside the other, is refused (in any case of letters), since the ticket's copy would land in the worktree and be published, or the worktree could not be made. |
+| `required_files` | `[]` | Files that must exist in the skill checkout before a run (a local build properties file, say), each a file, not a directory. Cleave copies each to the same place in the run's checkout. Relative, no `..`. The session works in the run's checkout, not in the skill checkout: a file git does not track (a local properties file, a signing config, a services file) is there only when it is listed here, also when the skill copies it from "the checkout it runs in" into its worktree. |
 | `build_env` | `[]` | Environment variables the session and the gates get from the daemon. Each must be set when the daemon runs. A variable Cleave's config reads a secret from (any `${VAR}` in any string of the global, project or repo config, not only a string's first: `https://${GH_USER}:${GH_TOKEN}@…` names both), or one that makes `claude` bill an API key, is refused. |
 | `host_notes` | `""` | Free text added as one more host note to the session's first prompt. |
-| `gates` | `{}` | Cleave's gate commands: any of `test`, `lint`, `build`. Empty: the staged flow's `testing.run_command`, `linting.run_command` and `build.check_command`. |
+| `gates` | `{}` | Cleave's gate commands: any of `test`, `lint`, `build`. Empty: the staged flow's `testing.run_command`, `linting.run_command` and `build.check_command`. The programs they start are also what makes a session's command a build (see [the build slot](#the-build-slot)). |
 | `gate_rounds` | `2` | How many times a failing gate goes back to the session for a fix. `0`: none. |
 | `effort` | `""` | Passed to `claude --effort`. Empty: the CLI's default. |
 | `timeout_seconds` | `14400` | The wall-clock limit of one session turn. A turn over it stops the run (`session failed`). |
+
+In `global.yaml`, `defaults.max_parallel_skill_runs` (default `3`) is how many runs work at once, across every repo on `both`: a whole number of at least 1, else the daemon stops at start with an error that names the field. It is read at start, and only from `global.yaml`.
 
 The base branch is the repo's `vcs.default_branch`. The mode is the daemon's, read when a run is prepared for its first turn. In auto mode Cleave passes the skill its `unattended` argument; in manual mode it does not, and adds a note that the final message of each turn is relayed to you and your reply comes back. Whether the skill stops before code, and waits for your Approve, is the skill's own behaviour in that mode.
 
 ## How a run goes
 
-The runner takes one run at a time, the oldest first, for every repo on `both`. A queued run starts only when:
+The runner works up to `defaults.max_parallel_skill_runs` runs at once (three by default), for every repo on `both`, each in a checkout of its own. When there is room it takes the oldest run that may start, never one already being worked. A queued run starts only when:
 
 - tickets are running both globally and for the repo (`tickets pause` or `tickets pause app` holds the repo's runs; a run already working goes on until it parks);
 - the `claude` login and the repo's GitHub token are not failing their credential checks;
-- no usage-limit or login wait is on.
+- no usage-limit or login wait is on. A run that meets a limit or a failing login starts the wait; the runs already working go on, each to its own end.
 
-At start the runner waits for the first round of credential checks (two minutes at most). A session turn and a gate command hold the pipeline's build slot (`defaults.max_parallel_builds`, shared with the staged flow's dev and QA stages) while they run, and release it between turns. A session turn holds it for as long as the turn runs, up to `timeout_seconds`. Meanwhile a staged workspace that reaches a build stage waits for the slot, and because the staged loop waits for all its workspaces before its next poll cycle, the whole cycle stands still until the turn ends: no new tickets are taken, and no workspace of any repo goes on to its next step. With `max_parallel_builds: 1` (the default) that can last up to `timeout_seconds` (four hours by default), and the two flows of a ticket build one after the other, so a ticket on `both` takes up to twice as long. The two levers: `max_parallel_builds: 2`, so a staged build stage gets a slot of its own, or a lower `skill_flow.timeout_seconds`.
+At start the runner waits for the first round of credential checks (two minutes at most).
 
-**Prepare.** Cleave fetches every branch from GitHub, moves the checkout to `origin/<base>` (detached, never forced: local changes that the move would overwrite stop the run; other local changes and untracked files are carried along), checks `required_files` and `build_env`, writes the ticket's files to `<notes_dir>/ticket/` (an earlier copy there is replaced), and reads the host facts: the other branches and open PRs that carry the ticket key, with the staged flow's own branch left out. A branch name or PR title carries the key as a whole key, in any case: not right after a letter or digit and not followed by a digit, so `ACME-1` is in `feature/ACME-1-login`, `acme-1-fix` and `(ACME-1)`, but not in `XACME-1-login` or `ACME-10`.
+### The build slot
 
-**The session.** The first prompt names the skill and its arguments (`ACME-1`, or `ACME-1 unattended` in auto mode) and gives the host notes: where the ticket is, that `origin/<base>` is current, that the session has no network credentials, the assignee and status at intake, the other branches and PRs, and `host_notes`. In manual mode it also says that the final message of every turn goes to you and your reply comes back.
+The pipeline's build slot (`defaults.max_parallel_builds`, one by default) is shared with the staged flow's dev and QA stages: it is how many builds run on the host at once. In the skill flow it is held by Cleave's gate commands while they run, and by each build a session runs, while that build runs. A session turn itself holds none, so the runs' turns go on at once, and a staged stage waits only for a build, not for a whole turn.
+
+A build is a Bash command of the session (or of one of its subagents) that names a program one of the repo's gate commands starts, in any word of the command, by its file name: for `./gradlew test` that is `gradlew`, so `./gradlew :app:test`, `cd app && ../gradlew lint` and `timeout 600 ./gradlew build` are builds, and `cat build.gradle.kts` is not. In a gate command, a shell builtin (`cd`, `export`, …), a shell keyword (`if`, `then`, …) and what only runs the program after it (`env`, `nice`, `time`, `timeout`, `nohup`, a `NAME=value`, with their options) do not count. Cleave's settings file for the session has a `PreToolUse` hook that puts a wait for the slot in front of each such command; the command itself is left as it is, in the session's shell. The wait asks the daemon for the slot over a socket (`build-slot.sock`, see [Where things live](#where-things-live-on-the-host)); once the slot is free the command runs, and the slot is given back when the shell that runs the command ends (within half a second), killed or not. A build that has to wait has its output start with `Cleave: waiting for the host's build slot: another build is running.` When the daemon cannot be reached, the command runs without the slot, and its output says `Cleave: build slot not taken (…); the command runs without it.`
+
+The time a build waits for the slot counts against its Bash timeout (15 minutes by default in the session). A staged dev or QA stage holds the slot for the whole stage, so with `max_parallel_builds: 1` a session's build can wait as long as that stage runs: past its timeout, Claude Code moves the command to the background, where it may run 15 minutes more (the session's `BASH_DEFAULT_TIMEOUT_MS` again) before it is stopped. `max_parallel_builds: 2` gives each side a build at a time.
+
+A turn holds the slot for as long as it runs when the session's builds cannot take it themselves: when the daemon could not serve the socket at start (a warning in the log, `Build slot for skill sessions not served …`), or when the repo has no gate command (none in `skill_flow.gates` nor in the staged flow's) that starts a program. The two flows of a ticket then build one after the other, and a staged build stage waits for a whole turn, up to `timeout_seconds`; meanwhile the staged loop, which waits for all its workspaces before its next poll cycle, stands still.
+
+### Prepare, the session and a turn's end
+
+**Prepare.** Cleave fetches every branch from GitHub into the skill checkout, which itself stays where it is, and makes the run's own checkout: a worktree of the skill checkout, detached at `origin/<base>`, at `runs/<run id>/checkout`. It shares the skill checkout's objects, branches and git config, and it is the run's alone: no other run works in it. When the run is prepared again (Approve after a stop in its prepare), its checkout is moved to `origin/<base>` (never forced: local changes that the move would overwrite stop the run; other local changes and untracked files are carried along). Then Cleave checks that `required_files` are in the skill checkout and copies them to the run's checkout (an earlier copy is replaced), checks `build_env`, writes the ticket's files to `<notes_dir>/ticket/` in the run's checkout (an earlier copy there is replaced), and reads the host facts: the other branches and open PRs that carry the ticket key, with the staged flow's own branch left out. A branch name or PR title carries the key as a whole key, in any case: not right after a letter or digit and not followed by a digit, so `ACME-1` is in `feature/ACME-1-login`, `acme-1-fix` and `(ACME-1)`, but not in `XACME-1-login` or `ACME-10`.
+
+**The session.** It works in the run's checkout: `notes_dir` and `worktree_dir` are read there. The first prompt names the skill and its arguments (`ACME-1`, or `ACME-1 unattended` in auto mode) and gives the host notes: where the ticket is, that `origin/<base>` is current, that the session has no network credentials, the assignee and status at intake, the other branches and PRs, and `host_notes`. In manual mode it also says that the final message of every turn goes to you and your reply comes back.
 
 **A turn's end.** Cleave reads the first line of the session's final message:
 
@@ -127,10 +141,10 @@ A run moves through four steps: work, commit, gates, push. It parks in the step 
 
 - **The session asks** (`waiting`) or **the skill stops** (`stopped`).
 - **Cleave stops it** (`stopped`), with the reason in the message. The common reasons:
-  - the checkout is missing, is a shallow clone, could not be fetched, or could not move to `origin/<base>`;
+  - the skill checkout is missing, is a shallow clone or could not be fetched; the run's checkout could not be made (`the run's checkout could not be made at …`) or could not move to `origin/<base>` (`the run's checkout could not move to origin/<base>: …`);
   - the courier cannot be used (`the courier at … cannot be used: …`), or something Cleave did not make sits at its path (`Cleave did not make …: remove it by hand`);
-  - the ticket's files could not be written (`<notes_dir>/ticket in the skill checkout is a symlink: …`, `the ticket could not be written to …`);
-  - `required file missing in the skill checkout: …`;
+  - the ticket's files could not be written (`<notes_dir>/ticket in the run's checkout is a symlink: …`, `the ticket could not be written to …`);
+  - `required file missing in the skill checkout: …`, or a required file not copied (`required file … in the skill checkout is not a file`, `… in the run's checkout is a symlink: no file is copied through one`, `… could not be copied to the run's checkout: …`);
   - `build variable … is not set in the daemon's environment`;
   - `host facts not read: …`;
   - `session failed: …`, which includes a turn over `timeout_seconds`;
@@ -141,7 +155,7 @@ A run moves through four steps: work, commit, gates, push. It parks in the step 
   - `deferred 3 times (usage limit or claude login)`;
   - a git read in the worktree that failed (`worktree state not read: …`, `changed files not read: …`, `commit not read: …`).
 - **A restart** (`interrupted`). The next start parks every run that was `running` or in its `gates` and sends you Approve and Drop for it. On shutdown the daemon gives its tasks 5 s and then kills a session or gate still running.
-- **A usage limit or a failing `claude` login** (`deferred`): until the reset time the CLI gives (an hour when it gives none), or 15 minutes for the login. While the wait is on, no run starts. The third deferral in a row stops the run instead.
+- **A usage limit or a failing `claude` login** (`deferred`): until the reset time the CLI gives (an hour when it gives none), or 15 minutes for the login. While the wait is on, no run starts; a shorter wait another run meets meanwhile does not end it sooner. The third deferral in a row stops the run instead.
 
 After a turn that did not end normally (a limit, a failed login, a crash, a restart), what the session gets next depends on where it was cut:
 
@@ -172,7 +186,7 @@ Every message starts with the ticket and the skill, `ACME-1 · skill run (fix-th
 | The PR is open | `— draft PR opened: <url>`, the status line, `Gates: test ok, lint ok, build ok`; the same words when Cleave found an open PR of the branch and used it instead of opening one | none |
 | Deferred | `— deferred until 14:05 UTC (usage limit reached)`; not again when the run is deferred again straight after, before any of its turns ended normally | none |
 | Failed | `— failed: <reason>` | none |
-| A worktree Cleave could not remove | `— worktree left at <path>: <why>` | none |
+| A worktree or a run's checkout Cleave could not remove | `— worktree left at <path>: <why>` | none |
 
 A run parks whether or not Telegram answers. A message that cannot go out is sent again once Telegram is back, in order. A message in several parts goes on from the part that failed: the parts already out are not sent again, and Approve and Drop count on all of its parts.
 
@@ -207,7 +221,7 @@ Every reply and tap gets one answer, as a reply: what was done (`ACME-1 · Appro
 
 ## What Cleave checks before it publishes
 
-After a result with a change, Cleave asks the session to commit by the repo's convention and to write the PR description to `<notes_dir>/PR_DESCRIPTION.md` in the main checkout. Then:
+After a result with a change, Cleave asks the session to commit by the repo's convention and to write the PR description to `<notes_dir>/PR_DESCRIPTION.md` in the run's checkout. Then:
 
 1. **The commit check**, in the ticket's worktree:
    - the change is on a named branch, neither the base branch nor the staged flow's branch for the ticket;
@@ -217,7 +231,7 @@ After a result with a change, Cleave asks the session to commit by the repo's co
    - the PR description file is there, is not a symbolic link (one is refused: it could lead to any file the daemon can read, and the text is published) and is not empty.
 
    A problem stops the run in its commit step (`commit check failed: …`); Approve asks the session for the commit again.
-2. **Cleave's gates** on that commit: the `test`, `lint` and `build` commands, each through `/bin/sh -c` in the worktree, with the session's environment (no token), one hour each, judged by exit code. Then the check for tests that read source files as text instead of testing behaviour, on the files the branch changed.
+2. **Cleave's gates** on that commit: the `test`, `lint` and `build` commands, each through `/bin/sh -c` in the worktree, with the session's environment (no token), one hour each, in the build slot, judged by exit code. Then the check for tests that read source files as text instead of testing behaviour, on the files the branch changed.
 3. **A failing gate** goes back to the session with its command, exit code and the end of its output, at most `gate_rounds` times. The session fixes and commits; the commit check and the gates run again. After the last round the run stops with the failing output; Approve gives the gates their rounds again.
 4. **The commit that is pushed is the commit the gates passed.** Cleave records the head it read before the gates ran, and before the push runs the commit check again and compares the branch's head with it; a branch that moved since (by hand, between a stop and Approve, or by a commit made while the gates ran, a gate's own included) is gated again first. That takes the run back to its gates step: gates that fail there stop it in the gates step, and Approve gives them their rounds again. When the branch moved again each of the 2 times it was gated again, the run stops in its push step (`the branch kept moving: …`).
 5. **The push** sends that commit itself, the one the gates passed, to the branch of the same name on GitHub, not the branch by name: a commit made on the branch after the compare stays in the checkout. A commit that is not on the branch's history is refused before anything reaches GitHub (`push failed: the commit … is not on <branch>`). It never forces: a branch there with other history rejects it, and the run stops with git's reason. The base branch is never pushed.
@@ -248,7 +262,7 @@ A side is at rest when nothing more happens on it without you:
 
 A skill run that is `waiting`, `interrupted` or `deferred` is not at rest: it waits for you or goes on by itself.
 
-Cleave's comparison keeper looks at every open comparison every 30 seconds, and at once after a tap. It runs in its own task, so the build slot a skill turn holds does not hold it back, and it starts with the daemon, without waiting for the first credential round: it calls no `claude`.
+Cleave's comparison keeper looks at every open comparison every 30 seconds, and at once after a tap. It runs in its own task, so neither a skill run nor the build slot holds it back, and it starts with the daemon, without waiting for the first credential round: it calls no `claude`.
 
 ### The comparison message
 
@@ -295,7 +309,7 @@ The verdict runs in steps, in this order. Each step is recorded once it is done,
 3. **Comment.** When the loser's PR is still open, it gets the comment `Closed by Cleave: the comparison of the two flows chose the skill flow's PR #13.` A PR already closed gets none.
 4. **Close.** The loser's PR is closed, when it is still open. A side without a PR has nothing to close.
 5. **Tracker.** The writes the staged flow held, for the winner's PR: the move to In Review and the `PR opened: <url>` comment. They are made once: a failed write is a line in the closing message (`Tracker: move to In Review failed: TimeoutError`), never a stuck verdict, and it is never tried again. Make that write by hand. A project with no tracker gets the line `Tracker: none configured.`
-6. **Skill run.** When the skill side wins, its run stays `pr_open` and is released: its worktree is removed. A winning run that is not `pr_open` (one that failed after its PR was opened, say) is left as it is, worktree and all: `Skill run: failed; left as it is.` Otherwise the run ends as `dropped` (`comparison verdict: staged`) and its worktree is removed as a dropped run's. A run you set working again just before the verdict (`running`, `gates`) makes this step wait until the run parks: that wait is not a stuck verdict.
+6. **Skill run.** When the skill side wins, its run stays `pr_open` and is released: its worktree and then its checkout are removed. A winning run that is not `pr_open` (one that failed after its PR was opened, say) is left as it is, worktree, checkout and all: `Skill run: failed; left as it is.` Otherwise the run ends as `dropped` (`comparison verdict: staged`) and its worktree and checkout are removed as a dropped run's. A run you set working again just before the verdict (`running`, `gates`) makes this step wait until the run parks: that wait is not a stuck verdict.
 7. **Staged workspace.** It ends, whichever side wins: a workspace in PR review goes to `DONE`, one in `BLOCKED` or `FAILED` is archived (`BLOCKED` through `FAILED`), one already `DONE` or `ARCHIVED` stays as it is. The line is `Staged workspace: <state>`. A workspace that is gone is the line `Staged workspace: not found.` One that moved on (`DEFERRED`, or working again) is left as it is, never archived under you, and the line names the error's class (`Staged workspace: InvalidTransitionError`).
 
 The staged flow's own end of a ticket does not run: its `PR ready for merge` notice is never sent, and the verdict's closing message takes its place:
@@ -311,7 +325,7 @@ Staged workspace: DONE
 
 **Neither** makes no forge and no tracker write: both PRs stay open as drafts (`Both PRs stay drafts.`), the skill run is dropped and the staged workspace ends, as above.
 
-Removing a worktree at the verdict follows the rule for a dropped run's: never forced, only when no other run of the ticket that has not ended works there; when git refuses, the worktree stays and you get the `worktree left at` line. The staged workspace's directory is not removed. The age cleanup deletes only `ARCHIVED` workspaces, so one the verdict ended as `DONE` stays on disk until you archive it from the dashboard.
+Removing a worktree and a checkout at the verdict follows the rule for a dropped run's (see [Known limits](#known-limits)): never forced; when git refuses, it stays and you get the `worktree left at` line. The staged workspace's directory is not removed. The age cleanup deletes only `ARCHIVED` workspaces, so one the verdict ended as `DONE` stays on disk until you archive it from the dashboard.
 
 ### A stuck verdict and Retry
 
@@ -347,18 +361,24 @@ Everything is under the directory of `reviewer.db`: `~/CleaveData/reviewer/` by 
   reviewer.db                          the runs (table skill_runs), the comparisons (comparisons) and the
                                        Telegram messages of both (skill_anchors)
   skill/
-    repos/acme/app/                    the skill checkout, made by hand
-      ai_instructions/ACME-1/          notes_dir: ticket/, the skill's notes, REPORT.md, PR_DESCRIPTION.md
-      .claude/worktrees/ACME-1/        worktree_dir: the ticket's worktree, made by the skill
+    build-slot.sock                    where a session's builds ask the daemon for the build slot
+    repos/acme/app/                    the skill checkout, made by hand; fetched, never moved
     repos/acme/app.courier.git/        Cleave's courier
     runs/<run id>/
       ticket/                          the ticket's files as they were at intake
-      session/settings.json            the deny rules the session runs with
+      checkout/                        the run's own checkout: a worktree of the skill checkout
+        ai_instructions/ACME-1/        notes_dir: ticket/, the skill's notes, REPORT.md, PR_DESCRIPTION.md
+        .claude/worktrees/ACME-1/      worktree_dir: the ticket's worktree, made by the skill
+      session/settings.json            the deny rules and the build-slot hook the session runs with
       session/progress.log             every turn's progress lines
       session/stream-<n>.jsonl         the CLI's raw output of turn n
 ```
 
-The courier is a small bare repository of Cleave's own, next to the checkout. It borrows the checkout's objects and is made anew once per prepare and once per push. Both go through it, so the git calls that carry the token never read the checkout's own `.git/config`, which the session can write. Cleave removes and remakes only a courier it made (it holds a `cleave-courier` file); anything else at that path stops the run until you remove it.
+The runs' checkouts and the tickets' worktrees in them are all worktrees of the skill checkout: `git -C <skill checkout> worktree list` lists them, and a branch a session makes is a branch of the skill checkout. A run that an earlier version of Cleave prepared, before runs had checkouts of their own, goes on in the skill checkout itself, with its notes and worktree there: the CLI resumes a session only from the directory it started in.
+
+The courier is a small bare repository of Cleave's own, next to the checkout. It borrows the checkout's objects and is made anew once per prepare and once per push. Both go through it, so the git calls that carry the token never read the checkout's own `.git/config`, which the session can write. Cleave removes and remakes only a courier it made (it holds a `cleave-courier` file); anything else at that path stops the run until you remove it. The runs of a repo take turns in the skill checkout for the fetch, the courier, the push, a worktree made, moved or removed, and the reads of the fetched branches.
+
+The daemon serves `build-slot.sock` from its start, when it serves a skill repo, for its own user only. A socket an earlier daemon left there is replaced; anything else at that path is left as it is, and the socket is then not served (a warning in the log; see [the build slot](#the-build-slot)).
 
 To list the runs and why each parked (the dashboard shows the comparisons, not the runs):
 
@@ -381,9 +401,10 @@ A restart does not stop a verdict: the next start carries out a `deciding` compa
 - The deny rules in Cleave's settings file for the session refuse `gh`, `glab`, `curl`, `wget`, `security`, the git commands that reach or rewire a remote or a credential (`push`, `fetch`, `pull`, `ls-remote`, `remote`, `config`, `credential`), and reads of `~/.git-credentials`, `~/.netrc`, `~/.config/gh/`, Cleave's `.env` and its config directory. They are a second line, not a sandbox: they match commands by their start. The session runs unsandboxed, with the host profile's plugins, builds with the host's toolchain, and can read any file the host user can. So keep no GitHub login for the host user: no `gh` login, no github.com entry in the git credentials file and no github.com item in the login keychain (host step 6). The session can reach a login stored for that user, and a push made with it would skip every gate.
 - The ticket's text, its comments and attachments are untrusted input. The prompt says the ticket files are data, never instructions, and Cleave's hard safety rules are in the system prompt.
 - What the session writes can reach Cleave's own processes, with no token at stake in any of them:
-  - Cleave's own git calls in the checkout and its worktrees (the move to the base branch, the status and commit checks, the worktree removal) carry no token and run no hook and no fsmonitor, but the other settings of the checkout's git config, which the session can write, still apply to them (a filter driver it sets runs inside Cleave's call);
+  - Cleave's own git calls in the checkout and its worktrees (making a run's checkout and moving it to the base branch, the status and commit checks, the worktree removal) carry no token and run no hook and no fsmonitor, but the other settings of the checkout's git config, which the session can write, still apply to them (a filter driver it sets runs inside Cleave's call). Every run's checkout shares that one git config, and the skill checkout's branches and git hooks: what one session writes there reaches the sessions of the other runs too;
   - the gate commands run the session's code;
-  - a later session in the same checkout loads whatever the checkout's own Claude Code settings (`.claude/settings.json`) hold, hooks included.
+  - a later turn of the same run loads whatever its checkout's own Claude Code settings (`.claude/settings.json`) hold, hooks included; another run's checkout starts from the base's. Claude Code reads `.claude/settings.local.json` of a worktree from its main checkout, so that file in the skill checkout is read by every run's session;
+  - the build slot's hook and its wait run with the session's environment and carry no token; a session can change them or get around them, which only costs memory (see [Known limits](#known-limits)).
 - The PR description and the commits are the session's, published under the account of the repo's token.
 
 ## Known limits
@@ -395,7 +416,8 @@ A restart does not stop a verdict: the next start carries out a `deciding` compa
 - **`reviewed` on a compared ticket.** `reviewed ACME-1`, a tap on an old "Review Complete" button or a reply to an earlier escalation message of a compared ticket is still answered `Got it. Fetching PR comments now.`, but nothing is fetched: the reply is stored and takes effect only if the workspace goes back to the staged flow's own PR review (`both` turned off).
 - **A staged workspace taken up again while its verdict was stuck** (you re-ran it from the dashboard, say) stays running after the verdict, whose line reads `Staged workspace: InvalidTransitionError`. While the verdict is stuck it stays compared: its review comments are not answered and it offers no "Review Complete". Once the verdict closes, it goes back to the staged flow's own behaviour, as on a `staged` repo: a ready PR, its tracker writes and its PR review. The same holds for a workspace re-run after its verdict closed. Archive it from the dashboard if you do not want that.
 - **A `both` repo skipped at start while another repo is served.** Its open comparisons' staged workspaces stay parked as compared until the repo is served again; only a warning at start says so.
-- **Worktrees.** Only the worktree of a dropped run, or of the skill run a verdict chose (released), is removed, never forced, and only when no other run of the ticket that has not ended works there; when git refuses (changes, untracked files) it stays and you get a line. The worktree of a run that ends any other way stays in the checkout until you remove it (`git -C <checkout> worktree remove <path>`).
-- **A dropped or released run's local branch stays in the checkout.** Removing the worktree does not delete its branch.
+- **Worktrees and the runs' checkouts.** Only those of a dropped run, or of the skill run a verdict chose (released), are removed: the ticket's worktree first, then the run's checkout, each never forced. When git refuses (changes, untracked files) it stays and you get a line, and a checkout whose worktree stays stays too. A file in the run's checkout that the repo does not ignore keeps it: the notes directory and the copied `required_files`, unless the repo ignores them. Removing a checkout removes the notes in it, `REPORT.md` among them. A run dropped before its first prepare has nothing to remove. A failed run keeps both until the ticket's next run is prepared, which first removes them (never forced, with the same line when git refuses): its worktree keeps the ticket's branch checked out, and the next run's skill could not check it out. A run that ends any other way keeps both, until you remove them (`git -C <skill checkout> worktree remove <path>`, the worktree first). A run's checkout or worktree whose directory you deleted by hand is dropped from git's list of worktrees the next time Cleave makes or removes one at that path. Each run's checkout is a whole working tree of the repo, on disk until it is removed, and no free-space check holds a run back. A run an earlier version prepared has only its worktree removed: the skill checkout it worked in stays.
+- **A dropped or released run's local branch stays in the skill checkout.** Removing the worktree and the checkout does not delete its branch. A branch is checked out in at most one worktree: one that the skill checkout itself, or an older run's worktree that is still there, has checked out cannot be checked out in a run's worktree.
+- **The build slot is scheduling, not a guard.** A build that does not name a program of the gate commands (a system `gradle` while the gates say `./gradlew`, a git hook that builds, a script that calls the build tool), a command run another way than the Bash tool, or a session that edits the hook out, builds outside the slot: it costs only the host's memory. A command that names such a program for another reason (`cat gradlew`) waits for the slot all the same. The Gradle and Kotlin daemons a build starts outlive it and keep their memory after the slot is given back.
 - **Other open PRs.** The open PRs that carry the ticket key, listed in the host notes, are read from one page of 100 open PRs.
 - **Switched off.** When the daemon serves no repo (none on `both`, every `both` repo skipped at start, or a dry run) but Telegram is on, a reply to an old skill-run or comparison message, and a tap on one of their buttons, is answered `The skill flow is off on this daemon; nothing was done.` in the chat's language, and is never read as a command. This holds once the daemon's database has any skill-run or comparison message; a daemon that never sent one reads every reply as before.

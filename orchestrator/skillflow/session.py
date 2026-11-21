@@ -14,6 +14,7 @@ from integrations.llm.claude_code_adapter import BASH_TIMEOUT_DEFAULTS
 from orchestrator.agent_runtime import HARD_SAFETY_RULES
 from orchestrator.reviewer.commands import NO_HOST_GIT_ENV
 from orchestrator.reviewer.session import _outcome, _secret_rules
+from orchestrator.skillflow.build_slot import HOOK_TIMEOUT
 
 SKILL_TOOLS = ("Read", "Write", "Edit", "Glob", "Grep", "Bash", "Skill", "Agent", "TodoWrite")
 SKILL_MAX_TURNS = 1000            # the wall clock is the real limit
@@ -69,22 +70,28 @@ def skill_env(
     }
 
 
-def skill_settings_json(secret_paths: list[Path]) -> dict:
-    """Cleave's own settings file for the session: the DENY rules and a Read deny for each secret. No sandbox: the
-    session builds and needs the host's toolchain."""
-    return {"permissions": {"deny": [*DENY, *(f"Read({s})" for s in _secret_rules(secret_paths))]}}
+def skill_settings_json(secret_paths: list[Path], slot_hook: str = "") -> dict:
+    """Cleave's own settings file for the session: the DENY rules and a Read deny for each secret, and with
+    `slot_hook` (build_slot.hook_command) the PreToolUse hook that puts each Bash build in the build slot. No
+    sandbox: the session builds and needs the host's toolchain."""
+    settings: dict = {"permissions": {"deny": [*DENY, *(f"Read({s})" for s in _secret_rules(secret_paths))]}}
+    if slot_hook:
+        settings["hooks"] = {"PreToolUse": [{"matcher": "Bash", "hooks": [
+            {"type": "command", "command": slot_hook, "timeout": HOOK_TIMEOUT}]}]}
+    return settings
 
 
 async def run_turn(
     llm, *, checkout_dir: Path, session_dir: Path, prompt: str, session_id: str, resume: bool, model: str,
-    cfg: SkillFlowConfig, secret_paths: list[Path], env: dict[str, str], turn: int,
+    cfg: SkillFlowConfig, secret_paths: list[Path], env: dict[str, str], turn: int, slot_hook: str = "",
 ) -> TurnOutcome:
     """Run one turn of the skill session and classify how it ended; never raises for a failed run. A failed
     --resume fails the turn: a cold start would drop the session's work so far. --strict-mcp-config without
     --mcp-config: no MCP server configured on the host loads."""
     session_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
     settings = session_dir / "settings.json"
-    settings.write_text(json.dumps(skill_settings_json(secret_paths), indent=2) + "\n", encoding="utf-8")
+    settings.write_text(json.dumps(skill_settings_json(secret_paths, slot_hook), indent=2) + "\n",
+                        encoding="utf-8")
     try:
         response = await llm.execute_in_workspace(
             prompt=prompt,

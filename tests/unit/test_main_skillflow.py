@@ -16,6 +16,7 @@ import yaml
 import main
 import orchestrator.reviewer.db as db_module
 import orchestrator.skillflow.board as board_module
+import orchestrator.skillflow.build_slot as build_slot_module
 import orchestrator.skillflow.intake as intake_module
 import orchestrator.skillflow.keeper as keeper_module
 import orchestrator.skillflow.replies as replies_module
@@ -222,8 +223,9 @@ def _run_main(tmp_path, monkeypatch, *, flow: str = "both", telegram: bool = Tru
     ticket_flow and whose chat is 7 (in `language`, "": global.yaml's), and with the dashboard off. With
     `tokenless_web`, a second repo, web, on both but with no GitHub token. With `telegram`, a bot token and 42 as the
     global chat (no request is made). Returns what main built (the orchestrator, the runner, the keeper, the board,
-    the intake, the replies and the command handler as "handler"; each only when built) and the names it gave
-    _stop_background. A second call on the same tmp_path rewrites the config and keeps reviewer.db."""
+    the intake, the replies and the command handler as "handler"; each only when built; the build-slot server as
+    "slot", whose start listens nowhere) and the names it gave _stop_background. A second
+    call on the same tmp_path rewrites the config and keeps reviewer.db."""
     monkeypatch.setenv("ACME_GITHUB_TOKEN", "tok-app")
     cfg = tmp_path / "config-live"
     repos_dir = cfg / "projects" / "acme" / "repos"
@@ -271,6 +273,13 @@ def _run_main(tmp_path, monkeypatch, *, flow: str = "both", telegram: bool = Tru
     async def no_tickets(self):
         built["orchestrator"] = self
 
+    async def slot_start(self):
+        built["slot"] = self
+        return True
+
+    def slot_close(self):
+        built["slot_closed"] = True
+
     monkeypatch.setenv("GRADLE_USER_HOME", str(tmp_path / "gradle"))   # main caps build memory there
     monkeypatch.setattr(main, "_stop_background", stop_background)
     monkeypatch.setattr(runner_module, "SkillRunner", recorder("runner", FakeRunner))
@@ -284,6 +293,8 @@ def _run_main(tmp_path, monkeypatch, *, flow: str = "both", telegram: bool = Tru
     monkeypatch.setattr(TelegramAdapter, "set_command_handler", keep_handler)
     monkeypatch.setattr(CredentialHealth, "run", idle)
     monkeypatch.setattr(Orchestrator, "run", no_tickets)   # the daemon shuts down at once
+    monkeypatch.setattr(build_slot_module.BuildSlotServer, "start", slot_start)
+    monkeypatch.setattr(build_slot_module.BuildSlotServer, "close", slot_close)
     root = logging.getLogger()
     before = list(root.handlers)
     monkeypatch.setattr(root, "handlers", list(before))   # main adds its log file's handler
@@ -320,6 +331,12 @@ def test_main_wires_the_skill_flow(tmp_path, monkeypatch, capsys):
     assert kwargs["secret_paths"] == [Path(main.__file__).parent / ".env", cfg.absolute()]
     assert kwargs["event_bus"] is orch._events is not None
     assert kwargs["language_of"]("acme/app") == "uk"   # the project's telegram.language
+    assert kwargs["max_parallel"] == 3                  # defaults.max_parallel_skill_runs
+    # The sessions' builds take the pipeline's build slot over a socket next to the runs, served from the start
+    # (before the runner's loop) and closed at shutdown.
+    slot = built["slot"]
+    assert slot._slot is orch.build_slot and slot.path == tmp_path / "rv" / "skill" / "build-slot.sock"
+    assert kwargs["build_slot"] is slot and built["slot_closed"] is True
     # The comparisons: one store on the skill store's connection, on the orchestrator, the intake, the keeper, the
     # replies and the board.
     comparisons = orch._comparisons

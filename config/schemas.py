@@ -85,6 +85,9 @@ class DefaultsConfig:
     # Cap concurrent build stages independently of the max_parallel_tickets
     # fan-out (light stages like BA/scope-guard still run in parallel).
     max_parallel_builds: int = 1
+    # Skill-flow runs worked at once, across every repo on `both` (read from global.yaml only). Each has its own
+    # checkout and `claude` session; their builds still take the build slot above.
+    max_parallel_skill_runs: int = 3
     # Cap the JVM heap the build toolchain may request, written to
     # GRADLE_USER_HOME/gradle.properties at startup so it overrides each repo's
     # own (often oversized) org.gradle.jvmargs / kotlin.daemon.jvmargs.

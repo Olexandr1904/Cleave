@@ -37,7 +37,7 @@ def _gate_detail(failures: list[GateResult]) -> str:
 
 class PublishSteps:
     """The commit, gates and push steps of SkillRunner (a mixin): it uses the host's _turn, _save, _park, _emit,
-    _env, _worktree, _notes_rel, _slot, _from_deferred and _stamp."""
+    _env, _worktree, _checkout_dir, _notes_rel, _slot, _from_deferred and _stamp."""
 
     async def _publish(self, repo: SkillRepo, run: SkillRun) -> None:
         """The commit, gates and push steps, from run.phase on. A step that passes moves the run to the next and
@@ -62,7 +62,7 @@ class PublishSteps:
     async def _gates_again(self, repo: SkillRepo, run: SkillRun) -> None:
         """The gates step of a run taken up again. The tree is checked first: a fix turn that did not end ok, or a
         hand, may have changed it since. Approve gives gates that still failed their rounds again."""
-        if not self._from_deferred:
+        if run.id not in self._from_deferred:
             run.gate_round = 0
         await self._check_commit(repo, run, "")
 
@@ -197,7 +197,7 @@ class PublishSteps:
         return branch, ""
 
     def _description(self, repo: SkillRepo, run: SkillRun) -> str:
-        """The PR description the session wrote in the main checkout; "" when there is none. A symlink is never
+        """The PR description the session wrote in the run's checkout; "" when there is none. A symlink is never
         read: it can lead to any file the daemon can read, and the text is published."""
         path = self._description_path(repo, run)
         if path.is_symlink():
@@ -208,7 +208,7 @@ class PublishSteps:
             return ""
 
     def _description_path(self, repo: SkillRepo, run: SkillRun) -> Path:
-        return repo.checkout.path / self._notes_rel(repo, run) / DESCRIPTION_FILE
+        return self._checkout_dir(repo, run) / self._notes_rel(repo, run) / DESCRIPTION_FILE
 
     async def _head(self, repo: SkillRepo, run: SkillRun) -> str:
         try:

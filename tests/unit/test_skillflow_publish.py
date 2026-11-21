@@ -3,7 +3,9 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import shutil
 from datetime import timedelta
+from pathlib import Path
 
 import httpx
 import pytest
@@ -137,17 +139,54 @@ async def test_a_usage_limit_in_the_commit_turn_keeps_the_phase(tmp_path):
     run = await rig.go()
     assert run.state == "pr_open" and rig.llm.calls[2]["prompt"].startswith(CUT_PREFIX + "Cleave will now publish")
 
-async def test_a_dropped_runs_worktree_is_removed_once(tmp_path):
+def drop(rig, run, **changes):
+    """The run dropped once its prepare had given it its own checkout."""
+    return rig.store.claim(run.id, (run.state,), NOW, "dropped", checkout=str(rig.checkout_of(run)), **changes)
+
+async def test_a_dropped_runs_worktree_and_then_its_checkout_are_removed_once(tmp_path):
     rig = Rig(tmp_path)
-    run = rig.store.in_states(("queued",))[0]; rig.store.claim(run.id, ("queued",), NOW, "dropped")
+    run = drop(rig, rig.store.in_states(("queued",))[0])
     await rig.runner.sweep_dropped(); await rig.runner.sweep_dropped()
-    assert rig.checkout.calls.count(("remove_worktree", rig.worktree)) == 1 and rig.store.run(run.id).cleaned is True
+    removed = [c for c in rig.checkout.calls if isinstance(c, tuple) and c[0] == "remove_worktree"]
+    assert removed == [("remove_worktree", rig.worktree), ("remove_worktree", rig.run_checkout)]
+    assert rig.store.run(run.id).cleaned is True
 
 async def test_a_worktree_git_refuses_to_remove_is_reported(tmp_path):
     rig = Rig(tmp_path); rig.checkout.remove_answer = "contains modified or untracked files"
-    run = rig.store.in_states(("queued",))[0]; rig.store.claim(run.id, ("queued",), NOW, "dropped")
+    drop(rig, rig.store.in_states(("queued",))[0])
     await rig.runner.sweep_dropped(); await rig.runner.flush_outbox()
-    assert "worktree left at" in rig.notifier.sent[-1].text and "contains modified or untracked files" in rig.notifier.sent[-1].text
+    assert f"worktree left at {rig.worktree}: contains modified or untracked files" in rig.notifier.sent[-1].text
+    assert ("remove_worktree", rig.run_checkout) not in rig.checkout.calls      # the worktree is inside it
+
+async def test_a_run_checkout_git_refuses_to_remove_is_reported(tmp_path):
+    rig = Rig(tmp_path); rig.checkout.remove_answers[rig.run_checkout] = "contains modified or untracked files"
+    run = drop(rig, rig.store.in_states(("queued",))[0])
+    await rig.runner.sweep_dropped(); await rig.runner.flush_outbox()
+    assert f"worktree left at {rig.run_checkout}: contains modified or untracked files" in rig.notifier.sent[-1].text
+    assert rig.store.run(run.id).cleaned is True
+
+async def test_a_run_dropped_before_its_first_prepare_has_nothing_to_remove(tmp_path):
+    rig = Rig(tmp_path)
+    run = rig.store.in_states(("queued",))[0]; rig.store.claim(run.id, ("queued",), NOW, "dropped")
+    await rig.runner.sweep_dropped()
+    assert rig.checkout.calls == [] and rig.store.run(run.id).cleaned is True
+
+async def test_a_dropped_run_an_earlier_version_prepared_leaves_the_skill_checkout_itself(tmp_path):
+    rig = Rig(tmp_path)
+    run = rig.store.in_states(("queued",))[0]
+    rig.store.claim(run.id, ("queued",), NOW, "dropped", session_id="sid-1")
+    await rig.runner.sweep_dropped()
+    assert rig.checkout.calls == [("remove_worktree", rig.checkout.path / "worktrees" / "ACME-1")]
+
+async def test_a_dropped_run_an_earlier_version_prepared_leaves_the_worktree_another_such_run_works_in(tmp_path):
+    # Such runs all worked in the ticket's worktree in the skill checkout itself.
+    rig = Rig(tmp_path)
+    run = rig.store.in_states(("queued",))[0]
+    rig.store.claim(run.id, ("queued",), NOW, "dropped", session_id="sid-1")
+    later = rig.add_run("ACME-1", (T0 + timedelta(minutes=5)).isoformat())
+    rig.store.claim(later.id, ("queued",), NOW, "waiting", session_id="sid-2")
+    await rig.runner.sweep_dropped()
+    assert rig.checkout.calls == [] and rig.store.run(run.id).cleaned is True
 
 
 # --- the addendum's tests ---
@@ -223,12 +262,10 @@ async def test_the_sessions_answer_in_a_stop_is_relayed_cut(tmp_path):
 @pytest.mark.parametrize("damage", ["worktree", "row"])
 async def test_a_dropped_run_that_cannot_be_cleaned_holds_back_only_itself(tmp_path, caplog, damage):
     rig = Rig(tmp_path)
-    healthy = rig.store.in_states(("queued",))[0]
-    rig.store.claim(healthy.id, ("queued",), NOW, "dropped")
+    healthy = drop(rig, rig.store.in_states(("queued",))[0])
     earlier = (T0 - timedelta(hours=1)).isoformat()
     if damage == "worktree":
-        bad_id, error = rig.add_run("ACME-2", earlier).id, "CheckoutError"
-        rig.store.claim(bad_id, ("queued",), NOW, "dropped")
+        bad_id, error = drop(rig, rig.add_run("ACME-2", earlier)).id, "CheckoutError"
         rig.checkout.worktree_errors["worktrees/ACME-2"] = CheckoutError("'worktrees/ACME-2' is not inside the "
                                                                          "skill checkout")
     else:                                           # an outbox of the wrong shape, read to report a refusal
@@ -245,8 +282,7 @@ async def test_a_dropped_run_that_cannot_be_cleaned_holds_back_only_itself(tmp_p
 
 async def test_what_went_out_during_the_removal_does_not_come_back(tmp_path):
     rig = Rig(tmp_path); rig.checkout.remove_answer = "contains modified or untracked files"
-    run = rig.store.in_states(("queued",))[0]
-    rig.store.claim(run.id, ("queued",), NOW, "dropped", outbox=[{"text": "an older line", "buttons": False}])
+    run = drop(rig, rig.store.in_states(("queued",))[0], outbox=[{"text": "an older line", "buttons": False}])
     rig.checkout.on_remove = lambda: rig.store.drop_sent(run.id, 1, NOW)     # the older line went out meanwhile
     await rig.runner.sweep_dropped()
     got = rig.store.run(run.id)
@@ -319,6 +355,14 @@ async def test_the_gates_get_the_sessions_environment(tmp_path):
     assert run.state == "pr_open" and "JAVA_HOME=/jdk" in env and "GIT_AUTHOR_NAME=Cleave Bot" in env
     assert "GITHUB_TOKEN" not in env
 
+async def test_with_the_slot_served_the_gates_hold_it_and_the_turns_do_not(tmp_path, monkeypatch):
+    rig = ready(tmp_path, gates={"test": "ls"}, slot_socket=Path("/tmp/cleave-test/build-slot.sock"))
+    rig.spy_gates(monkeypatch)
+    rig.llm.on_call = lambda: rig.seen.append(rig.slot.locked())
+    run = await rig.go()
+    assert run.state == "pr_open" and rig.seen == [False, False] and rig.gate_seen == [(True, "gates")]
+    assert rig.checkout.under_slot == [] and not rig.slot.locked()
+
 async def test_only_the_turns_and_the_gates_hold_the_slot(tmp_path):
     rig = ready(tmp_path, texts=[FIXED, "Committed.", "Fixed."], gates={"test": "test -f fixed.flag"})
     rig.llm.after_call[2] = lambda: (rig.worktree / "fixed.flag").touch()
@@ -343,19 +387,21 @@ async def test_the_pr_body_is_the_description_cut(tmp_path):
 
 async def test_the_loop_cleans_dropped_runs_when_nothing_runs(tmp_path):
     rig = Rig(tmp_path)
-    run = rig.store.in_states(("queued",))[0]; rig.store.claim(run.id, ("queued",), NOW, "dropped")
+    run = drop(rig, rig.store.in_states(("queued",))[0])
     stop = asyncio.Event()
     task = asyncio.create_task(rig.runner.loop(stop))
     await _until(lambda: rig.store.run(run.id).cleaned)
     stop.set(); await asyncio.wait_for(task, 5)
     assert rig.store.run(run.id).cleaned is True and ("remove_worktree", rig.worktree) in rig.checkout.calls
 
-async def test_a_dropped_run_leaves_the_worktree_a_later_run_of_the_ticket_works_in(tmp_path):
+async def test_a_dropped_runs_checkout_goes_while_a_later_run_of_the_ticket_works_in_its_own(tmp_path):
     rig = Rig(tmp_path)
-    dropped = rig.store.in_states(("queued",))[0]; rig.store.claim(dropped.id, ("queued",), NOW, "dropped")
-    rig.add_run("ACME-1", (T0 + timedelta(minutes=5)).isoformat())     # queued: worktrees/ACME-1 is its now
+    dropped = drop(rig, rig.store.in_states(("queued",))[0])
+    later = rig.add_run("ACME-1", (T0 + timedelta(minutes=5)).isoformat())
     await rig.runner.sweep_dropped()
-    assert rig.store.run(dropped.id).cleaned is True and ("remove_worktree", rig.worktree) not in rig.checkout.calls
+    assert rig.store.run(dropped.id).cleaned is True and ("remove_worktree", rig.run_checkout) in rig.checkout.calls
+    assert not any(c[1].is_relative_to(rig.checkout_of(later))
+                   for c in rig.checkout.calls if isinstance(c, tuple) and c[0] == "remove_worktree")
 
 
 # --- review round 1 ---
@@ -381,6 +427,7 @@ def real_rig(tmp_path, texts, gates=None):
     checkout = SkillCheckout(tmp_path / "checkout", f"file://{bare}", "develop", "tok")
     (checkout.path / "local.properties").write_text("sdk.dir=/sdk\n")
     rig.runner._repos[SCOPE] = SkillRepo("acme", "app", rig.repo.cfg, checkout, rig.vcs)
+    shutil.rmtree(rig.run_checkout)                  # the real checkout makes the run's own
     return rig, checkout, bare
 
 async def test_a_change_made_after_its_pr_was_opened_is_pushed_to_it(tmp_path):
@@ -411,16 +458,17 @@ async def test_a_change_on_the_base_or_the_staged_branch_is_never_pushed(tmp_pat
 
 async def test_real_git_a_commit_on_the_base_branch_never_reaches_the_forge(tmp_path):
     rig, co, bare = real_rig(tmp_path, [FIXED, "Committed."], gates={"test": "true"})
-    wt = co.worktree("worktrees/ACME-1")
+    git("checkout", "--detach", cwd=co.path)            # a clone holds develop: no other worktree could take it
+    wt = rig.worktree
     before = git("rev-parse", "refs/heads/develop", cwd=bare)
 
     def work():                                          # the hand-made clone's own develop, taken by a worktree
-        git("worktree", "add", str(wt), "develop", cwd=co.path)
+        git("worktree", "add", str(wt), "develop", cwd=rig.run_checkout)
         (wt / "fix.txt").write_text("fix")
 
     def commit_it():
         git("add", ".", cwd=wt); commit(wt, "ACME-1: fix")
-        (co.path / "ai_instructions" / "ACME-1" / "PR_DESCRIPTION.md").write_text("d")
+        (rig.run_checkout / "ai_instructions" / "ACME-1" / "PR_DESCRIPTION.md").write_text("d")
 
     rig.llm.after_call[0], rig.llm.after_call[1] = work, commit_it
     run = await rig.go()
@@ -527,7 +575,7 @@ async def test_a_symlinked_description_stops_the_run_and_is_never_read(tmp_path)
     rig = ready(tmp_path)
     secret = tmp_path / ".env"                           # the rig's secret path, outside the notes directory
     secret.write_text(f"GITHUB_TOKEN={TOKEN}\n")
-    link = rig.checkout.path / "ai_instructions" / "ACME-1" / "PR_DESCRIPTION.md"
+    link = rig.run_checkout / "ai_instructions" / "ACME-1" / "PR_DESCRIPTION.md"
     link.unlink(); link.symlink_to(secret)
     run = await rig.go()
     assert (run.state, run.phase, run.reason) == ("stopped", "commit",
@@ -592,15 +640,15 @@ async def test_real_git_a_branch_already_on_the_forge_is_never_pushed(tmp_path):
     rig, co, bare = real_rig(tmp_path, [FIXED, "Committed."], gates={"test": "true"})
     git("push", "origin", "HEAD:refs/heads/release/2.0", cwd=tmp_path / "work")
     before = git("rev-parse", "refs/heads/release/2.0", cwd=bare)
-    wt = co.worktree("worktrees/ACME-1")
+    wt = rig.worktree
 
     def session_works():
-        git("worktree", "add", "-b", "release/2.0", str(wt), "origin/release/2.0", cwd=co.path)
+        git("worktree", "add", "-b", "release/2.0", str(wt), "origin/release/2.0", cwd=rig.run_checkout)
         (wt / "fix.txt").write_text("fix")
 
     def session_commits():
         git("add", ".", cwd=wt); commit(wt, "ACME-1: fix")
-        (co.path / "ai_instructions" / "ACME-1" / "PR_DESCRIPTION.md").write_text("d")
+        (rig.run_checkout / "ai_instructions" / "ACME-1" / "PR_DESCRIPTION.md").write_text("d")
 
     rig.llm.after_call[0], rig.llm.after_call[1] = session_works, session_commits
     run = await rig.go()
@@ -650,18 +698,44 @@ async def test_a_commit_made_while_the_gates_run_is_gated_before_it_is_pushed(tm
     before_push = rig.checkout.calls[:rig.checkout.calls.index(("push", "ACME-1-fix"))]
     assert before_push.count("changed_files") == 2
 
-async def test_real_git_a_gate_that_keeps_committing_stops_the_run(tmp_path):
-    assert publish_module.MAX_REGATES == 2
-    rig, co, bare = real_rig(tmp_path, [FIXED, "Committed."], gates={"test": "git commit -q --allow-empty -m gate"})
-    wt = co.worktree("worktrees/ACME-1")
+async def test_real_git_a_run_works_in_its_own_checkout_and_its_release_removes_it(tmp_path):
+    rig, co, bare = real_rig(tmp_path, [FIXED, "Committed."], gates={"test": "test -f ../../local.properties"})
+    wt = rig.worktree
 
     def session_works():
-        git("worktree", "add", "--no-track", "-b", "ACME-1-fix", str(wt), "origin/develop", cwd=co.path)
+        git("worktree", "add", "--no-track", "-b", "ACME-1-fix", str(wt), "origin/develop", cwd=rig.run_checkout)
         (wt / "fix.txt").write_text("fix")
 
     def session_commits():
         git("add", ".", cwd=wt); commit(wt, "ACME-1: fix")
-        (co.path / "ai_instructions" / "ACME-1" / "PR_DESCRIPTION.md").write_text("d")
+        (rig.run_checkout / "ai_instructions" / "ACME-1" / "PR_DESCRIPTION.md").write_text("d")
+
+    rig.llm.after_call[0], rig.llm.after_call[1] = session_works, session_commits
+    run = await rig.go()
+    assert run.state == "pr_open" and rig.llm.calls[0]["cwd"] == str(rig.run_checkout)
+    assert (rig.run_checkout / "local.properties").read_text() == "sdk.dir=/sdk\n"      # copied from the skill one
+    assert git("rev-parse", "refs/heads/ACME-1-fix", cwd=bare) == git("rev-parse", "HEAD", cwd=wt)
+    assert not (co.path / "ai_instructions").exists() and not (co.path / "worktrees").exists()
+    rig.store.claim(run.id, ("pr_open",), NOW, "pr_open", released=True)
+    # A file the repo does not ignore keeps the checkout (its removal is never forced); these it ignores.
+    (co.path / ".git" / "info" / "exclude").write_text("/local.properties\n/ai_instructions/\n/worktrees/\n")
+    await rig.runner.sweep_dropped()
+    assert not wt.exists() and not rig.run_checkout.exists() and rig.store.run(run.id).cleaned is True
+    assert git("rev-parse", "refs/heads/ACME-1-fix", cwd=co.path) == git("rev-parse", "refs/heads/ACME-1-fix",
+                                                                         cwd=bare)      # the branch stays
+
+async def test_real_git_a_gate_that_keeps_committing_stops_the_run(tmp_path):
+    assert publish_module.MAX_REGATES == 2
+    rig, co, bare = real_rig(tmp_path, [FIXED, "Committed."], gates={"test": "git commit -q --allow-empty -m gate"})
+    wt = rig.worktree
+
+    def session_works():
+        git("worktree", "add", "--no-track", "-b", "ACME-1-fix", str(wt), "origin/develop", cwd=rig.run_checkout)
+        (wt / "fix.txt").write_text("fix")
+
+    def session_commits():
+        git("add", ".", cwd=wt); commit(wt, "ACME-1: fix")
+        (rig.run_checkout / "ai_instructions" / "ACME-1" / "PR_DESCRIPTION.md").write_text("d")
 
     rig.llm.after_call[0], rig.llm.after_call[1] = session_works, session_commits
     run = await rig.go()
@@ -675,7 +749,7 @@ async def test_the_commit_and_fix_prompts_name_the_description_by_its_absolute_p
     rig = ready(tmp_path, texts=[FIXED, "Committed.", "Fixed."], gates={"test": "test -f fixed.flag"})
     rig.llm.after_call[2] = lambda: (rig.worktree / "fixed.flag").touch()
     run = await rig.go()
-    path = rig.checkout.path / "ai_instructions" / "ACME-1" / "PR_DESCRIPTION.md"
+    path = rig.run_checkout / "ai_instructions" / "ACME-1" / "PR_DESCRIPTION.md"
     assert run.state == "pr_open" and path.is_absolute()
     assert all(f"`{path}`" in call["prompt"] for call in rig.llm.calls[1:])
 
@@ -799,15 +873,16 @@ def run_in(rig, state, **changes):
     run = rig.store.in_states(("queued",))[0]
     return rig.store.claim(run.id, ("queued",), NOW, state, **changes)
 
-async def test_a_released_winner_loses_its_worktree(tmp_path):
+async def test_a_released_winner_loses_its_worktree_and_its_checkout(tmp_path):
     rig = Rig(tmp_path)
-    run = run_in(rig, "pr_open", released=True)
+    run = run_in(rig, "pr_open", released=True, checkout=str(rig.run_checkout))
     await rig.runner.sweep_dropped()
     assert ("remove_worktree", rig.worktree) in rig.checkout.calls and rig.store.run(run.id).cleaned is True
+    assert ("remove_worktree", rig.run_checkout) in rig.checkout.calls
     assert rig.store.run(run.id).state == "pr_open"
 
 async def test_an_unreleased_open_pr_keeps_its_worktree(tmp_path):
     rig = Rig(tmp_path)
-    run_in(rig, "pr_open")
+    run_in(rig, "pr_open", checkout=str(rig.run_checkout))
     await rig.runner.sweep_dropped()
     assert not any(c[0] == "remove_worktree" for c in rig.checkout.calls if isinstance(c, tuple))

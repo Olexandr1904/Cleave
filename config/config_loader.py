@@ -439,7 +439,7 @@ def _parse_defaults_section(data: dict, file_path: str) -> DefaultsConfig:
     }
 
     try:
-        return DefaultsConfig(
+        defaults = DefaultsConfig(
             **defaults_data,
             max_iterations=max_iterations,
             agent_budget=agent_budget,
@@ -447,6 +447,13 @@ def _parse_defaults_section(data: dict, file_path: str) -> DefaultsConfig:
         )
     except TypeError as e:
         raise ConfigError(f"Invalid fields in 'defaults': {e}", file_path=file_path, field="defaults") from e
+    cap = defaults.max_parallel_skill_runs
+    if isinstance(cap, bool) or not isinstance(cap, int) or cap < 1:
+        raise ConfigError(
+            f"'defaults.max_parallel_skill_runs' must be a whole number of at least 1, not {cap!r}",
+            file_path=file_path, field="defaults.max_parallel_skill_runs",
+        )
+    return defaults
 
 
 def _parse_vcs_section(data: dict, file_path: str) -> VCSConfig:

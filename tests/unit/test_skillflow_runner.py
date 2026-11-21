@@ -2,14 +2,17 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import sqlite3
 from datetime import timedelta
+from pathlib import Path
 
 import pytest
 
 from integrations.llm.claude_code_adapter import CLIError, QuotaExhaustedError
 from orchestrator.skillflow import runner as runner_module
+from orchestrator.skillflow.build_slot import hook_command
 from orchestrator.skillflow.checkout import CheckoutError
 from orchestrator.skillflow.messages import parked_buttons
 from orchestrator.skillflow.prompts import CONTINUE, CUT_PREFIX
@@ -32,7 +35,9 @@ async def test_unattended_result_without_a_change_ends_as_no_change(tmp_path):
     rig = Rig(tmp_path, texts=["ACME-1 | no app fix | tested: none | review: -, 0 findings | needs user: no"])
     run = await rig.go()
     assert (run.state, run.outcome, run.session_started) == ("no_change", "no app fix", True)
-    assert rig.checkout.calls[:3] == ["prepare", "missing_files", "write_ticket"]
+    own = rig.run_checkout
+    assert rig.checkout.calls[:5] == ["prepare", ("make_run_checkout", own), "missing_files", ("copy_files", own),
+                                      ("write_ticket", own)]
     call = rig.llm.calls[0]
     assert "Arguments: `ACME-1 unattended`" in call["prompt"] and call["resume"] is False
     assert call["session_id"] == run.session_id != ""
@@ -86,6 +91,8 @@ async def test_the_skills_stop_parks_the_run(tmp_path):
     (lambda r: setattr(r.checkout, "missing", ["local.properties"]), "required file missing in the skill checkout: local.properties"),
     (lambda r: r.repo.cfg.skill_flow.build_env.append("ANDROID_HOME"), "build variable ANDROID_HOME is not set"),
     (lambda r: setattr(r.vcs, "error", RuntimeError("boom")), "host facts not read: RuntimeError"),
+    (lambda r: setattr(r.checkout, "copy_error", CheckoutError("local.properties in the run's checkout is a "
+                                                               "symlink")), "local.properties in the run's checkout"),
 ])
 async def test_a_failed_prepare_stops_before_any_session(tmp_path, break_it, reason):
     rig = Rig(tmp_path); break_it(rig)
@@ -188,8 +195,8 @@ async def test_the_key_is_filled_in_without_format(tmp_path):
     rig.repo.cfg.skill_flow.worktree_dir = "worktrees/{key}-{0}"
     run = await rig.go()
     assert run.state == "no_change" and rig.checkout.ticket == "notes/ACME-1/{not-a-field}"
-    assert ("has_change", rig.checkout.path / "worktrees/ACME-1-{0}") in rig.checkout.calls
-    assert f"Notes: {rig.checkout.path / 'notes/ACME-1/{not-a-field}'}" in rig.notifier.sent[-1].text
+    assert ("has_change", rig.run_checkout / "worktrees/ACME-1-{0}") in rig.checkout.calls
+    assert f"Notes: {rig.run_checkout / 'notes/ACME-1/{not-a-field}'}" in rig.notifier.sent[-1].text
 
 async def test_a_reply_while_the_parked_message_goes_out_is_kept(tmp_path):
     rig = Rig(tmp_path, mode="manual", texts=["Plan. Reply ok."])
@@ -443,11 +450,11 @@ async def test_an_error_while_the_parked_message_goes_out_keeps_the_reply(tmp_pa
     rig = Rig(tmp_path, mode="manual", texts=["Plan. Reply ok."])
     run_id = rig.store.in_states(("queued",))[0].id
 
-    async def flush():
+    async def send(run):                                   # the job's flush of its own run
         rig.store.claim(run_id, ("waiting",), NOW, "queued", pending="the login screen")
         raise RuntimeError("boom")
 
-    rig.runner.flush_outbox = flush
+    rig.runner._send_run = send
     with caplog.at_level(logging.WARNING):
         run = await rig.go()
     assert (run.state, run.pending, run.unsent) == ("queued", "the login screen", 1)
@@ -546,7 +553,8 @@ async def test_approve_after_a_failed_prepare_prepares_again_and_starts_the_sess
     rig = Rig(tmp_path, texts=[RESULT])
     rig.vcs.error = RuntimeError("boom")
     run = await rig.go()
-    assert (run.state, run.session_id, rig.checkout.calls.count("write_ticket")) == ("stopped", "", 1)
+    assert (run.state, run.session_id, rig.checkout.calls.count(("write_ticket", rig.run_checkout))) == (
+        "stopped", "", 1)
     rig.vcs.error = None
     rig.store.claim(run.id, ("stopped",), NOW, "queued", approved=True)
     run = await rig.go()
@@ -665,3 +673,238 @@ async def test_a_message_recover_queued_goes_out_in_the_runs_language(tmp_path):
     sent = rig.notifier.sent[-1]
     assert "interrupted by a restart" not in sent.text and [b.label for b in sent.buttons] != ["Approve", "Drop"]
     assert set(asked) == {"acme/app"}
+
+
+# --- every run in a checkout of its own ---
+
+async def test_a_run_works_in_a_checkout_of_its_own(tmp_path):
+    rig = Rig(tmp_path, texts=[RESULT])
+    run = await rig.go()
+    assert run.checkout == str(rig.run_checkout) and rig.run_checkout.parent == rig.runs_dir / run.id
+    assert rig.llm.calls[0]["cwd"] == str(rig.run_checkout)
+    assert (rig.run_checkout / "ai_instructions" / "ACME-1" / "ticket" / "ticket.md").exists()
+    assert not (rig.checkout.path / "ai_instructions").exists()       # nothing of the run in the skill checkout
+    assert ("has_change", rig.worktree) in rig.checkout.calls
+
+async def test_two_runs_never_share_a_checkout(tmp_path):
+    rig = Rig(tmp_path, texts=[RESULT, RESULT])
+    other = rig.add_run("ACME-2", (T0 + timedelta(minutes=1)).isoformat())
+    first, second = await rig.go(), await rig.go()
+    assert second.id == other.id and {first.checkout, second.checkout} == {
+        str(rig.run_checkout), str(rig.checkout_of(other))}
+    assert [call["cwd"] for call in rig.llm.calls] == [first.checkout, second.checkout]
+
+async def test_a_run_an_earlier_version_prepared_goes_on_in_the_skill_checkout(tmp_path):
+    # Its session was started there: --resume finds it only from the same directory.
+    rig = Rig(tmp_path, texts=[RESULT])
+    [run] = rig.store.in_states(("queued",))
+    run.session_id, run.session_started = "sid-1", True; rig.store.save(run, NOW)
+    run = await rig.go()
+    assert run.checkout == "" and rig.llm.calls[0]["cwd"] == str(rig.checkout.path)
+    assert ("has_change", rig.checkout.path / "worktrees" / "ACME-1") in rig.checkout.calls
+    assert not any(isinstance(c, tuple) and c[0] == "make_run_checkout" for c in rig.checkout.calls)
+
+
+# --- runs worked at once ---
+
+async def test_the_loop_works_up_to_the_cap_of_runs_at_once_the_oldest_first(tmp_path):
+    rig = Rig(tmp_path, texts=[RESULT, *(f"ACME-{n} | no app fix | needs user: no" for n in (2, 3))],
+              max_parallel=2, builds=2)
+    second = rig.add_run("ACME-2", (T0 + timedelta(minutes=1)).isoformat())
+    third = rig.add_run("ACME-3", (T0 + timedelta(minutes=2)).isoformat())
+    rig.llm.holds = {0: asyncio.Event(), 1: asyncio.Event()}
+    stop = asyncio.Event()
+    task = asyncio.create_task(rig.runner.loop(stop))
+    await _until(lambda: rig.llm.active == 2)
+    await asyncio.sleep(0.05)                              # a few idle cycles: the third waits for room
+    assert len(rig.llm.calls) == 2 and rig.store.run(third.id).state == "queued"
+    assert {call["cwd"] for call in rig.llm.calls} == {str(rig.run_checkout), str(rig.checkout_of(second))}
+    rig.llm.holds[0].set()
+    await _until(lambda: rig.store.run(third.id).state == "no_change")
+    rig.llm.holds[1].set()
+    await _until(lambda: rig.store.run(second.id).state == "no_change")
+    stop.set(); await asyncio.wait_for(task, 5)
+    assert rig.llm.peak == 2 and [run.state for run in rig.store.in_states(("no_change",))] == ["no_change"] * 3
+
+async def test_a_run_in_flight_is_never_taken_again(tmp_path):
+    rig = Rig(tmp_path, texts=[RESULT], max_parallel=3, builds=3)
+    rig.llm.holds = {0: asyncio.Event()}
+    stop = asyncio.Event()
+    task = asyncio.create_task(rig.runner.loop(stop))
+    await _until(lambda: rig.llm.active == 1)
+    await asyncio.sleep(0.05)
+    assert len(rig.llm.calls) == 1 and rig.checkout.calls.count("prepare") == 1
+    rig.llm.holds[0].set()
+    stop.set(); await asyncio.wait_for(task, 5)
+
+async def test_a_limit_one_run_meets_starts_no_new_run_and_lets_the_others_finish(tmp_path):
+    rig = Rig(tmp_path, texts=[QuotaExhaustedError("limit", retry_at=IN_TWO_HOURS),
+                               "ACME-2 | no app fix | needs user: no"], max_parallel=2, builds=2)
+    second = rig.add_run("ACME-2", (T0 + timedelta(minutes=1)).isoformat())
+    third = rig.add_run("ACME-3", (T0 + timedelta(minutes=2)).isoformat())
+    rig.llm.holds = {1: asyncio.Event()}                   # the second run's turn goes on past the limit
+    [first] = rig.store.runs_for_ticket("acme/app", "ACME-1")
+    stop = asyncio.Event()
+    task = asyncio.create_task(rig.runner.loop(stop))
+    await _until(lambda: rig.store.run(first.id).state == "deferred")
+    await asyncio.sleep(0.05)                              # idle cycles with room for one more run
+    assert rig.store.run(third.id).state == "queued"
+    rig.llm.holds[1].set()
+    await _until(lambda: rig.store.run(second.id).state == "no_change")
+    await asyncio.sleep(0.05)
+    stop.set(); await asyncio.wait_for(task, 5)
+    assert rig.store.run(second.id).state == "no_change" and rig.store.run(third.id).state == "queued"
+
+async def test_whether_a_run_was_taken_from_deferred_is_its_own(tmp_path):
+    # The first run's wait was told; the second's is new and must be told, whichever job saw its limit last.
+    rig = Rig(tmp_path, texts=[QuotaExhaustedError("l", retry_at=IN_TWO_HOURS)] * 2, max_parallel=2, builds=2)
+    [first] = rig.store.in_states(("queued",))
+    first.state, first.retry_at = "deferred", (T0 - timedelta(minutes=1)).isoformat()
+    first.session_id, first.session_started, first.deferrals = "sid-1", True, 1
+    rig.store.save(first, NOW)
+    second = rig.add_run("ACME-2", (T0 + timedelta(minutes=1)).isoformat())
+    rig.llm.holds = {0: asyncio.Event()}                   # the first run's limit comes after the second job started
+    stop = asyncio.Event()
+    task = asyncio.create_task(rig.runner.loop(stop))
+    await _until(lambda: rig.store.run(second.id).state == "deferred")
+    rig.llm.holds[0].set()
+    await _until(lambda: rig.store.run(first.id).state == "deferred" and rig.store.run(first.id).unsent == 0)
+    stop.set(); await asyncio.wait_for(task, 5)
+    told = [m.text for m in rig.notifier.sent if "deferred until" in m.text]
+    assert len(told) == 1 and told[0].startswith("ACME-2")
+
+async def test_a_job_never_sends_what_another_working_runs_outbox_holds(tmp_path):
+    # The first run's note did not go out and its job goes on; the second run parks meanwhile, Telegram back.
+    rig = Rig(tmp_path, mode="manual", texts=["ACME-1 | fixed | needs user: yes\nCheck the copy.", "Committed.",
+                                              "Which screen?"], max_parallel=2, builds=2)
+    rig.checkout.changed, rig.checkout.states = True, [("ACME-1-fix", "")]; rig.write_description("d")
+    second = rig.add_run("ACME-2", (T0 + timedelta(minutes=1)).isoformat())
+    rig.llm.holds = {1: asyncio.Event(), 2: asyncio.Event()}    # the first run's commit turn, the second's turn
+    rig.notifier.fail = True
+    stop = asyncio.Event()
+    task = asyncio.create_task(rig.runner.loop(stop))
+    await _until(lambda: rig.llm.active == 2)
+    rig.notifier.fail = False                              # before the second run parks
+    rig.llm.holds[2].set()
+    await _until(lambda: rig.store.run(second.id).state == "waiting")
+    await asyncio.sleep(0.05)                              # the loop's own flushes skip the working run too
+    rig.llm.holds[1].set()
+    [first] = rig.store.runs_for_ticket("acme/app", "ACME-1")
+    await _until(lambda: rig.store.run(first.id).state == "pr_open" and rig.store.run(first.id).unsent == 0)
+    stop.set(); await asyncio.wait_for(task, 5)
+    notes = [m.text for m in rig.notifier.sent if "needs you" in m.text]
+    assert len(notes) == 1 and rig.store.run(first.id).state == "pr_open"
+
+async def test_a_restart_interrupts_every_run_that_was_working(tmp_path):
+    rig = Rig(tmp_path)
+    [first] = rig.store.in_states(("queued",))
+    second = rig.add_run("ACME-2", (T0 + timedelta(minutes=1)).isoformat())
+    rig.store.claim(first.id, ("queued",), NOW, "running")
+    rig.store.claim(second.id, ("queued",), NOW, "gates", phase="gates")
+    await rig.runner.start()
+    assert [rig.store.run(r.id).state for r in (first, second)] == ["interrupted", "interrupted"]
+
+async def test_the_loop_stopped_cancels_every_run_in_flight(tmp_path):
+    rig = Rig(tmp_path, texts=[RESULT, RESULT], max_parallel=2, builds=2)
+    rig.add_run("ACME-2", (T0 + timedelta(minutes=1)).isoformat())
+    rig.llm.holds = {0: asyncio.Event(), 1: asyncio.Event()}
+    task = asyncio.create_task(rig.runner.loop(asyncio.Event()))
+    await _until(lambda: rig.llm.active == 2)
+    task.cancel()                                          # the daemon's shutdown, past its grace
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    assert rig.llm.active == 0 and [run.state for run in rig.store.in_states(("running",))] == ["running"] * 2
+
+
+# --- the build slot: taken by the session's builds, not by its turns ---
+
+SLOT_SOCKET = Path("/tmp/cleave-test/build-slot.sock")
+GRADLE = {"test": "./gradlew test", "lint": "./gradlew detekt"}
+
+
+def _hook_of(call):
+    settings = Path(call["extra_args"][call["extra_args"].index("--settings") + 1])
+    hooks = json.loads(settings.read_text()).get("hooks", {}).get("PreToolUse", [])
+    return [hook["command"] for group in hooks for hook in group["hooks"]]
+
+async def test_with_the_slot_served_a_turn_holds_none_and_its_builds_take_it(tmp_path):
+    rig = Rig(tmp_path, texts=[RESULT], gates=GRADLE, slot_socket=SLOT_SOCKET)
+    rig.llm.on_call = lambda: rig.seen.append(rig.slot.locked())
+    run = await rig.go()
+    assert run.state == "no_change" and rig.seen == [False]
+    assert _hook_of(rig.llm.calls[0]) == [hook_command(SLOT_SOCKET, ["gradlew"])]
+
+@pytest.mark.parametrize("socket, serving, gates", [(None, False, GRADLE), (SLOT_SOCKET, False, GRADLE),
+                                                    (SLOT_SOCKET, True, {})])
+async def test_without_the_slot_served_or_a_build_tool_known_a_turn_holds_the_slot(tmp_path, socket, serving,
+                                                                                     gates):
+    rig = Rig(tmp_path, texts=[RESULT], gates=gates, slot_socket=socket)
+    if socket is not None:
+        rig.runner._build_slot.serving = serving              # its start failed, or it was closed
+    rig.llm.on_call = lambda: rig.seen.append(rig.slot.locked())
+    await rig.go()
+    assert rig.seen == [True] and _hook_of(rig.llm.calls[0]) == []
+
+async def test_with_the_slot_served_turns_of_runs_go_on_at_once_in_one_slot(tmp_path):
+    rig = Rig(tmp_path, texts=[RESULT, "ACME-2 | no app fix | needs user: no"], gates=GRADLE,
+              slot_socket=SLOT_SOCKET, max_parallel=2, builds=1)
+    second = rig.add_run("ACME-2", (T0 + timedelta(minutes=1)).isoformat())
+    rig.llm.holds = {0: asyncio.Event(), 1: asyncio.Event()}
+    stop = asyncio.Event()
+    task = asyncio.create_task(rig.runner.loop(stop))
+    await _until(lambda: rig.llm.active == 2)
+    assert rig.llm.active == 2
+    for hold in rig.llm.holds.values():
+        hold.set()
+    await _until(lambda: rig.store.run(second.id).state == "no_change")
+    stop.set(); await asyncio.wait_for(task, 5)
+    assert rig.llm.peak == 2 and not rig.slot.locked()
+
+
+# --- the review's tests ---
+
+async def test_a_shorter_wait_another_job_meets_later_never_cuts_the_limits_wait_short(tmp_path):
+    rig = Rig(tmp_path, texts=[QuotaExhaustedError("limit", retry_at=IN_TWO_HOURS), LOGIN], max_parallel=2, builds=2)
+    second = rig.add_run("ACME-2", (T0 + timedelta(minutes=1)).isoformat())
+    rig.llm.holds = {1: asyncio.Event()}                   # the second run's login fails after the first's limit
+    [first] = rig.store.runs_for_ticket("acme/app", "ACME-1")
+    stop = asyncio.Event()
+    task = asyncio.create_task(rig.runner.loop(stop))
+    await _until(lambda: rig.store.run(first.id).state == "deferred")
+    rig.llm.holds[1].set()
+    await _until(lambda: rig.store.run(second.id).state == "deferred")
+    stop.set(); await asyncio.wait_for(task, 5)
+    rig.clock.advance(minutes=15)                          # the login's backoff is over, the limit is not
+    assert rig.runner.next_run() is None
+    rig.clock.advance(hours=1, minutes=45)
+    assert rig.runner.next_run() is not None
+
+async def test_a_job_that_raises_before_it_takes_its_run_does_not_start_again_at_once(tmp_path, monkeypatch):
+    rig = Rig(tmp_path, idle_seconds=60)
+    [run] = rig.store.in_states(("queued",))
+    claims = []
+
+    def locked(*args, **kwargs):
+        claims.append(args)
+        raise sqlite3.OperationalError("database is locked")
+
+    monkeypatch.setattr(rig.store, "claim", locked)
+    stop = asyncio.Event()
+    task = asyncio.create_task(rig.runner.loop(stop))
+    await asyncio.sleep(0.1)
+    stop.set(); await asyncio.wait_for(task, 5)
+    assert len(claims) == 1 and rig.runner.next_run() is None
+    rig.clock.advance(seconds=60)                          # one idle wait on, it is tried again
+    assert rig.runner.next_run().id == run.id
+
+async def test_a_new_run_of_the_ticket_first_removes_an_ended_runs_worktree_and_checkout(tmp_path):
+    # The ended run's worktree keeps the ticket's branch checked out: the new run's skill could not check it out.
+    rig = Rig(tmp_path, texts=[RESULT])
+    [failed] = rig.store.in_states(("queued",))
+    rig.store.claim(failed.id, ("queued",), NOW, "failed", checkout=str(rig.run_checkout), session_id="sid-1")
+    again = rig.add_run("ACME-1", (T0 + timedelta(minutes=5)).isoformat())
+    run = await rig.go()
+    assert run.id == again.id and rig.store.run(failed.id).cleaned is True
+    removed = [c for c in rig.checkout.calls if isinstance(c, tuple) and c[0] == "remove_worktree"]
+    assert removed == [("remove_worktree", rig.worktree), ("remove_worktree", rig.run_checkout)]
+    assert rig.checkout.calls.index(removed[-1]) < rig.checkout.calls.index("prepare")

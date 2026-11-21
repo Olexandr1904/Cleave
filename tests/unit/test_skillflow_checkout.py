@@ -1,6 +1,6 @@
 # tests/unit/test_skillflow_checkout.py
 from __future__ import annotations
-import base64, shutil, subprocess
+import asyncio, base64, shutil, subprocess
 from pathlib import Path
 import pytest
 from integrations.base.ticket_key import carries_key
@@ -51,7 +51,7 @@ def repo(tmp_path):
     return bare, work, SkillCheckout(tmp_path / "checkout", f"file://{bare}", "develop", "tok")
 
 def add_worktree(co, key="ACME-1", branch="ACME-1-fix"):
-    wt = co.worktree(f".claude/worktrees/{key}")
+    wt = co.worktree(co.path, f".claude/worktrees/{key}")
     git("worktree", "add", "--no-track", "-b", branch, str(wt), "origin/develop", cwd=co.path)
     return wt
 
@@ -59,12 +59,130 @@ def tip(co, branch="ACME-1-fix"):
     """The branch's commit in the checkout: the commit the runner hands push, the one its gates passed."""
     return git("rev-parse", f"refs/heads/{branch}", cwd=co.path)
 
-async def test_prepare_moves_to_the_new_base_and_keeps_untracked_files(repo):
+async def test_prepare_fetches_and_leaves_the_skill_checkout_where_it_is(repo):
     bare, work, co = repo
-    (co.path / "local.properties").write_text("sdk.dir=/sdk")
+    before = git("rev-parse", "HEAD", cwd=co.path)
     sha = commit_and_push(work, "new.txt")
-    assert await co.prepare() == sha
-    assert (co.path / "new.txt").exists() and (co.path / "local.properties").exists()
+    assert await co.prepare() == sha == git("rev-parse", "refs/remotes/origin/develop", cwd=co.path)
+    assert git("rev-parse", "HEAD", cwd=co.path) == before and not (co.path / "new.txt").exists()
+
+async def test_a_run_checkout_is_a_worktree_of_its_own_at_the_base(repo, tmp_path):
+    bare, work, co = repo
+    (co.path / "local.properties").write_text("sdk.dir=/sdk")       # the operator's, not the run's
+    sha = commit_and_push(work, "new.txt")
+    await co.prepare()
+    run = tmp_path / "runs" / "r1" / "checkout"
+    await co.make_run_checkout(run)
+    assert git("rev-parse", "HEAD", cwd=run) == sha and git("branch", "--show-current", cwd=run) == ""
+    assert (run / "new.txt").exists() and not (run / "local.properties").exists()
+    assert not (co.path / "new.txt").exists()                       # the skill checkout itself does not move
+    assert git("rev-parse", "--git-common-dir", cwd=run) == str((co.path / ".git").resolve())
+
+async def test_a_run_checkout_made_again_moves_to_the_new_base_and_keeps_untracked_files(repo, tmp_path):
+    bare, work, co = repo
+    await co.prepare()
+    run = tmp_path / "runs" / "r1" / "checkout"
+    await co.make_run_checkout(run)
+    (run / "local.properties").write_text("sdk.dir=/sdk")
+    sha = commit_and_push(work, "new.txt")
+    await co.prepare()
+    await co.make_run_checkout(run)                                 # a prepare Approve runs again
+    assert git("rev-parse", "HEAD", cwd=run) == sha and (run / "local.properties").exists()
+
+async def test_a_run_checkout_refuses_to_overwrite_local_changes(repo, tmp_path):
+    bare, work, co = repo
+    await co.prepare()
+    run = tmp_path / "runs" / "r1" / "checkout"
+    await co.make_run_checkout(run)
+    (run / "docs" / "process.md").write_text("mine")
+    (work / "docs" / "process.md").write_text("theirs"); commit_and_push_all(work)
+    await co.prepare()
+    with pytest.raises(CheckoutError) as e:
+        await co.make_run_checkout(run)
+    reason = str(e.value)
+    assert reason.startswith("the run's checkout could not move to origin/develop: ")
+    assert "local changes" in reason and "docs/process.md" in reason
+    assert (run / "docs" / "process.md").read_text() == "mine"
+
+async def test_a_run_checkout_never_takes_a_path_that_is_not_its_own(repo, tmp_path):
+    _, _, co = repo
+    await co.prepare()
+    run = tmp_path / "runs" / "r1" / "checkout"
+    run.mkdir(parents=True); (run / "keep.txt").write_text("keep")
+    with pytest.raises(CheckoutError, match="the run's checkout could not be made"):
+        await co.make_run_checkout(run)
+    assert sorted(p.name for p in run.iterdir()) == ["keep.txt"]
+
+async def test_copy_files_brings_the_required_files_from_the_skill_checkout(repo, tmp_path):
+    _, _, co = repo
+    await co.prepare()
+    run = tmp_path / "runs" / "r1" / "checkout"
+    await co.make_run_checkout(run)
+    (co.path / "local.properties").write_text("sdk.dir=/sdk")
+    (co.path / "app" / "keys").mkdir(parents=True); (co.path / "app" / "keys" / "debug.json").write_text("{}")
+    co.copy_files(run, ["local.properties", "app/keys/debug.json"])
+    assert (run / "local.properties").read_text() == "sdk.dir=/sdk"
+    assert (run / "app" / "keys" / "debug.json").read_text() == "{}"
+    (co.path / "local.properties").write_text("sdk.dir=/new")
+    co.copy_files(run, ["local.properties"])                        # an earlier copy is replaced
+    assert (run / "local.properties").read_text() == "sdk.dir=/new"
+
+async def test_copy_files_never_writes_through_a_symlink_nor_copies_a_directory(repo, tmp_path):
+    _, _, co = repo
+    await co.prepare()
+    run = tmp_path / "runs" / "r1" / "checkout"
+    await co.make_run_checkout(run)
+    (co.path / "local.properties").write_text("sdk.dir=/sdk")
+    outside = tmp_path / "outside.txt"; outside.write_text("keep")
+    (run / "local.properties").symlink_to(outside)
+    with pytest.raises(CheckoutError, match="symlink"):
+        co.copy_files(run, ["local.properties"])
+    assert outside.read_text() == "keep"
+    (co.path / "keys").mkdir()
+    with pytest.raises(CheckoutError, match="not a file"):
+        co.copy_files(run, ["keys"])
+
+async def test_the_skills_worktree_in_a_run_checkout_is_checked_pushed_and_removed(repo, tmp_path):
+    # The skill makes its worktree inside the run's checkout, with git worktree add there: it is the skill
+    # checkout's worktree, like the run's checkout itself.
+    bare, _, co = repo
+    await co.prepare()
+    run = tmp_path / "runs" / "r1" / "checkout"
+    await co.make_run_checkout(run)
+    wt = co.worktree(run, ".claude/worktrees/ACME-1")
+    git("worktree", "add", "--no-track", "-b", "ACME-1-fix", str(wt), "origin/develop", cwd=run)
+    (wt / "fix.txt").write_text("fix"); git("add", ".", cwd=wt); commit(wt, "fix")
+    assert await co.has_change(wt) is True and await co.commit_state(wt) == ("ACME-1-fix", "")
+    await co.push("ACME-1-fix", tip(co))
+    assert git("rev-parse", "refs/heads/ACME-1-fix", cwd=bare) == git("rev-parse", "HEAD", cwd=wt)
+    assert await co.remove_worktree(wt) == "" and not wt.exists()
+    assert await co.remove_worktree(run) == "" and not run.exists()
+    assert git("rev-parse", "refs/heads/ACME-1-fix", cwd=co.path) == git("rev-parse", "refs/heads/ACME-1-fix",
+                                                                         cwd=bare)   # the branch stays
+
+async def test_a_run_checkout_holding_an_untracked_file_is_never_removed(repo, tmp_path):
+    _, _, co = repo
+    await co.prepare()
+    run = tmp_path / "runs" / "r1" / "checkout"
+    await co.make_run_checkout(run)
+    (run / "REPORT.md").write_text("the session's")
+    assert "untracked" in await co.remove_worktree(run) and (run / "REPORT.md").exists()
+
+async def test_runs_that_prepare_and_push_at_once_take_turns_in_the_skill_checkout(repo, tmp_path):
+    # The fetch, the courier and the worktree list are the skill checkout's, shared by every run of the repo.
+    bare, work, co = repo
+    await co.prepare()
+    wt = add_worktree(co); (wt / "fix.txt").write_text("fix"); git("add", ".", cwd=wt); commit(wt, "fix")
+    commit_and_push(work, "new.txt")
+    runs = [tmp_path / "runs" / f"r{i}" / "checkout" for i in range(3)]
+
+    async def prepare(run):
+        await co.prepare()
+        await co.make_run_checkout(run)
+
+    await asyncio.gather(*(prepare(run) for run in runs), co.push("ACME-1-fix", tip(co)))
+    assert all((run / "new.txt").exists() for run in runs)
+    assert git("rev-parse", "refs/heads/ACME-1-fix", cwd=bare) == tip(co)
 
 async def test_prepare_fetches_other_branches(repo):
     bare, work, co = repo
@@ -106,40 +224,22 @@ async def test_prepare_without_a_checkout_says_where(tmp_path):
     with pytest.raises(CheckoutError, match="clone it by hand"):
         await SkillCheckout(tmp_path / "none", "file:///x", "develop", "tok").prepare()
 
-async def test_prepare_refuses_to_overwrite_local_changes(repo):
-    bare, work, co = repo
-    (co.path / "docs" / "process.md").write_text("mine")
-    (work / "docs" / "process.md").write_text("theirs"); commit_and_push_all(work)
-    with pytest.raises(CheckoutError, match="local changes"):
-        await co.prepare()
-    assert (co.path / "docs" / "process.md").read_text() == "mine"
-
-async def test_local_changes_error_names_the_file(repo):
-    bare, work, co = repo
-    (co.path / "docs" / "process.md").write_text("mine")
-    (work / "docs" / "process.md").write_text("theirs"); commit_and_push_all(work)
-    with pytest.raises(CheckoutError) as e:
-        await co.prepare()
-    reason = str(e.value)
-    assert reason.startswith("the skill checkout could not move to origin/develop: ")
-    assert "local changes" in reason and "docs/process.md" in reason
-
 def test_missing_files_and_ticket_copy(repo, tmp_path):
     _, _, co = repo
     assert co.missing_files(["local.properties", "docs/process.md"]) == ["local.properties"]
     src = tmp_path / "ticket"; (src / "attachments").mkdir(parents=True)
     (src / "ticket.md").write_text("# ACME-1"); (src / "attachments" / "a.png").write_bytes(b"x")
-    dest = co.write_ticket(src, "ai_instructions/ACME-1")
+    dest = co.write_ticket(co.path, src, "ai_instructions/ACME-1")
     assert dest == co.path / "ai_instructions/ACME-1/ticket" and (dest / "attachments/a.png").exists()
 
 def test_write_ticket_replaces_only_an_earlier_copy(repo, tmp_path):
     _, _, co = repo
     src = tmp_path / "ticket"; src.mkdir()
     (src / "old.png").write_bytes(b"x")
-    dest = co.write_ticket(src, "ai_instructions/ACME-1")
+    dest = co.write_ticket(co.path, src, "ai_instructions/ACME-1")
     (dest.parent / "notes.md").write_text("the session's own")
     (src / "old.png").unlink(); (src / "ticket.md").write_text("# ACME-1")
-    assert co.write_ticket(src, "ai_instructions/ACME-1") == dest
+    assert co.write_ticket(co.path, src, "ai_instructions/ACME-1") == dest
     assert not (dest / "old.png").exists() and (dest / "ticket.md").read_text() == "# ACME-1"
     assert (dest.parent / "notes.md").read_text() == "the session's own"
 
@@ -150,11 +250,11 @@ def test_write_ticket_refuses_a_symlink_or_a_file_at_ticket(repo, tmp_path):
     notes = co.path / "ai_instructions" / "ACME-1"; notes.mkdir(parents=True)
     (notes / "ticket").symlink_to(outside)
     with pytest.raises(CheckoutError, match="symlink"):
-        co.write_ticket(src, "ai_instructions/ACME-1")
+        co.write_ticket(co.path, src, "ai_instructions/ACME-1")
     assert sorted(p.name for p in outside.iterdir()) == ["keep.txt"]     # never followed
     (notes / "ticket").unlink(); (notes / "ticket").write_text("a file")
     with pytest.raises(CheckoutError, match="ticket"):
-        co.write_ticket(src, "ai_instructions/ACME-1")
+        co.write_ticket(co.path, src, "ai_instructions/ACME-1")
 
 def test_write_ticket_in_an_unreadable_notes_directory_is_a_checkout_error(repo, tmp_path):
     _, _, co = repo
@@ -163,29 +263,29 @@ def test_write_ticket_in_an_unreadable_notes_directory_is_a_checkout_error(repo,
     notes.chmod(0o000)
     try:
         with pytest.raises(CheckoutError, match="ticket"):
-            co.write_ticket(src, "ai_instructions/ACME-1")
+            co.write_ticket(co.path, src, "ai_instructions/ACME-1")
     finally:
         notes.chmod(0o755)
 
 def test_worktree_must_stay_inside(repo):
     with pytest.raises(CheckoutError):
-        repo[2].worktree("../outside")
+        repo[2].worktree(repo[2].path, "../outside")
 
 def test_unusable_paths_are_checkout_errors(repo, tmp_path):
     _, _, co = repo
     with pytest.raises(CheckoutError):
-        co.worktree(str(tmp_path / "elsewhere"))                          # absolute
+        co.worktree(co.path, str(tmp_path / "elsewhere"))                          # absolute
     (co.path / "loop").symlink_to(co.path / "loop")
     with pytest.raises(CheckoutError, match="loop"):
-        co.worktree("loop/ACME-1")
+        co.worktree(co.path, "loop/ACME-1")
     src = tmp_path / "ticket"; src.mkdir()
     with pytest.raises(CheckoutError, match="loop"):
-        co.write_ticket(src, "loop/ACME-1")
+        co.write_ticket(co.path, src, "loop/ACME-1")
 
 async def test_change_and_commit_state(repo):
     _, _, co = repo
     await co.prepare()
-    assert await co.has_change(co.worktree(".claude/worktrees/ACME-1")) is False      # no worktree
+    assert await co.has_change(co.worktree(co.path, ".claude/worktrees/ACME-1")) is False      # no worktree
     wt = add_worktree(co)
     assert await co.has_change(wt) is False
     (wt / "fix.txt").write_text("fix")
@@ -465,13 +565,15 @@ async def test_git_speaks_english_whatever_the_locale(repo, monkeypatch):
     # _reason looks for git's own words, and the reason reaches the operator in English.
     monkeypatch.setenv("LANG", "uk_UA.UTF-8")
     _, work, co = repo
-    (co.path / "docs" / "process.md").write_text("mine")
-    (work / "docs" / "process.md").write_text("theirs"); commit_and_push_all(work)
-    with pytest.raises(CheckoutError) as e:
-        await co.prepare()
-    assert "local changes" in str(e.value) and "docs/process.md" in str(e.value)
-    (co.path / "docs" / "process.md").write_text("# Process\n")
     await co.prepare()
+    run = co.path.parent / "runs" / "r1" / "checkout"
+    await co.make_run_checkout(run)
+    (run / "docs" / "process.md").write_text("mine")
+    (work / "docs" / "process.md").write_text("theirs"); commit_and_push_all(work)
+    await co.prepare()
+    with pytest.raises(CheckoutError) as e:
+        await co.make_run_checkout(run)
+    assert "local changes" in str(e.value) and "docs/process.md" in str(e.value)
     wt = add_worktree(co); (wt / "fix.txt").write_text("fix"); git("add", ".", cwd=wt); commit(wt, "fix")
     git("checkout", "-b", "ACME-1-fix", cwd=work); commit_and_push_branch(work, "other.txt", "ACME-1-fix")
     with pytest.raises(CheckoutError) as e:
@@ -487,6 +589,19 @@ async def test_remove_worktree_never_forces(repo):
     (wt / "dirty.txt").unlink()
     assert await co.remove_worktree(wt) == "" and not wt.exists()
     assert await co.remove_worktree(wt) == ""
+
+async def test_a_run_checkout_removed_by_hand_reads_as_removed_and_is_made_again(repo, tmp_path):
+    # Its directory gone, git still lists it: it would neither move nor remove it.
+    _, _, co = repo
+    await co.prepare()
+    run = tmp_path / "runs" / "r1" / "checkout"
+    await co.make_run_checkout(run)
+    shutil.rmtree(run)
+    assert await co.remove_worktree(run) == ""
+    await co.make_run_checkout(run)
+    shutil.rmtree(run)
+    await co.make_run_checkout(run)
+    assert git("branch", "--show-current", cwd=run) == "" and (run / ".git").is_file()
 
 async def test_remove_worktree_tells_a_path_it_cannot_resolve(repo):
     _, _, co = repo
@@ -544,11 +659,13 @@ async def test_only_the_fetch_and_the_push_carry_the_token(repo, monkeypatch):
         return await run_command(argv, **kwargs)
     monkeypatch.setattr("orchestrator.skillflow.checkout.run_command", recording)
     await co.prepare()
+    run = co.path.parent / "runs" / "r1" / "checkout"
+    await co.make_run_checkout(run); await co.make_run_checkout(run)      # made, then moved
     wt = add_worktree(co); (wt / "fix.txt").write_text("fix"); git("add", ".", cwd=wt); commit(wt, "fix")
     await co.branches_with("ACME-1"); await co.has_change(wt); await co.on_forge("ACME-1-fix")
     await co.commit_state(wt); await co.changed_files(wt)
     await co.push("ACME-1-fix", tip(co))
-    assert await co.remove_worktree(wt) == ""
+    assert await co.remove_worktree(wt) == "" and await co.remove_worktree(run) == ""
     assert [args[0] for args, env in calls if any(header in v for v in env.values())] == ["fetch", "push"]
     local = {word for args, env in calls if not any(header in v for v in env.values()) for word in args}
     assert {"checkout", "status", "rev-list", "branch", "for-each-ref", "worktree", "diff"} <= local
@@ -571,6 +688,8 @@ async def test_the_token_goes_only_to_the_courier(repo, monkeypatch, tmp_path):
         return await run_command(argv, **kwargs)
     monkeypatch.setattr("orchestrator.skillflow.checkout.run_command", recording)
     await co.prepare()
+    run = tmp_path / "runs" / "r1" / "checkout"
+    await co.make_run_checkout(run); await co.make_run_checkout(run)      # made, then moved
     wt = add_worktree(co); (wt / "fix.txt").write_text("fix"); git("add", ".", cwd=wt); commit(wt, "fix")
     await co.push("ACME-1-fix", tip(co))
     in_courier = ["--git-dir", str(tmp_path / "checkout.courier.git")]
@@ -578,8 +697,9 @@ async def test_the_token_goes_only_to_the_courier(repo, monkeypatch, tmp_path):
     assert [argv[3] for argv in with_token] == ["fetch", "push"]
     assert all(argv[1:3] == in_courier for argv in with_token)
     in_checkout = [(argv, token) for argv, token in calls if argv[1] == "-C"]
-    assert {word for argv, _ in in_checkout for word in argv[3:]} >= {"fetch", "checkout", "push"}
-    assert all(Path(argv[2]).is_relative_to(co.path) and not token for argv, token in in_checkout)
+    assert {word for argv, _ in in_checkout for word in argv[3:]} >= {"fetch", "worktree", "checkout", "push"}
+    assert all(Path(argv[2]).is_relative_to(co.path) or Path(argv[2]) == run for argv, _ in in_checkout)
+    assert not any(token for _, token in in_checkout)
     assert len(in_checkout) + sum(argv[1:3] == in_courier for argv, _ in calls) == len(calls)
 
 NETWORK_OVERRIDES = {"core.alternateRefsCommand": "true", "push.gpgSign": "false",
@@ -737,4 +857,4 @@ async def test_head_is_the_worktrees_commit(repo, tmp_path):
     wt = add_worktree(co); (wt / "fix.txt").write_text("fix"); git("add", ".", cwd=wt); commit(wt, "fix")
     assert await co.head(wt) == git("rev-parse", "HEAD", cwd=wt)
     with pytest.raises(CheckoutError, match="git rev-parse failed"):
-        await co.head(co.worktree(".claude/worktrees/ACME-9"))
+        await co.head(co.worktree(co.path, ".claude/worktrees/ACME-9"))

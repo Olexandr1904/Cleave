@@ -41,7 +41,9 @@ class FakeCheckout:
     meaningful argument as its name and the others as (name, arg); prepare notes whether the slot was held, and
     `under_slot` names every other git call made while it was. `states` are commit_state's answers in order, the
     last one standing for every later check; `sha` is the worktree's HEAD; `forge_branches` are on the forge (none,
-    so a run's own branch is never refused as someone else's); `pushed_shas` are the commits push was given."""
+    so a run's own branch is never refused as someone else's); `pushed_shas` are the commits push was given.
+    make_run_checkout makes its directory; remove_worktree answers `remove_answers` for a path given there, else
+    `remove_answer`."""
     base_branch = "develop"
 
     def __init__(self, path, slot):
@@ -51,6 +53,7 @@ class FakeCheckout:
         self.slot_during_prepare, self.change_error = None, None
         self.states, self.files, self.push_errors, self.remove_answer = [], [], [], ""
         self.worktree_errors, self.on_remove, self.under_slot = {}, None, []
+        self.copy_error, self.remove_answers = None, {}
         self.sha, self.forge_branches, self.pushed_shas = "b" * 40, set(), []
         path.mkdir(parents=True)
 
@@ -61,14 +64,23 @@ class FakeCheckout:
             raise self.prepare_error
         return "a" * 40
 
+    async def make_run_checkout(self, dest):
+        self._git(("make_run_checkout", dest))
+        dest.mkdir(parents=True, exist_ok=True)
+
     def missing_files(self, required):
         self.calls.append("missing_files")
         return [rel for rel in required if rel in self.missing]
 
-    def write_ticket(self, source, notes_rel):
-        self.calls.append("write_ticket")
+    def copy_files(self, root, required):
+        self.calls.append(("copy_files", root))
+        if self.copy_error:
+            raise self.copy_error
+
+    def write_ticket(self, root, source, notes_rel):
+        self.calls.append(("write_ticket", root))
         self.ticket = notes_rel
-        dest = self.path / notes_rel / "ticket"
+        dest = root / notes_rel / "ticket"
         if dest.exists():                   # as the real one: an earlier copy is replaced
             shutil.rmtree(dest)
         shutil.copytree(source, dest)       # as the real one: a missing copy fails it
@@ -81,10 +93,10 @@ class FakeCheckout:
         self.calls.append("branches_with")
         return list(self.branches)
 
-    def worktree(self, rel):
+    def worktree(self, root, rel):
         if rel in self.worktree_errors:
             raise self.worktree_errors[rel]
-        return self.path / rel
+        return root / rel
 
     async def has_change(self, worktree):
         self.calls.append(("has_change", worktree))
@@ -118,7 +130,7 @@ class FakeCheckout:
         self._git(("remove_worktree", worktree))
         if self.on_remove:
             self.on_remove()
-        return self.remove_answer
+        return self.remove_answers.get(worktree, self.remove_answer)
 
     def _git(self, call):
         self.calls.append(call)
@@ -151,17 +163,28 @@ class FakeVcs:
 
 class FakeLLM:
     """execute_in_workspace records its keyword arguments and answers the next text as a response, or raises the
-    next exception; on_call runs inside the call, after_call[i] once call i has its answer."""
+    next exception; on_call runs inside the call, after_call[i] once call i has its answer. Call i takes its item
+    when it starts, then waits for holds[i] (an asyncio.Event) when there is one; `active` counts the calls going
+    on, `peak` the most at once."""
 
     def __init__(self, items):
         self.items, self.calls, self.on_call, self.after_call = list(items), [], None, {}
+        self.holds, self.active, self.peak = {}, 0, 0
 
     async def execute_in_workspace(self, **kwargs):
         self.calls.append(kwargs)
+        index = len(self.calls) - 1
         if self.on_call:
             self.on_call()
         item = self.items.pop(0)
-        if hook := self.after_call.get(len(self.calls) - 1):
+        self.active += 1
+        self.peak = max(self.peak, self.active)
+        try:
+            if (hold := self.holds.get(index)) is not None:
+                await hold.wait()
+        finally:
+            self.active -= 1
+        if hook := self.after_call.get(index):
             hook()
         if isinstance(item, BaseException):
             raise item
@@ -198,19 +221,17 @@ class FakeNotifier:
 class Rig:
     """A runner on a real store, switches, chat, prompts, status reader and gates; a fake checkout, forge, LLM
     and notifier; a clock that moves only when told. One queued run for ACME-1, its ticket copy on disk, and its
-    worktree a real directory the gate commands run in."""
+    worktree, in the run's own checkout (`run_checkout`), a real directory the gate commands run in."""
 
     def __init__(self, tmp_path, mode="auto", texts=(), idle_seconds=0.01, gates=None, gate_rounds=2,
-                 language_of=None):
+                 language_of=None, max_parallel=None, builds=1, slot_socket=None):
         conn = connect(tmp_path / "reviewer.db")
         self.store, self.switches = SkillStore(conn), Switches(conn)
         self.switches.set("tickets", "running")          # paused on a first boot
         self.clock, self.mode, self.failing, self.events, self.seen = Clock(T0), mode, set(), [], []
-        self.slot = asyncio.Semaphore(1)
+        self.slot = asyncio.Semaphore(builds)      # the build slot: `builds` at once
         self.checkout = FakeCheckout(tmp_path / "skill" / "app", self.slot)
         self.vcs, self.llm = FakeVcs(), FakeLLM(texts)
-        self.worktree = self.checkout.path / "worktrees" / "ACME-1"
-        self.worktree.mkdir(parents=True)
         cfg = RepoConfig(repo=RepoInfo(id="app"), ticket_flow="both", telegram=TelegramConfig(default_chat_id=CHAT_ID),
                          skill_flow=SkillFlowConfig(
                              bug_skill="fix-this", task_skill="implement-this", notes_dir="ai_instructions/{key}",
@@ -230,9 +251,14 @@ class Rig:
             [self.repo], self.store, self.chat, self.llm, slot=self.slot, switches=self.switches,
             credential_failing=self.failing.__contains__, get_mode=lambda: self.mode, runs_dir=self.runs_dir,
             secret_paths=[tmp_path / ".env"], event_bus=self, now=self.clock.now, environ=self.environ,
-            idle_seconds=idle_seconds, **({} if language_of is None else {"language_of": language_of}))
-        self.add_run("ACME-1", NOW, summary="Login crashes",
-                     facts={"assignee": "Ann", "status": "To Do", "staged_branch": "feature/ACME-1-acme-1"})
+            idle_seconds=idle_seconds, **({} if language_of is None else {"language_of": language_of}),
+            **({} if max_parallel is None else {"max_parallel": max_parallel}),
+            **({} if slot_socket is None else {"build_slot": SimpleNamespace(path=slot_socket, serving=True)}))
+        run = self.add_run("ACME-1", NOW, summary="Login crashes",
+                           facts={"assignee": "Ann", "status": "To Do", "staged_branch": "feature/ACME-1-acme-1"})
+        self.run_checkout = self.checkout_of(run)
+        self.worktree = self.run_checkout / "worktrees" / "ACME-1"
+        self.worktree.mkdir(parents=True)
         self.gate_seen = []
 
     def add_run(self, key, created, summary="", facts=None):
@@ -242,6 +268,10 @@ class Rig:
         (self.runs_dir / run.id / "ticket").mkdir(parents=True)
         (self.runs_dir / run.id / "ticket" / "ticket.md").write_text(f"# {key} {summary}")
         return run
+
+    def checkout_of(self, run):
+        """Where the runner makes the run's own checkout."""
+        return self.runs_dir / run.id / "checkout"
 
     def emit(self, event_type, message, *, project_id=None, ticket_id=None, data=None):
         self.events.append(SimpleNamespace(type=event_type, message=message, project_id=project_id,
@@ -266,8 +296,9 @@ class Rig:
             self.failing.discard(gate)
 
     def write_description(self, text, key="ACME-1"):
-        """The PR description the session writes in the main checkout's notes directory."""
-        notes = self.checkout.path / "ai_instructions" / key
+        """The PR description the session writes in the notes directory of its run's checkout."""
+        run = self.store.runs_for_ticket(SCOPE, key)[0]
+        notes = self.checkout_of(run) / "ai_instructions" / key
         notes.mkdir(parents=True, exist_ok=True)
         (notes / "PR_DESCRIPTION.md").write_text(text)
 

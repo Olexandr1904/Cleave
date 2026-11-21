@@ -925,8 +925,8 @@ def main(argv: list[str] | None = None) -> int:
         print(f"  Reviewer: {len(reviewer_contexts)} repo(s), jobs on{from_telegram}")
 
     # Skill flow: with ticket_flow both, each new workspace's ticket also gets a skill run, worked
-    # one at a time in the pipeline's build slot; the replies to its messages are wired with the
-    # command handler. Repos added by hot reload wait for a restart.
+    # up to defaults.max_parallel_skill_runs at once, each in a checkout of its own; the replies to
+    # its messages are wired with the command handler. Repos added by hot reload wait for a restart.
     skill_dir = reviewer_data / "skill"
     global_chat_id = global_config.telegram.default_chat_id
     skill_repos = _skill_repos(
@@ -934,6 +934,7 @@ def main(argv: list[str] | None = None) -> int:
         global_chat_id=global_chat_id,
     )
     skill_runner = None
+    skill_slot = None
     skill_replies = None
     comparison_keeper = None
     comparison_board = None
@@ -947,6 +948,7 @@ def main(argv: list[str] | None = None) -> int:
     if skill_repos:
         from integrations.llm.claude_code_adapter import ClaudeCodeAdapter
         from orchestrator.skillflow.board import ComparisonBoard
+        from orchestrator.skillflow.build_slot import BuildSlotServer
         from orchestrator.skillflow.compare_store import ComparisonStore
         from orchestrator.skillflow.intake import SkillIntake
         from orchestrator.skillflow.keeper import ComparisonKeeper
@@ -964,12 +966,16 @@ def main(argv: list[str] | None = None) -> int:
         comparisons = ComparisonStore(skill_conn)
         skill_chat = SkillChat(notifier, skill_store)
         skill_runs = skill_dir / "runs"
+        # A session's builds take the pipeline's build slot over this socket, served from the start; while
+        # it is not served, a session turn holds the slot for as long as it runs.
+        skill_slot = BuildSlotServer(orchestrator.build_slot, skill_dir / "build-slot.sock")
         skill_runner = SkillRunner(
             skill_repos, skill_store, skill_chat, ClaudeCodeAdapter(),
             slot=orchestrator.build_slot, switches=switches,
             credential_failing=credential_health.failing, get_mode=mode_handler.get_mode,
             runs_dir=skill_runs, secret_paths=secret_paths, event_bus=event_bus,
-            language_of=_scope_language,
+            language_of=_scope_language, max_parallel=global_config.defaults.max_parallel_skill_runs,
+            build_slot=skill_slot,
         )
         # Only here: on a daemon that serves no repo on both, no workspace is compared.
         orchestrator.set_comparisons(comparisons)
@@ -1094,6 +1100,8 @@ def main(argv: list[str] | None = None) -> int:
         reviewer_tasks = _start_reviewer(
             reviewer, review_jobs, review_edits, ready=credential_health.first_round,
         )
+        if skill_slot is not None:
+            await skill_slot.start()   # a warning when it cannot be served
         skill_tasks = _start_skill(skill_runner, credential_health.first_round)
         if comparison_keeper is not None:
             # No first-round wait: the keeper calls no CLI.
@@ -1247,6 +1255,8 @@ def main(argv: list[str] | None = None) -> int:
                 **reviewer_tasks,
                 **skill_tasks,
             }, timeout=5.0)
+            if skill_slot is not None:
+                skill_slot.close()
             if tg_active:
                 # A post cut short here stays `posting`: the next start announces it.
                 await reviewer_replies.aclose()

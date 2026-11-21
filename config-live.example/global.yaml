@@ -31,6 +31,9 @@ defaults:
     qa: 2
     dev: 2
   max_parallel_tickets: 5
+  # max_parallel_skill_runs: 3     # skill-flow runs (ticket_flow: both) worked at once, each in its own
+                                   # checkout; their builds share max_parallel_builds (default 1) with
+                                   # the staged flow's build stages
   pr_comment_fetch_delay_minutes: 30
   # Per-execution agent ceilings. Whichever limit trips first ends the run
   # and marks it permanent-failed.

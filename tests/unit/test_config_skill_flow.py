@@ -3,7 +3,7 @@ from __future__ import annotations
 import pytest
 import yaml
 
-from config.config_loader import ConfigError, load_config
+from config.config_loader import ConfigError, load_config, load_global_config
 
 REPO = {"vcs": {"provider": "github", "github": {"token": "${GITHUB_TOKEN}", "owner": "acme", "repo": "app"}}}
 
@@ -122,3 +122,21 @@ def test_build_env_refuses_a_variable_the_global_config_reads(tmp_path, monkeypa
         load_repo(tmp_path, {"ticket_flow": "both", "skill_flow": {**VALID, "build_env": ["TELEGRAM_BOT_TOKEN"]}},
                   global_yaml=global_yaml)
     assert e.value.field == "skill_flow.build_env"
+
+# --- how many skill runs work at once: global.yaml's defaults ---
+
+def _global(tmp_path, text):
+    (tmp_path / "global.yaml").write_text(text)
+    return load_global_config(str(tmp_path))
+
+def test_max_parallel_skill_runs_defaults_to_3(tmp_path):
+    assert _global(tmp_path, "os: mac\n").defaults.max_parallel_skill_runs == 3
+
+def test_max_parallel_skill_runs_read(tmp_path):
+    assert _global(tmp_path, "defaults:\n  max_parallel_skill_runs: 1\n").defaults.max_parallel_skill_runs == 1
+
+@pytest.mark.parametrize("value", ["0", "-1", "true", "two", "1.5"])
+def test_max_parallel_skill_runs_below_one_refused(tmp_path, value):
+    with pytest.raises(ConfigError, match="defaults.max_parallel_skill_runs") as e:
+        _global(tmp_path, f"defaults:\n  max_parallel_skill_runs: {value}\n")
+    assert e.value.field == "defaults.max_parallel_skill_runs"

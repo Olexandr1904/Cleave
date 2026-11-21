@@ -156,7 +156,7 @@ A restart fails a running job with `interrupted (daemon restarted)` (a review or
 
 ## Skill flow: host prerequisites
 
-The [skill flow](../docs/skill-flow.md) runs a repo's own skill in one `claude` session per ticket, in a long-lived checkout of the repo. Do these steps once per repo, in a Terminal on the host's desktop (Screen Sharing is fine), before you set `ticket_flow: both` on the repo and restart. None of them prints a token or asks you to type one.
+The [skill flow](../docs/skill-flow.md) runs a repo's own skill in one `claude` session per ticket, each run in a checkout of its own: a worktree of a long-lived checkout of the repo that you make once. Do these steps once per repo, in a Terminal on the host's desktop (Screen Sharing is fine), before you set `ticket_flow: both` on the repo and restart. None of them prints a token or asks you to type one.
 
 The checkout's path is `<the directory of reviewer.db>/skill/repos/<project_id>/<repo_id>`; with the default database that is:
 ```bash
@@ -179,15 +179,15 @@ git -C "$C" rev-parse --is-shallow-repository
 ```
 `<TOKEN_VAR>` is the `.env` variable the repo's GitHub token names. A good result: git's `Cloning into …` and no error, then `false`.
 
-Then place the files `skill_flow.required_files` names (a local build properties file, say) in the checkout, and check that each is there:
+Then place the files `skill_flow.required_files` names (a local build properties file, say) in the checkout, and check that each is there. Each run works in a checkout of its own, which holds only what git tracks plus these files: list every untracked file a build or the skill needs (signing config, services file), also on a host upgraded from a version where the runs worked in this checkout itself.
 ```bash
 ls -l "$C/local.properties"
 ```
-Leave `submodule.recurse` unset in the checkout: Cleave fetches no submodules, and with `submodule.recurse=true` in the checkout's own config the move to the base branch can fail. A good result for this prints nothing (or `false`):
+Leave `submodule.recurse` unset in the checkout: Cleave fetches no submodules, and with `submodule.recurse=true` in the checkout's own config making a run's checkout, or moving it to the base branch, can fail. A good result for this prints nothing (or `false`):
 ```bash
 git -C "$C" config --local --get submodule.recurse
 ```
-Last, trust the directory, as for the review clones: `cd "$C" && claude`, accept the workspace-trust prompt and type `/exit`.
+Last, trust the directory, as for the review clones: `cd "$C" && claude`, accept the workspace-trust prompt and type `/exit`. The runs' checkouts need no trust step of their own: they are worktrees of `$C`, and Claude Code keys a worktree's trust on its main checkout.
 
 **2. The skills' plugins are installed in the host's `claude` profile, and a skill can be called by name in `-p` mode.** Install the plugins that carry the repo's skills for the host user (`claude`, then `/plugin`), then ask a `-p` session in the checkout which skills it can call:
 ```bash
@@ -263,6 +263,17 @@ A good result: no file line (or `0 github.com line(s)`), then `no github.com ite
 - The repo's token must be able to mark a PR ready for review (a GraphQL call, `markPullRequestReadyForReview`), edit a PR's title, comment on a PR and close one: write access to the repo's pull requests (for a fine-grained token, **Pull requests: Read and write**; for a classic one, the `repo` scope).
 
 There is no dry check for either: the first compared ticket on the host is the check. A good result: both PRs open as drafts, the comparison message comes, and a tap gives a closing message that lists `Ready for review: PR #…` and `Closed: PR #…`, with no `not finished` message. A verdict stuck on `marking PR #… ready`, `retitling PR #…`, `commenting on PR #…` or `closing PR #…` names GitHub's answer: fix the token's rights, then tap Retry.
+
+**8. The build slot's hook reaches a session's builds.** A session's build takes the [build slot](../docs/skill-flow.md#the-build-slot) through a `PreToolUse` hook in Cleave's settings file, which puts a wait in front of the command. Make that settings file with the daemon's own code, its hook pointed at a socket nobody serves, and let a `-p` session run a command that names `gradlew`:
+```bash
+cd ~/Cleave
+D="$(mktemp -d)"
+.venv/bin/python -c 'import json, sys; from pathlib import Path; from orchestrator.skillflow.build_slot import hook_command; from orchestrator.skillflow.session import skill_settings_json; print(json.dumps(skill_settings_json([], hook_command(Path(sys.argv[1]), ["gradlew"]))))' "$D/none.sock" > "$D/settings.json"
+cd "$C"
+claude -p --settings "$D/settings.json" --strict-mcp-config --allowedTools Bash \
+  "Run 'echo gradlew' with the Bash tool. Answer with its whole output, as it is."
+```
+A good result: the answer holds `Cleave: build slot not taken` and then `gradlew`. That line is the wait's own, printed when no daemon answers at the socket: the hook rewrote the command. With only `gradlew`, the hook did not run, and a session's builds run outside the slot.
 
 ---
 

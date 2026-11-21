@@ -69,6 +69,8 @@ Before a run Cleave writes the ticket copy into the skill's notes directory for 
 
 **One build at a time (the designer's call, not the operator's).** A skill session builds throughout, so it takes the pipeline's one build slot (`max_parallel_builds`, shared by every repo) for as long as a `claude` process or a gate command of the run is alive, and releases it between turns. A run that is `waiting`, `stopped` or `deferred` holds nothing and does not keep the next ticket's run from starting: each ticket has its own worktree, so several runs may be parked at once. The cost is accepted: the two sides of a ticket build one after the other, so a compared ticket takes up to twice as long, and a staged stage that needs the slot waits for a skill session as it already waits for another staged build.
 
+**Superseded on 2026-11-21 (the operator's call).** The checkout and the one-build-at-a-time paragraphs above are replaced: every run works in a checkout of its own (a worktree of the skill checkout at the base, under the run's directory; the skill checkout is fetched, never moved), up to `defaults.max_parallel_skill_runs` runs at once (3 by default), and a session turn holds no build slot: only a build the session runs holds it, through a `PreToolUse` hook in Cleave's settings file, and Cleave's gates hold it as before. [skill-flow.md](../../skill-flow.md) describes the behaviour.
+
 ### 3. The session
 
 One `claude -p` run in the skill checkout, started through the existing adapter:

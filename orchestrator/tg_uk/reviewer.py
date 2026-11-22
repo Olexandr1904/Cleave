@@ -31,8 +31,14 @@ TEXTS: dict[str, str] = {
     '[{scope}] Self-review findings on your PR #{number} "{title}"':
         '[{scope}] Зауваження самоперевірки у вашому PR #{number} "{title}"',
     "head {head} · {findings} · {change}": "коміт {head} · {findings} · {change}",
-    "Protected files in the fix ({paths}): Cleave will not push it.":
-        "Захищені файли у виправленні ({paths}): Cleave його не запушить.",
+    'Protected files in the fix ({paths}): Cleave pushes it only on "push anyway".':
+        'Захищені файли у виправленні ({paths}): Cleave запушить його лише на "push anyway".',
+    "Push + reply all": "Push + відповісти всім",
+    "Push": "Push",
+    "Diff": "Diff",
+    "Push anyway + reply all…": "Push попри захист + відповісти всім…",
+    "Push anyway…": "Push попри захист…",
+    "Reply all": "Відповісти всім",
     "Reply to this message: {commands}": "Відповідайте на це повідомлення: {commands}",
     "… {lines} — the full report is on the dashboard": "… ще {lines} — повний звіт на дашборді",
 

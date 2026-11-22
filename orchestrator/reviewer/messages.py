@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import posixpath
 
+from integrations.base.notifier import Button
 from orchestrator.reviewer.fix import fix_summary
 from orchestrator.reviewer.report import CONFIRMED, KIND_EMOJI, Report, ReportItem
 from orchestrator.tg_i18n import N_, count, model_text, tr
@@ -114,7 +115,37 @@ def _change(fix: dict) -> str:
 def _protected_line(fix: dict) -> list[str]:
     if not fix.get("protected"):
         return []
-    return [tr("Protected files in the fix ({paths}): Cleave will not push it.", paths=_cut(", ".join(fix["protected"])))]
+    return [tr('Protected files in the fix ({paths}): Cleave pushes it only on "push anyway".',
+               paths=_cut(", ".join(fix["protected"])))]
+
+
+def _push_command(fix: dict) -> list[str]:
+    """The reply that pushes a fix: "push anyway" for one with protected files; none without a fix."""
+    if not fix:
+        return []
+    return ['"push anyway"'] if fix.get("protected") else ['"push"']
+
+
+def fix_buttons(kind: str, job_id: str, replies: list[dict], fix: dict) -> list[Button]:
+    """The buttons of a job's message: on a threads (address) message, a findings message and a re-check message,
+    only the actions that can run (labels in the current Telegram language). A fix with protected files gets
+    "Push anyway…", which asks for a confirmation first."""
+    if kind not in ("address", "findings", "recheck"):
+        return []
+    buttons: list[Button] = []
+    with_replies = kind != "findings" and bool(replies)
+    if fix and kind != "recheck":
+        if fix.get("protected"):
+            label = N_("Push anyway + reply all…") if with_replies else N_("Push anyway…")
+            buttons.append(Button(tr(label), f"rv_pushx:{job_id}"))
+        elif with_replies:
+            buttons += [Button(tr("Push + reply all"), f"rv_pushpost:{job_id}"), Button(tr("Push"), f"rv_push:{job_id}")]
+        else:
+            buttons.append(Button(tr("Push"), f"rv_push:{job_id}"))
+        buttons.append(Button(tr("Diff"), f"rv_diff:{job_id}"))
+    elif with_replies:
+        buttons.append(Button(tr("Reply all"), f"rv_post:{job_id}"))
+    return buttons
 
 
 def address_message(
@@ -135,7 +166,7 @@ def address_message(
         *_protected_line(fix),
         "",
     ]
-    commands = ['"push"'] if fix and not fix.get("protected") else []
+    commands = _push_command(fix)
     if replies:
         for entry in replies:
             gist = tg_lines.get(entry["n"]) or entry["body"].strip().partition("\n")[0]
@@ -171,7 +202,7 @@ def findings_message(
     for entry in verdicts:
         gist = tg_lines.get(entry["n"]) or f"{entry['verdict']} · {entry['why']}"
         lines.append(f"{entry['n']}. {model_text(_cut(gist))}")
-    commands = [*(['"push"'] if fix and not fix.get("protected") else []), *(['"diff"'] if fix else []), '"again: …"']
+    commands = [*_push_command(fix), *(['"diff"'] if fix else []), '"again: …"']
     lines += ["", tr("Reply to this message: {commands}", commands=" · ".join(commands)), url]
     return "\n".join(lines)
 
@@ -259,4 +290,5 @@ def _item_line(item: ReportItem, tg_lines: dict[int, str]) -> str:
 
 
 def _cut(text: str) -> str:
-    return text[:_MAX_TEXT]
+    """At most _MAX_TEXT characters, then "…" when the text was longer: a cut line never reads as whole."""
+    return text if len(text) <= _MAX_TEXT else text[:_MAX_TEXT] + "…"

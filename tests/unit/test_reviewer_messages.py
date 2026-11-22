@@ -4,8 +4,9 @@ import dataclasses
 from datetime import datetime, timezone
 from orchestrator.reviewer.lines import (
     drift_line, job_deferred_line, job_failed_line, login_line, outdated_line)
+from integrations.base.notifier import Button
 from orchestrator.reviewer.messages import (
-    address_message, findings_message, message_parts, recheck_message, review_message, split_message)
+    address_message, findings_message, fix_buttons, message_parts, recheck_message, review_message, split_message)
 from orchestrator.reviewer.report import parse_report
 from tests.unit.test_reviewer_report import HEAD, REPORT
 
@@ -108,17 +109,19 @@ def test_long_texts_are_cut():
     hostile = dataclasses.replace(r, items=items, dropped=dropped, event_reason="R" * 5000)
     lines = review_message("acme/app", 1712, "P" * 5000, "ACME-1234", URL, 14, hostile,
                            {2: "G" * 5000}).splitlines()
-    assert lines[0] == f'[acme/app] Review of PR #1712 "{"P" * 200}" · ACME-1234'
-    assert lines[2] == f"Suggested: REQUEST_CHANGES — {'R' * 200}"
-    assert f"🔴 1. {'p' * 200}:88 — {'T' * 200}" in lines
-    assert f"🟠 2. SyncWorker.kt:41 — {'G' * 200}" in lines
-    assert f"Dropped: 7 — {'W' * 200}; 8 — duplicate; 9 — pre-dates the PR" in lines
+    # A cut text ends with "…", so a line never reads as whole when it is not.
+    assert lines[0] == f'[acme/app] Review of PR #1712 "{"P" * 200}…" · ACME-1234'
+    assert lines[2] == f"Suggested: REQUEST_CHANGES — {'R' * 200}…"
+    assert f"🔴 1. {'p' * 200}…:88 — {'T' * 200}…" in lines
+    assert f"🟠 2. SyncWorker.kt:41 — {'G' * 200}…" in lines
+    assert f"Dropped: 7 — {'W' * 200}…; 8 — duplicate; 9 — pre-dates the PR" in lines
     assert review_message("acme/app", 1712, "Fix cart sync", "", URL, 14, r, {8: "D" * 5000}).splitlines()[-4] == (
-        f"Dropped: 7 — unreachable; 8 — {'D' * 200}; 9 — pre-dates the PR")
+        f"Dropped: 7 — unreachable; 8 — {'D' * 200}…; 9 — pre-dates the PR")
     replies = [{"n": 1, "body": "B" * 5000 + "\nsecond line"}, {"n": 3, "body": "short"}]
     lines = recheck_message("acme/app", 1712, "P" * 5000, URL, HEAD, replies, {3: "G" * 5000}).splitlines()
-    assert lines[0] == f'[acme/app] Re-check of PR #1712 "{"P" * 200}"'
-    assert f"1. {'B' * 200}" in lines and f"3. {'G' * 200}" in lines
+    assert lines[0] == f'[acme/app] Re-check of PR #1712 "{"P" * 200}…"'
+    assert f"1. {'B' * 200}…" in lines and f"3. {'G' * 200}…" in lines
+    assert f"3. {'G' * 200}" in recheck_message("acme/app", 1712, "t", URL, HEAD, replies, {3: "G" * 200}).splitlines()
 
 def test_split_message():
     text = "".join(f"{i:02d}{'x' * 97}\n" for i in range(90))
@@ -206,8 +209,8 @@ Reply to this message: "push" · "post replies 1 2" · "text 1" · "diff" · "ag
     assert "no code change" in none and '"push"' not in none and '"diff"' not in none
     assert 'Reply to this message: "post replies 1 2" · "text 1" · "again: …"' in none
     guarded = address_message("acme/app", 1712, "t", URL, "8" * 40, replies, {}, {**fix, "protected": [".github/ci.yml"]})
-    assert guarded.splitlines()[2] == "Protected files in the fix (.github/ci.yml): Cleave will not push it."
-    assert '"push"' not in guarded and '"diff"' in guarded     # no push is offered for a fix Cleave refuses to push
+    assert guarded.splitlines()[2] == 'Protected files in the fix (.github/ci.yml): Cleave pushes it only on "push anyway".'
+    assert 'Reply to this message: "push anyway" · "post replies 1 2" · "text 1" · "diff" · "again: …"' in guarded
     empty = address_message("acme/app", 1712, "t", URL, "8" * 40, [], {}, fix)
     assert "No replies drafted." in empty and 'Reply to this message: "push" · "diff" · "again: …"' in empty
 
@@ -239,11 +242,34 @@ def test_findings_message_without_a_patch_offers_no_push():
     assert 'Reply to this message: "again: …"' in text
 
 
-def test_findings_message_with_a_protected_file_offers_no_push():
+def test_findings_message_with_a_protected_file_offers_push_anyway():
     text = findings_message("acme/app", 108, "t", URL, "8" * 40, VERDICTS, {},
                             {**FINDINGS_FIX, "protected": [".github/ci.yml"]})
-    assert text.splitlines()[2] == "Protected files in the fix (.github/ci.yml): Cleave will not push it."
-    assert 'Reply to this message: "diff" · "again: …"' in text
+    assert text.splitlines()[2] == 'Protected files in the fix (.github/ci.yml): Cleave pushes it only on "push anyway".'
+    assert 'Reply to this message: "push anyway" · "diff" · "again: …"' in text
+
+
+FIX = {"files": [{"path": "a.kt", "added": 1, "deleted": 0}], "protected": [], "bytes": 9}
+GUARDED = {**FIX, "protected": [".github/ci.yml"]}
+PUSH_ALL, PUSH, DIFF = (Button("Push + reply all", "rv_pushpost:j1"), Button("Push", "rv_push:j1"),
+                        Button("Diff", "rv_diff:j1"))
+PUSH_ANYWAY_ALL, PUSH_ANYWAY = Button("Push anyway + reply all…", "rv_pushx:j1"), Button("Push anyway…", "rv_pushx:j1")
+REPLY_ALL = Button("Reply all", "rv_post:j1")
+
+
+def test_fix_buttons_offer_only_what_can_run():
+    assert fix_buttons("address", "j1", REPLIES, FIX) == [PUSH_ALL, PUSH, DIFF]
+    assert fix_buttons("address", "j1", REPLIES, GUARDED) == [PUSH_ANYWAY_ALL, DIFF]
+    assert fix_buttons("address", "j1", [], FIX) == [PUSH, DIFF]
+    assert fix_buttons("address", "j1", [], GUARDED) == [PUSH_ANYWAY, DIFF]
+    assert fix_buttons("address", "j1", REPLIES, {}) == [REPLY_ALL]
+    assert fix_buttons("address", "j1", [], {}) == []
+    assert fix_buttons("findings", "j1", [], FIX) == [PUSH, DIFF]
+    assert fix_buttons("findings", "j1", [], GUARDED) == [PUSH_ANYWAY, DIFF]
+    assert fix_buttons("findings", "j1", [], {}) == []
+    assert fix_buttons("recheck", "j1", REPLIES, {}) == [REPLY_ALL]
+    assert fix_buttons("recheck", "j1", [], {}) == []
+    assert fix_buttons("review", "j1", [], {}) == []
 
 
 def test_review_message_offers_fix_only_when_fixable_with_a_confirmed_finding():

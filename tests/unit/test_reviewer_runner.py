@@ -21,7 +21,7 @@ from orchestrator.reviewer.fix import FixError
 from orchestrator.reviewer.forge_github import ForgeError
 from orchestrator.reviewer.lines import drift_line, login_line
 from orchestrator.reviewer.messages import (
-    address_message, findings_message, recheck_message, review_message, split_message,
+    address_message, findings_message, fix_buttons, recheck_message, review_message, split_message,
 )
 from orchestrator.reviewer.models import (
     Anchor, BoardRow, BoardSnapshot, Job, JobRun, Post, PRDetails, PRFull, RepoState, SnapshotPR, Turn,
@@ -93,7 +93,7 @@ class FakeChat:
     """Message ids from 100; each message sent is anchored in the store, as ReviewerChat does."""
     chat_id = CHAT_ID
     def __init__(self, store, now):
-        self.texts, self.next_id, self.fail, self.tries = [], 100, 0, 0
+        self.texts, self.buttons, self.next_id, self.fail, self.tries = [], [], 100, 0, 0
         self.store, self.now = store, now
     async def send(self, text, *, job_id="", scope="", number=0, reply_to=None, buttons=None):
         self.tries += 1
@@ -101,6 +101,7 @@ class FakeChat:
             self.fail -= 1
             raise RuntimeError("telegram down")
         self.texts.append(text)
+        self.buttons.append(buttons)
         self.next_id += 1
         self.store.add_anchor(CHAT_ID, self.next_id - 1, job_id, self.now().isoformat(), scope=scope, number=number)
         return self.next_id - 1
@@ -703,6 +704,7 @@ async def test_long_message_is_split_and_anchored(tmp_path, monkeypatch):
     await rig.runner.run_job(job)
     parts = long_parts()
     assert len(parts) >= 3 and rig.chat.texts == parts
+    assert rig.chat.buttons == [None] * len(parts)   # a review message takes typed replies only
     assert max(len(p) for p in parts) == 3900
     ids = list(range(100, 100 + len(parts)))
     assert [rig.store.anchor(CHAT_ID, i).job_id for i in ids] == [job.id] * len(parts)
@@ -1777,10 +1779,20 @@ async def test_address_job_keeps_plan_fix_and_sends_the_message(tmp_path, monkey
     assert rig.chat.texts == [address_message(SCOPE, 1712, "Fix cart sync", URL, HEAD, ADDRESS_PLAN,
                                               {1: "FIXED · a.kt:3 · null check"}, FIX)]
     assert rig.chat.texts[-1].startswith('[acme/app] Threads on your PR #1712')
+    assert rig.chat.buttons == [fix_buttons("address", job.id, ADDRESS_PLAN, FIX)]
     kw = rig.session_kw
     assert (kw["kind"], kw["job_cfg"]) == ("address", JOBS["address"])
     assert kw["prompt"] == address_prompt("docs/threads.md", 1712, rig.paths, "octo", "")
     assert not rig.root(job).exists()
+
+async def test_a_long_threads_message_has_its_buttons_on_the_last_part(tmp_path, monkeypatch):
+    plan = [{"n": n, "thread_id": f"T{n}", "body": "Intended. " + "x" * 190, "resolve": False} for n in range(1, 70)]
+    rig = address_rig(tmp_path, monkeypatch)
+    rig.write = lambda paths: write_address(paths, plan)
+    job = rig.add_job("address", key=f"{HEAD}:T1")
+    await rig.runner.run_job(job)
+    assert len(rig.chat.texts) >= 3
+    assert rig.chat.buttons == [None] * (len(rig.chat.texts) - 1) + [fix_buttons("address", job.id, plan, FIX)]
 
 async def test_address_prompt_carries_the_operators_instruction(tmp_path, monkeypatch):
     rig = address_rig(tmp_path, monkeypatch)

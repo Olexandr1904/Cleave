@@ -130,17 +130,33 @@ def test_retry_text_keeps_the_flags(event, flags):
 def test_address_grammar(text, command):
     assert parse_reply(text) == command
 
-@pytest.mark.parametrize("text", ["push 1 2", "push anyway", "diff 3", "again 2", "commit", "again:"])
+@pytest.mark.parametrize("text, command", [
+    ("post all", C("post_replies", all_replies=True)), ("post replies", C("post_replies", all_replies=True)),
+    ("post replies all", C("post_replies", all_replies=True)), ("Post all replies.", C("post_replies", all_replies=True)),
+    ("Опублікуй всі", C("post_replies", all_replies=True)), ("опубликуй все", C("post_replies", all_replies=True)),
+    ("пости ответы", C("post_replies", all_replies=True)),
+    ("push anyway", C("push", anyway=True)), ("пуш все одно", C("push", anyway=True)),
+    ("запушь все равно", C("push", anyway=True)),
+    ("push and post", C("push_post")), ("push and post all", C("push_post")), ("push + post replies", C("push_post")),
+    ("запушь и опубликуй все", C("push_post")), ("push and post anyway", C("push_post", anyway=True)),
+    ("push and post all anyway", C("push_post", anyway=True)),
+])
+def test_all_replies_push_anyway_and_push_and_post_grammar(text, command):
+    assert parse_reply(text) == command
+
+@pytest.mark.parametrize("text", ["push 1 2", "diff 3", "again 2", "commit", "again:", "post all 1", "push and post 1",
+                                  "post and push", "push all", "anyway", "diff anyway", "push push"])
 def test_address_grammar_unknown(text):
     assert parse_reply(text) is None
 
 def test_check_command_on_an_address_message():
     replies = [{"n": 1, "thread_id": "T1", "body": "x"}]
-    for cmd in (C("push"), C("diff"), C("again"), C("text", (1,)), C("post_replies", (1,))):
+    for cmd in (C("push"), C("push", anyway=True), C("push_post"), C("push_post", anyway=True), C("diff"), C("again"),
+                C("text", (1,)), C("post_replies", (1,))):
         assert check_command(cmd, "address", None, replies, set(), set()) == cmd
     for cmd in (C("post", (1,)), C("edit", (1,), instruction="x"), C("draft", (1,))):
         assert check_command(cmd, "address", None, replies, set(), set()) == (
-            'This is a threads message: reply "push", "post replies 1 3", "text 2", "diff" or "again: …". '
+            'This is a threads message: reply "push", "post all", "text 2", "diff" or "again: …". '
             "Nothing was done.")
     assert check_command(C("post_replies", (2,)), "address", None, replies, set(), set()) == \
         "Unknown number: 2. Nothing was done."
@@ -150,15 +166,31 @@ def test_check_command_on_an_address_message():
         for action in ("push", "diff", "again"):
             assert check_command(C(action), kind, None, replies, set(), set()) == \
                 f'"{action}" works on a fix message of your own PR (threads or self-review findings). Nothing was done.'
+        assert check_command(C("push_post"), kind, None, replies, set(), set()) == \
+            '"push and post" works on a fix message of your own PR (threads or self-review findings). Nothing was done.'
+
+def test_post_all_names_every_drafted_reply_not_posted_at_the_head():
+    replies = [{"n": n, "thread_id": f"T{n}", "body": "x"} for n in (1, 2, 3)]
+    all_replies = C("post_replies", all_replies=True)
+    for kind in ("recheck", "address"):
+        assert check_command(all_replies, kind, None, replies, {2}, set()) == C("post_replies", (1, 3))
+        nothing = "Nothing left to post: every drafted reply is already posted at this head. Nothing was done."
+        assert check_command(all_replies, kind, None, replies, {1, 2, 3}, set()) == nothing
+        assert check_command(all_replies, kind, None, [], set(), set()) == nothing
+    assert check_command(all_replies, "review", parse_report(REPORT, HEAD), [], set(), set()).startswith(
+        "This is a review message")
 
 def test_describe_address_commands():
     assert [describe(C(a), HEAD) for a in ("push", "diff", "again")] == ["push", "diff", "again"]
+    assert describe(C("push", anyway=True), HEAD) == "push anyway"
+    assert describe(C("push_post"), HEAD) == "push and post"
+    assert describe(C("push_post", anyway=True), HEAD) == "push and post anyway"
     assert describe(C("again", instruction="leave 2"), HEAD) == 'again: "leave 2"'
 
 def test_not_understood_on_an_address_message():
     from orchestrator.reviewer.lines import not_understood_line
     assert not_understood_line("address") == (
-        'Not understood; nothing was done. Reply like "push", "post replies 1 3", "text 2", "diff" or "again: …".')
+        'Not understood; nothing was done. Reply like "push", "post all", "text 2", "diff" or "again: …".')
 
 
 # --- Findings jobs ---
@@ -181,8 +213,9 @@ def test_check_command_on_a_findings_message():
     for cmd in (C("push"), C("diff"), C("again"), C("again", instruction="leave 3")):
         assert check_command(cmd, "findings", None, [], set(), set()) == cmd
     for cmd in (C("post", (1,)), C("post", (), "APPROVE"), C("text", (1,)), C("post_replies", (1,)),
-                C("edit", (1,), instruction="x"), C("draft", (1,))):
+                C("post_replies", all_replies=True), C("push_post"), C("edit", (1,), instruction="x"), C("draft", (1,))):
         assert check_command(cmd, "findings", None, [], set(), set()) == FINDINGS_REFUSED
+    assert check_command(C("push", anyway=True), "findings", None, [], set(), set()) == C("push", anyway=True)
 
 
 def test_fix_only_on_a_review_message():

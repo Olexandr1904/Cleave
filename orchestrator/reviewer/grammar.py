@@ -41,6 +41,8 @@ _PHRASES = {
     ),
     "no_summary": ("no summary", "without summary", "без summary", "без саммари", "без самари"),
     "anyway": ("anyway", "все равно", "все одно", "однаково"),
+    # "post all" on a re-check or a threads message: every drafted reply not posted yet.
+    "all": ("all", "все", "всі", "усі"),
     "replies": ("replies", "reply", "answers", "ответы", "ответ", "відповіді", "відповідь"),
     "text": ("text", "текст"),
     "draft": ("draft", "черновик", "чернетка"),
@@ -70,19 +72,24 @@ _POST_TOKENS = {
     "post", "number", "filler", "and", *_EVENTS, "all_confirmed", "no_summary", "anyway",
 }
 _REPLIES_TOKENS = {"post", "replies", "number", "filler", "and"}
+_ALL_REPLIES_TOKENS = {"post", "replies", "all"}
+_PUSH_POST_TOKENS = {"push", "and", "post", "replies", "all", "anyway"}
 _EVENT_ONLY_TOKENS = {*_EVENTS, "no_summary", "anyway", "and"}
 _RETRY_EVENT = {"APPROVE": "approve", "REQUEST_CHANGES": "request changes"}
 
 
 @dataclass(frozen=True)
 class ReplyCommand:
-    action: str  # post, post_replies, text, edit, draft, review_again, skip, push, diff, again, fix
+    # post, post_replies, text, edit, draft, review_again, skip, push, push_post (push, then post every drafted reply),
+    # diff, again, fix
+    action: str
     numbers: tuple[int, ...] = ()
     event: str = "COMMENT"
     all_confirmed: bool = False
     no_summary: bool = False
-    anyway: bool = False
+    anyway: bool = False  # a post: whatever GitHub shows; a push: protected files too
     instruction: str = ""
+    all_replies: bool = False  # post_replies: every drafted reply not posted at the head (check_command expands it)
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "numbers", tuple(sorted(set(self.numbers))))
@@ -110,6 +117,13 @@ def parse_reply(text: str) -> ReplyCommand | None:
     numbers = tuple(n for kind, n in tokens if kind == "number")
     if kinds in (["review_again"], ["skip"], ["push"], ["diff"], ["fix"]):
         return ReplyCommand(kinds[0])
+    if kinds == ["push", "anyway"]:
+        return ReplyCommand("push", anyway=True)
+    if (kinds[:1] == ["push"] and count["push"] == 1 and count["post"] == 1 and "and" in used
+            and used <= _PUSH_POST_TOKENS and kinds.index("and") < kinds.index("post")):
+        return ReplyCommand("push_post", anyway="anyway" in used)
+    if count["post"] == 1 and used <= _ALL_REPLIES_TOKENS and len(kinds) == len(used) and used & {"replies", "all"}:
+        return ReplyCommand("post_replies", all_replies=True)
     if used == {"text", "number"} and count["text"] == 1:
         return ReplyCommand("text", numbers)
     if count == Counter(draft=1, number=1):
@@ -151,11 +165,11 @@ def check_command(
     if kind == "findings" and cmd.action not in ("push", "diff", "again", "review_again", "skip"):
         return tr('This is a findings message: reply "push", "diff" or "again: …". Nothing was done.')
     if kind == "address" and cmd.action in ("post", "edit", "draft"):
-        return tr('This is a threads message: reply "push", "post replies 1 3", "text 2", "diff" or "again: …". '
+        return tr('This is a threads message: reply "push", "post all", "text 2", "diff" or "again: …". '
                   "Nothing was done.")
-    if kind not in FIX_KINDS and cmd.action in ("push", "diff", "again"):
+    if kind not in FIX_KINDS and cmd.action in ("push", "push_post", "diff", "again"):
         return tr('"{action}" works on a fix message of your own PR (threads or self-review findings). Nothing was '
-                  "done.", action=cmd.action)
+                  "done.", action="push and post" if cmd.action == "push_post" else cmd.action)
     recheck = kind in ("recheck", "address")
     if not recheck and cmd.action == "post_replies":
         return tr('This is a review message: "post replies" works on a re-check message. Nothing was done.')
@@ -168,6 +182,11 @@ def check_command(
         return tr('Name a number: "text 2". Nothing was done.')
     if cmd.action == "draft" and len(cmd.numbers) != 1:
         return tr('Draft one number at a time: "draft 7". Nothing was done.')
+    if cmd.all_replies:  # every drafted reply not posted at the head
+        left = tuple(entry["n"] for entry in replies if entry["n"] not in posted)
+        if not left:
+            return tr("Nothing left to post: every drafted reply is already posted at this head. Nothing was done.")
+        cmd = dataclasses.replace(cmd, numbers=left, all_replies=False)
     if cmd.action == "post_replies" and not cmd.numbers:
         return tr('Name the replies: "post replies 1 3". Nothing was done.')
     items = report.items if report else ()
@@ -224,7 +243,11 @@ def describe(cmd: ReplyCommand, head: str) -> str:
         return f'edit {numbers}: "{cmd.instruction}"'
     if cmd.action == "review_again":
         return "review again"
-    if cmd.action in ("push", "diff", "fix"):
+    if cmd.action == "push_post":
+        return "push and post anyway" if cmd.anyway else "push and post"
+    if cmd.action == "push":
+        return "push anyway" if cmd.anyway else "push"
+    if cmd.action in ("diff", "fix"):
         return cmd.action
     if cmd.action == "again":
         return f'again: "{cmd.instruction}"' if cmd.instruction else "again"

@@ -266,7 +266,7 @@ def _check_steps(steps: list[dict], entries: list[dict], threads: dict, allowed:
     a named entry with no step is already posted. A resolve alone passes here: whether its reply is in the thread
     is GitHub's to say, right before the confirm run. A reply carries its entry's text, a comment the same after a
     line naming the review it answers (`_shown_text`); a resolve posts none, and shows none or its entry's text.
-    Each step names its entry's thread (or path) or review body; every text passes the body check."""
+    Every text passes the body check. Where each step aims is checked once GitHub's threads are read (`_off_aim`)."""
     by_n = {entry["n"]: entry for entry in entries}
     planned: dict[int, list[str]] = {}
     for step in steps:
@@ -281,11 +281,22 @@ def _check_steps(steps: list[dict], entries: list[dict], threads: dict, allowed:
                 return f"{what} carries a text"
         elif _words(body) != _words(_shown_text(step["step"], entry, threads, pr_url)):
             return f"{what} is not its planned text"
-        if not _aims_at(step["target"], entry, threads):
-            return f"{what} is aimed at {step['target'][:80]}"
         if problems := body_problems(body, allowed):
             return f"{what} {problems[0]}"
     return {n: [kind for kind in _STEP_ORDER if kind in kinds] for n, kinds in planned.items()}
+
+
+def _off_aim(steps: list[dict], entries: list[dict], prepared: dict, current: dict) -> str | None:
+    """Why a step of the dry run does not aim at its entry's thread or review body, None when each does. A thread
+    is named by its id or by its `path:line` as GitHub shows it now (`current`: the threads command right before
+    the confirm run) or as Prepare's snapshot (`prepared`) had it: Cleave's own push of a fix moves a thread's line
+    when the fix added lines above it."""
+    by_n = {entry["n"]: entry for entry in entries}
+    for step in steps:
+        entry = by_n[step["n"]]
+        if not any(_aims_at(step["target"], entry, threads) for threads in (current, prepared)):
+            return f"the {step['step']} for #{step['n']} is aimed at {step['target']}"
+    return None
 
 
 class Posting:
@@ -596,6 +607,9 @@ class Posting:
             # A reply that reports a fix names the job's head: the pushed commit, or the head the fix was already
             # on when the job changed no code. Cleave writes the SHA; the model's entry never carries one.
             unpushed = next((e["n"] for e in entries if e.get("fixed") is True), None) if run.fix and not push else None
+            if unpushed is not None and run.fix.get("protected"):
+                raise _Refused(tr('#{n} reports a fix that is not pushed: reply "push anyway" first. Nothing was done.',
+                                  n=unpushed))
             if unpushed is not None:
                 raise _Refused(tr('#{n} reports a fix that is not pushed: reply "push" first. Nothing was done.',
                                   n=unpushed))
@@ -618,9 +632,11 @@ class Posting:
                 await lease.enter_async_context(ctx.clone.reader(wait=self._reader_wait))
             except CloneError as e:
                 raise _Refused(not_posted_line(number, str(e))) from None
-            planned = await self._replies_dry_run(ctx, values, number, entries, prepared)
+            planned, steps = await self._replies_dry_run(ctx, values, number, entries, prepared)
             pr = await self._pr_at_head(ctx, number, head)
             before = await self._threads_before(ctx, number, head)
+            if (off := _off_aim(steps, entries, prepared, before)) is not None:
+                raise _Refused(not_posted_line(number, off))
             # An entry the dry run leaves out is already posted only when GitHub agrees.
             by_n = {entry["n"]: entry for entry in entries}
             left_out = {n: why for n in cmd.numbers
@@ -646,7 +662,7 @@ class Posting:
                                                 left_out, results, result, unknown)
 
     async def _replies_dry_run(self, ctx: RepoContext, values: dict[str, str], number: int, entries: list[dict],
-                               prepared: dict) -> dict[int, list[str]]:
+                               prepared: dict) -> tuple[dict[int, list[str]], list[dict]]:
         result = await ctx.poster.replies(ctx.clone.path, values, confirm=False)
         if result.timed_out or result.returncode != 0:
             raise _Refused(not_posted_line(number, f"the dry run failed: {_dry_run_failure(result)}"))
@@ -658,7 +674,7 @@ class Posting:
                                f"https://github.com/{ctx.readiness.repo}/pull/{number}")
         if isinstance(planned, str):
             raise _Refused(not_posted_line(number, planned))
-        return planned
+        return planned, steps
 
     @staticmethod
     async def _threads_before(ctx: RepoContext, number: int, head: str) -> dict:
@@ -757,12 +773,15 @@ class Posting:
         return PostOutcome(state, replies_partial_line(number, why, results_text, by_hand, retry,
                                                        pr.url if uncertain else ""))
 
-    async def push_fix(self, ctx: RepoContext, job: Job) -> PostOutcome:
+    async def push_fix(self, ctx: RepoContext, job: Job, *, anyway: bool = False,
+                       then_post: bool = False) -> PostOutcome:
         """A fix job's patch (an address or a findings job's) committed on the PR head and pushed, under the posting
-        lock; never raises but a cancellation, which leaves the Post `posting` for the restart's recover()."""
+        lock; never raises but a cancellation, which leaves the Post `posting` for the restart's recover().
+        `anyway`: the operator's "push anyway", which pushes a fix with protected files too; `then_post`: a post of
+        the replies follows, so the answer names no "post replies" to send."""
         async with self._lock:
             try:
-                return await self._push_fix(ctx, job)
+                return await self._push_fix(ctx, job, anyway, then_post)
             except _Refused as e:
                 return PostOutcome("refused", str(e))
             except Exception as e:
@@ -770,7 +789,7 @@ class Posting:
             finally:
                 self._post = None
 
-    async def _push_fix(self, ctx: RepoContext, job: Job) -> PostOutcome:
+    async def _push_fix(self, ctx: RepoContext, job: Job, anyway: bool, then_post: bool) -> PostOutcome:
         # 1. The job as it is now, with a patch Cleave may push and no push of it landed; no ticket workspace
         # holding the PR (the ticket pipeline force-pushes its branch), read from the board before GitHub is.
         job = self._current(job.id)
@@ -778,9 +797,9 @@ class Posting:
         run = self._store.run(job.id)
         if job.kind not in FIX_KINDS or not run.fix:
             raise _Refused(tr("This job changed no code: nothing to push."))
-        if run.fix.get("protected"):
-            raise _Refused(tr("The fix touches protected files ({paths}): Cleave does not push it. Nothing was done.",
-                              paths=", ".join(run.fix["protected"])[:_MAX_PATH]))
+        if run.fix.get("protected") and not anyway:
+            raise _Refused(tr('The fix touches protected files ({paths}): Cleave pushes it only on "push anyway". '
+                              "Nothing was done.", paths=", ".join(run.fix["protected"])))
         if (landed := self._store.push_of(job)) is not None:
             raise _Refused(tr("Already pushed as {sha}. Nothing was done.", sha=landed.sha[:9]))
         row = self._store.board(job.scope).get(number)
@@ -838,7 +857,7 @@ class Posting:
         # A findings job has no replies: no "post replies" hint follows its push.
         posted = self._store.posted_replies(job)
         fixed = [e["n"] for e in run.replies if e.get("fixed") is True and e["n"] not in posted]
-        return PostOutcome("posted", pushed_line(number, sha, url, fixed))
+        return PostOutcome("posted", pushed_line(number, sha, url, [] if then_post else fixed))
 
     async def _head_is(self, ctx: RepoContext, number: int, sha: str) -> bool:
         """Whether GitHub shows `sha` as the PR's head, read up to verify_reads times, verify_wait apart (its PR

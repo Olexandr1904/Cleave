@@ -55,6 +55,14 @@ _FORGE_FAILING = N_("The forge token is failing (see the dashboard): nothing pos
 _HANDLED = N_("Already handled.")
 _CANCELLED = N_("Cancelled: nothing was done.")
 _EXPIRED = N_("Expired: reply again; nothing was done.")
+# A fix message's buttons (messages.fix_buttons), each the command the typed reply gives; rv_pushx asks first.
+_TAPS = {
+    "rv_push": ReplyCommand("push"),
+    "rv_pushpost": ReplyCommand("push_post"),
+    "rv_post": ReplyCommand("post_replies", all_replies=True),
+    "rv_diff": ReplyCommand("diff"),
+}
+_PUSH_ANYWAY_TAP = "rv_pushx"
 
 
 @dataclass(frozen=True)
@@ -137,15 +145,19 @@ class ReviewerReplies:
                 await self._internal_error(to, e)
 
     async def handle_callback(self, action: str, conf_id: str, chat_id: str, message_id: int) -> None:
-        """A tap on an echo's Yes (rv_ok) or No (rv_no). The store hands a confirmation out once, so a second tap or
-        a redelivered Yes runs nothing. A tap in another chat than the echo's is logged only: it neither runs nor
-        spends the echo. Never raises (cancellation aside)."""
+        """A tap on an echo's Yes (rv_ok) or No (rv_no), or on a fix message's button (then `conf_id` is the job's id,
+        see _tap). The store hands a confirmation out once, so a second tap or a redelivered Yes runs nothing. A tap
+        in another chat than the echo's is logged only: it neither runs nor spends the echo. Never raises
+        (cancellation aside)."""
         to = _To(message_id)
         language = self._language_of("")  # until the echo's job names a project
         try:
             if not self._contexts:
                 with telegram_language(language):
                     await self._answer(to, tr(_OFF))
+                return
+            if action in _TAPS or action == _PUSH_ANYWAY_TAP:
+                await self._tap(action, conf_id, chat_id, message_id)
                 return
             if (conf := self._store.confirmation(conf_id)) is not None and conf.chat_id != chat_id:
                 logger.warning("Reviewer confirmation tapped in another chat: nothing was done")
@@ -164,6 +176,48 @@ class ReviewerReplies:
         except Exception as e:
             with telegram_language(language):
                 await self._internal_error(to, e)
+
+    async def _tap(self, action: str, job_id: str, chat_id: str, message_id: int) -> None:
+        """A tap on a fix message's button: its command run as the typed reply to that message runs, answered as a
+        reply to it. The tapped message must be the job's own, else nothing runs (logged only). "Push anyway…"
+        echoes what it would push with Yes / No first."""
+        to = _To(message_id, job_id)
+        anchor = self._store.anchor(chat_id, message_id)
+        if anchor is None or anchor.job_id != job_id:
+            logger.warning("Reviewer button tapped on a message that is not its job's: nothing was done")
+            return
+        language = self._anchor_language(job_id, anchor.scope)
+        try:
+            with telegram_language(language):
+                job = self._store.job(job_id)
+                ctx = self._contexts.get(job.scope)
+                if ctx is None:
+                    await self._answer(to, tr(_GONE))
+                elif action == _PUSH_ANYWAY_TAP:
+                    await self._ask_push_anyway(job, chat_id, to)
+                else:
+                    await self._execute(ctx, job, _TAPS[action], to)
+        except Exception as e:
+            with telegram_language(language):
+                await self._internal_error(to, e)
+
+    async def _ask_push_anyway(self, job: Job, chat_id: str, to: _To) -> None:
+        """The echo of "push anyway" (then a post of every drafted reply, on a threads message with replies), with
+        Yes / No: Yes runs it as the stored command (_confirmed)."""
+        run = self._store.run(job.id)
+        then_post = job.kind == "address" and bool(run.replies)
+        checked = self._check(job, ReplyCommand("push_post" if then_post else "push", anyway=True))
+        if isinstance(checked, str):
+            await self._answer(to, checked)
+            return
+        paths = ", ".join((run.fix or {}).get("protected", []))
+        if then_post:
+            text = tr("Push the fix with protected files ({paths}) to #{number}, then post every drafted reply?",
+                      paths=paths, number=job.number)
+        else:
+            text = tr("Push the fix with protected files ({paths}) to #{number}?", paths=paths, number=job.number)
+        conf = self._store.add_confirmation(job.id, chat_id, checked.to_dict(), self._now().isoformat())
+        await self._answer(to, text, [Button(tr("Yes"), f"rv_ok:{conf.id}"), Button(tr("No"), f"rv_no:{conf.id}")])
 
     async def start(self) -> None:
         """The posts a restart left `posting`, now `interrupted`, each announced with a line anchored to its job;
@@ -296,9 +350,12 @@ class ReviewerReplies:
                                           n=n))
         elif self._credential_failing(f"forge:{job.scope}"):
             await self._answer(to, tr(_FORGE_FAILING))
-        else:  # post, post_replies, push
+        else:  # post, post_replies, push, push_post
             if checked.action == "push":
                 await self._answer(to, tr("Checking before pushing."))
+            elif checked.action == "push_post":
+                await self._answer(to, tr("Checking before pushing; once the push lands, every drafted reply is "
+                                          "posted."))
             else:
                 await self._answer(to, tr("Checking before posting: {command}.",
                                           command=describe(checked, job.head_sha)))
@@ -309,12 +366,27 @@ class ReviewerReplies:
             await self._answer(to, text)
 
     async def _post(self, ctx: RepoContext, job: Job, cmd: ReplyCommand, to: _To) -> None:
-        if cmd.action == "push":
-            outcome = await self._posting.push_fix(ctx, job)
+        if cmd.action in ("push", "push_post"):
+            then_post = cmd.action == "push_post"
+            outcome = await self._posting.push_fix(ctx, job, anyway=cmd.anyway, then_post=then_post)
+            await self._answer(to, outcome.text)
+            if then_post and outcome.state == "posted":
+                await self._post_all(ctx, job.id, to)
+            return
         else:
             post = self._posting.post_review if cmd.action == "post" else self._posting.post_replies
             outcome = await post(ctx, job, cmd)
         await self._answer(to, outcome.text)
+
+    async def _post_all(self, ctx: RepoContext, job_id: str, to: _To) -> None:
+        """After "push and post" pushed the fix: every drafted reply not posted at the job's new head."""
+        job = self._store.job(job_id)
+        checked = self._check(job, ReplyCommand("post_replies", all_replies=True))
+        if isinstance(checked, str):
+            await self._answer(to, checked)
+            return
+        await self._answer(to, tr("Checking before posting: {command}.", command=describe(checked, job.head_sha)))
+        await self._answer(to, (await self._posting.post_replies(ctx, job, checked)).text)
 
     def _check(self, job: Job, cmd: ReplyCommand) -> ReplyCommand | str:
         """The command as it runs against the job ("all confirmed" expanded), or why nothing is done."""

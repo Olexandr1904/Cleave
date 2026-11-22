@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Any
 
 from config.schemas import ReviewerJobConfig
+from integrations.base.notifier import Button
 from orchestrator.reviewer.board import ADDRESS_ACTIONS, FIX_KINDS, TICKET_KEY
 from orchestrator.reviewer.chat import ReviewerChat
 from orchestrator.reviewer.clone import ReviewClone, git_file_changed, guarded_git_files
@@ -30,6 +31,7 @@ from orchestrator.reviewer.messages import (
     MESSAGE_LIMIT,
     address_message,
     findings_message,
+    fix_buttons,
     message_parts,
     recheck_message,
     review_message,
@@ -725,11 +727,13 @@ class JobRunner:
             run.language = current_language()
         with telegram_language(run.language):  # "" (a run from before languages): English
             text = _message(job, run)
+            buttons = fix_buttons(job.kind, job.id, run.replies, run.fix)
             if not run.message_ids and (missing := [t for t in marked_texts(text) if t not in run.translations]):
                 run.translations = {**run.translations, **await self._chat.translations(missing)}
         parts = message_parts(fill(text, run.translations), limit=MESSAGE_LIMIT)
-        for part in parts[len(run.message_ids):]:
-            message_id = await self._send(part, job_id=job.id)
+        for i, part in enumerate(parts[len(run.message_ids):], len(run.message_ids)):
+            # The buttons go on the last part, where the operator ends reading.
+            message_id = await self._send(part, job_id=job.id, buttons=buttons if i == len(parts) - 1 else None)
             if message_id is None:
                 self._attempt_failed(run)
                 return False
@@ -760,13 +764,14 @@ class JobRunner:
         process = ctx.cfg.process
         await self._send(drift_line(ctx.scope, process.doc, process.prepare_section), scope=ctx.scope)
 
-    async def _send(self, text: str, job_id: str = "", scope: str = "") -> int | None:
+    async def _send(self, text: str, job_id: str = "", scope: str = "",
+                    buttons: list[Button] | None = None) -> int | None:
         """The Telegram message id, the message a reply anchor to the job or the repo; None without a chat,
         or when the send failed (logged with the exception class only)."""
         if self._chat is None:
             return None
         try:
-            return await self._chat.send(text, job_id=job_id, scope=scope)
+            return await self._chat.send(text, job_id=job_id, scope=scope, buttons=buttons or None)
         except Exception as e:
             logger.warning("Reviewer line not sent: %s", type(e).__name__)
             return None

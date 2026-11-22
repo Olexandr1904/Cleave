@@ -460,6 +460,13 @@ async def test_step_text_still_passes_the_body_check(tmp_path):
     assert rig.confirms() == []
 
 
+async def test_an_off_target_is_named_whole(tmp_path):
+    target = f"app/src/main/{'very/' * 30}Other.kt:5 @x"
+    rig = Rig(tmp_path, dry=(steps({**REPLY_1, "target": target}, {**RESOLVE_1, "target": target}, COMMENT_3),))
+    assert await rig.post() == PostOutcome("refused", f"Not posted on #1712: the reply for #1 is aimed at {target}.")
+    assert rig.confirms() == []
+
+
 @pytest.mark.parametrize("target, posted", [
     ("T1", True), ("T1 @octo-author", True), ("app/src/main/CartRepository.kt:88 @octo-author", True),
     # Fix round 2: the path alone, or the path at another line, is not T1 (Q3).
@@ -790,6 +797,13 @@ async def test_fixed_reply_is_refused_before_the_push(tmp_path):
     assert out.state == "refused" and rig.confirms() == [] and rig.poster.calls == []
 
 
+async def test_a_protected_fixed_reply_is_refused_naming_push_anyway(tmp_path):
+    rig = address(tmp_path, fix={**FIX, "protected": [".github/workflows/ci.yml"]})
+    out = await rig.post(ReplyCommand("post_replies", (1,)))
+    assert out.text == '#1 reports a fix that is not pushed: reply "push anyway" first. Nothing was done.'
+    assert out.state == "refused" and rig.poster.calls == []
+
+
 async def test_unfixed_reply_posts_before_the_push(tmp_path):
     after = snapshot([THREAD_1, thread("T2", AUTHOR, comment(201, AUTHOR), comment(202, ME, "Intended."))], BODIES)
     rig = address(tmp_path, fix=FIX, snapshots=(PREPARED_A, after),
@@ -812,6 +826,22 @@ async def test_fixed_reply_posts_after_the_push(tmp_path):
                         "resolve": True, "fix_sha": NEW_HEAD}]
     assert rig.poster.plans == [written] * 2
     assert rig.store.posted_replies(rig.job) == {1}   # Prepare's snapshot (at HEAD) was accepted
+
+
+async def test_fixed_reply_posts_after_the_push_moved_its_line(tmp_path):
+    """Cleave's own push added lines above the thread: GitHub now shows it, and the dry run aims at it, at line 90,
+    while Prepare's snapshot (of the head before the push) says 88."""
+    new9 = NEW_HEAD[:9]
+    moved = snapshot([{**THREAD_1, "line": 90}, MY_T2], BODIES)
+    target = "app/src/main/CartRepository.kt:90 @octo-author"
+    body = f"Fixed in {new9}: null check."
+    rig = address(tmp_path, fix=FIX, push=NEW_HEAD, heads=(NEW_HEAD,),
+                  snapshots=(at(moved, NEW_HEAD), at(T1_GONE, NEW_HEAD)),
+                  dry=(steps({"step": "reply", "n": 1, "target": target, "body": body},
+                             {"step": "resolve", "n": 1, "target": target, "body": body}),),
+                  confirm=(FIXED_RESULTS,))
+    out = await rig.post(ReplyCommand("post_replies", (1,)))
+    assert out == PostOutcome("posted", f"Posted replies on #1712:\n1: replied {REPLIED}{RESOLVED}")
 
 
 async def test_fixed_reply_without_a_patch_uses_the_jobs_head(tmp_path):

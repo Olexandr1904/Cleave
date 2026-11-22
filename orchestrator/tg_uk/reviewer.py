@@ -31,8 +31,14 @@ TEXTS: dict[str, str] = {
     '[{scope}] Self-review findings on your PR #{number} "{title}"':
         '[{scope}] Зауваження самоперевірки у вашому PR #{number} "{title}"',
     "head {head} · {findings} · {change}": "коміт {head} · {findings} · {change}",
-    "Protected files in the fix ({paths}): Cleave will not push it.":
-        "Захищені файли у виправленні ({paths}): Cleave його не запушить.",
+    'Protected files in the fix ({paths}): Cleave pushes it only on "push anyway".':
+        'Захищені файли у виправленні ({paths}): Cleave запушить його лише на "push anyway".',
+    "Push + reply all": "Push + відповісти всім",
+    "Push": "Push",
+    "Diff": "Diff",
+    "Push anyway + reply all…": "Push попри захист + відповісти всім…",
+    "Push anyway…": "Push попри захист…",
+    "Reply all": "Відповісти всім",
     "Reply to this message: {commands}": "Відповідайте на це повідомлення: {commands}",
     "… {lines} — the full report is on the dashboard": "… ще {lines} — повний звіт на дашборді",
 
@@ -79,8 +85,8 @@ TEXTS: dict[str, str] = {
         'Не зрозумів; нічого не зроблено. Відповідайте, наприклад, "post replies 1 3", "text 1" або "review again".',
     'Not understood; nothing was done. Reply like "push", "diff" or "again: …".':
         'Не зрозумів; нічого не зроблено. Відповідайте, наприклад, "push", "diff" або "again: …".',
-    'Not understood; nothing was done. Reply like "push", "post replies 1 3", "text 2", "diff" or "again: …".':
-        'Не зрозумів; нічого не зроблено. Відповідайте, наприклад, "push", "post replies 1 3", "text 2", "diff"'
+    'Not understood; nothing was done. Reply like "push", "post all", "text 2", "diff" or "again: …".':
+        'Не зрозумів; нічого не зроблено. Відповідайте, наприклад, "push", "post all", "text 2", "diff"'
         ' або "again: …".',
     'Not understood; nothing was done. Reply like "post 1 2 4 approve", "text 2", "edit 2: …", "draft 7" or'
     ' "review again".':
@@ -107,6 +113,8 @@ TEXTS: dict[str, str] = {
         '#{number}: його текст {problem}: нічого не опубліковано. Відповідайте "again: …", щоб його переписали.',
     '#{n} reports a fix that is not pushed: reply "push" first. Nothing was done.':
         '#{n} повідомляє про виправлення, яке не запушено: спершу відповідайте "push". Нічого не зроблено.',
+    '#{n} reports a fix that is not pushed: reply "push anyway" first. Nothing was done.':
+        '#{n} повідомляє про виправлення, яке не запушено: спершу відповідайте "push anyway". Нічого не зроблено.',
     "Nothing left to post on #{number} at {head}: what you named is already posted.":
         "У #{number} на {head} публікувати нічого: усе, що ви назвали, вже опубліковано.",
     'The Summary already landed at #{number} at {head}: add "no summary". Nothing was done.':
@@ -210,8 +218,9 @@ TEXTS: dict[str, str] = {
 
     # lines.py and posting.py: the push of an address job's fix
     "This job changed no code: nothing to push.": "Ця задача не змінила коду: пушити нічого.",
-    "The fix touches protected files ({paths}): Cleave does not push it. Nothing was done.":
-        "Виправлення зачіпає захищені файли ({paths}): Cleave його не пушить. Нічого не зроблено.",
+    'The fix touches protected files ({paths}): Cleave pushes it only on "push anyway". Nothing was done.':
+        'Виправлення зачіпає захищені файли ({paths}): Cleave пушить його лише на "push anyway".'
+        " Нічого не зроблено.",
     "Already pushed as {sha}. Nothing was done.": "Уже запушено як {sha}. Нічого не зроблено.",
     'A ticket of the pipeline still holds #{number}\'s branch and may overwrite it: nothing pushed. Reply "push"'
     ' again when the ticket is done.':
@@ -239,8 +248,8 @@ TEXTS: dict[str, str] = {
         'Це повідомлення рев\'ю: "post replies" працює в повідомленні повторної перевірки. Нічого не зроблено.',
     'This is a re-check message: reply "post replies 1 3". Nothing was done.':
         'Це повідомлення повторної перевірки: відповідайте "post replies 1 3". Нічого не зроблено.',
-    'This is a threads message: reply "push", "post replies 1 3", "text 2", "diff" or "again: …". Nothing was done.':
-        'Це повідомлення про треди: відповідайте "push", "post replies 1 3", "text 2", "diff" або "again: …".'
+    'This is a threads message: reply "push", "post all", "text 2", "diff" or "again: …". Nothing was done.':
+        'Це повідомлення про треди: відповідайте "push", "post all", "text 2", "diff" або "again: …".'
         ' Нічого не зроблено.',
     '"{action}" works on a fix message of your own PR (threads or self-review findings). Nothing was done.':
         '"{action}" працює в повідомленні про виправлення вашого PR (треди чи зауваження самоперевірки).'
@@ -254,6 +263,8 @@ TEXTS: dict[str, str] = {
     'Name a number: "text 2". Nothing was done.': 'Вкажіть номер: "text 2". Нічого не зроблено.',
     'Draft one number at a time: "draft 7". Nothing was done.':
         'Чернетки — по одному номеру: "draft 7". Нічого не зроблено.',
+    "Nothing left to post: every drafted reply is already posted at this head. Nothing was done.":
+        "Публікувати нічого: усі чернетки відповідей уже опубліковано на цьому коміті. Нічого не зроблено.",
     'Name the replies: "post replies 1 3". Nothing was done.':
         'Вкажіть відповіді: "post replies 1 3". Нічого не зроблено.',
     "Nothing left to post: every confirmed finding is already posted at this head. Nothing was done.":
@@ -303,6 +314,12 @@ TEXTS: dict[str, str] = {
     "#{number} is not on the board any more; nothing was done.": "#{number} уже немає на дошці; нічого не зроблено.",
     "Queued a review of #{number} at {head}.": "Рев'ю #{number} на {head} поставлено в чергу.",
     "Checking before pushing.": "Перевіряю перед пушем.",
+    "Push the fix with protected files ({paths}) to #{number}, then post every drafted reply?":
+        "Запушити виправлення із захищеними файлами ({paths}) у #{number}, а тоді опублікувати всі чернетки відповідей?",
+    "Push the fix with protected files ({paths}) to #{number}?":
+        "Запушити виправлення із захищеними файлами ({paths}) у #{number}?",
+    "Checking before pushing; once the push lands, every drafted reply is posted.":
+        "Перевіряю перед пушем; щойно пуш пройде, опублікую всі чернетки відповідей.",
     "This job changed no code: there is no patch.": "Ця задача не змінила коду: патча немає.",
     "Patch cut: the dashboard shows all of it.": "Патч обрізано: на дашборді він повністю.",
     "A run on #{number} is already queued.": "Запуск для #{number} уже в черзі.",

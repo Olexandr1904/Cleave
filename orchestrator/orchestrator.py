@@ -18,6 +18,7 @@ from integrations.base.tracker import TrackerInterface
 from integrations.base.vcs import VCSInterface
 from integrations.telegram.handlers.mode import ModeHandler
 from orchestrator.agent_runtime import AgentRuntime
+from orchestrator.notify import QuotaWindow
 from orchestrator.pipeline.actions.fetch_pr_comments import (
     action_fetch_pr_comments,
     hand_over_to_reviewer,
@@ -118,10 +119,9 @@ class Orchestrator:
         self._repo_vcs: dict[str, tuple[VCSInterface, RepoConfig]] = {}
         # Mode handler — initialized later via set_mode_handler or from config default
         self._mode_handler: ModeHandler | None = None
-        # In-memory debounce for Claude CLI quota notifications.
-        # Stores the retry_at of the first notification in the current window;
-        # further quota hits while now < _quota_window_end are silenced.
-        self._quota_window_end: datetime | None = None
+        # The open usage-limit window of each chat (notify.QuotaWindow): its one
+        # Telegram message, which later tickets hitting the limit edit themselves into.
+        self._quota_windows: dict[str, QuotaWindow] = {}
         self._config_dir = config_dir
         self._on_project_added = on_project_added
         # Runtime owns the long-running daemon state (active workspaces,
@@ -462,11 +462,15 @@ class Orchestrator:
         event_bus = getattr(self, "_events", None)
         notifier = getattr(self, "_notifier", None)
 
-        async def _deferred(ws, retry_at, reason=None):
+        async def _deferred(ws, retry_at, reason=None, *, quota=False):
             chat_id = self._get_chat_id(ws)
-            self._quota_window_end = await notify_deferred(
-                notifier, chat_id, ws, retry_at, reason, self._quota_window_end,
+            window = await notify_deferred(
+                notifier, chat_id, ws, retry_at, reason, quota=quota, window=self._quota_windows.get(chat_id),
             )
+            if window is None:
+                self._quota_windows.pop(chat_id, None)
+            else:
+                self._quota_windows[chat_id] = window
 
         async def _failed(ws, error):
             if notifier is None:
@@ -508,13 +512,13 @@ class Orchestrator:
         await self._ensure_runtime_for_tests().sweep_deferred()
 
     def _sweep_quota_window(self, now: datetime) -> None:
-        """Clear in-memory quota debounce window once its retry_at has passed.
+        """Drop the usage-limit windows that have ended: the next hit opens a new message.
 
         Called by Runtime.sweep_deferred so the window state stays on the
-        Orchestrator (alongside the rest of the quota debounce machinery).
+        Orchestrator (alongside the rest of the quota machinery).
         """
-        if self._quota_window_end is not None and now >= self._quota_window_end:
-            self._quota_window_end = None
+        for chat_id in [c for c, window in self._quota_windows.items() if now >= window.end]:
+            del self._quota_windows[chat_id]
 
     def _ensure_runtime_for_tests(self) -> Runtime:
         """Return the Runtime, lazily constructing a minimal one if missing.

@@ -190,3 +190,13 @@ Two independent guards, both on `DefaultsConfig`:
 ## Max-iterations escalation distinguishes no-output runs (2026-05-21)
 
 `orchestrator/escalation.py`: the max-iterations escalation hint is extracted into `build_max_iterations_hint(...)` and now branches on whether the stage actually produced a runtime output file (`STAGE_RUNTIME_OUTPUT[stage]` exists in `reports/`). When the agent ran but never wrote output (timed out / crashed / interrupted), the message no longer claims "Last output is shown above" — it says no output was produced and points the operator at skip / reset-and-retry. The header also now shows `iterations/cap` (e.g. `stuck after 2/2 attempts`).
+
+## The same transient error three times stops the ticket (2026-11-23)
+
+`pipeline/agent_stage.py`: a transient agent failure (`failure_kind == "transient"`) is counted in the workspace
+state (`transient_error` = "<stage>: <first line>", `transient_count`). The third time in a row the same error comes
+at the same stage, the ticket goes to FAILED with "The same error 3 times in a row: …" and the Retry button instead
+of being deferred again; a deterministic failure the CLI reports like a transient one ("Session ID … is already in
+use") was deferred ten times in an hour. A usage limit neither counts nor breaks the count; a run that succeeds, a
+different error or another stage starts it again, and so does the failure itself (the operator's Retry gets three
+more tries).

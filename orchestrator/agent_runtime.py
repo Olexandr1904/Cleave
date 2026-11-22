@@ -84,7 +84,9 @@ class AgentResult:
     tool_rounds: int = 0
     duration_seconds: float = 0
     error: str | None = None
-    failure_kind: str | None = None  # "quota" | "permanent" | None
+    # "quota": a usage limit (QuotaExhaustedError); "transient": a CLI error deferred the same way that is
+    # not one; "permanent"; None.
+    failure_kind: str | None = None
     retry_at: datetime | None = None
 
 
@@ -479,7 +481,7 @@ class AgentRuntime:
                     success=False,
                     output="",
                     error=str(e),
-                    failure_kind="quota",  # reuse quota path for auto-retry
+                    failure_kind="transient",  # deferred like a quota hit, announced as what it is
                     retry_at=retry_at,
                 )
             logger.error("Agent '%s' failed: %s", agent_id, e)

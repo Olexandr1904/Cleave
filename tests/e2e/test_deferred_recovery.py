@@ -89,7 +89,7 @@ def orchestrator(tmp_path):
     orch._mode_handler = MagicMock(get_mode=MagicMock(return_value="auto"))
     orch._shutdown_event = MagicMock()
     orch._recent_completions = []
-    orch._quota_window_end = None
+    orch._quota_windows = {}
     orch._agent_runtime = MagicMock()
 
     from dashboard.events import EventBus

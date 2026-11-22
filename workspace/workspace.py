@@ -86,6 +86,10 @@ class WorkspaceState:
     manual_control_started_at: str | None = None
     manual_control_comment: str | None = None
     retry_at: str | None = None
+    # The transient agent error last deferred ("<stage>: <its first line>") and how many times in a row it came:
+    # the same one too often stops the ticket instead of deferring it again (pipeline/agent_stage.py).
+    transient_error: str | None = None
+    transient_count: int = 0
     pending_review_comments: list[dict] | None = None
     review_cycle: int = 0
     last_verified_sha: str = ""

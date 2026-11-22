@@ -79,8 +79,8 @@ TEXTS: dict[str, str] = {
         'Не зрозумів; нічого не зроблено. Відповідайте, наприклад, "post replies 1 3", "text 1" або "review again".',
     'Not understood; nothing was done. Reply like "push", "diff" or "again: …".':
         'Не зрозумів; нічого не зроблено. Відповідайте, наприклад, "push", "diff" або "again: …".',
-    'Not understood; nothing was done. Reply like "push", "post replies 1 3", "text 2", "diff" or "again: …".':
-        'Не зрозумів; нічого не зроблено. Відповідайте, наприклад, "push", "post replies 1 3", "text 2", "diff"'
+    'Not understood; nothing was done. Reply like "push", "post all", "text 2", "diff" or "again: …".':
+        'Не зрозумів; нічого не зроблено. Відповідайте, наприклад, "push", "post all", "text 2", "diff"'
         ' або "again: …".',
     'Not understood; nothing was done. Reply like "post 1 2 4 approve", "text 2", "edit 2: …", "draft 7" or'
     ' "review again".':
@@ -239,8 +239,8 @@ TEXTS: dict[str, str] = {
         'Це повідомлення рев\'ю: "post replies" працює в повідомленні повторної перевірки. Нічого не зроблено.',
     'This is a re-check message: reply "post replies 1 3". Nothing was done.':
         'Це повідомлення повторної перевірки: відповідайте "post replies 1 3". Нічого не зроблено.',
-    'This is a threads message: reply "push", "post replies 1 3", "text 2", "diff" or "again: …". Nothing was done.':
-        'Це повідомлення про треди: відповідайте "push", "post replies 1 3", "text 2", "diff" або "again: …".'
+    'This is a threads message: reply "push", "post all", "text 2", "diff" or "again: …". Nothing was done.':
+        'Це повідомлення про треди: відповідайте "push", "post all", "text 2", "diff" або "again: …".'
         ' Нічого не зроблено.',
     '"{action}" works on a fix message of your own PR (threads or self-review findings). Nothing was done.':
         '"{action}" працює в повідомленні про виправлення вашого PR (треди чи зауваження самоперевірки).'
@@ -254,6 +254,8 @@ TEXTS: dict[str, str] = {
     'Name a number: "text 2". Nothing was done.': 'Вкажіть номер: "text 2". Нічого не зроблено.',
     'Draft one number at a time: "draft 7". Nothing was done.':
         'Чернетки — по одному номеру: "draft 7". Нічого не зроблено.',
+    "Nothing left to post: every drafted reply is already posted at this head. Nothing was done.":
+        "Публікувати нічого: усі чернетки відповідей уже опубліковано на цьому коміті. Нічого не зроблено.",
     'Name the replies: "post replies 1 3". Nothing was done.':
         'Вкажіть відповіді: "post replies 1 3". Нічого не зроблено.',
     "Nothing left to post: every confirmed finding is already posted at this head. Nothing was done.":

@@ -208,8 +208,7 @@ def not_understood_line(kind: str) -> str:
     if kind == "findings":
         return tr('Not understood; nothing was done. Reply like "push", "diff" or "again: …".')
     if kind == "address":
-        return tr('Not understood; nothing was done. Reply like "push", "post replies 1 3", "text 2", "diff" or '
-                  '"again: …".')
+        return tr('Not understood; nothing was done. Reply like "push", "post all", "text 2", "diff" or "again: …".')
     if kind == "recheck":
         return tr('Not understood; nothing was done. Reply like "post replies 1 3", "text 1" or "review again".')
     return tr('Not understood; nothing was done. Reply like "post 1 2 4 approve", "text 2", "edit 2: …",'

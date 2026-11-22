@@ -738,6 +738,67 @@ async def test_post_all_posts_every_drafted_reply_not_posted(tmp_path):
     assert rig.posting.calls == [("post_replies", SCOPE, rig.job.id, ReplyCommand("post_replies", (3,)))]
     assert rig.chat.sent[0] == ("Checking before posting: post replies 3.", rig.at(200))
 
+# --- Buttons of a fix message ---
+
+async def test_push_button_runs_the_push_on_its_message(tmp_path):
+    rig = address_rig(tmp_path)
+    rig.posting.outcome = PostOutcome("posted", "Pushed …")
+    await rig.tap("rv_push", rig.job.id, 200)
+    assert rig.posting.calls == [("push_fix", SCOPE, rig.job.id, None)]
+    assert rig.chat.sent == [("Checking before pushing.", rig.at(200)), ("Pushed …", rig.at(200))]
+
+async def test_push_and_reply_all_button_pushes_then_posts(tmp_path):
+    rig = address_rig(tmp_path)
+    rig.posting.outcomes = {"push_fix": PostOutcome("posted", "Pushed …")}
+    await rig.tap("rv_pushpost", rig.job.id, 200)
+    assert [(call[0], call[3]) for call in rig.posting.calls] == [
+        ("push_fix", {"anyway": False, "then_post": True}), ("post_replies", ReplyCommand("post_replies", (1, 3)))]
+    assert rig.texts() == [PUSH_THEN_POST, "Pushed …", "Checking before posting: post replies 1 3.", "Posted …"]
+
+async def test_reply_all_and_diff_buttons(tmp_path):
+    rig = address_rig(tmp_path)
+    await rig.tap("rv_post", rig.job.id, 200)
+    assert rig.posting.calls == [("post_replies", SCOPE, rig.job.id, ReplyCommand("post_replies", (1, 3)))]
+    await rig.tap("rv_diff", rig.job.id, 200)
+    assert rig.chat.sent[-1] == (PATCH, rig.at(200))
+
+async def test_a_button_runs_nothing_on_another_jobs_message(tmp_path, caplog):
+    rig = address_rig(tmp_path)
+    with caplog.at_level(logging.WARNING, logger="orchestrator.reviewer.replies"):
+        await rig.tap("rv_push", rig.job.id, 100)     # the review's message, not the threads message
+        await rig.tap("rv_push", rig.job.id, 999)     # no message of the reviewer's
+    assert rig.chat.sent == [] and rig.posting.calls == []
+    assert caplog.text.count("not its job's: nothing was done") == 2
+
+PUSH_ANYWAY_ECHO = (f"Push the fix with protected files (.github/workflows/ci.yml) to #{N}, then post every drafted "
+                    "reply?")
+
+async def test_push_anyway_button_asks_first_and_yes_pushes_and_posts(tmp_path):
+    rig = address_rig(tmp_path)
+    protect(rig)
+    rig.posting.outcomes = {"push_fix": PostOutcome("posted", "Pushed …")}
+    await rig.tap("rv_pushx", rig.job.id, 200)
+    assert rig.posting.calls == [] and rig.chat.sent[0][0] == PUSH_ANYWAY_ECHO
+    conf_id = echo_id(rig.chat.sent[0][1])
+    await rig.tap("rv_ok", conf_id, rig.last_id())
+    assert [(call[0], call[3]) for call in rig.posting.calls] == [
+        ("push_fix", {"anyway": True, "then_post": True}), ("post_replies", ReplyCommand("post_replies", (1, 3)))]
+
+async def test_push_anyway_button_no_pushes_nothing(tmp_path):
+    rig = address_rig(tmp_path)
+    protect(rig)
+    await rig.tap("rv_pushx", rig.job.id, 200)
+    await rig.tap("rv_no", echo_id(rig.chat.sent[0][1]), rig.last_id())
+    assert rig.posting.calls == [] and rig.last() == "Cancelled: nothing was done."
+
+async def test_push_anyway_button_on_a_findings_message_asks_for_the_push_alone(tmp_path):
+    rig = findings_rig(tmp_path)
+    protect(rig)
+    await rig.tap("rv_pushx", rig.job.id, 300)
+    assert rig.chat.sent[0][0] == f"Push the fix with protected files (.github/workflows/ci.yml) to #{N}?"
+    await rig.tap("rv_ok", echo_id(rig.chat.sent[0][1]), rig.last_id())
+    assert rig.posting.calls == [("push_fix", SCOPE, rig.job.id, {"anyway": True, "then_post": False})]
+
 async def test_push_refused_while_the_forge_token_fails(tmp_path):
     rig = address_rig(tmp_path, failing=("forge:acme/app",))
     await rig.reply("push", 200)

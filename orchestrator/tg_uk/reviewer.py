@@ -314,6 +314,10 @@ TEXTS: dict[str, str] = {
     "#{number} is not on the board any more; nothing was done.": "#{number} уже немає на дошці; нічого не зроблено.",
     "Queued a review of #{number} at {head}.": "Рев'ю #{number} на {head} поставлено в чергу.",
     "Checking before pushing.": "Перевіряю перед пушем.",
+    "Push the fix with protected files ({paths}) to #{number}, then post every drafted reply?":
+        "Запушити виправлення із захищеними файлами ({paths}) у #{number}, а тоді опублікувати всі чернетки відповідей?",
+    "Push the fix with protected files ({paths}) to #{number}?":
+        "Запушити виправлення із захищеними файлами ({paths}) у #{number}?",
     "Checking before pushing; once the push lands, every drafted reply is posted.":
         "Перевіряю перед пушем; щойно пуш пройде, опублікую всі чернетки відповідей.",
     "This job changed no code: there is no patch.": "Ця задача не змінила коду: патча немає.",

@@ -294,6 +294,131 @@ class TestQuotaNotificationDebounce:
         assert ws2.state.current_state == Stage.DEFERRED
 
 
+def _transient(error: str) -> AgentResult:
+    return AgentResult(
+        agent_id="ba-agent", success=False, output="", error=error, failure_kind="transient",
+        retry_at=datetime.now(timezone.utc) + timedelta(minutes=10),
+    )
+
+
+async def _run_stage(orch, ws, stage_id: str = "analysis") -> None:
+    stage_def = MagicMock()
+    stage_def.agent = "ba-agent"
+    stage_def.max_iterations = 0
+    await orch._handle_agent_stage(ws, stage_id, stage_def)
+
+
+def _resume(ws, stage: str = Stage.ANALYSIS) -> None:
+    """What the deferred sweep does once retry_at has passed."""
+    ws.transition(stage)
+
+
+SESSION_IN_USE = "Claude Code CLI exited with code 1. stderr='Error: Session ID abc is already in use.'"
+
+
+class TestRepeatedTransientFailure:
+    """The same transient error over and over is not transient: on the third time in a row at a stage the
+    ticket stops with that error and the Retry button, instead of being deferred again (seen: ten deferrals in
+    an hour, every one "Session ID … is already in use")."""
+
+    async def test_third_same_error_in_a_row_fails_the_ticket_with_retry(
+        self, orchestrator_with_stubs, tmp_path
+    ):
+        orch = orchestrator_with_stubs
+        ws = _make_workspace(tmp_path, "T-1", state=Stage.ANALYSIS)
+        orch._active_workspaces.append(ws)
+        orch._agent_runtime.execute = AsyncMock(return_value=_transient(SESSION_IN_USE + "\nmore detail"))
+
+        await _run_stage(orch, ws)
+        assert ws.state.current_state == Stage.DEFERRED
+        _resume(ws)
+        await _run_stage(orch, ws)
+        assert ws.state.current_state == Stage.DEFERRED
+        _resume(ws)
+        await _run_stage(orch, ws)
+
+        assert ws.state.current_state == Stage.FAILED
+        assert ws.state.previous_state == Stage.ANALYSIS
+        assert ws.state.error == f"The same error 3 times in a row: {SESSION_IN_USE}"
+        assert ws.state.raw_error == SESSION_IN_USE + "\nmore detail"
+        last = orch._notifier.send_message.call_args
+        assert [b.action for b in last.kwargs["buttons"]][-1] == "retry:T-1"
+        # The operator's Retry starts a fresh count.
+        assert ws.state.transient_count == 0
+        assert ws.state.transient_error is None
+
+    async def test_a_different_error_starts_the_count_again(self, orchestrator_with_stubs, tmp_path):
+        orch = orchestrator_with_stubs
+        ws = _make_workspace(tmp_path, "T-2", state=Stage.ANALYSIS)
+        orch._active_workspaces.append(ws)
+
+        for error in (SESSION_IN_USE, SESSION_IN_USE, "Claude Code CLI timed out after 2400s"):
+            orch._agent_runtime.execute = AsyncMock(return_value=_transient(error))
+            await _run_stage(orch, ws)
+            assert ws.state.current_state == Stage.DEFERRED
+            _resume(ws)
+
+        assert ws.state.transient_count == 1
+
+    async def test_the_same_error_at_another_stage_starts_the_count_again(
+        self, orchestrator_with_stubs, tmp_path
+    ):
+        orch = orchestrator_with_stubs
+        ws = _make_workspace(tmp_path, "T-3", state=Stage.ANALYSIS)
+        orch._active_workspaces.append(ws)
+        orch._agent_runtime.execute = AsyncMock(return_value=_transient(SESSION_IN_USE))
+
+        await _run_stage(orch, ws, "analysis")
+        _resume(ws)
+        await _run_stage(orch, ws, "analysis")
+        _resume(ws, Stage.DEV)
+        await _run_stage(orch, ws, "dev")
+
+        assert ws.state.current_state == Stage.DEFERRED
+        assert ws.state.transient_count == 1
+
+    async def test_a_usage_limit_neither_counts_nor_breaks_the_count(self, orchestrator_with_stubs, tmp_path):
+        orch = orchestrator_with_stubs
+        ws = _make_workspace(tmp_path, "T-4", state=Stage.ANALYSIS)
+        orch._active_workspaces.append(ws)
+        quota = AgentResult(
+            agent_id="ba-agent", success=False, output="", error="You've hit your 5-hour limit",
+            failure_kind="quota", retry_at=datetime.now(timezone.utc) + timedelta(hours=1),
+        )
+
+        for result in (_transient(SESSION_IN_USE), quota, quota, _transient(SESSION_IN_USE)):
+            orch._agent_runtime.execute = AsyncMock(return_value=result)
+            await _run_stage(orch, ws)
+            assert ws.state.current_state == Stage.DEFERRED
+            _resume(ws)
+
+        assert ws.state.transient_count == 2
+
+    async def test_a_run_that_succeeds_clears_the_count(self, orchestrator_with_stubs, tmp_path):
+        from types import SimpleNamespace
+        from unittest.mock import patch
+
+        orch = orchestrator_with_stubs
+        ws = _make_workspace(tmp_path, "T-5", state=Stage.ANALYSIS)
+        orch._active_workspaces.append(ws)
+        for _ in range(2):
+            orch._agent_runtime.execute = AsyncMock(return_value=_transient(SESSION_IN_USE))
+            await _run_stage(orch, ws)
+            _resume(ws)
+        orch._agent_runtime.execute = AsyncMock(return_value=AgentResult(
+            agent_id="ba-agent", success=True, output="done",
+        ))
+
+        with patch("orchestrator.pipeline.agent_stage.stage_verifier.capture_stage_start", return_value=None), \
+                patch("orchestrator.pipeline.agent_stage.stage_verifier.verify",
+                      return_value=SimpleNamespace(ok=False, reason="stop here")), \
+                patch("orchestrator.notify.notify_verification_blocked", new_callable=AsyncMock):
+            await _run_stage(orch, ws)
+
+        assert ws.state.transient_count == 0
+        assert ws.state.transient_error is None
+
+
 class TestDeferredSweep:
     async def test_sweep_resumes_when_retry_at_passed(
         self, orchestrator_with_stubs, tmp_path, monkeypatch

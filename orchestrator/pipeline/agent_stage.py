@@ -36,6 +36,8 @@ from workspace.workspace import Stage, Workspace
 logger = logging.getLogger(__name__)
 
 DEFAULT_QUOTA_RETRY_DELAY = timedelta(hours=1)
+# The same transient error this many times in a row at a stage fails the ticket instead of deferring it again.
+TRANSIENT_REPEAT_LIMIT = 3
 
 
 def _now() -> str:
@@ -168,6 +170,21 @@ def rollback_iteration(workspace: Workspace, stage_id: str) -> None:
     if current > 0:
         state.stage_iterations[stage_id] = current - 1
         workspace.save_state()
+
+
+def _first_line(error: str | None) -> str:
+    return (error or "").strip().partition("\n")[0]
+
+
+def _transient_repeats(workspace: Workspace, stage_id: str, error: str | None) -> bool:
+    """Count a transient error at a stage, saved with the workspace; True when it is the same error (its first
+    line) TRANSIENT_REPEAT_LIMIT times in a row at that stage. A deterministic failure the CLI reports like a
+    transient one ("Session ID … is already in use") is otherwise deferred forever."""
+    state = workspace.state
+    key = f"{stage_id}: {_first_line(error)}"
+    count = state.transient_count + 1 if state.transient_error == key else 1
+    workspace.update_state(transient_error=key, transient_count=count)
+    return count >= TRANSIENT_REPEAT_LIMIT
 
 
 def parse_agent_outcome(
@@ -332,7 +349,13 @@ async def handle_agent_stage(
             agent_id=stage_def.agent,
             data={"stage": stage_id, "error": result.error},
         )
-        if result.failure_kind in ("quota", "transient"):
+        if result.failure_kind == "transient" and _transient_repeats(workspace, stage_id, result.error):
+            rollback_iteration(workspace, stage_id)
+            error = f"The same error {TRANSIENT_REPEAT_LIMIT} times in a row: {_first_line(result.error)}"
+            workspace.transition(Stage.FAILED)
+            workspace.update_state(error=error, raw_error=result.error, transient_error=None, transient_count=0)
+            await notify_failed_fn(workspace, error)
+        elif result.failure_kind in ("quota", "transient"):
             rollback_iteration(workspace, stage_id)
             retry_at = result.retry_at or (
                 datetime.now(timezone.utc) + DEFAULT_QUOTA_RETRY_DELAY
@@ -353,6 +376,8 @@ async def handle_agent_stage(
             await notify_failed_fn(workspace, final_error)
         return
 
+    if getattr(state, "transient_count", 0):
+        workspace.update_state(transient_error=None, transient_count=0)
     _emit(event_bus, "agent_completed", f"{stage_def.agent} completed for {state.ticket_id}", project_id=state.company_id, ticket_id=state.ticket_id, agent_id=stage_def.agent, data={"stage": stage_id, "duration": result.duration_seconds, "input_tokens": result.input_tokens, "output_tokens": result.output_tokens})
     sha_info = ""
     if stage_id == "dev":

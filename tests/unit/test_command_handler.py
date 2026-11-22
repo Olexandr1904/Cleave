@@ -1065,6 +1065,72 @@ class TestReviewerReplies:
             call("42", self.UNANCHORED)] * len(reviewer_forms)
 
 
+class TestStatusButtons:
+    """The taps on the buttons under /status: Retry, From stage… and a stage, Skip."""
+
+    def _handler(self, notifier, mode_handler, workspaces):
+        handler = CommandHandler(intent_parser=AsyncMock(), notifier=notifier, mode_handler=mode_handler,
+                                 active_workspaces_fn=lambda: workspaces)
+        handler._wake_fn = MagicMock()
+        return handler
+
+    async def test_retry_gives_the_stage_fresh_attempts_as_the_retry_reply_does(self, mock_notifier, mock_mode_handler):
+        ws = _make_workspace("ACME-1", "BLOCKED", previous_state="SCOPE_CHECK")
+        ws.state.stage_iterations = {"scope_check": 2, "qa": 1}
+        handler = self._handler(mock_notifier, mock_mode_handler, [ws])
+        await handler.handle_callback("retry", "ACME-1", "12345", 42)
+        ws.transition.assert_called_once_with("SCOPE_CHECK")
+        assert ws.state.stage_iterations == {"scope_check": 0, "qa": 0}
+
+    async def test_from_stage_answers_with_the_stages_as_buttons(self, mock_notifier, mock_mode_handler):
+        handler = self._handler(mock_notifier, mock_mode_handler, [_make_workspace("ACME-1", "BLOCKED", "QA")])
+        await handler.handle_callback("retry_pick", "ACME-1", "12345", 42)
+        sent = mock_notifier.send_message.await_args
+        assert sent.kwargs["reply_to_message_id"] == 42
+        actions = [b.action for b in sent.kwargs["buttons"]]
+        assert actions == [f"retry_from:ACME-1:{stage}" for stage in
+                           ("analysis", "plan_review", "dev", "scope_check", "code_review", "qa", "push")]
+        assert all(len(a.encode()) <= 64 for a in actions)
+        assert len({b.row for b in sent.kwargs["buttons"]}) > 1
+
+    async def test_a_stage_tapped_retries_from_it(self, mock_notifier, mock_mode_handler):
+        ws = _make_workspace("ACME-1", "BLOCKED", previous_state="QA")
+        ws.state.stage_iterations = {"dev": 2}
+        handler = self._handler(mock_notifier, mock_mode_handler, [ws])
+        await handler.handle_callback("retry_from", "ACME-1:dev", "12345", 43)
+        ws.transition.assert_called_once_with(Stage.DEV)
+        assert ws.state.stage_iterations["dev"] == 0
+        assert ws.state.rejected_at is None
+        handler._wake_fn.assert_called_once()
+        assert mock_notifier.send_message.await_args.kwargs["reply_to_message_id"] == 43
+
+    async def test_skip_advances_past_the_stage_as_the_skip_reply_does(self, mock_notifier, mock_mode_handler):
+        ws = _make_workspace("ACME-1", "FAILED", previous_state="SCOPE_CHECK")
+        handler = self._handler(mock_notifier, mock_mode_handler, [ws])
+        await handler.handle_callback("skip", "ACME-1", "12345", 44)
+        ws.transition.assert_called_once_with(Stage.CODE_REVIEW)
+        sent = mock_notifier.send_message.await_args
+        assert "Skipped SCOPE_CHECK. Advanced to CODE_REVIEW." in sent.args[1]
+        assert sent.kwargs["reply_to_message_id"] == 44
+        handler._wake_fn.assert_called_once()
+
+    async def test_skip_of_a_ticket_that_runs_again_does_nothing(self, mock_notifier, mock_mode_handler):
+        ws = _make_workspace("ACME-1", "DEV")
+        handler = self._handler(mock_notifier, mock_mode_handler, [ws])
+        await handler.handle_callback("skip", "ACME-1", "12345", 44)
+        ws.transition.assert_not_called()
+        assert "ACME-1 is DEV now: nothing was done." in mock_notifier.send_message.await_args.args[1]
+
+    async def test_a_transition_the_ticket_cannot_take_is_answered(self, mock_notifier, mock_mode_handler):
+        from workspace.workspace import InvalidTransitionError
+        ws = _make_workspace("ACME-1", "FAILED", previous_state="QA")
+        ws.transition.side_effect = InvalidTransitionError("Cannot transition from 'FAILED' to 'PUSHED'")
+        handler = self._handler(mock_notifier, mock_mode_handler, [ws])
+        await handler.handle_callback("skip", "ACME-1", "12345", 44)
+        assert "ACME-1 is FAILED now: nothing was done." in mock_notifier.send_message.await_args.args[1]
+        ws.save_state.assert_not_called()
+
+
 def _assert_passed(parser, notifier, text):
     """`text` passed the reviewer's guard: a fixed command was answered by the ticket flow without the intent parser,
     anything else reached the intent parser."""

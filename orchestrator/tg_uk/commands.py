@@ -36,6 +36,8 @@ TEXTS: dict[str, str] = {
     "Workspace {ticket_id} not found in PR_REVIEW.": "Воркспейс {ticket_id} не знайдено в PR_REVIEW.",
     "Got it. Fetching PR comments for {ticket_id} now.": "Прийнято. Забираю коментарі PR для {ticket_id}.",
     "Please specify a ticket ID to retry.": "Вкажіть ID тікета, який треба перезапустити.",
+    "{ticket_id} is {state} now: nothing was done.": "{ticket_id} зараз у стані {state}: нічого не зроблено.",
+    "{ticket_id}: retry from which stage?": "{ticket_id}: з якого етапу перезапустити?",
     "Several tickets end in {number}: {keys}. Send the full key.":
         "На {number} закінчуються кілька тікетів: {keys}. Надішліть повний ключ.",
     "Unknown stage '{stage}'. Valid stages: {valid}": "Невідомий етап '{stage}'. Допустимі етапи: {valid}",

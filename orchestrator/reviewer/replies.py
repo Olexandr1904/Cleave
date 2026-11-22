@@ -296,9 +296,12 @@ class ReviewerReplies:
                                           n=n))
         elif self._credential_failing(f"forge:{job.scope}"):
             await self._answer(to, tr(_FORGE_FAILING))
-        else:  # post, post_replies, push
+        else:  # post, post_replies, push, push_post
             if checked.action == "push":
                 await self._answer(to, tr("Checking before pushing."))
+            elif checked.action == "push_post":
+                await self._answer(to, tr("Checking before pushing; once the push lands, every drafted reply is "
+                                          "posted."))
             else:
                 await self._answer(to, tr("Checking before posting: {command}.",
                                           command=describe(checked, job.head_sha)))
@@ -309,12 +312,27 @@ class ReviewerReplies:
             await self._answer(to, text)
 
     async def _post(self, ctx: RepoContext, job: Job, cmd: ReplyCommand, to: _To) -> None:
-        if cmd.action == "push":
-            outcome = await self._posting.push_fix(ctx, job)
+        if cmd.action in ("push", "push_post"):
+            then_post = cmd.action == "push_post"
+            outcome = await self._posting.push_fix(ctx, job, anyway=cmd.anyway, then_post=then_post)
+            await self._answer(to, outcome.text)
+            if then_post and outcome.state == "posted":
+                await self._post_all(ctx, job.id, to)
+            return
         else:
             post = self._posting.post_review if cmd.action == "post" else self._posting.post_replies
             outcome = await post(ctx, job, cmd)
         await self._answer(to, outcome.text)
+
+    async def _post_all(self, ctx: RepoContext, job_id: str, to: _To) -> None:
+        """After "push and post" pushed the fix: every drafted reply not posted at the job's new head."""
+        job = self._store.job(job_id)
+        checked = self._check(job, ReplyCommand("post_replies", all_replies=True))
+        if isinstance(checked, str):
+            await self._answer(to, checked)
+            return
+        await self._answer(to, tr("Checking before posting: {command}.", command=describe(checked, job.head_sha)))
+        await self._answer(to, (await self._posting.post_replies(ctx, job, checked)).text)
 
     def _check(self, job: Job, cmd: ReplyCommand) -> ReplyCommand | str:
         """The command as it runs against the job ("all confirmed" expanded), or why nothing is done."""

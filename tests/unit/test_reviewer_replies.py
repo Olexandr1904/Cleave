@@ -59,7 +59,7 @@ class FakePosting:
     """Records (method, scope, job id, command) per post; returns `outcome` (POSTED) or raises `error`."""
 
     def __init__(self):
-        self.calls, self.error, self.outcome = [], None, POSTED
+        self.calls, self.error, self.outcome, self.outcomes = [], None, POSTED, {}
 
     async def post_review(self, ctx, job, cmd):
         return self._post("post_review", ctx, job, cmd)
@@ -67,14 +67,16 @@ class FakePosting:
     async def post_replies(self, ctx, job, cmd):
         return self._post("post_replies", ctx, job, cmd)
 
-    async def push_fix(self, ctx, job):
-        return self._post("push_fix", ctx, job, None)
+    async def push_fix(self, ctx, job, *, anyway=False, then_post=False):
+        """A plain push records None; "anyway" or a post to follow records both flags."""
+        flags = {"anyway": anyway, "then_post": then_post} if anyway or then_post else None
+        return self._post("push_fix", ctx, job, flags)
 
     def _post(self, name, ctx, job, cmd):
         self.calls.append((name, ctx.scope, job.id, cmd))
         if self.error is not None:
             raise self.error
-        return self.outcome
+        return self.outcomes.get(name, self.outcome)
 
 
 class FakeSmall:
@@ -683,6 +685,58 @@ async def test_push_runs_the_push_and_answers_its_outcome(tmp_path):
     await rig.reply("push", 200)
     assert rig.posting.calls == [("push_fix", SCOPE, rig.job.id, None)]
     assert rig.chat.sent == [("Checking before pushing.", rig.at(200)), ("Pushed …", rig.at(200))]
+
+def protect(rig):
+    run = rig.store.run(rig.job.id)
+    run.fix = {**run.fix, "protected": [".github/workflows/ci.yml"]}
+    rig.store.save_run(run)
+
+async def test_push_anyway_pushes_a_protected_fix(tmp_path):
+    rig = address_rig(tmp_path)
+    protect(rig)
+    rig.posting.outcome = PostOutcome("posted", "Pushed …")
+    await rig.reply("push anyway", 200)
+    assert rig.posting.calls == [("push_fix", SCOPE, rig.job.id, {"anyway": True, "then_post": False})]
+    assert rig.chat.sent == [("Checking before pushing.", rig.at(200)), ("Pushed …", rig.at(200))]
+
+PUSH_THEN_POST = "Checking before pushing; once the push lands, every drafted reply is posted."
+
+async def test_push_and_post_pushes_then_posts_every_drafted_reply(tmp_path):
+    rig = address_rig(tmp_path)
+    rig.posting.outcomes = {"push_fix": PostOutcome("posted", "Pushed …")}
+    await rig.reply("push and post", 200)
+    assert rig.posting.calls == [("push_fix", SCOPE, rig.job.id, {"anyway": False, "then_post": True}),
+                                 ("post_replies", SCOPE, rig.job.id, ReplyCommand("post_replies", (1, 3)))]
+    assert rig.chat.sent == [(PUSH_THEN_POST, rig.at(200)), ("Pushed …", rig.at(200)),
+                             ("Checking before posting: post replies 1 3.", rig.at(200)), ("Posted …", rig.at(200))]
+
+async def test_push_and_post_posts_nothing_when_the_push_does_not_land(tmp_path):
+    rig = address_rig(tmp_path)
+    protect(rig)
+    for outcome in (PostOutcome("refused", "The fix touches protected files …"), PostOutcome("unverified", "Check …")):
+        rig.posting.calls, rig.chat.sent = [], []
+        rig.posting.outcomes = {"push_fix": outcome}
+        await rig.reply("push and post", 200)
+        assert [call[0] for call in rig.posting.calls] == ["push_fix"]
+        assert rig.texts() == [PUSH_THEN_POST, outcome.text]
+
+async def test_push_and_post_after_the_push_names_what_is_left(tmp_path):
+    rig = address_rig(tmp_path)
+    rig.store.save_post(Post("r1", rig.job.id, SCOPE, N, HEAD, "replies", "posted", T0.isoformat(), T0.isoformat(),
+                             numbers=[1, 3], landed=[{"n": n, "path": "", "line": None, "title": "", "where": "reply"}
+                                                     for n in (1, 3)]))
+    rig.posting.outcomes = {"push_fix": PostOutcome("posted", "Pushed …")}
+    await rig.reply("push and post anyway", 200)
+    assert [call[0] for call in rig.posting.calls] == ["push_fix"]
+    assert rig.last() == "Nothing left to post: every drafted reply is already posted at this head. Nothing was done."
+
+async def test_post_all_posts_every_drafted_reply_not_posted(tmp_path):
+    rig = address_rig(tmp_path)
+    rig.store.save_post(Post("r1", rig.job.id, SCOPE, N, HEAD, "replies", "posted", T0.isoformat(), T0.isoformat(),
+                             numbers=[1], landed=[{"n": 1, "path": "", "line": None, "title": "", "where": "reply"}]))
+    await rig.reply("post all", 200)
+    assert rig.posting.calls == [("post_replies", SCOPE, rig.job.id, ReplyCommand("post_replies", (3,)))]
+    assert rig.chat.sent[0] == ("Checking before posting: post replies 3.", rig.at(200))
 
 async def test_push_refused_while_the_forge_token_fails(tmp_path):
     rig = address_rig(tmp_path, failing=("forge:acme/app",))

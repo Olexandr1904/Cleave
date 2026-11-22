@@ -308,6 +308,8 @@ TEXTS: dict[str, str] = {
     "#{number} is not on the board any more; nothing was done.": "#{number} уже немає на дошці; нічого не зроблено.",
     "Queued a review of #{number} at {head}.": "Рев'ю #{number} на {head} поставлено в чергу.",
     "Checking before pushing.": "Перевіряю перед пушем.",
+    "Checking before pushing; once the push lands, every drafted reply is posted.":
+        "Перевіряю перед пушем; щойно пуш пройде, опублікую всі чернетки відповідей.",
     "This job changed no code: there is no patch.": "Ця задача не змінила коду: патча немає.",
     "Patch cut: the dashboard shows all of it.": "Патч обрізано: на дашборді він повністю.",
     "A run on #{number} is already queued.": "Запуск для #{number} уже в черзі.",

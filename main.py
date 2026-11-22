@@ -47,6 +47,7 @@ def _build_tracker_for_project(cfg, project_id, on_auth_failure=None):
                 "done": j.statuses.done,
             },
             on_auth_failure=on_auth_failure,
+            transition_via=j.transition_via,
         )
     if cfg.provider == "trello" and cfg.trello.api_key and cfg.trello.token and cfg.trello.board_id:
         from integrations.trello.trello_adapter import TrelloAdapter

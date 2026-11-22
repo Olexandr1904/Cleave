@@ -220,6 +220,8 @@ class JiraConfig:
     trigger_labels: list[str] = field(default_factory=lambda: ["ai-pipeline"])
     ignore_labels: list[str] = field(default_factory=list)
     statuses: JiraStatusesConfig = field(default_factory=JiraStatusesConfig)
+    # The statuses a move may step through on its way to one it has no transition to, in order; none by default.
+    transition_via: list[str] = field(default_factory=list)
 
 
 @dataclass

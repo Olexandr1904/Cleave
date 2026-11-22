@@ -18,8 +18,11 @@ jira:
   statuses:
     todo: "To Do"
     in_progress: "In Progress"
-    in_review: "In Review"
+    in_review: "In Review"          # where the ticket goes once its PR is open (any status of your workflow)
     done: "Done"
+  # A move to a status with no transition from where the ticket is steps only through these statuses, in order.
+  # Without them Cleave takes direct transitions only (it never guesses a step).
+  # transition_via: ["Ready For Development", "In Progress"]
 
 telegram:
   bot_token: "${TELEGRAM_BOT_TOKEN}"

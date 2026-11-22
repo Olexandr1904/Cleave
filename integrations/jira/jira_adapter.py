@@ -36,6 +36,7 @@ class JiraAdapter(TrackerInterface):
         ignore_labels: list[str] | None = None,
         statuses: dict[str, str] | None = None,
         *, on_auth_failure: Callable[[int], None] | None = None,
+        transition_via: list[str] | None = None,
     ) -> None:
         # Every client this adapter builds reports a 401/403 through this hook.
         self._auth_hooks = {"response": [auth_failure_hook(on_auth_failure)]}
@@ -51,6 +52,8 @@ class JiraAdapter(TrackerInterface):
             "in_review": "In Review",
             "done": "Done",
         }
+        # The statuses transition_ticket may step through on its way to a status it has no transition to, in order.
+        self._transition_via = list(transition_via or [])
         self._client = httpx.AsyncClient(
             base_url=f"{self._url}/rest/api/3",
             auth=(email, token),
@@ -174,53 +177,40 @@ class JiraAdapter(TrackerInterface):
         return self._parse_ticket(data)
 
     async def transition_ticket(self, ticket_id: str, status: str, max_hops: int = 3) -> None:
-        """Transition a ticket to a new status, stepping through intermediates if needed."""
-        for hop in range(max_hops):
-            trans_data = await self._request("GET", f"/issue/{ticket_id}/transitions")
-            transitions = trans_data.get("transitions", [])
-
-            # Look for direct match to target status
-            target_transition = None
-            for t in transitions:
-                if t.get("name", "").lower() == status.lower():
-                    target_transition = t
-                    break
-                if t.get("to", {}).get("name", "").lower() == status.lower():
-                    target_transition = t
-                    break
-
-            if target_transition:
-                await self._request(
-                    "POST",
-                    f"/issue/{ticket_id}/transitions",
-                    json={"transition": {"id": target_transition["id"]}},
-                )
+        """Move a ticket to `status`: a transition whose name or target is `status`; else nothing when the ticket
+        is in `status` already; else one step into a status of `transition_via` not entered yet, and again, at
+        most `max_hops` steps. No other transition is ever taken: the first one a workflow offers can be
+        "Resolve Issue". Raises ValueError, with the transitions offered last, when `status` is not reached."""
+        target = status.lower()
+        entered: set[str] = set()
+        for hop in range(max_hops + 1):
+            transitions = (await self._request("GET", f"/issue/{ticket_id}/transitions")).get("transitions", [])
+            direct = next((t for t in transitions if target in (t.get("name", "").lower(), _to(t).lower())), None)
+            if direct is not None:
+                await self._post_transition(ticket_id, direct)
                 logger.info("Transitioned %s to '%s'", ticket_id, status)
                 return
-
-            # No direct path — try the first available forward transition
-            if not transitions:
+            if hop == 0 and (await self._status(ticket_id)).lower() == target:
+                return
+            step = next((t for via in self._transition_via for t in transitions
+                         if _to(t).lower() == via.lower() and via.lower() not in entered), None)
+            if step is None or hop == max_hops:
                 break
-            # Pick the first transition that isn't going backwards
-            step = transitions[0]
-            await self._request(
-                "POST",
-                f"/issue/{ticket_id}/transitions",
-                json={"transition": {"id": step["id"]}},
-            )
-            step_name = step.get("to", {}).get("name", step.get("name", "?"))
-            logger.info(
-                "Intermediate transition %s -> '%s' (hop %d toward '%s')",
-                ticket_id, step_name, hop + 1, status,
-            )
+            await self._post_transition(ticket_id, step)
+            entered.add(_to(step).lower())
+            logger.info("Intermediate transition %s -> '%s' (hop %d toward '%s')",
+                        ticket_id, _to(step), hop + 1, status)
+        offered = [_to(t) or t.get("name", "") for t in transitions]
+        raise ValueError(f"Cannot transition {ticket_id} to '{status}'. Available transitions: {offered}")
 
-        # Exhausted hops
-        trans_data = await self._request("GET", f"/issue/{ticket_id}/transitions")
-        available = [t.get("name", "") for t in trans_data.get("transitions", [])]
-        raise ValueError(
-            f"Cannot transition {ticket_id} to '{status}' after {max_hops} hops. "
-            f"Available transitions: {available}"
-        )
+    async def _post_transition(self, ticket_id: str, transition: dict) -> None:
+        await self._request("POST", f"/issue/{ticket_id}/transitions",
+                            json={"transition": {"id": transition["id"]}})
+
+    async def _status(self, ticket_id: str) -> str:
+        """The name of the ticket's status now."""
+        data = await self._request("GET", f"/issue/{ticket_id}", params={"fields": "status"})
+        return ((data.get("fields") or {}).get("status") or {}).get("name", "")
 
     async def add_comment(self, ticket_id: str, comment: str) -> None:
         """Post a comment to a ticket."""
@@ -320,6 +310,11 @@ class JiraAdapter(TrackerInterface):
     async def close(self) -> None:
         """Close the HTTP client."""
         await self._client.aclose()
+
+
+def _to(transition: dict) -> str:
+    """The name of the status a transition leads to ("" when Jira names none)."""
+    return (transition.get("to") or {}).get("name", "") or ""
 
 
 def _extract_adf_text(adf: dict) -> str:

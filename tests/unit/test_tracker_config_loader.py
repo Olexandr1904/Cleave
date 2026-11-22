@@ -70,6 +70,29 @@ tracker:
     cfg = projects["acme"].config.tracker
     assert cfg.provider == "jira"
     assert cfg.jira.project_key == "ACME"
+    assert cfg.jira.transition_via == []
+
+
+def test_jira_transition_via_reaches_the_adapter(make_project):
+    config_dir = make_project("acme", """
+project:
+  id: acme
+  name: Acme
+tracker:
+  provider: jira
+  jira:
+    url: https://acme.atlassian.net
+    email: bot@acme.com
+    token: secret
+    project_key: ACME
+    transition_via: [Ready For Development, In Progress]
+""")
+    from main import _build_tracker_for_project
+
+    _, projects = load_config(str(config_dir))
+    cfg = projects["acme"].config.tracker
+    assert cfg.jira.transition_via == ["Ready For Development", "In Progress"]
+    assert _build_tracker_for_project(cfg, "acme")._transition_via == ["Ready For Development", "In Progress"]
 
 
 def test_new_tracker_block_trello(make_project):

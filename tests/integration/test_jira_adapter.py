@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
@@ -110,9 +111,89 @@ class TestJiraTransition:
         respx.get(
             "https://test.atlassian.net/rest/api/3/issue/TEST-123/transitions",
         ).mock(return_value=httpx.Response(200, json={"transitions": []}))
+        respx.get("https://test.atlassian.net/rest/api/3/issue/TEST-123").mock(
+            return_value=httpx.Response(200, json={"fields": {"status": {"name": "Open"}}}))
 
         with pytest.raises(ValueError, match="Cannot transition"):
             await adapter.transition_ticket("TEST-123", "Nonexistent")
+
+    @respx.mock
+    async def test_a_transition_it_was_not_told_to_take_is_never_taken(self, adapter):
+        """From an "Open" status the first transition offered can be "Resolve Issue": it is never a step."""
+        respx.get("https://test.atlassian.net/rest/api/3/issue/TEST-123/transitions").mock(
+            return_value=httpx.Response(200, json={"transitions": [
+                {"id": "5", "name": "Resolve Issue", "to": {"name": "Resolved"}},
+                {"id": "61", "name": "Accept to Develop", "to": {"name": "Ready For Development"}},
+            ]}))
+        respx.get("https://test.atlassian.net/rest/api/3/issue/TEST-123").mock(
+            return_value=httpx.Response(200, json={"fields": {"status": {"name": "Open"}}}))
+        posted = respx.post("https://test.atlassian.net/rest/api/3/issue/TEST-123/transitions").mock(
+            return_value=httpx.Response(204))
+
+        with pytest.raises(ValueError, match=r"Cannot transition TEST-123 to 'In Progress'.*Resolved"):
+            await adapter.transition_ticket("TEST-123", "In Progress")
+        assert not posted.called
+
+    @respx.mock
+    async def test_steps_through_the_statuses_it_is_told_to(self):
+        adapter = JiraAdapter(url="https://test.atlassian.net", email="e", token="t", project_key="TEST",
+                              transition_via=["Ready For Development", "In Progress"])
+        respx.get("https://test.atlassian.net/rest/api/3/issue/TEST-123/transitions").mock(side_effect=[
+            httpx.Response(200, json={"transitions": [
+                {"id": "5", "name": "Resolve Issue", "to": {"name": "Resolved"}},
+                {"id": "61", "name": "Accept to Develop", "to": {"name": "Ready For Development"}},
+            ]}),
+            httpx.Response(200, json={"transitions": [
+                {"id": "64", "name": "On Hold", "to": {"name": "On Hold"}},
+                {"id": "62", "name": "Start Progress", "to": {"name": "In Progress"}},
+            ]}),
+            httpx.Response(200, json={"transitions": [
+                {"id": "5", "name": "Resolve Issue", "to": {"name": "Resolved"}},
+                {"id": "63", "name": "Ready For Build", "to": {"name": "Ready for Build"}},
+            ]}),
+        ])
+        respx.get("https://test.atlassian.net/rest/api/3/issue/TEST-123").mock(
+            return_value=httpx.Response(200, json={"fields": {"status": {"name": "Open"}}}))
+        posted = respx.post("https://test.atlassian.net/rest/api/3/issue/TEST-123/transitions").mock(
+            return_value=httpx.Response(204))
+
+        await adapter.transition_ticket("TEST-123", "Ready for Build")
+        ids = [json.loads(call.request.content)["transition"]["id"] for call in posted.calls]
+        assert ids == ["61", "62", "63"]
+
+    @respx.mock
+    async def test_a_status_already_visited_is_not_stepped_into_again(self):
+        adapter = JiraAdapter(url="https://test.atlassian.net", email="e", token="t", project_key="TEST",
+                              transition_via=["Ready For Development", "In Progress"])
+        respx.get("https://test.atlassian.net/rest/api/3/issue/TEST-123/transitions").mock(side_effect=[
+            httpx.Response(200, json={"transitions": [
+                {"id": "62", "name": "Start Progress", "to": {"name": "In Progress"}}]}),
+            httpx.Response(200, json={"transitions": [
+                {"id": "65", "name": "Stop Progress", "to": {"name": "Ready For Development"}}]}),
+            httpx.Response(200, json={"transitions": [
+                {"id": "62", "name": "Start Progress", "to": {"name": "In Progress"}}]}),
+        ])
+        respx.get("https://test.atlassian.net/rest/api/3/issue/TEST-123").mock(
+            return_value=httpx.Response(200, json={"fields": {"status": {"name": "Ready For Development"}}}))
+        posted = respx.post("https://test.atlassian.net/rest/api/3/issue/TEST-123/transitions").mock(
+            return_value=httpx.Response(204))
+
+        with pytest.raises(ValueError, match="Cannot transition"):
+            await adapter.transition_ticket("TEST-123", "Ready for Build")
+        assert len(posted.calls) == 2
+
+    @respx.mock
+    async def test_a_ticket_already_in_the_status_is_left_as_it_is(self, adapter):
+        respx.get("https://test.atlassian.net/rest/api/3/issue/TEST-123/transitions").mock(
+            return_value=httpx.Response(200, json={"transitions": [
+                {"id": "5", "name": "Resolve Issue", "to": {"name": "Resolved"}}]}))
+        respx.get("https://test.atlassian.net/rest/api/3/issue/TEST-123").mock(
+            return_value=httpx.Response(200, json={"fields": {"status": {"name": "In Progress"}}}))
+        posted = respx.post("https://test.atlassian.net/rest/api/3/issue/TEST-123/transitions").mock(
+            return_value=httpx.Response(204))
+
+        await adapter.transition_ticket("TEST-123", "in progress")
+        assert not posted.called
 
 
 class TestJiraComment:

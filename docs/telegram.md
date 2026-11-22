@@ -68,14 +68,19 @@ The cost: haiku turns of a few hundred to a few thousand tokens, only for messag
 
 ## Switch commands
 
-Fixed commands pause and resume the ticket pipeline and reviewer mode. They are not replies, and they run before the LLM intent parser (allowlisted chats only):
+Fixed commands pause and resume the ticket pipeline and reviewer mode, show the status and retry a ticket. They are not replies, and they run before the LLM intent parser (allowlisted chats only):
 
 | Command | Effect |
 |---|---|
 | `tickets pause` / `tickets start` | Pause / resume the ticket pipeline globally |
 | `reviews pause` / `reviews start` | Pause / resume reviews globally |
 | any of the above + a repo id, e.g. `tickets pause app` or `reviews start acme/app` | Same, for one repo (`repo` or `project/repo`) |
-| `status` | The switch block (tickets and reviews, global and per repo), then the pipeline summary |
+| `status`, `/status` | The switch block (tickets and reviews, global and per repo), then the pipeline summary (see [The status summary](#the-status-summary)) |
+| `status ACME-12`, `/status 12` | The ticket's detail: stage, branch, Jira URL, PR URL, iteration counts, what blocked it |
+| `retry ACME-12`, `/retry 12` | Re-run a BLOCKED, FAILED or DEFERRED ticket from the furthest stage its reports show it reached (back to the judge that blocked it) |
+| `retry ACME-12 from <stage>` | Re-run it from that stage: `analysis`, `plan_review`, `dev`, `scope_check` (or `scope check`), `code_review`, `qa`, `push` (or `pushed`) |
+
+These answer at once: no model turn and no `⚙️ Processing...` line. A ticket key may be typed in any case or as its number alone (`12` names `ACME-12` when it is the only active ticket ending in `-12`; when several do, the bot lists them and does nothing). A slash command may carry the bot's name (`/status@CleaveBot`). Any other wording (`what's stuck?`, `resume ACME-12`) goes to the [intent parser](#free-text-commands).
 
 Commands are case-insensitive. Russian/Ukrainian words are accepted as input synonyms: `тикеты` / `тікети` for `tickets`; `ревью` / `рев'ю` (ASCII or typographic apostrophe) for `reviews`; `пауза` for `pause`; `старт` for `start`; `статус` for `status`. Replies are in the chat's [language](#language) whichever spelling you use.
 
@@ -99,6 +104,32 @@ While tickets are paused, `analyze` refuses the ticket and names the command tha
 
 The switches are stored in `~/CleaveData/reviewer/reviewer.db` and survive restarts. **First start after upgrading:** the database is created with **tickets paused** and reviews running, so the ticket pipeline picks up nothing until you send `tickets start` (or click the `Tickets: paused ⏸` pill on the Board to switch it to running).
 
+### The status summary
+
+After the mode, uptime and last poll, each active ticket (a failed one included) is one line, and a ticket that stopped says why and what Cleave waits for:
+
+```
+Active (4):
+  ACME-1 — blocked at Code Check
+     The plan forbids config/baseline.xml.
+     Waits for: your reply to its message, or a button below
+  ACME-2 — deferred at QA
+     Retries by itself at 13:10 UTC
+  ACME-3 — awaiting approval after Plan Review
+     Waits for: Approve or Reject on its message
+  ACME-4 — Code Review (iteration 1/2)
+```
+
+The line under a blocked ticket is the first line of its escalation's question (or of its error); under a failed or deferred one, its error. Each BLOCKED, FAILED or DEFERRED ticket gets a row of buttons under the summary, and under its `status <key>` detail:
+
+| Button | Effect |
+|---|---|
+| **Retry ACME-1** | Back to the stage it stopped at, with fresh attempts there and after, as the `retry` reply to its escalation |
+| **From stage…** | Answers with the stages as buttons; a stage tapped is `retry ACME-1 from <stage>` |
+| **Skip** | Past the stage it stopped at, to the next one, as the `skip` reply to its escalation |
+
+A tap on a ticket that runs again (or cannot go there from where it is) answers `ACME-1 is DEV now: nothing was done.`
+
 ---
 
 ## Free-text commands
@@ -109,13 +140,13 @@ Recognized intents (from `integrations/telegram/intent_parser.py`):
 
 | Intent | Trigger phrases | Effect |
 |---|---|---|
-| `status` | `/status`, `status`, `what's running`, `pipeline status` | The switch block first, then the pipeline summary: mode, uptime, active workspaces, recent completions |
-| `status` (drill-down) | `/status TICKET-123`, `status of TICKET-123` | Per-workspace detail: stage, branch, Jira URL, PR URL, iteration counts |
+| `status` | `what's running`, `pipeline status` (`status` and `/status` are [fixed commands](#switch-commands)) | The switch block first, then [the status summary](#the-status-summary) |
+| `status` (drill-down) | `status of TICKET-123` | Per-workspace detail: stage, branch, Jira URL, PR URL, iteration counts |
 | `analyze` | `analyze TICKET-1, TICKET-2`, `pick up TICKET-1` | Validate tickets against Jira and create workspaces (used in manual mode) |
 | `approve` | `approve`, `approve TICKET-1`, `yes` (when one approval pending) | Resolve an AWAITING_APPROVAL gate to its happy-path next state |
 | `reject` | `reject`, `reject TICKET-1`, `no` (when one approval pending) | Stop a workspace at the gate |
 | `set_mode` | `/auto`, `/manual`, `auto mode`, `manual mode` | Switch pipeline mode |
-| `retry` | `retry TICKET-1`, `resume TICKET-1`, `retry TICKET-1 from dev` | Re-run a BLOCKED, FAILED, or DEFERRED ticket from `previous_state` (or the named stage) |
+| `retry` | `resume TICKET-1` (`retry TICKET-1 [from <stage>]` is a [fixed command](#switch-commands)) | Re-run a BLOCKED, FAILED, or DEFERRED ticket from `previous_state` (or the named stage) |
 | `provide_input` | Free text replying to a BLOCKED escalation, e.g. "the bug is X", "yes both screens" | Stored on `state.human_input_reply`, fed to the agent on resume |
 | `reviewed` | `reviewed`, `review done`, `review complete` | Mark a PR_REVIEW workspace as reviewed and advance to DONE |
 | `unanswered` | `/unanswered`, `/repeat`, `what's pending`, `which comments are open` | List PR review comments still waiting on your decision |
@@ -133,7 +164,8 @@ For messages that expect discrete choices, Cleave attaches inline keyboard butto
 | **Approve** / **Reject** | AWAITING_APPROVAL gates (manual mode) | `approve:<ticket>` / `reject:<ticket>` |
 | **Review Complete** | PR_REVIEW notifications, in a repo where reviewer mode is off (you've finished reviewing the PR) | `reviewed:<ticket>` |
 | **Fix** / **Won't Fix** | PR review comment escalations (per comment) | `pr_fix:<key>` / `pr_wontfix:<key>` |
-| **Retry Now** / **Retry** | DEFERRED notifications (quota / transient error) and FAILED notifications | `retry:<ticket>` |
+| **Retry Now** / **Retry** | DEFERRED notifications (quota / transient error) and FAILED notifications | `retry:<ticket>` — back to the stage it stopped at, with fresh attempts there and after |
+| **Retry ACME-1** / **From stage…** / **Skip** | [The status summary](#the-status-summary) and a ticket's `status <key>` detail, per BLOCKED, FAILED or DEFERRED ticket | `retry:<ticket>` / `retry_pick:<ticket>` (answered with `retry_from:<ticket>:<stage>` buttons) / `skip:<ticket>` |
 | **🧹 Clear cache & retry** | FAILED notifications whose error matches the AAPT2 corruption signature | `clear_gradle:<ticket>` — stops that gradle home's own daemons, wipes `<gradle_home>/caches/*/transforms` then retries. Needs `GRADLE_USER_HOME` set (Cleave's own, in `.env`): the shared `~/.gradle` is never cleared |
 | **Show N unanswered** | PR_REVIEW summary when comments are pending your decision | `unanswered:<ticket>` |
 | **Yes** / **No** | The reviewer's echo of a reply it understood through the model (see [replies the grammar does not know](#replies-the-grammar-does-not-know)) | `rv_ok:<id>` / `rv_no:<id>` |

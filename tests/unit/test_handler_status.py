@@ -7,7 +7,7 @@ from unittest.mock import MagicMock, PropertyMock
 
 import pytest
 
-from integrations.telegram.handlers.status import StatusHandler
+from integrations.telegram.handlers.status import StatusHandler, status_buttons
 from workspace.workspace import Stage
 
 
@@ -138,3 +138,81 @@ class TestStatusHandler:
 
         assert "Last error: timed out" in result
         assert "Blocked on:" not in result
+
+
+class TestStatusPanel:
+    """The summary says per ticket where it stopped, why, and what Cleave waits for; it showed "BLOCKED, blocked"."""
+
+    @pytest.fixture
+    def handler(self):
+        return StatusHandler()
+
+    def _summary(self, handler, *workspaces):
+        return handler.format_summary(mode="manual", uptime_seconds=0, last_poll_ago_seconds=0,
+                                      active_workspaces=list(workspaces), recent_completions=[])
+
+    def _ws(self, ticket_id, state, previous_state=None, **fields):
+        ws = _make_workspace(ticket_id, state)
+        ws.state.previous_state = previous_state
+        ws.state.retry_at = None
+        for name, value in fields.items():
+            setattr(ws.state, name, value)
+        return ws
+
+    def test_a_blocked_ticket_names_its_stage_its_question_and_the_reply_it_waits_for(self, handler):
+        ws = self._ws("ACME-1", "BLOCKED", "SCOPE_CHECK",
+                      human_input_question="\nThe plan forbids config/baseline.xml.\nSecond line.")
+        lines = self._summary(handler, ws).splitlines()
+        i = lines.index("  ACME-1 — blocked at Code Check")
+        assert lines[i + 1:i + 3] == ["     The plan forbids config/baseline.xml.",
+                                      "     Waits for: your reply to its message, or a button below"]
+
+    def test_a_blocked_ticket_without_a_question_shows_its_error(self, handler):
+        ws = self._ws("ACME-1", "BLOCKED", "PUSHED", error="push refused\nmore")
+        assert "     push refused" in self._summary(handler, ws).splitlines()
+
+    def test_a_long_reason_is_cut_with_an_ellipsis(self, handler):
+        ws = self._ws("ACME-1", "FAILED", "DEV", error="x" * 300)
+        line = next(line for line in self._summary(handler, ws).splitlines() if line.startswith("     x"))
+        assert line == "     " + "x" * 160 + "…"
+
+    def test_a_failed_ticket(self, handler):
+        ws = self._ws("ACME-1", "FAILED", "QA", error="gate could not run")
+        lines = self._summary(handler, ws).splitlines()
+        i = lines.index("  ACME-1 — failed at QA")
+        assert lines[i + 1:i + 3] == ["     gate could not run", "     Waits for: a button below"]
+
+    def test_a_deferred_ticket_says_when_it_retries_by_itself(self, handler):
+        ws = self._ws("ACME-1", "DEFERRED", "QA", retry_at="2026-11-20T13:10:00+00:00")
+        lines = self._summary(handler, ws).splitlines()
+        i = lines.index("  ACME-1 — deferred at QA")
+        assert lines[i + 1] == "     Retries by itself at 13:10 UTC"
+
+    def test_a_ticket_at_a_gate_waits_for_the_buttons_on_its_message(self, handler):
+        ws = self._ws("ACME-1", "AWAITING_APPROVAL", "PLAN_REVIEW")
+        lines = self._summary(handler, ws).splitlines()
+        i = lines.index("  ACME-1 — awaiting approval after Plan Review")
+        assert lines[i + 1] == "     Waits for: Approve or Reject on its message"
+
+    def test_a_running_ticket_takes_one_line(self, handler):
+        lines = self._summary(handler, self._ws("ACME-1", "DEV")).splitlines()
+        i = next(n for n, line in enumerate(lines) if line.startswith("  ACME-1"))
+        assert not lines[i + 1].startswith("     ")
+
+    def test_buttons_give_each_stopped_ticket_its_own_row(self, handler):
+        workspaces = [self._ws("ACME-1", "BLOCKED", "DEV"), self._ws("ACME-2", "DEV"),
+                      self._ws("ACME-3", "DEFERRED", "QA"), self._ws("ACME-4", "FAILED", "QA"),
+                      self._ws("ACME-5", "AWAITING_APPROVAL", "PLAN_REVIEW")]
+        buttons = status_buttons(workspaces)
+        rows: dict[int, list[str]] = {}
+        for b in buttons:
+            rows.setdefault(b.row, []).append(b.action)
+        assert list(rows.values()) == [
+            ["retry:ACME-1", "retry_pick:ACME-1", "skip:ACME-1"],
+            ["retry:ACME-3", "retry_pick:ACME-3", "skip:ACME-3"],
+            ["retry:ACME-4", "retry_pick:ACME-4", "skip:ACME-4"],
+        ]
+        assert [b.label for b in buttons[:3]] == ["Retry ACME-1", "From stage…", "Skip"]
+
+    def test_no_stopped_ticket_no_buttons(self, handler):
+        assert status_buttons([self._ws("ACME-2", "DEV")]) == []

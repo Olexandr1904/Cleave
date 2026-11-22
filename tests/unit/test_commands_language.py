@@ -133,7 +133,7 @@ async def test_the_status_drill_down_marks_the_agents_question(tmp_path):
     ws.state.branch, ws.state.pr_url = "feature/ACME-5", None
     handler, notifier = _handler(tmp_path, [ws], ParsedIntent(intent="status", params={"ticket_id": "ACME-5"}))
     await handler.handle_message("status ACME-5", "1")
-    text = notifier.edit_message.await_args.args[2]
+    text = _sent(notifier)
     assert "Етап: BLOCKED" in text and "Гілка: feature/ACME-5" in text
     assert marked_texts(text) == ["Which screen should scroll?"]  # the adapter translates it when it sends
 

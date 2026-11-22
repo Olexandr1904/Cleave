@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -74,6 +75,34 @@ class ParsedIntent:
                 reply=tr("I didn't understand that. I can do: status checks, analyze tickets, approve/reject steps, "
                          "switch modes, unanswered comment recall."),
             )
+
+
+_STATUS_WORDS = ("status", "статус")
+_KEY = re.compile(r"([A-Za-z][A-Za-z0-9_]*-)?[0-9]+")  # a ticket key, or only its number
+_STAGE_ALIASES = {"pushed": "push"}  # the stage's state name where the retry stage's name differs
+
+
+def parse_fixed_intent(text: str) -> ParsedIntent | None:
+    """The intent of a command with a fixed shape, read without the LLM: `status`, `status <key>`, `retry <key>`,
+    `retry <key> from <stage>` (a leading "/" and a "/command@bot" suffix allowed; the key as typed, a full key or
+    its number). None for anything else, which the LLM reads."""
+    words = text.strip().rstrip(".!").split()
+    if not words:
+        return None
+    command = words[0].lower().lstrip("/").partition("@")[0]
+    rest = words[1:]
+    if rest and not _KEY.fullmatch(rest[0]):
+        return None
+    if command in _STATUS_WORDS and len(rest) <= 1:
+        return ParsedIntent("status", {"ticket_id": rest[0]} if rest else {})
+    if command != "retry" or not rest:
+        return None
+    if len(rest) == 1:
+        return ParsedIntent("retry", {"ticket_id": rest[0]})
+    if rest[1].lower() != "from" or len(rest) < 3:
+        return None
+    stage = "_".join(rest[2:]).lower()
+    return ParsedIntent("retry", {"ticket_id": rest[0], "from_stage": _STAGE_ALIASES.get(stage, stage)})
 
 
 class IntentParser:

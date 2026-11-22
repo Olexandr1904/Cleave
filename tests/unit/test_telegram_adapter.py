@@ -84,6 +84,26 @@ class TestSendMessageWithButtons:
             assert markup.inline_keyboard[0][0].text == "Approve"
             assert markup.inline_keyboard[0][0].callback_data == "approve:T-1"
 
+    async def test_buttons_with_rows_make_one_keyboard_row_per_row_in_order(self):
+        with patch("integrations.telegram.telegram_adapter.Bot") as MockBot:
+            bot_instance = AsyncMock()
+            sent_msg = MagicMock()
+            sent_msg.message_id = 98
+            bot_instance.send_message = AsyncMock(return_value=sent_msg)
+            MockBot.return_value = bot_instance
+
+            adapter = TelegramAdapter(bot_token="fake-token")
+            buttons = [
+                Button(label="Retry ACME-2", action="retry:ACME-2", row=2),
+                Button(label="Skip ACME-2", action="skip:ACME-2", row=2),
+                Button(label="Retry ACME-1", action="retry:ACME-1", row=1),
+            ]
+            await adapter.send_message("123", "Status", buttons=buttons)
+
+            markup = bot_instance.send_message.call_args.kwargs["reply_markup"]
+            rows = [[b.callback_data for b in row] for row in markup.inline_keyboard]
+            assert rows == [["retry:ACME-2", "skip:ACME-2"], ["retry:ACME-1"]]
+
     async def test_send_message_passes_reply_to_message_id(self):
         with patch("integrations.telegram.telegram_adapter.Bot") as MockBot:
             bot_instance = AsyncMock()

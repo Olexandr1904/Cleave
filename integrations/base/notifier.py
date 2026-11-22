@@ -11,6 +11,7 @@ class Button:
     """A labeled action button for inline display."""
     label: str   # User-visible text, e.g. "Approve"
     action: str  # Encoded action, e.g. "approve:ACME-14595"
+    row: int = 0  # Buttons with the same row share one keyboard row, rows in order of first appearance
 
 
 class NotifierInterface(ABC):

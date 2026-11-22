@@ -79,10 +79,10 @@ class TelegramAdapter(NotifierInterface):
             "text": message,
         }
         if buttons:
-            keyboard = [
-                [InlineKeyboardButton(b.label, callback_data=b.action) for b in buttons]
-            ]
-            kwargs["reply_markup"] = InlineKeyboardMarkup(keyboard)
+            rows: dict[int, list[InlineKeyboardButton]] = {}
+            for b in buttons:
+                rows.setdefault(b.row, []).append(InlineKeyboardButton(b.label, callback_data=b.action))
+            kwargs["reply_markup"] = InlineKeyboardMarkup(list(rows.values()))
         if reply_to_message_id:
             kwargs["reply_to_message_id"] = reply_to_message_id
 

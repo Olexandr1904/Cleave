@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Awaitable, Callable
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any
 
@@ -24,71 +25,81 @@ from workspace.workspace import Workspace
 logger = logging.getLogger(__name__)
 
 
+@dataclass
+class QuotaWindow:
+    """One usage-limit window's Telegram message in a chat: the tickets waiting in it (key, stage), edited in as
+    they hit the limit, and when the last of them may resume."""
+    end: datetime
+    message_id: int
+    tickets: list[tuple[str, str]] = field(default_factory=list)
+
+
+def _quota_text(window: QuotaWindow) -> str:
+    tickets = ", ".join(f"{key} ({stage})" for key, stage in window.tickets)
+    return tr("⏱ Usage limit until {when} UTC. Waiting, each resumes on its own then: {tickets}",
+              when=window.end.strftime("%Y-%m-%d %H:%M"), tickets=tickets)
+
+
 async def notify_deferred(
     notifier: NotifierInterface | None,
     chat_id: str,
     workspace: Workspace,
     retry_at: datetime,
     reason: str | None,
-    current_quota_window_end: datetime | None,
-) -> datetime | None:
-    """Send a one-shot Telegram notification for transient agent failure
-    deferrals.
+    *,
+    quota: bool,
+    window: QuotaWindow | None,
+) -> QuotaWindow | None:
+    """Tell the operator a ticket was deferred; return the chat's usage-limit window as it is now.
 
-    Picks a headline from the actual cause — not all DEFERREDs are quota
-    hits, even though the pipeline reuses the quota retry path for any
-    transient CLI failure. Hard-coding "Quota exhausted" misled operators
-    when the real cause was, e.g., the agent hitting `max_turns`.
-
-    Quota-window debouncing only applies when the cause IS a real
-    usage-limit hit; other transient failures skip the silence window so
-    each ticket's distinct reason still surfaces.
-
-    Returns the new quota_window_end (or unchanged value if not modified).
+    `quota` is the caller's word (AgentResult.failure_kind == "quota"), never guessed from the text: the CLI says
+    "You've hit your 5-hour limit" as well as "usage limit". A usage-limit hit gets one message per window and
+    chat, with no Retry Now (a retry only fails again until the limit resets): a later ticket in an open
+    `window` edits itself into that message. A window opens only once its message is sent, so after a failed
+    send the next hit sends again. Any other deferral (max turns, a transient CLI error) gets its own message
+    naming its cause, with Retry Now, and leaves `window` as it is.
     """
     state = workspace.state
-    new_window_end = current_quota_window_end
-    is_real_quota = bool(
-        reason and (
-            "usage limit" in reason.lower()
-            or "api_error_status\":429" in reason
-            or '"api_error_status": 429' in reason
-        )
-    )
-
-    # Window debouncing is for the case where one quota hit cascades
-    # across many tickets — silence the same announcement.
+    stage = state.previous_state or "?"
     now = datetime.now(timezone.utc)
-    if (
-        is_real_quota
-        and current_quota_window_end is not None
-        and now < current_quota_window_end
-    ):
-        return new_window_end
+
+    if quota:
+        if window is not None and now < window.end:
+            if state.ticket_id in {key for key, _ in window.tickets}:
+                return window
+            window.tickets.append((state.ticket_id, stage))
+            window.end = max(window.end, retry_at)
+            edit = getattr(notifier, "edit_message", None)
+            if edit is not None:
+                try:
+                    await edit(chat_id, window.message_id, _quota_text(window))
+                except Exception as e:
+                    logger.warning("Failed to edit the usage-limit notification: %s", type(e).__name__)
+            return window
+        if notifier is None:
+            return None
+        opened = QuotaWindow(end=retry_at, message_id=0, tickets=[(state.ticket_id, stage)])
+        try:
+            opened.message_id = await notifier.send_message(chat_id, _quota_text(opened))
+        except Exception as e:
+            logger.warning("Failed to send deferred notification: %s", e)
+            return None
+        return opened
 
     if notifier is None:
-        if is_real_quota:
-            new_window_end = retry_at
-        return new_window_end
+        return window
 
     title = tg_format.read_ticket_title(workspace)
     hdr = tg_format.tg_header("⏱", state.company_id, state.ticket_id, title)
 
     # Pick a headline that names the actual cause.
-    if is_real_quota:
-        headline = tr(
-            "Quota exhausted at {stage}, deferred "
-            "until {when} UTC. "
-            "Other tickets hitting the same quota will defer silently.",
-            stage=state.previous_state or "?", when=retry_at.strftime("%Y-%m-%d %H:%M"),
-        )
-    elif reason and "error_max_turns" in reason:
+    if reason and "error_max_turns" in reason:
         headline = tr(
             "Agent hit max-turns limit at {stage}, "
             "deferred until {when} UTC for retry. "
             "If this recurs the agent task may be too complex — consider "
             "raising `max_turns` or splitting the work.",
-            stage=state.previous_state or "?", when=retry_at.strftime("%H:%M"),
+            stage=stage, when=retry_at.strftime("%H:%M"),
         )
     else:
         short = detail(reason.splitlines()[0][:200]) if reason else tr("no detail captured")
@@ -96,19 +107,17 @@ async def notify_deferred(
             "Transient agent failure at {stage}, "
             "deferred until {when} UTC. "
             "Reason: {reason}",
-            stage=state.previous_state or "?", when=retry_at.strftime("%H:%M"), reason=short,
+            stage=stage, when=retry_at.strftime("%H:%M"), reason=short,
         )
 
     msg = f"{hdr}\n{headline}"
     buttons = [Button(label=tr("Retry Now"), action=f"retry:{state.ticket_id}")]
     try:
         await notifier.send_message(chat_id, msg, buttons=buttons)
-        if is_real_quota:
-            new_window_end = retry_at
     except Exception as e:
         logger.warning("Failed to send deferred notification: %s", e)
 
-    return new_window_end
+    return window
 
 
 async def notify_failed(

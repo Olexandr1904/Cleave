@@ -57,7 +57,7 @@ def orchestrator_with_stubs(tmp_path, monkeypatch):
     orch._mode_handler.get_mode = MagicMock(return_value="auto")
     orch._shutdown_event = MagicMock()
     orch._recent_completions = []
-    orch._quota_window_end = None
+    orch._quota_windows = {}
 
     from dashboard.events import EventBus
     orch._events = EventBus()
@@ -138,6 +138,30 @@ class TestQuotaFailureRouting:
         parsed = datetime.fromisoformat(ws.state.retry_at)
         assert before + timedelta(minutes=59) <= parsed <= after + timedelta(hours=1, minutes=1)
 
+    async def test_transient_failure_is_deferred_like_a_quota_hit(
+        self, orchestrator_with_stubs, tmp_path
+    ):
+        orch = orchestrator_with_stubs
+        ws = _make_workspace(tmp_path, "T-5", state=Stage.DEV)
+        orch._active_workspaces.append(ws)
+
+        retry_at = datetime.now(timezone.utc) + timedelta(minutes=10)
+        orch._agent_runtime.execute = AsyncMock(
+            return_value=AgentResult(
+                agent_id="dev-agent", success=False, output="",
+                error="Claude Code CLI timed out after 2400s", failure_kind="transient", retry_at=retry_at,
+            )
+        )
+
+        stage_def = MagicMock()
+        stage_def.agent = "dev-agent"
+        stage_def.max_iterations = 0
+        await orch._handle_agent_stage(ws, "dev", stage_def)
+
+        assert ws.state.current_state == Stage.DEFERRED
+        assert ws.state.retry_at == retry_at.isoformat()
+        assert orch._quota_windows == {}  # not a usage limit: no window
+
     async def test_permanent_failure_transitions_to_failed(
         self, orchestrator_with_stubs, tmp_path
     ):
@@ -205,7 +229,10 @@ class TestQuotaNotificationDebounce:
         await orch._handle_agent_stage(ws1, "dev", stage_def)
         await orch._handle_agent_stage(ws2, "dev", stage_def)
 
+        # One message for the window; the second ticket edits it in.
         assert orch._notifier.send_message.await_count == 1
+        assert orch._notifier.edit_message.await_count == 1
+        assert "T-1 (DEV), T-2 (DEV)" in orch._notifier.edit_message.call_args.args[2]
         assert ws1.state.current_state == Stage.DEFERRED
         assert ws2.state.current_state == Stage.DEFERRED
 
@@ -233,8 +260,8 @@ class TestQuotaNotificationDebounce:
     async def test_notification_retried_if_first_send_fails(
         self, orchestrator_with_stubs, tmp_path
     ):
-        """If the first Telegram send raises, _quota_window_end stays None
-        so the next quota hit retries the notification instead of silencing."""
+        """If the first Telegram send raises, no window is opened, so the next
+        quota hit sends the notification again instead of editing nothing."""
         orch = orchestrator_with_stubs
         ws1 = _make_workspace(tmp_path, "T-1", state=Stage.DEV)
         ws2 = _make_workspace(tmp_path, "T-2", state=Stage.DEV)
@@ -242,7 +269,7 @@ class TestQuotaNotificationDebounce:
 
         # First send raises; second succeeds.
         orch._notifier.send_message = AsyncMock(
-            side_effect=[RuntimeError("telegram flake"), None]
+            side_effect=[RuntimeError("telegram flake"), 42]
         )
 
         retry_at = datetime.now(timezone.utc) + timedelta(hours=5)
@@ -257,11 +284,12 @@ class TestQuotaNotificationDebounce:
         stage_def.agent = "dev-agent"
         stage_def.max_iterations = 0
         await orch._handle_agent_stage(ws1, "dev", stage_def)
-        # First send failed → window not marked → second call should retry.
-        assert orch._quota_window_end is None
+        # First send failed → no window → second call sends again.
+        assert orch._quota_windows == {}
         await orch._handle_agent_stage(ws2, "dev", stage_def)
         assert orch._notifier.send_message.await_count == 2
-        assert orch._quota_window_end == retry_at
+        assert orch._quota_windows["chat-1"].end == retry_at
+        assert orch._quota_windows["chat-1"].message_id == 42
         assert ws1.state.current_state == Stage.DEFERRED
         assert ws2.state.current_state == Stage.DEFERRED
 
@@ -298,25 +326,21 @@ class TestDeferredSweep:
         assert ws.state.current_state == Stage.DEFERRED
         assert ws.state.retry_at == future.isoformat()
 
-    async def test_sweep_clears_quota_window_end_when_passed(
+    async def test_sweep_drops_a_quota_window_that_has_ended(
         self, orchestrator_with_stubs, tmp_path
     ):
+        from orchestrator.notify import QuotaWindow
+
         orch = orchestrator_with_stubs
         past = datetime.now(timezone.utc) - timedelta(minutes=1)
-        orch._quota_window_end = past
-
-        await orch._sweep_deferred()
-        assert orch._quota_window_end is None
-
-    async def test_sweep_keeps_quota_window_end_when_future(
-        self, orchestrator_with_stubs, tmp_path
-    ):
-        orch = orchestrator_with_stubs
         future = datetime.now(timezone.utc) + timedelta(hours=1)
-        orch._quota_window_end = future
+        orch._quota_windows = {
+            "chat-1": QuotaWindow(end=past, message_id=1, tickets=[("T-1", "DEV")]),
+            "chat-2": QuotaWindow(end=future, message_id=2, tickets=[("T-2", "DEV")]),
+        }
 
         await orch._sweep_deferred()
-        assert orch._quota_window_end == future
+        assert list(orch._quota_windows) == ["chat-2"]
 
 
 class TestPausedSkipped:

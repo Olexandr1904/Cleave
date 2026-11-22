@@ -730,7 +730,7 @@ class TestQuotaFailureClassification:
         # We still wrote the output — we already paid for it.
         assert (workspace.reports_dir / RUNTIME_OUTPUT_DEV).exists()
 
-    async def test_cli_timed_out_sets_failure_kind_quota_for_retry(
+    async def test_cli_timed_out_sets_failure_kind_transient_for_retry(
         self, registry, workspace
     ):
         """CLI 'timed out' errors must route to the auto-retry DEFERRED path,
@@ -749,10 +749,10 @@ class TestQuotaFailureClassification:
         result = await runtime.execute("dev-agent", workspace)
 
         assert result.success is False
-        assert result.failure_kind == "quota"  # reused for auto-retry
+        assert result.failure_kind == "transient"  # deferred like a quota hit, but not one
         assert result.retry_at is not None
 
-    async def test_cli_stalled_sets_failure_kind_quota_for_retry(
+    async def test_cli_stalled_sets_failure_kind_transient_for_retry(
         self, registry, workspace
     ):
         """A watchdog stall kill ('Claude Code CLI stalled: no activity ...')
@@ -774,7 +774,7 @@ class TestQuotaFailureClassification:
         result = await runtime.execute("dev-agent", workspace)
 
         assert result.success is False
-        assert result.failure_kind == "quota"  # reused for auto-retry
+        assert result.failure_kind == "transient"  # deferred like a quota hit, but not one
         assert result.retry_at is not None
 
 

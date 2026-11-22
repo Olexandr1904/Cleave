@@ -56,7 +56,7 @@ def orchestrator_with_stubs(tmp_path, monkeypatch):
     orch._mode_handler.get_mode = MagicMock(return_value="auto")
     orch._shutdown_event = MagicMock()
     orch._recent_completions = []
-    orch._quota_window_end = None
+    orch._quota_windows = {}
 
     from dashboard.events import EventBus
     orch._events = EventBus()

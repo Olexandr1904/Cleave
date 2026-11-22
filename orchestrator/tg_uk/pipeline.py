@@ -14,10 +14,8 @@ TEXTS: dict[str, str] = {
     "Show {count} unanswered": "Показати без відповіді ({count})",
 
     # orchestrator/notify.py
-    "Quota exhausted at {stage}, deferred until {when} UTC. Other tickets hitting the same quota will defer "
-    "silently.":
-        "Ліміт використання вичерпано на етапі {stage}, тікет відкладено до {when} UTC. Інші тікети, що впруться "
-        "в той самий ліміт, відкладуться без повідомлень.",
+    "⏱ Usage limit until {when} UTC. Waiting, each resumes on its own then: {tickets}":
+        "⏱ Ліміт використання до {when} UTC. Чекають і тоді продовжать самі: {tickets}",
     "Agent hit max-turns limit at {stage}, deferred until {when} UTC for retry. If this recurs the agent task may "
     "be too complex — consider raising `max_turns` or splitting the work.":
         "Агент вичерпав ліміт ходів (max-turns) на етапі {stage}; повтор відкладено до {when} UTC. Якщо це "

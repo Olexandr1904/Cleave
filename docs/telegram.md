@@ -133,7 +133,7 @@ For messages that expect discrete choices, Cleave attaches inline keyboard butto
 | **Approve** / **Reject** | AWAITING_APPROVAL gates (manual mode) | `approve:<ticket>` / `reject:<ticket>` |
 | **Review Complete** | PR_REVIEW notifications, in a repo where reviewer mode is off (you've finished reviewing the PR) | `reviewed:<ticket>` |
 | **Fix** / **Won't Fix** | PR review comment escalations (per comment) | `pr_fix:<key>` / `pr_wontfix:<key>` |
-| **Retry Now** / **Retry** | DEFERRED notifications (quota / transient error) and FAILED notifications | `retry:<ticket>` |
+| **Retry Now** / **Retry** | DEFERRED notifications of a transient error (not a usage limit: that one retries only after the limit resets, on its own) and FAILED notifications | `retry:<ticket>` |
 | **🧹 Clear cache & retry** | FAILED notifications whose error matches the AAPT2 corruption signature | `clear_gradle:<ticket>` — stops that gradle home's own daemons, wipes `<gradle_home>/caches/*/transforms` then retries. Needs `GRADLE_USER_HOME` set (Cleave's own, in `.env`): the shared `~/.gradle` is never cleared |
 | **Show N unanswered** | PR_REVIEW summary when comments are pending your decision | `unanswered:<ticket>` |
 | **Yes** / **No** | The reviewer's echo of a reply it understood through the model (see [replies the grammar does not know](#replies-the-grammar-does-not-know)) | `rv_ok:<id>` / `rv_no:<id>` |

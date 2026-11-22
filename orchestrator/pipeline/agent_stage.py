@@ -332,13 +332,15 @@ async def handle_agent_stage(
             agent_id=stage_def.agent,
             data={"stage": stage_id, "error": result.error},
         )
-        if result.failure_kind == "quota":
+        if result.failure_kind in ("quota", "transient"):
             rollback_iteration(workspace, stage_id)
             retry_at = result.retry_at or (
                 datetime.now(timezone.utc) + DEFAULT_QUOTA_RETRY_DELAY
             )
             workspace.transition(Stage.DEFERRED, retry_at=retry_at.isoformat())
-            await notify_deferred_fn(workspace, retry_at, reason=result.error)
+            await notify_deferred_fn(
+                workspace, retry_at, reason=result.error, quota=result.failure_kind == "quota",
+            )
         else:
             summary = await summarize_agent_failure(
                 workspace, stage_id,

@@ -7,7 +7,7 @@ from integrations.base.notifier import NotifierInterface
 from integrations.base.tracker import TrackerInterface
 from orchestrator import tg_format
 from orchestrator.stage_verifier import ActionResult
-from orchestrator.tg_i18n import tr
+from orchestrator.tg_i18n import detail, tr
 from workspace.workspace import Stage, Workspace
 
 logger = logging.getLogger(__name__)
@@ -58,61 +58,28 @@ async def on_ticket_done(
     in_review_status: str,
     handed_over: bool = False,
 ) -> None:
-    """Handle ticket completion: TG notification + Jira status transition."""
+    """Handle ticket completion: the tracker move to `in_review_status` (Jira: a status name, Trello: the
+    "in_review" key of its list mapping), then a Telegram message that says whether the move happened."""
     state = workspace.state
 
-    # TG notification
-    if notifier:
-        if chat_id:
-            title = tg_format.read_ticket_title(workspace)
-            hdr = tg_format.tg_header("✅", state.company_id, state.ticket_id, title)
-            if handed_over:
-                body = tr("PR opened: {pr_url}\n\n"
-                          "Reviewer mode takes it from here: its turns and review threads "
-                          "come to the reviewer chat.\n\n"
-                          "Ticket moved to review status.", pr_url=state.pr_url or tr("N/A"))
-            else:
-                body = tr("Pipeline complete.\n\n"
-                          "PR ready for merge: {pr_url}\n\n"
-                          "Ticket moved to review status.", pr_url=state.pr_url or tr("N/A"))
-            await notifier.send_message(chat_id, f"{hdr}\n" + body)
+    tracker_line = ""
+    if tracker and in_review_status:
+        try:
+            await tracker.transition_ticket(state.ticket_id, in_review_status)
+            tracker_line = tr("Tracker: moved to {status}.", status=in_review_status)
+        except Exception as e:
+            logger.warning("Failed to transition %s to '%s': %s", state.ticket_id, in_review_status, e)
+            reason = str(e).splitlines()[0] if str(e) else type(e).__name__
+            tracker_line = tr("Tracker: not moved to {status}: {reason}.", status=in_review_status,
+                              reason=detail(reason.rstrip(".")))
 
-    # Transition tracker ticket to in-review status (Jira: "In Review",
-    # Trello: a list-name match). Fuzzy keywords are pipeline policy and
-    # stay on this side of the port.
-    if tracker:
-        if in_review_status:
-            try:
-                available = await tracker.list_transitions(
-                    state.ticket_id,
-                )
-                matched = None
-                target_lower = in_review_status.lower()
-                for name in available:
-                    if target_lower in name.lower():
-                        matched = name
-                        break
-                if matched is None:
-                    for name in available:
-                        if any(kw in name.lower() for kw in (
-                            "review", "qa", "verification", "ready for qa",
-                        )):
-                            matched = name
-                            break
-                if matched is not None:
-                    await tracker.transition_ticket(
-                        state.ticket_id, matched,
-                    )
-                    logger.info(
-                        "Transitioned %s to '%s'", state.ticket_id, matched,
-                    )
-                else:
-                    logger.warning(
-                        "Cannot transition %s to '%s' — available: %s",
-                        state.ticket_id, in_review_status, available,
-                    )
-            except Exception as e:
-                logger.warning(
-                    "Failed to transition %s on tracker: %s",
-                    state.ticket_id, e,
-                )
+    if notifier and chat_id:
+        title = tg_format.read_ticket_title(workspace)
+        hdr = tg_format.tg_header("✅", state.company_id, state.ticket_id, title)
+        if handed_over:
+            body = tr("PR opened: {pr_url}\n\n"
+                      "Reviewer mode takes it from here: its turns and review threads "
+                      "come to the reviewer chat.", pr_url=state.pr_url or tr("N/A"))
+        else:
+            body = tr("Pipeline complete.\n\nPR ready for merge: {pr_url}", pr_url=state.pr_url or tr("N/A"))
+        await notifier.send_message(chat_id, f"{hdr}\n" + body + (f"\n\n{tracker_line}" if tracker_line else ""))

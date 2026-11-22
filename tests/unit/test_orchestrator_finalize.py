@@ -1,8 +1,7 @@
-"""Characterization tests for on_ticket_done fuzzy tracker transition.
+"""on_ticket_done: the tracker move to the configured review status, and a done message that says what happened.
 
-The matching logic uses tracker.list_transitions() to fetch available
-transition names and tracker.transition_ticket() to apply the first match
-(exact, then fuzzy on "review"/"qa"/"verification" keywords).
+The move is the tracker's transition_ticket (Jira steps only through the statuses it is told to); no keyword
+matching on the transitions offered, which once picked a "verification" status that means "merged and on stage".
 """
 from __future__ import annotations
 
@@ -25,81 +24,56 @@ def _ws():
     return ws
 
 
+@pytest.fixture(autouse=True)
+def _title(monkeypatch):
+    monkeypatch.setattr("orchestrator.tg_format.read_ticket_title", lambda w: "Sample title")
+
+
 @pytest.mark.asyncio
-async def test_exact_match_transition_fires(monkeypatch) -> None:
-    tracker = AsyncMock()
-    tracker.list_transitions.return_value = ["In Review"]
-    notifier = AsyncMock()
-    monkeypatch.setattr(
-        "orchestrator.tg_format.read_ticket_title", lambda w: "Sample title",
-    )
+async def test_moves_the_ticket_to_the_configured_status_and_says_so() -> None:
+    tracker, notifier = AsyncMock(), AsyncMock()
+    await on_ticket_done(_ws(), notifier, "chat-1", tracker, "Ready for Build")
+    tracker.transition_ticket.assert_awaited_once_with("T-1", "Ready for Build")
+    tracker.list_transitions.assert_not_awaited()
+    assert notifier.send_message.await_args.args[1].endswith("Tracker: moved to Ready for Build.")
+
+
+@pytest.mark.asyncio
+async def test_a_move_that_fails_is_reported_with_its_reason() -> None:
+    tracker, notifier = AsyncMock(), AsyncMock()
+    tracker.transition_ticket.side_effect = ValueError(
+        "Cannot transition T-1 to 'In Review'. Available transitions: ['Resolved', 'On Hold']")
     await on_ticket_done(_ws(), notifier, "chat-1", tracker, "In Review")
-    tracker.transition_ticket.assert_awaited_once()
-    assert tracker.transition_ticket.await_args.args[1] == "In Review"
+    text = notifier.send_message.await_args.args[1]
+    assert "Ticket moved" not in text and "Tracker: moved" not in text
+    assert text.endswith("Tracker: not moved to In Review: Cannot transition T-1 to 'In Review'. Available "
+                         "transitions: ['Resolved', 'On Hold'].")
 
 
 @pytest.mark.asyncio
-async def test_fuzzy_match_on_review_keyword(monkeypatch) -> None:
-    tracker = AsyncMock()
-    tracker.list_transitions.return_value = ["Reviewing"]
-    notifier = AsyncMock()
-    monkeypatch.setattr(
-        "orchestrator.tg_format.read_ticket_title", lambda w: "Sample title",
-    )
-    await on_ticket_done(_ws(), notifier, "chat-1", tracker, "Nonexistent Status")
-    tracker.transition_ticket.assert_awaited_once()
-    assert tracker.transition_ticket.await_args.args[1] == "Reviewing"
-
-
-@pytest.mark.asyncio
-async def test_no_matching_transition_does_nothing_fatal(monkeypatch) -> None:
-    tracker = AsyncMock()
-    tracker.list_transitions.return_value = ["Closed"]
-    notifier = AsyncMock()
-    monkeypatch.setattr(
-        "orchestrator.tg_format.read_ticket_title", lambda w: "Sample title",
-    )
-    await on_ticket_done(_ws(), notifier, "chat-1", tracker, "In Review")
-    tracker.transition_ticket.assert_not_awaited()
-
-
-@pytest.mark.asyncio
-async def test_done_sends_completion_message(monkeypatch) -> None:
-    """on_ticket_done sends a TG message containing pipeline-complete copy."""
-    tracker = AsyncMock()
-    notifier = AsyncMock()
-    monkeypatch.setattr(
-        "orchestrator.tg_format.read_ticket_title", lambda w: "Sample title",
-    )
+async def test_no_review_status_means_no_move_and_no_tracker_line() -> None:
+    tracker, notifier = AsyncMock(), AsyncMock()
     await on_ticket_done(_ws(), notifier, "chat-1", tracker, "")
-
     assert notifier.send_message.await_count == 1
     chat_id, message = notifier.send_message.await_args.args[:2]
     assert chat_id == "chat-1"
-    assert "Pipeline complete" in message
-    assert "https://g/pr/42" in message
-    # With empty target_status, transition lookups are skipped entirely.
-    tracker.list_transitions.assert_not_awaited()
+    assert message.endswith("Pipeline complete.\n\nPR ready for merge: https://g/pr/42")
     tracker.transition_ticket.assert_not_awaited()
 
 
 @pytest.mark.asyncio
-async def test_handed_over_text(monkeypatch) -> None:
+async def test_handed_over_text() -> None:
     notifier = AsyncMock()
-    monkeypatch.setattr("orchestrator.tg_format.read_ticket_title", lambda w: "Sample title")
-    await on_ticket_done(_ws(), notifier, "chat-1", AsyncMock(), "", handed_over=True)
+    await on_ticket_done(_ws(), notifier, "chat-1", AsyncMock(), "In Review", handed_over=True)
     text = notifier.send_message.await_args.args[1]
     assert text.endswith(
         "PR opened: https://g/pr/42\n\nReviewer mode takes it from here: its turns and review threads come to "
-        "the reviewer chat.\n\nTicket moved to review status.")
+        "the reviewer chat.\n\nTracker: moved to In Review.")
     assert "ready for merge" not in text
 
 
 @pytest.mark.asyncio
-async def test_not_handed_over_text_is_unchanged(monkeypatch) -> None:
+async def test_no_tracker_means_no_tracker_line() -> None:
     notifier = AsyncMock()
-    monkeypatch.setattr("orchestrator.tg_format.read_ticket_title", lambda w: "Sample title")
-    await on_ticket_done(_ws(), notifier, "chat-1", AsyncMock(), "")
-    text = notifier.send_message.await_args.args[1]
-    assert text.endswith(
-        "Pipeline complete.\n\nPR ready for merge: https://g/pr/42\n\nTicket moved to review status.")
+    await on_ticket_done(_ws(), notifier, "chat-1", None, "In Review")
+    assert notifier.send_message.await_args.args[1].endswith("PR ready for merge: https://g/pr/42")

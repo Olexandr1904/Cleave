@@ -108,8 +108,9 @@ class TestApprovalGates:
         """The plan gate moved to PLAN_REVIEW: the human reviews a vetted plan."""
         assert self._gate(self._manual(), "ANALYSIS") is False
 
-    def test_should_gate_returns_true_for_qa_in_manual(self):
-        assert self._gate(self._manual(), "QA") is True
+    def test_qa_not_gated(self):
+        """QA passed goes on to push and open the PR: the PR is where the operator reviews the code."""
+        assert self._gate(self._manual(), "QA") is False
 
     def test_pr_review_not_gated(self):
         """PR_REVIEW goes straight to DONE — no approval gate."""
@@ -133,8 +134,8 @@ class TestApprovalGates:
         """Unclear analysis escalates — gate must NOT fire."""
         assert self._gate(self._manual(), "ANALYSIS", "escalate") is False
 
-    def test_gate_qa_to_push_happy_path_fires(self):
-        assert self._gate(self._manual(), "QA", "push") is True
+    def test_gate_qa_to_push_does_not_fire(self):
+        assert self._gate(self._manual(), "QA", "push") is False
 
     def test_gate_qa_to_dev_failure_loop_bypasses(self):
         """QA fail loops back to dev — gate must NOT fire."""

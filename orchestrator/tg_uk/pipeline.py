@@ -115,8 +115,6 @@ TEXTS: dict[str, str] = {
     "Plan reviewer:": "Рев'юер плану:",
     "Approve = start coding. Reject = back to analysis.":
         "Схвалити — почати кодування. Відхилити — назад до аналізу.",
-    "QA passed.\n\nApprove = push code & open PR. Reject = back to dev.":
-        "QA пройдено.\n\nСхвалити — запушити код і відкрити PR. Відхилити — назад у розробку.",
     "Awaiting approval at {gate_state}": "Чекає схвалення на етапі {gate_state}",
 
     # orchestrator/pipeline/action_stage.py

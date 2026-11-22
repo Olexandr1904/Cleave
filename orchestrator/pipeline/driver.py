@@ -199,8 +199,6 @@ def build_gate_summary(
         if review_verdict:
             gate_title += "\n\n" + tr("Plan reviewer:") + f"\n{model_text(review_verdict)}"
         gate_title += "\n\n" + tr("Approve = start coding. Reject = back to analysis.")
-    elif gate_state == Stage.QA:
-        gate_title = tr("QA passed.\n\nApprove = push code & open PR. Reject = back to dev.")
     else:
         gate_title = tr("Awaiting approval at {gate_state}", gate_state=gate_state)
 

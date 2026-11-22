@@ -14,11 +14,11 @@ from workspace.workspace import Stage
 
 logger = logging.getLogger(__name__)
 
-APPROVAL_GATE_STATES = {Stage.PLAN_REVIEW, Stage.QA}
+# Only the plan: a ticket whose QA passed goes on to push and open its PR, where the operator reviews the code.
+APPROVAL_GATE_STATES = {Stage.PLAN_REVIEW}
 
 GATE_HAPPY_PATH_NEXT_STAGE = {
     Stage.PLAN_REVIEW: "dev",
-    Stage.QA: "push",
 }
 
 

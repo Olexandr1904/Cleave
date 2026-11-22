@@ -123,9 +123,9 @@ async def test_verification_blocked_shows_ukrainian_and_stores_english(tmp_path)
 def test_gate_summary_buttons_in_ukrainian(tmp_path):
     ws = _workspace(tmp_path)
     with telegram_language("uk"):
-        text, buttons = build_gate_summary(ws, Stage.QA)
+        text, buttons = build_gate_summary(ws, Stage.PLAN_REVIEW)
     assert [(b.label, b.action) for b in buttons] == [("Схвалити", "approve:ACME-7"), ("Відхилити", "reject:ACME-7")]
-    assert "QA пройдено." in text
+    assert "Схвалити — почати кодування. Відхилити — назад до аналізу." in text
 
 
 def test_escalated_comment_in_ukrainian_keeps_the_comment_body():

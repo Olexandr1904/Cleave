@@ -473,7 +473,7 @@ Replies sent while the daemon was down reach it at the start; one older than 15 
 Mode is global (set via `global.yaml` → `pipeline.mode` or toggled live with `/auto` / `/manual`).
 
 - **auto** — workspace flows through every stage without gates.
-- **manual** — Cleave inserts AWAITING_APPROVAL gates at major transitions (after analysis, after QA, before pushing). Each gate sends a Telegram message with Approve/Reject buttons. Switching to `auto` mid-flight auto-resumes any AWAITING_APPROVAL workspaces to their happy-path next state.
+- **manual** — Cleave waits at one AWAITING_APPROVAL gate: the reviewed plan, before coding starts. A ticket whose QA passed is pushed and its PR opened without a gate; the PR is where you review the code. The gate sends a Telegram message with Approve/Reject buttons. Switching to `auto` mid-flight auto-resumes any AWAITING_APPROVAL workspaces to their happy-path next state.
 
 The `/status` reply always shows the current mode in its header.
 

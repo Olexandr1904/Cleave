@@ -107,6 +107,8 @@ TEXTS: dict[str, str] = {
         '#{number}: його текст {problem}: нічого не опубліковано. Відповідайте "again: …", щоб його переписали.',
     '#{n} reports a fix that is not pushed: reply "push" first. Nothing was done.':
         '#{n} повідомляє про виправлення, яке не запушено: спершу відповідайте "push". Нічого не зроблено.',
+    '#{n} reports a fix that is not pushed: reply "push anyway" first. Nothing was done.':
+        '#{n} повідомляє про виправлення, яке не запушено: спершу відповідайте "push anyway". Нічого не зроблено.',
     "Nothing left to post on #{number} at {head}: what you named is already posted.":
         "У #{number} на {head} публікувати нічого: усе, що ви назвали, вже опубліковано.",
     'The Summary already landed at #{number} at {head}: add "no summary". Nothing was done.':
@@ -210,8 +212,9 @@ TEXTS: dict[str, str] = {
 
     # lines.py and posting.py: the push of an address job's fix
     "This job changed no code: nothing to push.": "Ця задача не змінила коду: пушити нічого.",
-    "The fix touches protected files ({paths}): Cleave does not push it. Nothing was done.":
-        "Виправлення зачіпає захищені файли ({paths}): Cleave його не пушить. Нічого не зроблено.",
+    'The fix touches protected files ({paths}): Cleave pushes it only on "push anyway". Nothing was done.':
+        'Виправлення зачіпає захищені файли ({paths}): Cleave пушить його лише на "push anyway".'
+        " Нічого не зроблено.",
     "Already pushed as {sha}. Nothing was done.": "Уже запушено як {sha}. Нічого не зроблено.",
     'A ticket of the pipeline still holds #{number}\'s branch and may overwrite it: nothing pushed. Reply "push"'
     ' again when the ticket is done.':

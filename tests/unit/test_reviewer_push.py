@@ -164,7 +164,7 @@ async def test_push_refused_when_the_head_moved(tmp_path):
 @pytest.mark.parametrize("change, text", [
     ({"fix": {}}, "This job changed no code: nothing to push."),
     ({"fix": {**FIX, "protected": [".github/ci.yml"]}},
-     "The fix touches protected files (.github/ci.yml): Cleave does not push it. Nothing was done."),
+     'The fix touches protected files (.github/ci.yml): Cleave pushes it only on "push anyway". Nothing was done.'),
     ({"pr": pr(head_repo="octo/acme-app")},
      "The PR's branch is in a fork (octo/acme-app): Cleave does not push there. Nothing was done."),
     ({"pr": pr(head_repo="")}, "The PR's branch is in a fork (?): Cleave does not push there. Nothing was done."),
@@ -179,6 +179,25 @@ async def test_push_refusals(tmp_path, change, text):
     out = await rig.push()
     assert (out.state, out.text) == ("refused", text)
     assert rig.clone.pushed == [] and rig.store.posts(SCOPE, N) == []
+
+
+async def test_push_anyway_pushes_a_fix_with_protected_files(tmp_path):
+    rig = Rig(tmp_path, fix={**FIX, "protected": [".github/ci.yml"]})
+    out = await rig.posting.push_fix(rig.ctx, rig.job, anyway=True)
+    assert (out.state, out.text) == ("posted", PUSHED) and len(rig.clone.pushed) == 1
+
+
+async def test_a_protected_refusal_names_every_path_whole(tmp_path):
+    paths = [f".github/workflows/{'release-' * 8}{i}.yml" for i in range(6)]
+    rig = Rig(tmp_path, fix={**FIX, "protected": paths})
+    out = await rig.push()
+    assert out.text == (f"The fix touches protected files ({', '.join(paths)}): "
+                        'Cleave pushes it only on "push anyway". Nothing was done.')
+
+
+async def test_a_push_that_a_post_follows_leaves_out_the_post_hint(rig):
+    out = await rig.posting.push_fix(rig.ctx, rig.job, then_post=True)
+    assert (out.state, out.text) == ("posted", PUSHED.partition("\n")[0])
 
 
 async def test_push_refused_without_the_patch_or_the_job(rig):

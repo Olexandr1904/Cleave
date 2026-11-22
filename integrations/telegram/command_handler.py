@@ -14,7 +14,7 @@ from integrations.telegram.handlers.approval import (
 )
 from integrations.telegram.handlers.mode import ModeHandler
 from integrations.telegram.handlers.status import StatusHandler
-from integrations.telegram.intent_parser import IntentParser, ParsedIntent
+from integrations.telegram.intent_parser import IntentParser, ParsedIntent, parse_fixed_intent
 from integrations.telegram.switch_commands import (
     format_switch_status,
     parse_switch_command,
@@ -241,6 +241,14 @@ class CommandHandler:
         if self._is_reviewer_command(text):
             await self._notifier.send_message(chat_id, tr(_REVIEWER_NOT_A_REPLY))
             return
+        fixed = parse_fixed_intent(text)
+        if fixed is not None:  # no model turn and no "Processing..." line: it answers at once
+            workspaces = self._active_workspaces_fn()
+            if fixed.intent == "status":
+                await self._handle_status(fixed, chat_id, workspaces)
+            else:
+                await self._handle_retry(fixed, chat_id, workspaces)
+            return
         # Send a visible processing message so the user knows we're working
         processing_msg_id = None
         preview = text[:100].replace("\n", " ")
@@ -326,9 +334,30 @@ class CommandHandler:
             "active_workspaces": active,
         }
 
+    @staticmethod
+    def _resolve_key(key: str, workspaces: list[Any]) -> tuple[str, str]:
+        """The active ticket a typed key names, and "" — or the key and why no ticket is chosen. A key names a
+        ticket in any case, or by its number alone when exactly one ticket ends in it; a key that names none comes
+        back upper-cased, for the "not found" answer."""
+        keys = [ws.state.ticket_id for ws in workspaces]
+        if exact := next((k for k in keys if k.lower() == key.lower()), None):
+            return exact, ""
+        if key.isdigit():
+            ending = [k for k in keys if k.rpartition("-")[2] == key]
+            if len(ending) == 1:
+                return ending[0], ""
+            if ending:
+                return key, tr("Several tickets end in {number}: {keys}. Send the full key.", number=key,
+                               keys=", ".join(ending))
+        return key.upper(), ""
+
     async def _handle_status(self, intent: ParsedIntent, chat_id: str, workspaces: list[Any], processing_msg_id: int | None = None) -> None:
         ticket_id = intent.params.get("ticket_id")
         if ticket_id:
+            ticket_id, ambiguous = self._resolve_key(ticket_id, workspaces)
+            if ambiguous:
+                await self._reply(chat_id, ambiguous, processing_msg_id)
+                return
             matches = [ws for ws in workspaces if ws.state.ticket_id == ticket_id]
             if matches:
                 msg = self._status_handler.format_drill_down(matches[0])
@@ -523,6 +552,10 @@ class CommandHandler:
         ticket_id = intent.params.get("ticket_id")
         if not ticket_id:
             await self._reply(chat_id, tr("Please specify a ticket ID to retry."), processing_msg_id)
+            return
+        ticket_id, ambiguous = self._resolve_key(ticket_id, workspaces)
+        if ambiguous:
+            await self._reply(chat_id, ambiguous, processing_msg_id)
             return
 
         matches = [ws for ws in workspaces if ws.state.ticket_id == ticket_id]

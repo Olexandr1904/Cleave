@@ -12,7 +12,7 @@ import pytest
 
 from integrations.telegram.command_handler import CommandHandler
 from integrations.telegram.handlers.approval import ApprovalHandler
-from integrations.telegram.intent_parser import ParsedIntent
+from integrations.telegram.intent_parser import ParsedIntent, parse_fixed_intent
 from workspace.workspace import Stage
 
 
@@ -130,7 +130,7 @@ class TestCommandHandler:
             allowed_chat_ids={"12345"},
         )
         await handler.handle_message("status", "12345")
-        mock_intent_parser.parse.assert_called_once()
+        mock_notifier.send_message.assert_awaited_once()
 
     async def test_reject_disambiguates_multiple_awaiting(
         self, mock_intent_parser, mock_notifier, mock_mode_handler,
@@ -200,7 +200,7 @@ class TestCommandHandler:
             recent_completions_fn=lambda: [("T-DONE", "DONE", 1_700_000_000.0)],
         )
         await handler.handle_message("status", "12345")
-        msg = mock_notifier.edit_message.call_args[0][2]
+        msg = mock_notifier.send_message.call_args[0][1]
         assert "T-DONE" in msg
 
     async def test_processing_indicator_includes_original_text(
@@ -319,6 +319,62 @@ class TestRetryDeferred:
         )
         await handler.handle_message("resume T-D", "12345")
         ws.transition.assert_called_once_with("push")
+
+
+class TestFixedCommands:
+    """`/status` and `retry <key> [from <stage>]` are read without the LLM; a key may be its number only."""
+
+    @pytest.fixture
+    def parser(self):
+        parser = AsyncMock()
+        parser.parse = AsyncMock(return_value=ParsedIntent(intent="unknown", params={}, reply=""))
+        return parser
+
+    def _handler(self, parser, notifier, mode_handler, workspaces):
+        return CommandHandler(intent_parser=parser, notifier=notifier, mode_handler=mode_handler,
+                              active_workspaces_fn=lambda: workspaces)
+
+    async def test_slash_status_skips_the_llm_and_the_processing_line(self, parser, mock_notifier, mock_mode_handler):
+        handler = self._handler(parser, mock_notifier, mock_mode_handler, [_make_workspace("ACME-1", "DEV")])
+        await handler.handle_message("/status", "12345")
+        parser.parse.assert_not_awaited()
+        texts = [c.args[1] for c in mock_notifier.send_message.await_args_list]
+        assert len(texts) == 1 and "Processing" not in texts[0] and "ACME-1" in texts[0]
+
+    async def test_status_of_a_number_drills_down_into_its_ticket(self, parser, mock_notifier, mock_mode_handler):
+        handler = self._handler(parser, mock_notifier, mock_mode_handler,
+                                [_make_workspace("ACME-15", "DEV"), _make_workspace("ACME-153", "QA")])
+        await handler.handle_message("status 153", "12345")
+        parser.parse.assert_not_awaited()
+        text = mock_notifier.send_message.await_args.args[1]
+        assert text.startswith("ACME-153") and "Stage: QA" in text
+
+    async def test_retry_of_a_number_retries_its_ticket(self, parser, mock_notifier, mock_mode_handler):
+        ws = _make_workspace("ACME-12", "BLOCKED", previous_state="DEV")
+        handler = self._handler(parser, mock_notifier, mock_mode_handler, [ws])
+        await handler.handle_message("retry 12 from qa", "12345")
+        parser.parse.assert_not_awaited()
+        ws.transition.assert_called_once_with(Stage.QA)
+        assert "Retrying ACME-12 from QA." in mock_notifier.send_message.await_args.args[1]
+
+    async def test_a_key_in_lower_case_is_the_ticket_s(self, parser, mock_notifier, mock_mode_handler):
+        ws = _make_workspace("ACME-12", "BLOCKED", previous_state="DEV")
+        handler = self._handler(parser, mock_notifier, mock_mode_handler, [ws])
+        await handler.handle_message("retry acme-12 from dev", "12345")
+        ws.transition.assert_called_once_with(Stage.DEV)
+
+    async def test_a_number_two_tickets_end_in_names_neither(self, parser, mock_notifier, mock_mode_handler):
+        a, b = _make_workspace("ACME-7", "BLOCKED", "DEV"), _make_workspace("WEB-7", "BLOCKED", "DEV")
+        handler = self._handler(parser, mock_notifier, mock_mode_handler, [a, b])
+        await handler.handle_message("retry 7", "12345")
+        a.transition.assert_not_called()
+        b.transition.assert_not_called()
+        assert "ACME-7, WEB-7" in mock_notifier.send_message.await_args.args[1]
+
+    async def test_free_text_still_goes_to_the_llm(self, parser, mock_notifier, mock_mode_handler):
+        handler = self._handler(parser, mock_notifier, mock_mode_handler, [])
+        await handler.handle_message("what is blocked?", "12345")
+        parser.parse.assert_awaited_once()
 
 
 def test_set_tracker_attaches_after_init():
@@ -956,7 +1012,8 @@ class TestReviewerReplies:
         """The guard is the reviewer's only while a repo is in reviewer mode (/code-review C8). With none, every
         message reaches the ticket flow as before: a bare approve, the ticket words, the reviewer's own forms. With
         one, it applies in every chat the ticket pipeline admits, an empty allowlist's included: the numbered forms
-        are never ticket words, and a bare approve and the ticket words still pass."""
+        are never ticket words, and a bare approve and the ticket words still pass ("status" and "retry ACME-1" to
+        the fixed commands, the rest to the intent parser)."""
         ticket_words = ("approve", "апрув", "approve ACME-2", "status", "retry ACME-1", "reject ACME-2: wrong",
                         "fix it")
         reviewer_forms = ("review again", "skip", "post 1 2 4 approve", "text 2", "post replies 1 3")
@@ -964,8 +1021,7 @@ class TestReviewerReplies:
             awaiting, handler = self._awaiting(mock_intent_parser, mock_notifier, mock_mode_handler,
                                                _reviewer(repos=False))
             await handler.handle_message(text, "1")
-            assert mock_intent_parser.parse.await_args.args[0] == text
-            mock_intent_parser.parse.reset_mock()
+            _assert_passed(mock_intent_parser, mock_notifier, text)
         assert call("1", self.UNANCHORED) not in mock_notifier.send_message.await_args_list
 
         # A repo reviewed, the allowlist empty: every chat is admitted for tickets, and the reviewer reads none.
@@ -973,8 +1029,7 @@ class TestReviewerReplies:
             awaiting, handler = self._awaiting(mock_intent_parser, mock_notifier, mock_mode_handler, _reviewer(),
                                                allowed=None, reviewer_chats=())
             await handler.handle_message(text, "42")
-            assert mock_intent_parser.parse.await_args.args[0] == text
-            mock_intent_parser.parse.reset_mock()
+            _assert_passed(mock_intent_parser, mock_notifier, text)
         for text in reviewer_forms:
             awaiting, handler = self._awaiting(mock_intent_parser, mock_notifier, mock_mode_handler, _reviewer(),
                                                allowed=None, reviewer_chats=())
@@ -983,6 +1038,17 @@ class TestReviewerReplies:
             awaiting.transition.assert_not_called()
         assert mock_notifier.send_message.await_args_list[-len(reviewer_forms):] == [
             call("42", self.UNANCHORED)] * len(reviewer_forms)
+
+
+def _assert_passed(parser, notifier, text):
+    """`text` passed the reviewer's guard: a fixed command was answered by the ticket flow without the intent parser,
+    anything else reached the intent parser."""
+    if parse_fixed_intent(text) is not None:
+        parser.parse.assert_not_awaited()
+        assert notifier.send_message.await_args.args[1] != TestReviewerReplies.UNANCHORED
+    else:
+        assert parser.parse.await_args.args[0] == text
+    parser.parse.reset_mock()
 
 
 from orchestrator.skillflow.chat import SkillChat

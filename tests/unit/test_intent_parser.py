@@ -7,7 +7,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from integrations.telegram.intent_parser import IntentParser, ParsedIntent
+from integrations.telegram.intent_parser import IntentParser, ParsedIntent, parse_fixed_intent
 
 
 class TestParsedIntent:
@@ -134,3 +134,43 @@ class TestDeferredContext:
         # for content unique to the context value.
         assert "T-D" in system_prompt
         assert "retry at 20:00" in system_prompt
+
+
+class TestFixedIntent:
+    """The commands with a fixed shape are read without the LLM (it took seconds of a model turn each)."""
+
+    @pytest.mark.parametrize("text", ["/status", "status", "Status", "статус", "/status@CleaveBot", "/status."])
+    def test_status(self, text):
+        assert parse_fixed_intent(text) == ParsedIntent("status", {})
+
+    @pytest.mark.parametrize("text", ["/status ACME-12", "status acme-12", "статус ACME-12"])
+    def test_status_of_a_ticket(self, text):
+        assert parse_fixed_intent(text) == ParsedIntent("status", {"ticket_id": text.split()[1]})
+
+    def test_status_of_a_number(self):
+        assert parse_fixed_intent("status 12") == ParsedIntent("status", {"ticket_id": "12"})
+
+    @pytest.mark.parametrize("text", ["retry ACME-12", "/retry ACME-12", "Retry ACME-12"])
+    def test_retry(self, text):
+        assert parse_fixed_intent(text) == ParsedIntent("retry", {"ticket_id": "ACME-12"})
+
+    @pytest.mark.parametrize("text, stage", [
+        ("retry ACME-12 from qa", "qa"),
+        ("retry ACME-12 from SCOPE_CHECK", "scope_check"),
+        ("retry ACME-12 from scope check", "scope_check"),
+        ("retry ACME-12 from pushed", "push"),
+        ("retry ACME-12 from push", "push"),
+        ("retry 12 from plan_review", "plan_review"),
+    ])
+    def test_retry_from_a_stage(self, text, stage):
+        assert parse_fixed_intent(text).params == {"ticket_id": text.split()[1], "from_stage": stage}
+
+    def test_an_unknown_stage_is_passed_on_for_the_handler_to_refuse(self):
+        assert parse_fixed_intent("retry ACME-12 from nowhere").params["from_stage"] == "nowhere"
+
+    @pytest.mark.parametrize("text", [
+        "retry", "status please", "what's going on", "retry ACME-12 now", "retry ACME-12 from",
+        "the status is weird", "approve ACME-12",
+    ])
+    def test_anything_else_is_the_llm_s(self, text):
+        assert parse_fixed_intent(text) is None

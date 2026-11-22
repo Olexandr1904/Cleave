@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import logging
+from datetime import datetime, timezone
 from typing import Any
 
+from integrations.base.notifier import Button
 from orchestrator.tg_i18n import N_, detail, model_text, tr
 
 logger = logging.getLogger(__name__)
@@ -18,6 +20,69 @@ _FRIENDLY = {
     "PR_REVIEW": N_("PR Review"),
     "PUSHED": N_("Pushing"),
 }
+
+
+# The states a ticket waits in for the operator's Retry or Skip; each gets a row of buttons under the summary.
+STOPPED_STATES = ("BLOCKED", "FAILED", "DEFERRED")
+_REASON_CHARS = 160  # of the one line of why a ticket stopped
+_INDENT = "     "
+
+
+def _stage_name(state: str | None) -> str:
+    return tr(_FRIENDLY[state]) if state in _FRIENDLY else (state or "?")
+
+
+def _first_line(text: Any) -> str:
+    """The first non-empty line of `text` (not a str: ""), cut to _REASON_CHARS with an ellipsis."""
+    if not isinstance(text, str):
+        return ""
+    line = next((line.strip() for line in text.splitlines() if line.strip()), "")
+    return line[:_REASON_CHARS] + "…" if len(line) > _REASON_CHARS else line
+
+
+def _retry_time(retry_at: Any) -> str:
+    try:
+        return datetime.fromisoformat(retry_at).astimezone(timezone.utc).strftime("%H:%M")
+    except (TypeError, ValueError):
+        return ""
+
+
+def _stopped_lines(s: Any) -> tuple[str, list[str]] | None:
+    """A ticket that stopped (or waits at a gate): what follows its key, and the lines under it — why, from its
+    question (an agent's, so marked for translation) or its error, and what Cleave waits for. None for a ticket
+    that is running."""
+    stage = _stage_name(s.previous_state)
+    question, error = _first_line(s.human_input_question), _first_line(s.error)
+    why = model_text(question) if question else (detail(error) if error else "")
+    if s.current_state == "BLOCKED":
+        head = tr("blocked at {stage}", stage=stage)
+        waits = tr("Waits for: your reply to its message, or a button below")
+    elif s.current_state == "FAILED":
+        head, why = tr("failed at {stage}", stage=stage), detail(error) if error else ""
+        waits = tr("Waits for: a button below")
+    elif s.current_state == "DEFERRED":
+        when = _retry_time(s.retry_at)
+        head, why = tr("deferred at {stage}", stage=stage), detail(error) if error else ""
+        waits = tr("Retries by itself at {time} UTC", time=when) if when else ""
+    elif s.current_state == "AWAITING_APPROVAL":
+        head, why = tr("awaiting approval after {stage}", stage=stage), ""
+        waits = tr("Waits for: Approve or Reject on its message")
+    else:
+        return None
+    return head, [_INDENT + line for line in (why, waits) if line]
+
+
+def status_buttons(workspaces: list[Any]) -> list[Button]:
+    """A row of Retry · From stage… · Skip for each ticket that stopped (STOPPED_STATES), in the summary's order."""
+    buttons: list[Button] = []
+    for row, ws in enumerate((ws for ws in workspaces if ws.state.current_state in STOPPED_STATES), start=1):
+        key = ws.state.ticket_id
+        buttons += [
+            Button(tr("Retry {key}", key=key), f"retry:{key}", row=row),
+            Button(tr("From stage…"), f"retry_pick:{key}", row=row),
+            Button(tr("Skip"), f"skip:{key}", row=row),
+        ]
+    return buttons
 
 
 def _format_duration(seconds: float) -> str:
@@ -67,13 +132,13 @@ class StatusHandler:
         if active_workspaces:
             for ws in active_workspaces:
                 s = ws.state
+                if (stopped := _stopped_lines(s)) is not None:
+                    head, below = stopped
+                    lines += [f"  {s.ticket_id} — {head}", *below]
+                    continue
                 iterations = s.stage_iterations.get(s.current_state.lower(), 0)
                 suffix = ""
-                if s.current_state == "AWAITING_APPROVAL":
-                    suffix = tr(", awaiting approval")
-                elif s.current_state == "BLOCKED":
-                    suffix = tr(", blocked")
-                elif iterations > 0:
+                if iterations > 0:
                     max_iter = 2
                     suffix = tr(" (iteration {n}/{max})", n=iterations, max=max_iter)
                 display = tr(_FRIENDLY[s.current_state]) if s.current_state in _FRIENDLY else s.current_state

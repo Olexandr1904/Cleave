@@ -13,7 +13,7 @@ from integrations.telegram.handlers.approval import (
     ApprovalHandler,
 )
 from integrations.telegram.handlers.mode import ModeHandler
-from integrations.telegram.handlers.status import StatusHandler
+from integrations.telegram.handlers.status import StatusHandler, status_buttons
 from integrations.telegram.intent_parser import IntentParser, ParsedIntent, parse_fixed_intent
 from integrations.telegram.switch_commands import (
     format_switch_status,
@@ -363,12 +363,32 @@ class CommandHandler:
                 msg = self._status_handler.format_drill_down(matches[0])
             else:
                 msg = tr("No active workspace found for {ticket_id}.", ticket_id=ticket_id)
+            buttons = status_buttons(matches[:1])
         else:
             msg = self._summary_text(workspaces)
+            buttons = status_buttons(self._listed(workspaces))
             if self._switches is not None:
                 scopes = switch_scopes(self._get_projects())
                 msg = format_switch_status(self._switches.snapshot(scopes)) + "\n\n" + msg
-        await self._reply(chat_id, msg, processing_msg_id)
+        await self._send_panel(chat_id, msg, buttons, processing_msg_id)
+
+    async def _send_panel(self, chat_id: str, text: str, buttons: list[Any], processing_msg_id: int | None) -> None:
+        """`text` with `buttons`. An edit of the "Processing..." line carries no buttons: with buttons that line is
+        deleted and the text sent anew."""
+        if not buttons:
+            await self._reply(chat_id, text, processing_msg_id)
+            return
+        if processing_msg_id and hasattr(self._notifier, "delete_message"):
+            try:
+                await self._notifier.delete_message(chat_id, processing_msg_id)
+            except Exception:
+                logger.debug("Failed to delete processing indicator", exc_info=True)
+        await self._notifier.send_message(chat_id, text, buttons=buttons)
+
+    @staticmethod
+    def _listed(workspaces: list[Any]) -> list[Any]:
+        """The tickets the summary lists: a failed one too, which waits for its Retry or Skip."""
+        return [ws for ws in workspaces if ws.state.current_state not in (Stage.DONE, Stage.ARCHIVED)]
 
     def _summary_text(self, workspaces: list[Any]) -> str:
         now = time.time()
@@ -380,7 +400,7 @@ class CommandHandler:
             except (ValueError, TypeError):
                 pass
         poll_ago = now - self._last_poll_time
-        active = [ws for ws in workspaces if ws.state.current_state not in (Stage.DONE, Stage.FAILED, Stage.ARCHIVED)]
+        active = self._listed(workspaces)
         recent = self._recent_completions_fn() if self._recent_completions_fn else []
         return self._status_handler.format_summary(
             mode=self._mode_handler.get_mode(),
@@ -394,9 +414,7 @@ class CommandHandler:
         projects = self._get_projects()
         scopes = switch_scopes(projects)
         if command.kind == "status":
-            text = format_switch_status(self._switches.snapshot(scopes))
-            text += "\n\n" + self._summary_text(self._active_workspaces_fn())
-            await self._notifier.send_message(chat_id, text)
+            await self._handle_status(ParsedIntent("status", {}), chat_id, self._active_workspaces_fn())
             return
         scope = GLOBAL
         if command.repo:

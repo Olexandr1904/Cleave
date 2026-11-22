@@ -371,6 +371,31 @@ class TestFixedCommands:
         b.transition.assert_not_called()
         assert "ACME-7, WEB-7" in mock_notifier.send_message.await_args.args[1]
 
+    async def test_the_summary_carries_a_button_row_per_stopped_ticket(self, parser, mock_notifier, mock_mode_handler):
+        workspaces = [_make_workspace("ACME-1", "BLOCKED", "DEV"), _make_workspace("ACME-2", "FAILED", "QA"),
+                      _make_workspace("ACME-3", "DEV")]
+        handler = self._handler(parser, mock_notifier, mock_mode_handler, workspaces)
+        await handler.handle_message("/status", "12345")
+        sent = mock_notifier.send_message.await_args
+        assert "ACME-2 — failed at QA" in sent.args[1]  # a failed ticket is listed: it waits for a button
+        assert [b.action for b in sent.kwargs["buttons"]] == [
+            "retry:ACME-1", "retry_pick:ACME-1", "skip:ACME-1", "retry:ACME-2", "retry_pick:ACME-2", "skip:ACME-2"]
+
+    async def test_a_drill_down_of_a_stopped_ticket_carries_its_buttons(self, parser, mock_notifier, mock_mode_handler):
+        handler = self._handler(parser, mock_notifier, mock_mode_handler, [_make_workspace("ACME-1", "BLOCKED", "DEV")])
+        await handler.handle_message("status 1", "12345")
+        assert [b.action for b in mock_notifier.send_message.await_args.kwargs["buttons"]] == [
+            "retry:ACME-1", "retry_pick:ACME-1", "skip:ACME-1"]
+
+    async def test_an_llm_status_with_buttons_replaces_the_processing_line(self, mock_notifier, mock_mode_handler):
+        parser = AsyncMock()
+        parser.parse = AsyncMock(return_value=ParsedIntent(intent="status", params={}))
+        mock_notifier.send_message = AsyncMock(side_effect=[7, 8])
+        handler = self._handler(parser, mock_notifier, mock_mode_handler, [_make_workspace("ACME-1", "BLOCKED", "DEV")])
+        await handler.handle_message("what is stuck?", "12345")
+        mock_notifier.delete_message.assert_awaited_once_with("12345", 7)
+        assert mock_notifier.send_message.await_args.kwargs["buttons"][0].action == "retry:ACME-1"
+
     async def test_free_text_still_goes_to_the_llm(self, parser, mock_notifier, mock_mode_handler):
         handler = self._handler(parser, mock_notifier, mock_mode_handler, [])
         await handler.handle_message("what is blocked?", "12345")

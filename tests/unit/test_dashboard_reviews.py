@@ -16,6 +16,7 @@ from dashboard.events import EventBus
 from dashboard.reviews_api import build_review_routes
 from dashboard.web import create_app
 from orchestrator.reviewer.db import connect
+from orchestrator.reviewer.forge_github import ForgeError
 from orchestrator.reviewer.grammar import ReplyCommand
 from orchestrator.reviewer.lines import not_understood_line
 from orchestrator.reviewer.models import BoardRow, Job, JobRun
@@ -83,6 +84,7 @@ class FakeService:
         self.address_now_error = None
         self.fix_findings_error = None
         self.findings_fixable = {2}
+        self.move_error = None
 
     def overview(self):
         return [{
@@ -115,6 +117,24 @@ class FakeService:
         self.calls.append(("skip", scope, number))
         if self.skip_error is not None:
             raise self.skip_error
+
+    async def pr_move(self, scope, number, move, *, reviewers=(), method="", head=""):
+        self.calls.append(("pr_move", scope, number, move, reviewers, method, head))
+        if self.move_error is not None:
+            raise self.move_error
+        return "done", f"Did {move} on #{number}."
+
+    async def review_candidates(self, scope, number):
+        self.calls.append(("review_candidates", scope, number))
+        if self.move_error is not None:
+            raise self.move_error
+        return [{"login": "rev1", "reason": "suggested by GitHub"}]
+
+    async def merge_options(self, scope):
+        self.calls.append(("merge_options", scope))
+        if self.move_error is not None:
+            raise self.move_error
+        return {"methods": ["merge", "squash"], "default": "merge"}
 
     def detail(self, scope, number):
         self.calls.append(("detail", scope, number))
@@ -149,6 +169,13 @@ async def store(tmp_path):
 def client(store):
     svc = FakeService()
     return TestClient(create_app(EventBus(), store, reviewer=svc)), svc
+
+
+@pytest.fixture
+def moves(store):
+    """The board's routes with an action layer: the GitHub moves' routes exist (the layer itself is not used)."""
+    svc = FakeService()
+    return TestClient(create_app(EventBus(), store, reviewer=svc, reviewer_actions=object())), svc
 
 
 def test_get_reviews_groups_and_trims(client):
@@ -733,3 +760,88 @@ def test_rows_carry_the_reviewers_to_rerequest(store):
     [repo] = c.get("/api/reviews").json()["repos"]
     assert repo["my_turn"][0]["rerequest"] == ["rev1", "rev2"]
     assert repo["waiting"][0]["rerequest"] == []
+
+
+
+def test_pr_move_route(moves):
+    c, svc = moves
+    body = {"scope": "acme/app", "number": 1, "move": "request_review", "reviewers": ["rev1"]}
+    r = c.post("/api/reviews/pr-move", json=body)
+    assert r.status_code == 200 and r.json() == {"state": "done", "text": "Did request_review on #1."}
+    assert svc.calls == [("pr_move", "acme/app", 1, "request_review", ["rev1"], "", "")]
+    c.post("/api/reviews/pr-move", json={"scope": "acme/app", "number": 1, "move": "merge", "method": "squash",
+                                         "head": "abcdef012"})
+    assert svc.calls[-1] == ("pr_move", "acme/app", 1, "merge", (), "squash", "abcdef012")
+
+
+@pytest.mark.parametrize("extra", [
+    {}, {"move": 7}, {"move": ""}, {"move": "ready", "reviewers": "rev1"}, {"move": "ready", "reviewers": [1]},
+    {"move": "merge", "method": 1}, {"move": "merge", "head": ["a"]},
+])
+def test_pr_move_bad_body_is_400(moves, extra):
+    c, svc = moves
+    r = c.post("/api/reviews/pr-move", json={"scope": "acme/app", "number": 1, **extra})
+    assert r.status_code == 400 and r.json()["error"] and svc.calls == []
+
+
+@pytest.mark.parametrize("error, status", [(LookupError("no PR #9"), 404), (ValueError("no move 'x'"), 400)])
+def test_pr_move_errors(moves, error, status):
+    c, svc = moves
+    svc.move_error = error
+    r = c.post("/api/reviews/pr-move", json={"scope": "acme/app", "number": 9, "move": "ready"})
+    assert r.status_code == status and r.json() == {"error": str(error)}
+
+
+def test_candidates_and_merge_options_routes(moves):
+    c, svc = moves
+    r = c.get("/api/reviews/candidates?scope=acme/app&number=1")
+    assert r.status_code == 200 and r.json() == {"candidates": [{"login": "rev1", "reason": "suggested by GitHub"}]}
+    r = c.get("/api/reviews/merge-options?scope=acme/app")
+    assert r.status_code == 200 and r.json() == {"methods": ["merge", "squash"], "default": "merge"}
+    assert svc.calls == [("review_candidates", "acme/app", 1), ("merge_options", "acme/app")]
+    assert c.get("/api/reviews/candidates?scope=acme/app&number=x").status_code == 400
+    assert c.get("/api/reviews/candidates?number=1").status_code == 400
+    assert c.get("/api/reviews/merge-options").status_code == 400
+    svc.move_error = LookupError("no PR #9")
+    assert c.get("/api/reviews/candidates?scope=acme/app&number=9").status_code == 404
+    assert c.get("/api/reviews/merge-options?scope=acme/other").status_code == 404
+    svc.move_error = ForgeError("GitHub 502", unavailable=True)
+    r = c.get("/api/reviews/candidates?scope=acme/app&number=1")
+    assert r.status_code == 502 and r.json() == {"error": "GitHub 502"}
+    r = c.get("/api/reviews/merge-options?scope=acme/app")
+    assert r.status_code == 502 and r.json() == {"error": "GitHub 502"}
+
+
+def test_dashboard_actions_are_logged(moves, caplog):
+    c, svc = moves
+    caplog.set_level("INFO", logger="dashboard.reviews_api")
+    c.post("/api/reviews/review-now", json={"scope": "acme/app", "number": 1})
+    svc.review_now_error = ValueError("already queued")
+    c.post("/api/reviews/review-now", json={"scope": "acme/app", "number": 1})
+    c.post("/api/reviews/pr-move", json={"scope": "acme/app", "number": 1, "move": "ready"})
+    lines = [r.getMessage() for r in caplog.records if r.name == "dashboard.reviews_api"]
+    assert lines == ["Dashboard review-now on acme/app #1: queued j1",
+                     "Dashboard review-now on acme/app #1: 409 already queued",
+                     "Dashboard pr-move ready on acme/app #1: done"]
+
+
+def test_a_typed_command_is_logged_without_its_text(dash, caplog):
+    d = dash
+    caplog.set_level("INFO", logger="dashboard.reviews_api")
+    conf_id = act(d, d.rig.review.id, text=ASK).json()["confirmation"]
+    confirm(d, conf_id, yes=False)
+    lines = [r.getMessage() for r in caplog.records if r.name == "dashboard.reviews_api"]
+    assert lines == [f"Dashboard text command on {SCOPE} #{N}: confirm",
+                     f"Dashboard no to a confirmation on {SCOPE} #{N}: refused"]
+    assert not any(ASK in line for line in lines)
+
+
+
+def test_moves_need_the_action_layer(client, moves):
+    c, _ = client
+    assert c.post("/api/reviews/pr-move", json={"scope": "acme/app", "number": 1, "move": "ready"}).status_code == 404
+    assert c.get("/api/reviews/candidates?scope=acme/app&number=1").status_code == 404
+    m, svc = moves
+    r = m.post("/api/reviews/pr-move", content=b'{"scope": "acme/app", "number": 1, "move": "ready"}',
+               headers={"Content-Type": "application/json", "Origin": "http://evil.example"})
+    assert r.status_code == 403 and svc.calls == []

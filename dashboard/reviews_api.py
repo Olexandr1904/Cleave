@@ -5,8 +5,9 @@ ReviewerActions, the layer Telegram's replies call, so a post or a push goes thr
 share; Telegram is told what it did."""
 from __future__ import annotations
 
+import json
 import logging
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from datetime import datetime
 from typing import Any
 
@@ -15,6 +16,7 @@ from starlette.responses import JSONResponse
 from starlette.routing import Route
 
 from dashboard.web_guard import foreign_origin
+from orchestrator.reviewer.forge_github import ForgeError
 from orchestrator.reviewer.grammar import ReplyCommand, describe, parse_reply
 from orchestrator.reviewer.models import BoardRow, Job
 from orchestrator.reviewer.service import _where, utcnow
@@ -136,6 +138,63 @@ def _command(data: Any) -> ReplyCommand | None:
     return ReplyCommand.from_dict(data)
 
 
+def _logged(what: str, target: tuple[str, int], outcome: str) -> None:
+    """One line per dashboard action, so a press can be traced afterwards: never a typed text."""
+    logger.info("Dashboard %s on %s #%d: %s", what, target[0], target[1], outcome)
+
+
+def _queued(what: str, target: tuple[str, int], call: Callable[[], Job]) -> JSONResponse:
+    """A button that queues a job (Review now, Fix now, Fix findings…): the job, or 404 / 409 with why."""
+    try:
+        job = call()
+    except LookupError as e:
+        _logged(what, target, f"404 {e}")
+        return JSONResponse({"error": str(e)}, status_code=404)
+    except ValueError as e:  # already queued, or not fixable
+        _logged(what, target, f"409 {e}")
+        return JSONResponse({"error": str(e)}, status_code=409)
+    _logged(what, target, f"queued {job.id}")
+    return JSONResponse({"job": _job(job)})
+
+
+# The board's GitHub moves: the body fields each may carry and their types.
+_MOVE_FIELDS = {"reviewers": list, "method": str, "head": str}
+
+
+def _move_args(body: dict) -> dict | JSONResponse:
+    """pr_move's keyword arguments from the body (each optional), or a 400 response."""
+    args = {}
+    for name, kind in _MOVE_FIELDS.items():
+        if name in body:
+            if type(body[name]) is not kind:
+                return JSONResponse({"error": f"{name} must be a {kind.__name__}"}, status_code=400)
+            args[name] = body[name]
+    if not all(isinstance(login, str) for login in args.get("reviewers", [])):
+        return JSONResponse({"error": "reviewers must be strings"}, status_code=400)
+    return args
+
+
+def _query_target(request: Request) -> tuple[str, int] | JSONResponse:
+    """The query's scope and number, or a 400 response."""
+    scope = request.query_params.get("scope")
+    if not scope:
+        return JSONResponse({"error": "scope is required"}, status_code=400)
+    try:
+        return scope, int(request.query_params.get("number", ""))
+    except ValueError:
+        return JSONResponse({"error": "number must be an integer"}, status_code=400)
+
+
+async def _forge_read(call: Callable[[], Awaitable[Any]], key: str) -> JSONResponse:
+    """A GitHub read for a move's dialog: {key: result}, 404 for an unknown repo or PR, 502 when GitHub fails."""
+    try:
+        return JSONResponse({key: await call()} if key else await call())
+    except LookupError as e:
+        return JSONResponse({"error": str(e)}, status_code=404)
+    except ForgeError as e:
+        return JSONResponse({"error": str(e)}, status_code=502)
+
+
 def _refused(text: str) -> JSONResponse:
     return JSONResponse({"state": "refused", "texts": [text]})
 
@@ -165,13 +224,7 @@ def build_review_routes(service: Any, get_projects: Callable[[], dict] = dict, a
         target = await _target(request)
         if isinstance(target, JSONResponse):
             return target
-        try:
-            job = service.review_now(*target)
-        except LookupError as e:
-            return JSONResponse({"error": str(e)}, status_code=404)
-        except ValueError as e:
-            return JSONResponse({"error": str(e)}, status_code=409)
-        return JSONResponse({"job": _job(job)})
+        return _queued("review-now", target, lambda: service.review_now(*target))
 
     async def post_skip(request: Request) -> JSONResponse:
         target = await _target(request)
@@ -180,32 +233,61 @@ def build_review_routes(service: Any, get_projects: Callable[[], dict] = dict, a
         try:
             service.skip(*target)
         except LookupError as e:
+            _logged("skip", target, f"404 {e}")
             return JSONResponse({"error": str(e)}, status_code=404)
+        _logged("skip", target, "skipped")
         return JSONResponse({"ok": True})
 
     async def post_fix_now(request: Request) -> JSONResponse:
         target = await _target(request)
         if isinstance(target, JSONResponse):
             return target
-        try:
-            job = service.address_now(*target)
-        except LookupError as e:
-            return JSONResponse({"error": str(e)}, status_code=404)
-        except ValueError as e:  # already queued, or not fixable
-            return JSONResponse({"error": str(e)}, status_code=409)
-        return JSONResponse({"job": _job(job)})
+        return _queued("fix-now", target, lambda: service.address_now(*target))
 
     async def post_fix_findings(request: Request) -> JSONResponse:
         target = await _target(request)
         if isinstance(target, JSONResponse):
             return target
+        # The PR's self-review at its head: no review id. 409: already queued, a post under way, or not fixable.
+        return _queued("fix-findings", target, lambda: service.fix_findings(*target))
+
+    async def post_pr_move(request: Request) -> JSONResponse:
+        """A board move on GitHub (ReviewerService.pr_move): request_review, ready or merge."""
+        body = await _body(request)
+        if isinstance(body, JSONResponse):
+            return body
+        target = _scope_number(body)
+        if isinstance(target, JSONResponse):
+            return target
+        move = body.get("move")
+        if not isinstance(move, str) or not move:
+            return JSONResponse({"error": "move must be a non-empty string"}, status_code=400)
+        args = _move_args(body)
+        if isinstance(args, JSONResponse):
+            return args
+        what = f"pr-move {move}"
         try:
-            job = service.fix_findings(*target)  # the PR's self-review at its head: no review id
+            state, text = await service.pr_move(*target, move, **args)
         except LookupError as e:
+            _logged(what, target, f"404 {e}")
             return JSONResponse({"error": str(e)}, status_code=404)
-        except ValueError as e:  # already queued, a post under way, or not fixable
-            return JSONResponse({"error": str(e)}, status_code=409)
-        return JSONResponse({"job": _job(job)})
+        except ValueError as e:
+            _logged(what, target, f"400 {e}")
+            return JSONResponse({"error": str(e)}, status_code=400)
+        _logged(what, target, state)
+        return JSONResponse({"state": state, "text": text})
+
+    async def get_candidates(request: Request) -> JSONResponse:
+        target = _query_target(request)
+        if isinstance(target, JSONResponse):
+            return target
+        return await _forge_read(lambda: service.review_candidates(*target), "candidates")
+
+    async def get_merge_options(request: Request) -> JSONResponse:
+        scope = request.query_params.get("scope")
+        if not scope:
+            return JSONResponse({"error": "scope is required"}, status_code=400)
+        return await _forge_read(lambda: service.merge_options(scope), "")
 
     async def post_action(request: Request) -> JSONResponse:
         """A command on a job of the body's PR: a button's (`command`, a ReplyCommand dict) or a typed one (`text`).
@@ -232,9 +314,13 @@ def build_review_routes(service: Any, get_projects: Callable[[], dict] = dict, a
             return JSONResponse({"error": f"no reviewer job {job_id}"}, status_code=404)
         if (job.scope, job.number) != target:
             return JSONResponse({"error": f"job {job_id} is not one of #{target[1]} in {target[0]}"}, status_code=400)
+        what = f"{cmd.action} command" if cmd is not None else "text command"
         if cmd is None and (cmd := parse_reply(text)) is None:
-            return await _understand(job, text)
-        return await _run(job, cmd)
+            answer = await _understand(job, text)
+        else:
+            answer = await _run(job, cmd)
+        _logged(what, target, json.loads(answer.body).get("state", "?"))
+        return answer
 
     async def post_confirm(request: Request) -> JSONResponse:
         """The Yes or No on a command the model understood from the dashboard's text (Telegram's own echoes are
@@ -254,9 +340,11 @@ def build_review_routes(service: Any, get_projects: Callable[[], dict] = dict, a
             return JSONResponse({"error": f"no dashboard confirmation {conf_id}"}, status_code=404)
         with telegram_language(ENGLISH):
             claimed = actions.claim(conf_id, yes, now())
-        if isinstance(claimed, str):
-            return _refused(claimed)
-        return await _execute(store.job(conf.job_id), claimed)
+        job = store.job(conf.job_id)
+        answer = _refused(claimed) if isinstance(claimed, str) else await _execute(job, claimed)
+        _logged(f"{'yes' if yes else 'no'} to a confirmation", (job.scope, job.number),
+                json.loads(answer.body).get("state", "?"))
+        return answer
 
     async def _understand(job: Job, text: str) -> JSONResponse:
         """The model's command for `text`, checked and kept for a Yes, or why nothing is done (the layer decides what
@@ -302,6 +390,10 @@ def build_review_routes(service: Any, get_projects: Callable[[], dict] = dict, a
     if actions is not None:
         routes += [
             Route("/api/reviews/action", post_action, methods=["POST"]),
+            # The board's GitHub moves write to GitHub as posting does: only with the action layer.
+            Route("/api/reviews/pr-move", post_pr_move, methods=["POST"]),
+            Route("/api/reviews/candidates", get_candidates, methods=["GET"]),
+            Route("/api/reviews/merge-options", get_merge_options, methods=["GET"]),
             Route("/api/reviews/confirm", post_confirm, methods=["POST"]),
         ]
     return routes

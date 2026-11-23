@@ -132,12 +132,6 @@ def build_action_routes(
                            what=lambda state: tr("rejected → {state}", state=state))
 
     async def retry(request: Request) -> JSONResponse:
-        ticket_id = request.path_params["ticket_id"]
-        ws = _find_workspace(orchestrator, ticket_id, global_config)
-        if ws is None:
-            return _error(f"Workspace not found: {ticket_id}", 404)
-        if ws.state.current_state not in (Stage.BLOCKED, Stage.FAILED):
-            return _error(f"Cannot retry: state is {ws.state.current_state}")
         stage = (await _body(request)).get("from") or None
         return await _gate(request, ticket_actions.retry, stage=stage, event="dashboard_retry",
                            text="Retried {ticket_id} via dashboard → {state}",

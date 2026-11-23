@@ -128,6 +128,8 @@ def retry(ws: Any, *, stage: str | None = None, furthest: bool = False,
         target_state, refused = retry_target(ws, stage)
     elif furthest:
         target_state, refused = retry_target(ws, None)
+    elif ws.state.current_state not in STOPPED_STATES:
+        return _nothing_done(ws)
     else:
         target_state, refused = ws.state.previous_state or Stage.ANALYSIS, ""
     if refused:

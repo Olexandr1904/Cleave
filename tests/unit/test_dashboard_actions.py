@@ -144,6 +144,7 @@ class TestRetryEndpoint:
         orchestrator.get_active_workspaces.return_value = [ws]
         resp = client.post("/api/workspaces/T-1/retry")
         assert resp.status_code == 400
+        assert resp.json()["message"] == "T-1 is DEV now: nothing was done."
 
 
 class TestClearGradleAndRetryEndpoint:

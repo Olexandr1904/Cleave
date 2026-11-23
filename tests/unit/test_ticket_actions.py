@@ -5,7 +5,7 @@ from __future__ import annotations
 import pytest
 
 from orchestrator import ticket_actions
-from orchestrator.constants import REPORT_QA
+from orchestrator.constants import REPORT_BA, REPORT_DEV, REPORT_QA, REPORT_SCOPE_GUARD
 from orchestrator.ticket_actions import TicketResult
 from workspace.workspace import Workspace, WorkspaceState
 
@@ -235,3 +235,32 @@ def test_the_fourth_hint_emits_exhausted_and_changes_nothing(pr_review_ws_hint_r
     c = pr_review_ws_hint_rounds_3.state.pending_review_comments[0]
     assert "last_hint" not in c and "pending_reinvestigation" not in c and c["hint_rounds"] == 3
     assert d.stored == "" and woke == []
+
+
+@pytest.mark.parametrize("state", ["DONE", "AWAITING_APPROVAL"])
+def test_default_retry_of_a_ticket_that_is_not_stopped_is_refused(tmp_path, state):
+    ws = _workspace(tmp_path / "ws", state, "QA")
+    result = ticket_actions.retry(ws)
+    assert result == TicketResult(state, f"ACME-1 is {state} now: nothing was done.")
+    assert ws.state.current_state == state
+
+
+def test_named_stage_retry_of_a_failed_ticket_still_works(tmp_ws):
+    assert ticket_actions.retry(tmp_ws, stage="qa").state == "QA"
+
+
+@pytest.mark.parametrize("judge", ["SCOPE_CHECK", "CODE_REVIEW", "QA"])
+def test_furthest_retry_of_a_ticket_blocked_at_a_judge_goes_back_to_that_judge(tmp_path, judge):
+    ws = _workspace(tmp_path / "ws", "BLOCKED", judge)
+    for name in (REPORT_BA, REPORT_DEV, REPORT_SCOPE_GUARD, REPORT_QA):
+        (ws.reports_dir / name).write_text("## Status: FAIL\n", encoding="utf-8")
+    assert ticket_actions.retry(ws, furthest=True).state == judge
+
+
+@pytest.mark.parametrize("report, expected", [
+    (REPORT_BA, "PLAN_REVIEW"), (REPORT_DEV, "SCOPE_CHECK"), (REPORT_SCOPE_GUARD, "QA"),
+])
+def test_furthest_retry_follows_the_furthest_report(tmp_path, report, expected):
+    ws = _workspace(tmp_path / "ws", "FAILED", "DEV")
+    (ws.reports_dir / report).write_text("x", encoding="utf-8")
+    assert ticket_actions.retry(ws, furthest=True).state == expected

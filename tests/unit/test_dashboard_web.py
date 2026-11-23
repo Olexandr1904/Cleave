@@ -254,3 +254,20 @@ def test_auto_refresh_label_names_its_interval(client):
     timer = re.search(r"function scheduleAutoRefresh\(\).*?\},\s*(\d+)\);", client.get("/static/js/app.js").text, re.S)
     assert label and timer
     assert int(label.group(1)) * 1000 == int(timer.group(1))
+
+
+def test_scan_rows_carry_the_question_the_comments_and_the_escalation_message(tmp_path):
+    ws_dir = tmp_path / "acme" / "ACME-123"
+    ws_dir.mkdir(parents=True)
+    (ws_dir / "state.json").write_text(json.dumps({
+        "ticket_id": "ACME-123", "company_id": "acme", "current_state": "PR_REVIEW",
+        "human_input_question": "Which file?", "escalation_msg_id": 77,
+        "pending_review_comments": [{"comment_id": "9", "author": "octo", "file": "a.py", "line": 3,
+                                     "body": "b" * 400, "assessment": "valid", "decision": None,
+                                     "msg_ids": [1, 2]}],
+    }))
+    row = _scan_all_workspaces(str(tmp_path))[0]
+    assert row["human_input_question"] == "Which file?" and row["escalation_msg_id"] == 77
+    assert row["pending_review_comments"] == [{
+        "comment_id": "9", "author": "octo", "file": "a.py", "line": 3, "body": "b" * 300,
+        "assessment": "valid", "decision": None, "hint_rounds": 0}]

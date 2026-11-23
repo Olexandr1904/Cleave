@@ -1231,6 +1231,7 @@ def main(argv: list[str] | None = None) -> int:
                 reviewer=reviewer,
                 comparisons=comparison_board,
                 allowed_networks=global_config.dashboard.allowed_networks,
+                allowed_hosts=global_config.dashboard.allowed_hosts,
                 wake=lambda: orchestrator._wake_event.set(),
                 ticket_announcer=ticket_announcer,
                 # The layer the replies run their commands through: one Posting for both channels.

@@ -69,7 +69,7 @@ journalctl -u cleave -f
 
 ## Dashboard Access
 
-The dashboard answers only the host itself and Tailscale (`127.0.0.0/8`, `::1/128`, `100.64.0.0/10`, `fd7a:115c:a1e0::/48`); any other peer gets 403. Override with `dashboard.allowed_networks` (a list of CIDR networks) in `global.yaml`.
+The dashboard answers only the host itself and Tailscale (`127.0.0.0/8`, `::1/128`, `100.64.0.0/10`, `fd7a:115c:a1e0::/48`); any other peer gets 403. Override with `dashboard.allowed_networks` (a list of CIDR networks) in `global.yaml`. A request must also name the dashboard by an IP address, `localhost`, a `*.ts.net` name or the machine's hostname; to reach it by another DNS name, add that name to `dashboard.allowed_hosts`.
 
 ## Log Files
 

@@ -382,6 +382,7 @@ def create_app(
     reviewer: Any | None = None,
     comparisons: Any | None = None,
     allowed_networks: list[str] | None = None,
+    allowed_hosts: tuple[str, ...] | list[str] = (),
     wake: Any | None = None,
     ticket_announcer: Any | None = None,
     reviewer_actions: Any | None = None,
@@ -583,6 +584,7 @@ def create_app(
     routes.append(Route("/api/projects/telegram-globals", telegram_globals))
 
     static_dir = str(Path(__file__).parent / "static")
-    app = Starlette(routes=routes, middleware=[Middleware(GuardMiddleware, allowed_networks=allowed_networks)])
+    guard = Middleware(GuardMiddleware, allowed_networks=allowed_networks, allowed_hosts=allowed_hosts)
+    app = Starlette(routes=routes, middleware=[guard])
     app.mount("/static", _RevalidatedStaticFiles(directory=static_dir), name="static")
     return app

@@ -14,6 +14,7 @@ The dashboard runs in-process with the daemon — when you start Cleave (`./run.
 - **Configured at:** `global.yaml` → `dashboard.host`, `dashboard.port`
 - **Disable:** `dashboard.enabled: false` in `global.yaml`
 - **Who can reach it:** `dashboard.allowed_networks`, a list of CIDR ranges. Default: `["127.0.0.0/8", "::1/128", "100.64.0.0/10", "fd7a:115c:a1e0::/48"]` (the host itself and the Tailscale ranges). A peer outside the list gets `403 Forbidden`, whatever `dashboard.host` binds to. Add a range to open the dashboard to another network
+- **Which names it answers:** a request must name the dashboard (its `Host` header) by an IP address, `localhost`, a Tailscale name (`*.ts.net`), this machine's hostname in full or short (`box.local` or `box`), or a name in `dashboard.allowed_hosts` (a list, default empty); any other `Host`, or none, gets `403 Forbidden`. That stops a DNS-rebinding page, whose own name points at this host, from reaching the dashboard through the operator's browser. Add a name to reach the dashboard by another DNS name. Checked with `allowed_networks`
 - **Cross-site writes:** every write (`POST`/`PUT`) must be sent as `Content-Type: application/json`, and an `Origin` or `Sec-Fetch-Site` header that names another site is refused with `403 cross-site request refused`
 - **Database:** `dashboard.db_path` (default `data/events.db`) — SQLite event store
 - **Auto-refresh:** every 30 s, toggle off via the **Auto (30s)** checkbox

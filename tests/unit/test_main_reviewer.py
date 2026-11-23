@@ -20,6 +20,7 @@ import orchestrator.reviewer.runner as runner_module
 import orchestrator.reviewer.service as service_module
 import orchestrator.reviewer.small_jobs as small_jobs_module
 from config.schemas import (
+    DashboardConfig,
     GitHubConfig,
     GlobalConfig,
     JiraConfig,
@@ -484,6 +485,7 @@ def test_main_gives_the_dashboard_the_replies_action_layer(tmp_path, monkeypatch
     _, built, _ = _run_main(tmp_path, monkeypatch, [SimpleNamespace(scope="acme/app")], telegram_events=[],
                             with_dashboard=True)
     [kwargs] = apps
+    assert kwargs["allowed_networks"] == DashboardConfig().allowed_networks and kwargs["allowed_hosts"] == []
     assert kwargs["reviewer"] is built["service"]
     assert isinstance(kwargs["reviewer_actions"], ReviewerActions)
     assert kwargs["reviewer_actions"] is built["replies"].kwargs["actions"]

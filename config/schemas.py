@@ -145,6 +145,9 @@ class DashboardConfig:
     allowed_networks: list[str] = field(
         default_factory=lambda: ["127.0.0.0/8", "::1/128", "100.64.0.0/10", "fd7a:115c:a1e0::/48"]
     )
+    # Host names the dashboard answers besides an IP address, localhost, *.ts.net and this machine's hostname (full
+    # or short); a request for any other Host gets 403 (DNS rebinding). Checked whenever allowed_networks is.
+    allowed_hosts: list[str] = field(default_factory=list)
 
 
 @dataclass

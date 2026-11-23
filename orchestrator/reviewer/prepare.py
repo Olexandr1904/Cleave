@@ -241,7 +241,12 @@ async def _prepare(
                 raise PrepareError("superseded", "head moved", drift)
             if pr.base != base:  # stacked on another PR's branch: the job clone needs it for the merge base
                 await ctx.clone.fetch_branch(pr.base)
-            clone = await ctx.clone.make_job_clone(job_clone_dir, n)
+                try:
+                    clone = await ctx.clone.make_job_clone(job_clone_dir, n)
+                finally:  # the job clone has its own copy now
+                    await ctx.clone.forget_branch(pr.base)
+            else:
+                clone = await ctx.clone.make_job_clone(job_clone_dir, n)
         except (ForgeError, CloneError, ReadinessError) as e:
             raise _prepare_error(e, drift) from None
     try:

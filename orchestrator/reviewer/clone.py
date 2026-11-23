@@ -187,6 +187,14 @@ class ReviewClone:
                                        f"refs/remotes/origin/{branch}"])
         return (await self._git("rev-parse", ["-C", str(self.path), "rev-parse", f"refs/heads/{branch}"])).strip()
 
+    async def forget_branch(self, branch: str) -> None:
+        """Drop a fetch_branch branch (local and origin/) once a job clone has it: none piles up, and a later branch
+        nested under its name fetches without a ref conflict. One that is not there is no error."""
+        if not _fetchable(branch):
+            raise CloneError(f"{branch!r} is not a branch Cleave fetches")
+        for ref in (f"refs/heads/{branch}", f"refs/remotes/origin/{branch}"):
+            await self._git("update-ref", ["-C", str(self.path), "update-ref", "-d", "--no-deref", ref])
+
     async def merge_base(self, head: str, base: str = "") -> str:
         """The merge base of `head` and origin/<base>, the configured base branch by default."""
         args = ["-C", str(self.path), "merge-base", f"refs/remotes/origin/{base or self._base}", head]

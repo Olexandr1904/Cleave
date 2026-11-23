@@ -626,3 +626,18 @@ async def test_fetch_branch_of_a_gone_branch_is_a_clone_error(tmp_path, stacked)
     clone = await refreshed(tmp_path, bare)
     with pytest.raises(CloneError):
         await clone.fetch_branch("task/gone")
+
+
+async def test_forget_branch_leaves_room_for_a_nested_name(tmp_path, stacked):
+    """A stacked base is dropped from the review clone once a job clone has it: a later branch nested under its
+    name (task/parent deleted, task/parent/child pushed) is fetched without a ref conflict."""
+    bare, work, parent, _ = stacked
+    clone = await refreshed(tmp_path, bare)
+    await clone.fetch_branch("task/parent")
+    await clone.forget_branch("task/parent")
+    for ref in ("refs/heads/task/parent", "refs/remotes/origin/task/parent"):
+        assert subprocess.run(["git", "rev-parse", "--verify", "-q", ref], cwd=clone.path).returncode != 0
+    await clone.forget_branch("task/parent")  # gone already: no error
+    git("push", "origin", ":task/parent", cwd=work)
+    git("push", "origin", f"{parent}:refs/heads/task/parent/child", cwd=work)
+    assert await clone.fetch_branch("task/parent/child") == parent

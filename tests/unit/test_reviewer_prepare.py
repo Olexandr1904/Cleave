@@ -272,6 +272,9 @@ async def test_prepare_a_stacked_pr(world, origin):
     assert git("rev-parse", "HEAD", cwd=prepared.clone.path) == origin.base  # the trusted checkout: develop
     assert not (prepared.clone.path / "parent.txt").exists()
     assert git("rev-parse", "refs/remotes/origin/task/parent", cwd=prepared.clone.path) == parent
+    # The review clone keeps no stacked base: the job clone has its own copy
+    assert subprocess.run(["git", "rev-parse", "--verify", "-q", "refs/heads/task/parent"],
+                          cwd=world.ctx.clone.path).returncode != 0
 
 
 async def test_prepare_refuses_a_base_it_does_not_fetch(world):

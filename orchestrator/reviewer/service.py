@@ -34,7 +34,7 @@ _CLONE_BUSY_RETRY_SECONDS = 5  # a repo whose clone a job prepares or cleans up 
 # and the repos are polled in turn.
 _CLONE_WAIT_SECONDS = 5
 _MAX_REPORT_TEXT = 200_000  # characters of a report the detail view returns
-# The board's GitHub moves on a PR: the turn of mine each needs on the row, the methods a merge takes and a GitHub login.
+# The board's GitHub moves on a PR: the turn of mine each needs on the row, a merge's methods and a GitHub login.
 _MOVE_TURNS = {"request_review": "request_review", "ready": "finish_draft", "merge": "merge"}
 _MERGE_METHODS = ("merge", "squash", "rebase")
 _LOGIN = re.compile(r"[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})")

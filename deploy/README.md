@@ -67,6 +67,10 @@ sudo systemctl status cleave
 journalctl -u cleave -f
 ```
 
+## Dashboard Access
+
+The dashboard answers only the host itself and Tailscale (`127.0.0.0/8`, `::1/128`, `100.64.0.0/10`, `fd7a:115c:a1e0::/48`); any other peer gets 403. Override with `dashboard.allowed_networks` (a list of CIDR networks) in `global.yaml`.
+
 ## Log Files
 
 - Daemon log: `/var/log/cleave/cleave-daemon.log` (rotating, 10 MB × 5 backups). Path is `<logging.dir>/cleave-daemon.log`; the daemon falls back to `./data/` if the configured dir isn't writable.

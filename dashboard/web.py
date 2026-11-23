@@ -12,6 +12,7 @@ from typing import Any
 
 import aiosqlite
 from starlette.applications import Starlette
+from starlette.middleware import Middleware
 from starlette.requests import Request
 from starlette.responses import HTMLResponse, JSONResponse, PlainTextResponse, Response
 from starlette.routing import Route
@@ -19,6 +20,7 @@ from starlette.staticfiles import StaticFiles
 
 from dashboard.event_store import EventStore
 from dashboard.events import EventBus
+from dashboard.web_guard import GuardMiddleware
 from orchestrator.model_resolver import model_short_name
 from workspace.workspace import Stage
 
@@ -362,6 +364,7 @@ def create_app(
     credential_health: Any | None = None,
     reviewer: Any | None = None,
     comparisons: Any | None = None,
+    allowed_networks: list[str] | None = None,
 ) -> Starlette:
     """Create the Starlette dashboard application."""
 
@@ -557,6 +560,6 @@ def create_app(
     routes.append(Route("/api/projects/telegram-globals", telegram_globals))
 
     static_dir = str(Path(__file__).parent / "static")
-    app = Starlette(routes=routes)
+    app = Starlette(routes=routes, middleware=[Middleware(GuardMiddleware, allowed_networks=allowed_networks)])
     app.mount("/static", _RevalidatedStaticFiles(directory=static_dir), name="static")
     return app

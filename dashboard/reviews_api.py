@@ -5,12 +5,12 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from typing import Any
-from urllib.parse import urlsplit
 
 from starlette.requests import Request
 from starlette.responses import JSONResponse
 from starlette.routing import Route
 
+from dashboard.web_guard import foreign_origin
 from orchestrator.reviewer.models import BoardRow, Job
 
 
@@ -69,10 +69,7 @@ def _cross_site(request: Request) -> bool:
     """
     if request.headers.get("content-type", "").split(";")[0].strip().lower() != "application/json":
         return True
-    if request.headers.get("sec-fetch-site", "same-origin") not in ("same-origin", "none"):
-        return True
-    origin = request.headers.get("origin")
-    return origin is not None and urlsplit(origin).netloc != request.headers.get("host")
+    return foreign_origin(request)
 
 
 async def _target(request: Request) -> tuple[str, int] | JSONResponse:

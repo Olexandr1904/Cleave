@@ -1198,6 +1198,7 @@ def main(argv: list[str] | None = None) -> int:
                 credential_health=credential_health,
                 reviewer=reviewer,
                 comparisons=comparison_board,
+                allowed_networks=global_config.dashboard.allowed_networks,
             )
             config = uvicorn.Config(
                 app, host=dash_config.host, port=dash_config.port,

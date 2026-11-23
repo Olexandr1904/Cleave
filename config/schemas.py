@@ -141,6 +141,10 @@ class DashboardConfig:
     # Empty means "derive the terminal launcher from GlobalConfig.os" (see
     # config/host_os.py). A non-empty value is an explicit override (e.g. iTerm).
     terminal_command: str = ""
+    # Peers the dashboard answers; any other gets 403. Default: the host and Tailscale.
+    allowed_networks: list[str] = field(
+        default_factory=lambda: ["127.0.0.0/8", "::1/128", "100.64.0.0/10", "fd7a:115c:a1e0::/48"]
+    )
 
 
 @dataclass

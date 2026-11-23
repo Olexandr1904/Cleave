@@ -174,6 +174,17 @@ TEXTS: dict[str, str] = {
     "⚠️ {label}: no access (HTTP {status}). {fix}": "⚠️ {label}: немає доступу (HTTP {status}). {fix}",
     "✅ {label}: working again.": "✅ {label}: знову працює.",
     "⏳ The claude login on the host expires {when}. {fix}": "⏳ Вхід у claude на хості спливає {when}. {fix}",
+    # orchestrator/ticket_announce.py, dashboard/actions.py
+    "Dashboard: {what}": "Дашборд: {what}",
+    "approved → {state}": "схвалено → {state}",
+    "rejected → {state}": "відхилено → {state}",
+    "retry from {state}": "повтор з {state}",
+    "skipped → {state}": "пропущено → {state}",
+    "answer: «{text}»": "відповідь: «{text}»",
+    "reviewed": "переглянуто",
+    "Fix on {file_line}": "Виправити в {file_line}",
+    "Won't fix on {file_line}: {reason}": "Не виправляти в {file_line}: {reason}",
+    "re-investigate {file_line}: {hint}": "дослідити ще раз {file_line}: {hint}",
 }
 
 NOUNS: dict[str, tuple[str, str, str]] = {

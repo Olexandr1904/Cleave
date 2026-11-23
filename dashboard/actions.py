@@ -13,14 +13,8 @@ from typing import Any
 from starlette.requests import Request
 from starlette.responses import JSONResponse
 
-from orchestrator.constants import (
-    JUDGING_STATES,
-    REPORT_BA,
-    REPORT_DEV,
-    REPORT_QA,
-    REPORT_SCOPE_GUARD,
-)
-from orchestrator.pipeline.driver import reset_attempts_from
+from orchestrator import ticket_actions
+from orchestrator.tg_i18n import ENGLISH, telegram_language, tr
 from workspace.workspace import Stage, archive_workspace
 
 from config.host_os import terminal_launch_command
@@ -88,51 +82,54 @@ def build_action_routes(
     mode_handler: Any,
     event_bus: Any | None = None,
     global_config: Any | None = None,
+    wake: Any | None = None,
+    ticket_announcer: Any | None = None,
 ) -> list:
     """Build Starlette Route objects for all action endpoints."""
     from starlette.routing import Route
 
-    async def approve(request: Request) -> JSONResponse:
+    async def _body(request: Request) -> dict:
+        try:
+            body = await request.json()
+        except Exception:
+            return {}
+        return body if isinstance(body, dict) else {}
+
+    def _reply_to(ws: Any) -> int | None:
+        return ws.state.escalation_msg_id or None
+
+    async def _announce(ws: Any, what: Any, reply_to: int | None) -> None:
+        """Tell Telegram what was done; it never raises, so the dashboard's answer does not depend on it."""
+        if ticket_announcer is not None:
+            await ticket_announcer.announce(ws, what, reply_to=reply_to)
+
+    async def _gate(request: Request, action: Any, *, event: str, text: str, what: Any, **kwargs: Any) -> JSONResponse:
+        """Run `action(ws, ...)` of orchestrator.ticket_actions on the ticket in the URL: a refusal is a 400 with the
+        layer's words, a done action is emitted, announced and answered with the new state."""
         ticket_id = request.path_params["ticket_id"]
         ws = _find_workspace(orchestrator, ticket_id, global_config)
         if ws is None:
             return _error(f"Workspace not found: {ticket_id}", 404)
-        if ws.state.current_state != Stage.AWAITING_APPROVAL:
-            return _error(f"Cannot approve: state is {ws.state.current_state}")
+        reply_to = _reply_to(ws)
+        with telegram_language(ENGLISH):
+            result = action(ws, wake=wake, **kwargs)
+            if result.refused:
+                return _error(result.refused)
+            if event_bus:
+                event_bus.emit(event, text.format(ticket_id=ticket_id, state=result.state),
+                               ticket_id=ticket_id, data={"new_state": result.state})
+        await _announce(ws, lambda: what(result.state), reply_to)
+        return JSONResponse({"status": "ok", "new_state": result.state})
 
-        from integrations.telegram.handlers.approval import ApprovalHandler
-        handler = ApprovalHandler()
-        next_state = handler.resolve_next_state(ws)
-        ws.transition(next_state)
-        if event_bus:
-            event_bus.emit(
-                "dashboard_approve",
-                f"Approved {ticket_id} via dashboard → {next_state}",
-                ticket_id=ticket_id,
-                data={"new_state": next_state},
-            )
-        return JSONResponse({"status": "ok", "new_state": next_state})
+    async def approve(request: Request) -> JSONResponse:
+        return await _gate(request, ticket_actions.approve, event="dashboard_approve",
+                           text="Approved {ticket_id} via dashboard → {state}",
+                           what=lambda state: tr("approved → {state}", state=state))
 
     async def reject(request: Request) -> JSONResponse:
-        ticket_id = request.path_params["ticket_id"]
-        ws = _find_workspace(orchestrator, ticket_id, global_config)
-        if ws is None:
-            return _error(f"Workspace not found: {ticket_id}", 404)
-        if ws.state.current_state != Stage.AWAITING_APPROVAL:
-            return _error(f"Cannot reject: state is {ws.state.current_state}")
-
-        from integrations.telegram.handlers.approval import APPROVAL_REJECT_STATE
-        previous = ws.state.previous_state or Stage.ANALYSIS
-        target = APPROVAL_REJECT_STATE.get(previous, previous)
-        ws.transition(target)
-        if event_bus:
-            event_bus.emit(
-                "dashboard_reject",
-                f"Rejected {ticket_id} via dashboard → back to {target}",
-                ticket_id=ticket_id,
-                data={"new_state": target},
-            )
-        return JSONResponse({"status": "ok", "new_state": target})
+        return await _gate(request, ticket_actions.reject, via="dashboard", event="dashboard_reject",
+                           text="Rejected {ticket_id} via dashboard → back to {state}",
+                           what=lambda state: tr("rejected → {state}", state=state))
 
     async def retry(request: Request) -> JSONResponse:
         ticket_id = request.path_params["ticket_id"]
@@ -141,45 +138,57 @@ def build_action_routes(
             return _error(f"Workspace not found: {ticket_id}", 404)
         if ws.state.current_state not in (Stage.BLOCKED, Stage.FAILED):
             return _error(f"Cannot retry: state is {ws.state.current_state}")
+        stage = (await _body(request)).get("from") or None
+        return await _gate(request, ticket_actions.retry, stage=stage, event="dashboard_retry",
+                           text="Retried {ticket_id} via dashboard → {state}",
+                           what=lambda state: tr("retry from {state}", state=state))
 
-        # Smart retry: detect furthest completed stage from existing artifacts.
-        # When QA has already passed, route through the approval gate instead of
-        # jumping straight to PUSHED — same gate the normal QA flow uses.
-        target = ws.state.previous_state or Stage.ANALYSIS
-        reports = Path(ws.reports_dir)
-        if ws.state.current_state == Stage.BLOCKED and target in JUDGING_STATES:
-            pass  # back to the judge that blocked it — see JUDGING_STATES
-        elif (reports / REPORT_QA).exists():
-            target = Stage.AWAITING_APPROVAL
-        elif (reports / REPORT_SCOPE_GUARD).exists():
-            target = Stage.QA
-        elif (reports / REPORT_DEV).exists():
-            target = Stage.SCOPE_CHECK
-        elif (reports / REPORT_BA).exists():
-            # Not DEV: a ticket that died in or after plan_review would retry
-            # into dev with a plan nothing has signed off on — the one thing
-            # this stage exists to prevent. Costs one extra reviewer run.
-            target = Stage.PLAN_REVIEW
+    async def skip(request: Request) -> JSONResponse:
+        return await _gate(request, ticket_actions.skip, event="dashboard_skip",
+                           text="Skipped {ticket_id} via dashboard → {state}",
+                           what=lambda state: tr("skipped → {state}", state=state))
 
-        ws.state.human_input_pending = False
-        ws.state.error = None
-        # Fresh attempt budgets for the target stage and those after it, so the
-        # driver's cap check doesn't re-escalate without running the agent
-        # (the same rule as the TG "retry … from <stage>" command).
-        reset_attempts_from(ws, target)
-        # Restore QA as the gating stage so the approval summary and auto-resume
-        # logic both know which gate to present.
-        extra = {"previous_state": Stage.QA} if target == Stage.AWAITING_APPROVAL else {}
-        ws.transition(target, **extra)
-        ws.save_state()
-        if event_bus:
-            event_bus.emit(
-                "dashboard_retry",
-                f"Retried {ticket_id} via dashboard → {target}",
-                ticket_id=ticket_id,
-                data={"new_state": target},
-            )
-        return JSONResponse({"status": "ok", "new_state": target})
+    async def answer(request: Request) -> JSONResponse:
+        text = str((await _body(request)).get("text") or "")
+        return await _gate(request, lambda ws, wake: ticket_actions.answer(ws, text, wake=wake), event="dashboard_answer",
+                           text="Answered {ticket_id} via dashboard → {state}",
+                           what=lambda state: tr("answer: «{text}»", text=text[:200]))
+
+    async def reviewed(request: Request) -> JSONResponse:
+        return await _gate(request, ticket_actions.reviewed, event="dashboard_reviewed",
+                           text="Marked {ticket_id} reviewed via dashboard",
+                           what=lambda state: tr("reviewed"))
+
+    async def decide(request: Request) -> JSONResponse:
+        ticket_id = request.path_params["ticket_id"]
+        comment_id = request.path_params["comment_id"]
+        ws = _find_workspace(orchestrator, ticket_id, global_config)
+        if ws is None:
+            return _error(f"Workspace not found: {ticket_id}", 404)
+        body = await _body(request)
+        decision = body.get("decision")
+        if decision not in ("fix", "wont_fix", "reinvestigate"):
+            return _error("decision must be fix, wont_fix or reinvestigate")
+        text = str(body.get("text") or "")
+        with telegram_language(ENGLISH):
+            d = ticket_actions.decide_comment(ws, comment_id, decision, text, via="dashboard",
+                                              events=event_bus, wake=wake)
+        if d.refused:
+            return _error(d.refused)
+        c = d.comment
+        file_line = f"{c.get('file', '?')}:{c.get('line', '?')}"
+        if decision == "fix":
+            what = lambda: tr("Fix on {file_line}", file_line=file_line)  # noqa: E731
+        elif decision == "wont_fix":
+            reason = d.stored.removeprefix("won't fix: ")
+            what = lambda: tr("Won't fix on {file_line}: {reason}", file_line=file_line, reason=reason)  # noqa: E731
+        else:
+            what = lambda: tr("re-investigate {file_line}: {hint}", file_line=file_line, hint=text[:200])  # noqa: E731
+        from integrations.telegram.command_handler import _ensure_msg_ids
+        msg_ids = _ensure_msg_ids(c)
+        await _announce(ws, what, msg_ids[-1] if msg_ids else _reply_to(ws))
+        return JSONResponse({"status": "ok", "stored": d.stored, "remaining": d.remaining,
+                             "new_state": ws.state.current_state})
 
     async def take_control(request: Request) -> JSONResponse:
         ticket_id = request.path_params["ticket_id"]
@@ -668,6 +677,10 @@ def build_action_routes(
         Route("/api/workspaces/{ticket_id:path}/approve", approve, methods=["POST"]),
         Route("/api/workspaces/{ticket_id:path}/reject", reject, methods=["POST"]),
         Route("/api/workspaces/{ticket_id:path}/retry", retry, methods=["POST"]),
+        Route("/api/workspaces/{ticket_id:path}/skip", skip, methods=["POST"]),
+        Route("/api/workspaces/{ticket_id:path}/answer", answer, methods=["POST"]),
+        Route("/api/workspaces/{ticket_id:path}/reviewed", reviewed, methods=["POST"]),
+        Route("/api/workspaces/{ticket_id:path}/comments/{comment_id}/decision", decide, methods=["POST"]),
         Route("/api/workspaces/{ticket_id:path}/clear-gradle-and-retry", clear_gradle_and_retry, methods=["POST"]),
         Route("/api/workspaces/{ticket_id:path}/take-control", take_control, methods=["POST"]),
         Route("/api/workspaces/{ticket_id:path}/release-control", release_control, methods=["POST"]),

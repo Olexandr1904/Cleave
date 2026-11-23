@@ -1185,6 +1185,11 @@ def main(argv: list[str] | None = None) -> int:
                         f"Files in source/: {[p.name for p in src.iterdir()]}"
                     )
 
+            ticket_announcer = None
+            if notifier is not None:
+                from orchestrator.ticket_announce import TicketAnnouncer
+                ticket_announcer = TicketAnnouncer(notifier, orchestrator._get_chat_id, _language_of)
+
             app = create_app(
                 event_bus, event_store,
                 workspace_base_dir=global_config.workspaces.base_dir,
@@ -1199,6 +1204,8 @@ def main(argv: list[str] | None = None) -> int:
                 reviewer=reviewer,
                 comparisons=comparison_board,
                 allowed_networks=global_config.dashboard.allowed_networks,
+                wake=lambda: orchestrator._wake_event.set(),
+                ticket_announcer=ticket_announcer,
             )
             config = uvicorn.Config(
                 app, host=dash_config.host, port=dash_config.port,

@@ -117,13 +117,13 @@ class TestRejectEndpoint:
         assert resp.json()["new_state"] == "ANALYSIS"
         ws.transition.assert_called_once_with("ANALYSIS")
 
-    def test_reject_at_other_gates_still_returns_to_the_previous_state(
+    def test_reject_at_other_gates_fails_the_ticket_as_telegram_does(
         self, client, orchestrator,
     ):
         ws = _make_workspace("T-1", "AWAITING_APPROVAL", previous="QA")
         orchestrator.get_active_workspaces.return_value = [ws]
         resp = client.post("/api/workspaces/T-1/reject")
-        assert resp.json()["new_state"] == "QA"
+        assert resp.json()["new_state"] == "FAILED"
 
     def test_reject_wrong_state(self, client, orchestrator):
         ws = _make_workspace("T-1", "DEV")
@@ -144,84 +144,6 @@ class TestRetryEndpoint:
         orchestrator.get_active_workspaces.return_value = [ws]
         resp = client.post("/api/workspaces/T-1/retry")
         assert resp.status_code == 400
-
-    def test_retry_resets_target_stage_counter(self, client, orchestrator, tmp_path):
-        # A QA ticket stuck after hitting its attempt cap: the dashboard Retry
-        # must clear stage_iterations["qa"] (like the TG "retry … from qa" command)
-        # so the driver actually re-dispatches instead of instantly re-escalating.
-        from orchestrator.constants import REPORT_SCOPE_GUARD
-        ws = _make_workspace("T-1", "BLOCKED", previous="QA", error="stuck")
-        ws.reports_dir = tmp_path
-        (tmp_path / REPORT_SCOPE_GUARD).write_text("scope ok")  # -> target QA
-        ws.state.stage_iterations = {"analysis": 1, "dev": 1, "qa": 2}
-        orchestrator.get_active_workspaces.return_value = [ws]
-
-        resp = client.post("/api/workspaces/T-1/retry")
-
-        assert resp.status_code == 200
-        assert resp.json()["new_state"] == "QA"
-        assert ws.state.stage_iterations["qa"] == 0
-        # Untouched stages keep their counts.
-        assert ws.state.stage_iterations["dev"] == 1
-
-
-    @pytest.mark.parametrize("judge, its_report", [
-        ("SCOPE_CHECK", "scope-guard.md"),
-        ("CODE_REVIEW", "scope-guard.md"),
-        ("QA", "qa.md"),
-    ])
-    def test_retry_of_a_ticket_blocked_at_a_judge_goes_back_to_that_judge(
-        self, client, orchestrator, tmp_path, judge, its_report,
-    ):
-        """A report on disk is not a stage that passed: the stage that blocked wrote its own before it
-        blocked. Retry sent a failed scope check on to QA, skipped code review after any scope report, and
-        offered a failed QA for push."""
-        ws = _make_workspace("T-1", "BLOCKED", previous=judge, error="stuck")
-        ws.reports_dir = tmp_path
-        for name in ("ba.md", "developer.md", its_report):
-            (tmp_path / name).write_text("## Status: FAIL\n")
-        ws.state.stage_iterations = {"dev": 3, judge.lower(): 2}
-        orchestrator.get_active_workspaces.return_value = [ws]
-
-        resp = client.post("/api/workspaces/T-1/retry")
-
-        assert resp.json()["new_state"] == judge
-        ws.transition.assert_called_once_with(judge)
-        assert ws.state.stage_iterations == {"dev": 3, judge.lower(): 0}
-
-    def test_retry_with_only_a_plan_goes_through_plan_review(
-        self, client, orchestrator, tmp_path,
-    ):
-        """A ticket that failed in or after plan_review must not retry
-        straight into dev with an unreviewed plan — that is the exact thing
-        this stage exists to prevent."""
-        from orchestrator.constants import REPORT_BA
-        ws = _make_workspace("T-1", "FAILED", previous="DEV", error="stuck")
-        ws.reports_dir = tmp_path
-        (tmp_path / REPORT_BA).write_text("# plan")
-        ws.state.stage_iterations = {"plan_review": 2}
-        orchestrator.get_active_workspaces.return_value = [ws]
-
-        resp = client.post("/api/workspaces/T-1/retry")
-
-        assert resp.status_code == 200
-        assert resp.json()["new_state"] == "PLAN_REVIEW"
-        assert ws.state.stage_iterations["plan_review"] == 0
-
-    def test_retry_frees_the_stages_after_its_target_too(self, client, orchestrator, tmp_path):
-        """Sent back to plan review with dev and the scope check still at their caps, the ticket would
-        escalate at each of them without an agent run."""
-        from orchestrator.constants import REPORT_BA
-        ws = _make_workspace("T-1", "FAILED", previous="DEV", error="stuck")
-        ws.reports_dir = tmp_path
-        (tmp_path / REPORT_BA).write_text("# plan")
-        ws.state.stage_iterations = {"analysis": 5, "plan_review": 2, "dev": 3, "scope_check": 2}
-        orchestrator.get_active_workspaces.return_value = [ws]
-
-        resp = client.post("/api/workspaces/T-1/retry")
-
-        assert resp.json()["new_state"] == "PLAN_REVIEW"
-        assert ws.state.stage_iterations == {"analysis": 5, "plan_review": 0, "dev": 0, "scope_check": 0}
 
 
 class TestClearGradleAndRetryEndpoint:
@@ -791,3 +713,130 @@ class TestPauseFallsBackToDiskScan:
                                 content=json.dumps({"confirm": True}))
         assert resp.status_code == 404
 
+
+
+# --- real workspaces, the shared layer and the Telegram announcement ---
+
+class FakeAnnouncer:
+    def __init__(self):
+        self.sent: list[tuple[str, int | None]] = []
+
+    async def announce(self, ws, what, *, reply_to=None):
+        self.sent.append((what(), reply_to))
+
+
+def _real_ws(tmp_path, state, previous=None, **fields) -> Workspace:
+    ws = Workspace(str(tmp_path), WorkspaceState(
+        ticket_id="ACME-1", company_id="acme", repo_id="app", workspace_root=str(tmp_path),
+        current_state=state, previous_state=previous, **fields))
+    ws.save_state()
+    return ws
+
+
+@pytest.fixture
+def announcer():
+    return FakeAnnouncer()
+
+
+@pytest.fixture
+def wakes():
+    return []
+
+
+@pytest.fixture
+def make_client(bus, store, orchestrator, mode_handler, announcer, wakes):
+    def make(ws):
+        orchestrator.get_active_workspaces.return_value = [ws]
+        return TestClient(create_app(bus, store, orchestrator=orchestrator, mode_handler=mode_handler,
+                                     wake=lambda: wakes.append(1), ticket_announcer=announcer))
+    return make
+
+
+def test_dashboard_retry_restarts_where_it_stopped(make_client, tmp_path):
+    from orchestrator.constants import REPORT_QA
+    ws = _real_ws(tmp_path, "FAILED", "QA")
+    (ws.reports_dir / REPORT_QA).write_text("done")
+    client = make_client(ws)
+    assert client.post("/api/workspaces/ACME-1/retry", json={}).json()["new_state"] == "QA"
+
+
+def test_dashboard_retry_from_a_stage(make_client, tmp_path, announcer, wakes):
+    ws = _real_ws(tmp_path, "FAILED", "QA", stage_iterations={"dev": 3, "qa": 2})
+    client = make_client(ws)
+    assert client.post("/api/workspaces/ACME-1/retry", json={"from": "dev"}).json()["new_state"] == "DEV"
+    assert ws.state.stage_iterations == {"dev": 0, "qa": 0}
+    assert announcer.sent == [("retry from DEV", None)] and wakes == [1]
+
+
+def test_an_unknown_retry_stage_is_a_400(make_client, tmp_path, announcer):
+    client = make_client(_real_ws(tmp_path, "FAILED", "QA"))
+    assert client.post("/api/workspaces/ACME-1/retry", json={"from": "nope"}).status_code == 400
+    assert announcer.sent == []
+
+
+def test_skip_route(make_client, tmp_path, announcer):
+    ws = _real_ws(tmp_path, "BLOCKED", "DEV", escalation_msg_id=77)
+    r = make_client(ws).post("/api/workspaces/ACME-1/skip")
+    assert r.json() == {"status": "ok", "new_state": "SCOPE_CHECK"}
+    assert announcer.sent == [("skipped → SCOPE_CHECK", 77)]
+
+
+def test_answer_route_announces_the_text_cut_to_200(make_client, tmp_path, announcer):
+    ws = _real_ws(tmp_path, "BLOCKED", "DEV", human_input_pending=True)
+    r = make_client(ws).post("/api/workspaces/ACME-1/answer", json={"text": "y" * 300})
+    assert r.json()["new_state"] == "DEV"
+    assert ws.state.human_input_reply == "y" * 300
+    assert announcer.sent == [("answer: «" + "y" * 200 + "»", None)]
+
+
+def test_reviewed_route(make_client, tmp_path, announcer):
+    ws = _real_ws(tmp_path, "PR_REVIEW", "PUSHED")
+    r = make_client(ws).post("/api/workspaces/ACME-1/reviewed")
+    assert r.json()["new_state"] == "PR_REVIEW" and ws.state.human_input_reply == "reviewed"
+    assert announcer.sent == [("reviewed", None)]
+
+
+def _comment(**kw):
+    return {"comment_id": "9", "author": "octo", "file": "a.py", "line": 3, "body": "b" * 400, **kw}
+
+
+@pytest.mark.parametrize("body, stored, said", [
+    ({"decision": "fix"}, "fix", "Fix on a.py:3"),
+    ({"decision": "wont_fix", "text": "intended"}, "won't fix: intended", "Won't fix on a.py:3: intended"),
+    ({"decision": "reinvestigate", "text": "look at b"}, "reinvestigate", "re-investigate a.py:3: look at b"),
+])
+def test_decision_route_replies_to_the_latest_comment_message(make_client, tmp_path, announcer, body, stored, said):
+    ws = _real_ws(tmp_path, "PR_REVIEW", "PUSHED", escalation_msg_id=5,
+                  pending_review_comments=[_comment(msg_ids=[10, 11])])
+    r = make_client(ws).post("/api/workspaces/ACME-1/comments/9/decision", json=body)
+    assert r.status_code == 200 and r.json()["stored"] == stored
+    assert announcer.sent == [(said, 11)]
+    if body["decision"] != "reinvestigate":
+        assert ws.state.pending_review_comments[0]["decision"] == stored
+
+
+def test_decision_route_refusals_are_400(make_client, tmp_path, announcer):
+    ws = _real_ws(tmp_path, "PR_REVIEW", "PUSHED", pending_review_comments=[_comment()])
+    client = make_client(ws)
+    assert client.post("/api/workspaces/ACME-1/comments/404/decision", json={"decision": "fix"}).status_code == 400
+    assert client.post("/api/workspaces/ACME-1/comments/9/decision", json={"decision": "dance"}).status_code == 400
+    assert announcer.sent == []
+
+
+def test_a_refusal_is_400_and_not_announced(make_client, tmp_path, announcer):
+    r = make_client(_real_ws(tmp_path, "DEV")).post("/api/workspaces/ACME-1/answer", json={"text": "x"})
+    assert r.status_code == 400 and announcer.sent == []
+
+
+def test_the_action_completes_when_telegram_fails(bus, store, orchestrator, mode_handler, tmp_path):
+    from orchestrator.ticket_announce import TicketAnnouncer
+
+    class Down:
+        async def send_message(self, *a, **kw):
+            raise RuntimeError("down")
+
+    ws = _real_ws(tmp_path, "AWAITING_APPROVAL", "ANALYSIS")
+    orchestrator.get_active_workspaces.return_value = [ws]
+    client = TestClient(create_app(bus, store, orchestrator=orchestrator, mode_handler=mode_handler,
+                                   ticket_announcer=TicketAnnouncer(Down(), lambda w: "1", lambda p: "en")))
+    assert client.post("/api/workspaces/ACME-1/approve", json={}).json()["status"] == "ok"

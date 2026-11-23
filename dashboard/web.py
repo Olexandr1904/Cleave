@@ -178,6 +178,20 @@ def _workspace_disk_bytes(ws_root: Path) -> int:
     return size
 
 
+def _review_comment_row(c: dict[str, Any]) -> dict[str, Any]:
+    """What the dashboard shows of a pending PR comment: no message ids, the body cut short."""
+    return {
+        "comment_id": c.get("comment_id"),
+        "author": c.get("author"),
+        "file": c.get("file"),
+        "line": c.get("line"),
+        "body": (c.get("body") or "")[:300],
+        "assessment": c.get("assessment"),
+        "decision": c.get("decision"),
+        "hint_rounds": c.get("hint_rounds", 0),
+    }
+
+
 def _scan_all_workspaces(
     base_dir: str,
     projects: dict[str, Any] | None = None,
@@ -229,6 +243,9 @@ def _scan_all_workspaces(
                 "error": data.get("error"),
                 "stage_iterations": data.get("stage_iterations", {}),
                 "human_input_pending": data.get("human_input_pending", False),
+                "human_input_question": data.get("human_input_question"),
+                "pending_review_comments": [_review_comment_row(c) for c in data.get("pending_review_comments") or []],
+                "escalation_msg_id": data.get("escalation_msg_id"),
                 "reports": reports,
                 "meta": meta,
                 "workspace_root": str(ws_root),
@@ -365,6 +382,8 @@ def create_app(
     reviewer: Any | None = None,
     comparisons: Any | None = None,
     allowed_networks: list[str] | None = None,
+    wake: Any | None = None,
+    ticket_announcer: Any | None = None,
 ) -> Starlette:
     """Create the Starlette dashboard application."""
 
@@ -514,6 +533,8 @@ def create_app(
             mode_handler=mode_handler,
             event_bus=bus,
             global_config=global_config,
+            wake=wake,
+            ticket_announcer=ticket_announcer,
         )
         routes.extend(action_routes)
 

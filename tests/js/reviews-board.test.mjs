@@ -182,7 +182,7 @@ test('cleaveMove: the move a card line names, by kind; none for GitHub turns alo
 test('mainButtonHtml: the move as a primary button; Push anyway… on protected files; none while posting', () => {
   const fixed = pr(1, { roles: ['author'], my_turns: ['answer_threads'], fix: fixJob() });
   const push = B.mainButtonHtml('acme/app', fixed, 'fix', 'card');
-  assert.match(push, /class="reviews-btn primary"[^>]*data-main-move="push"[^>]*>Push</);
+  assert.match(push, /class="reviews-btn primary is-main"[^>]*data-main-move="push"[^>]*>Push</);
   assert.match(push, /data-scope="acme\/app" data-number="1"/);
   assert.match(push, /data-fk="card:main:acme\/app#1"/);
   assert.match(B.mainButtonHtml('acme/app', { ...fixed, fix: fixJob({ protected: true }) }, 'fix', 'card'),
@@ -193,7 +193,8 @@ test('mainButtonHtml: the move as a primary button; Push anyway… on protected 
   const toPost = pr(1, { my_turns: ['review'], review: review({ critical: 1 }) });
   assert.match(B.mainButtonHtml('acme/app', toPost, 'review', 'panel'), /data-main-move="review"[^>]*>Post review…</);
   assert.match(B.mainButtonHtml('acme/app', toPost, 'review', 'panel'), /data-fk="panel:main:acme\/app#1"/);
-  assert.equal(B.mainButtonHtml('acme/app', byNumber(12), 'fix', 'card'), '');
+  // resolve conflicts has no button: the next turn's does
+  assert.match(B.mainButtonHtml('acme/app', byNumber(12), 'fix', 'card'), /data-main-move="request"[^>]*>Request review…</);
 });
 
 test('cardHtml: the main button comes before Fix again…, and its PR\'s last result shows on the card', () => {
@@ -465,4 +466,75 @@ test('verdictsHtml lists each verdict, escaped', () => {
   assert.match(html, /<li[^>]*>2\. FIXED — null &lt;check&gt; added<\/li>/);
   assert.match(html, /<li[^>]*>3\. WON'T FIX — intended<\/li>/);
   assert.equal(B.verdictsHtml([]), '');
+});
+
+
+test('turnMove: the first of my turns with a button, when Cleave\'s own move names none', () => {
+  const mine = fields => pr(1, { roles: ['author'], ...fields });
+  assert.deepEqual(B.turnMove(pr(1, { my_turns: ['review'] }), 'review'), { kind: 'review-now' });
+  assert.equal(B.turnMove(pr(1, { my_turns: ['recheck'] }), 'review'), null);  // the re-check job runs on its own
+  assert.deepEqual(B.turnMove(mine({ my_turns: ['answer_threads'], can_fix: true }), 'fix'), { kind: 'fix' });
+  assert.equal(B.turnMove(mine({ my_turns: ['address_review'] }), 'fix'), null);  // Fix now does not apply
+  assert.deepEqual(B.turnMove(mine({ my_turns: ['address_review', 'merge'] }), 'fix'), { kind: 'merge' });
+  assert.deepEqual(B.turnMove(mine({ my_turns: ['request_review'], rerequest: ['rev-a', 'rev-b'] }), 'fix'),
+    { kind: 'rerequest', logins: ['rev-a', 'rev-b'] });
+  assert.deepEqual(B.turnMove(mine({ my_turns: ['request_review'], rerequest: [] }), 'fix'), { kind: 'request' });
+  assert.deepEqual(B.turnMove(mine({ my_turns: ['request_review'] }), 'fix'), { kind: 'request' });
+  assert.deepEqual(B.turnMove(mine({ my_turns: ['finish_draft'] }), 'fix'), { kind: 'ready' });
+  assert.deepEqual(B.turnMove(mine({ my_turns: ['merge'] }), 'merge'), { kind: 'merge' });
+  assert.equal(B.turnMove(mine({ my_turns: ['resolve_conflicts', 'fix_checks'] }), 'fix'), null);
+  assert.equal(B.turnMove(pr(1, { roles: [], my_turns: [] }), 'review'), null);  // not involved
+  // Cleave's own move comes first: a fix to push is the line's move
+  assert.equal(B.turnMove(mine({ my_turns: ['answer_threads'], can_fix: true, fix: fixJob() }), 'fix'), null);
+});
+
+test('mainButtonHtml: a GitHub move as a main button; Review now and Fix now are the card\'s own', () => {
+  const mine = fields => pr(7, { roles: ['author'], ...fields });
+  const html = (p, column = 'fix') => B.mainButtonHtml('acme/app', p, column, 'card');
+  assert.match(html(mine({ my_turns: ['request_review'], rerequest: ['rev-a', 'rev-b'] })),
+    /class="reviews-btn primary is-main" data-main-move="rerequest"[^>]*>Re-request rev-a, rev-b</);
+  assert.match(html(mine({ my_turns: ['request_review'] })), /data-main-move="request"[^>]*>Request review…</);
+  assert.match(html(mine({ my_turns: ['finish_draft'] })), /data-main-move="ready"[^>]*>Ready for review</);
+  assert.match(html(mine({ my_turns: ['merge'] }), 'merge'), /data-main-move="merge"[^>]*>Merge…</);
+  assert.match(html(mine({ my_turns: ['merge'] }), 'merge'), /data-fk="card:main:acme\/app#7"/);
+  // a fix being posted holds Cleave's moves only
+  assert.match(html(mine({ my_turns: ['merge'], fix: fixJob({ posting: true, pushed: true, state: 'posted' }) }), 'merge'),
+    /data-main-move="merge"/);
+  assert.equal(html(pr(7, { my_turns: ['review'] }), 'review'), '');
+  assert.equal(html(mine({ my_turns: ['answer_threads'], can_fix: true })), '');
+  assert.match(B.mainButtonHtml('acme/<x>', mine({ my_turns: ['request_review'], rerequest: ['<b>'] }), 'fix', 'card'),
+    /data-scope="acme\/&lt;x&gt;"[^>]*>Re-request &lt;b&gt;</);
+});
+
+test('buttonsHtml: Review now and Fix now are marked main when the line names them', () => {
+  const toReview = pr(3, { my_turns: ['review'] });
+  assert.match(B.buttonsHtml('acme/app', toReview, 'card'), /class="reviews-btn primary is-main"\s+data-review-action="review-now"/);
+  const queued = pr(3, { my_turns: ['review'], review: review({}, { state: 'queued' }) });
+  assert.match(B.buttonsHtml('acme/app', queued, 'card'), /class="reviews-btn is-main" disabled[^>]*>Queued</);
+  const notMine = pr(3, { roles: [], my_turns: [] });  // not involved: Review now shows on hover only
+  assert.doesNotMatch(B.buttonsHtml('acme/app', notMine, 'card'), /is-main/);
+  const fixable = pr(4, { roles: ['author'], my_turns: ['answer_threads'], can_fix: true });
+  assert.match(B.buttonsHtml('acme/app', fixable, 'card'), /class="reviews-btn primary is-main"\s+data-review-action="fix-now"/);
+  const merge = pr(4, { roles: ['author'], my_turns: ['merge'], can_fix: true });
+  assert.doesNotMatch(B.buttonsHtml('acme/app', merge, 'card'), /is-main/);  // the line names Merge…
+});
+
+test('pickedReviewers: ticked first, then typed ones split on commas and spaces, @ dropped, each once', () => {
+  assert.deepEqual(B.pickedReviewers(['rev-a'], ' @rev-b, rev-c  rev-a,,'), ['rev-a', 'rev-b', 'rev-c']);
+  assert.deepEqual(B.pickedReviewers([], ''), []);
+  assert.deepEqual(B.pickedReviewers([], undefined), []);
+});
+
+test('candidatesHtml and mergeHtml: the move dialogs\' bodies', () => {
+  const pick = B.candidatesHtml([{ login: 'rev-a', reason: 'suggested by GitHub' }, { login: '<x>', reason: 'r & d' }]);
+  assert.match(pick, /<input type="checkbox" name="reviewer" value="rev-a">/);
+  assert.match(pick, /value="&lt;x&gt;"> &lt;x&gt; <span class="reviews-sub">r &amp; d<\/span>/);
+  assert.match(pick, /name="reviewer-other"/);
+  assert.doesNotMatch(pick, /checked/);
+  assert.match(B.candidatesHtml([]), /GitHub suggests nobody/);
+  const merge = B.mergeHtml(7, { methods: ['merge', 'squash'], default: 'squash' });
+  assert.match(merge, /#7/);
+  assert.match(merge, /value="squash" checked> Squash and merge/);
+  assert.match(merge, /value="merge"> Create a merge commit/);
+  assert.doesNotMatch(merge, /rebase/);
 });

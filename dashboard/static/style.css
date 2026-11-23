@@ -1246,10 +1246,10 @@ span.reviews-ticket { color: #6e7681; }
   margin-top: 8px; padding-top: 8px; border-top: 1px solid #21262d;
 }
 .reviews-card.focus .reviews-actions, .reviews-card:focus-within .reviews-actions { display: flex; }
-.reviews-card:not(.open) .reviews-actions:has([data-main-move]) { display: flex; }
+.reviews-card:not(.open) .reviews-actions:has(.is-main) { display: flex; }
 @media (hover: hover) {
-  .reviews-card:not(:hover):not(.focus):not(:focus-within) .reviews-actions > :not([data-main-move]) { display: none; }
-  .reviews-card:hover:not(.focus):not(:focus-within):not(.open):not(:has([data-main-move])) .reviews-actions {
+  .reviews-card:not(:hover):not(.focus):not(:focus-within) .reviews-actions > :not(.is-main) { display: none; }
+  .reviews-card:hover:not(.focus):not(:focus-within):not(.open):not(:has(.is-main)) .reviews-actions {
     display: flex; position: absolute; top: 5px; right: 8px; margin: 0; padding: 0 0 0 18px; border: 0;
     background: linear-gradient(90deg, transparent, #161b22 18px);
   }

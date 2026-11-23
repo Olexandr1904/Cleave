@@ -295,16 +295,72 @@ const PENDING_LABEL = { review: { queued: 'Queued', running: 'Running', deferred
   fix: { queued: 'Queued', running: 'Fixing', deferred: 'Deferred' },
   findings: { queued: 'Queued', running: 'Running', deferred: 'Deferred' } };
 
-const MAIN_LABEL = { push: 'Push', replies: 'Reply all', review: 'Post review…' };
+const MAIN_LABEL = {
+  push: 'Push', replies: 'Reply all', review: 'Post review…',
+  request: 'Request review…', ready: 'Ready for review', merge: 'Merge…',
+};
+// My turns an address job takes (board.py ADDRESS_ACTIONS): Fix now's.
+const FIX_TURNS = ['answer_threads', 'resolve_threads', 'address_review'];
 
-// The main button of a card ('card') or of the panel header ('panel'): the move its line names (cleaveMove), which
-// reviews.js sends as the panel's command does. None while a post of its fix is under way (buttonsHtml shows Posting).
+// The move my turn names when Cleave's own (cleaveMove) names none: Review now or Fix now (the card's own buttons,
+// which buttonsHtml marks main), or a move on GitHub: re-request the reviewers who asked for changes, request a
+// review, mark the draft ready, merge. The first of my turns that has one; null for none (a re-check, whose job runs
+// on its own; resolve conflicts; fix checks).
+export function turnMove(pr, column) {
+  if (notInvolved(pr) || cleaveMove(pr, column)) return null;
+  for (const action of pr.my_turns) {
+    if (action === 'review') return { kind: 'review-now' };
+    if (FIX_TURNS.includes(action) && isMine(pr) && pr.can_fix) return { kind: 'fix' };
+    if (action === 'request_review') {
+      const logins = pr.rerequest || [];
+      return logins.length ? { kind: 'rerequest', logins } : { kind: 'request' };
+    }
+    if (action === 'finish_draft') return { kind: 'ready' };
+    if (action === 'merge') return { kind: 'merge' };
+  }
+  return null;
+}
+
+// The main button of a card ('card') or of the panel header ('panel'): the move its line names, Cleave's own
+// (cleaveMove: none while a post of its fix is under way, buttonsHtml shows Posting) or one on GitHub (turnMove).
+// reviews.js sends it. Review now and Fix now have none here: the card's own button is the main one.
 export function mainButtonHtml(scope, pr, column, where) {
-  const move = cleaveMove(pr, column);
-  if (!move || (pr.fix && pr.fix.posting)) return '';
-  const label = move.kind === 'push' && pr.fix.protected ? 'Push anyway…' : MAIN_LABEL[move.kind];
-  return `<button class="reviews-btn primary" data-main-move="${move.kind}" data-scope="${esc(scope)}" data-number="${
+  const own = cleaveMove(pr, column);
+  if (own && pr.fix && pr.fix.posting) return '';
+  const move = own || turnMove(pr, column);
+  if (!move || move.kind === 'review-now' || move.kind === 'fix') return '';
+  const label = move.kind === 'push' && pr.fix.protected ? 'Push anyway…'
+    : move.kind === 'rerequest' ? `Re-request ${move.logins.join(', ')}` : MAIN_LABEL[move.kind];
+  return `<button class="reviews-btn primary is-main" data-main-move="${move.kind}" data-scope="${esc(scope)}" data-number="${
     esc(pr.number)}" data-fk="${where}:main:${esc(`${scope}#${pr.number}`)}">${esc(label)}</button>`;
+}
+
+// The Request review… dialog's body: who GitHub suggests and who reviewed the author's recent PRs, as checkboxes
+// (none ticked), and a field for other logins.
+export function candidatesHtml(candidates) {
+  const rows = candidates.map(c => `<label><input type="checkbox" name="reviewer" value="${esc(c.login)}"> ${
+    esc(c.login)} <span class="reviews-sub">${esc(c.reason)}</span></label>`).join('');
+  return `<p>${candidates.length ? 'Asks the ticked people to review it on GitHub.'
+    : 'GitHub suggests nobody: type the logins to ask.'}</p>
+    <fieldset class="review-event-pick">${rows}</fieldset>
+    <label>Others: <input type="text" name="reviewer-other" placeholder="logins, comma-separated" autocomplete="off"></label>`;
+}
+
+// The logins a Request review… dialog picked: the ticked ones, then the typed ones (split on commas and spaces, a
+// leading @ dropped), each once. The server checks each is a GitHub login.
+export function pickedReviewers(checked, other) {
+  const typed = String(other ?? '').split(/[\s,]+/).map(login => login.replace(/^@/, '')).filter(Boolean);
+  return [...new Set([...checked, ...typed])];
+}
+
+const MERGE_NAMES = { merge: 'Create a merge commit', squash: 'Squash and merge', rebase: 'Rebase and merge' };
+
+// The Merge… dialog's body: the methods the repo allows, its default checked.
+export function mergeHtml(number, options) {
+  const radios = options.methods.map(m => `<label><input type="radio" name="merge-method" value="${esc(m)}"${
+    m === options.default ? ' checked' : ''}> ${esc(MERGE_NAMES[m] || m)}</label>`).join('');
+  return `<p>Merges #${esc(number)} on GitHub at the head the board shows. A merge cannot be undone.</p>
+    <fieldset class="review-event-pick">${radios}</fieldset>`;
 }
 
 // What the last command on a PR did, coloured by its state (a word as well: the state is the first thing it says).
@@ -317,11 +373,16 @@ export function resultLineHtml(result) {
 export function buttonsHtml(scope, pr, where) {
   const key = `${scope}#${pr.number}`;
   const target = `data-scope="${esc(scope)}" data-number="${esc(pr.number)}"`;
-  const button = (action, label, primary = false) => `<button class="reviews-btn${primary ? ' primary' : ''}"
+  // The move the card's line names, when it is Review now or Fix now: that button is the card's main one (is-main).
+  const main = turnMove(pr, columnOf(pr))?.kind;
+  let mainOf = '';
+  const cls = primary => `reviews-btn${primary ? ' primary' : ''}${mainOf === main ? ' is-main' : ''}`;
+  const button = (action, label, primary = false) => `<button class="${cls(primary)}"
     data-review-action="${action}" ${target} data-fk="${where}:${action}:${esc(key)}">${esc(label)}</button>`;
-  const disabled = (label, title) => `<button class="reviews-btn" disabled title="${esc(title)}">${esc(label)}</button>`;
+  const disabled = (label, title) => `<button class="${cls(false)}" disabled title="${esc(title)}">${esc(label)}</button>`;
   const mine = isMine(pr);
   const out = [];
+  mainOf = 'review-now';
   if (!mine || where === 'panel') {
     const pending = reviewPending(pr);
     if (pending) {
@@ -336,6 +397,7 @@ export function buttonsHtml(scope, pr, where) {
         : button('review-now', pr.large ? 'Review anyway' : 'Review now', true));
     }
   }
+  mainOf = 'fix';
   if (mine && pr.can_fix) {
     const state = fixState(pr);
     if (state === 'posting') out.push(disabled('Posting', 'A push or a post of this fix is under way'));
@@ -343,6 +405,7 @@ export function buttonsHtml(scope, pr, where) {
     else if (state === 'again') out.push(button('fix-again', 'Fix again…'));
     else out.push(button('fix-now', 'Fix now', true));
   }
+  mainOf = '';
   if (mine && where === 'panel' && pr.can_fix_findings) {
     const state = fixState(pr, 'findings');
     const held = state === 'posting' || state === 'pending';

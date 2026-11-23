@@ -74,8 +74,8 @@ let statusTimer = null;
 let ticked = { finding: new Set(), reply: new Set() };  // the open PR's ticked rows, by number
 let postEvent = 'COMMENT';  // the review event a post carries
 let cmdText = '';           // the command field's text, kept across the panel's redraws
-let result = null;          // {key, state, text}: what the last push, post or command did, shown in the panel and
-                            // on its PR's card
+let result = null;          // {key, state, text, card}: what the last push, post or command did, shown in the panel;
+                            // a main button's (card) on its PR's card too
 let acting = false;         // a push, post or command is running: the panel's and the main buttons wait
 let panelDetail = null;     // the open panel's detail, for the click that resolves a button
 
@@ -624,8 +624,8 @@ function askConfirmation(answer) {
 }
 
 // One push, post or typed command on a job of `target`. It can push to GitHub or post a public review, so the panel and
-// the main buttons wait for the answer, then the board reloads.
-async function runCommand(view, target, jobId, body) {
+// the main buttons wait for the answer, then the board reloads. `card`: a main button's, whose result its card shows.
+async function runCommand(view, target, jobId, body, card = false) {
   if (acting) return;
   acting = true;
   const key = rowKey(target.scope, target.number);
@@ -635,11 +635,11 @@ async function runCommand(view, target, jobId, body) {
   try {
     let answer = await reviewAction(target.scope, target.number, jobId, body);
     if (answer.state === 'confirm') answer = await askConfirmation(answer);
-    result = { key, state: answer.state, text: (answer.texts || []).join('\n') };
+    result = { key, state: answer.state, text: (answer.texts || []).join('\n'), card };
     if (open && answer.state !== 'refused') ticked = { finding: new Set(), reply: new Set() };
     if (open && body.text != null) cmdText = '';
   } catch (err) {
-    result = { key, state: 'failed', text: String(err.message || err) };
+    result = { key, state: 'failed', text: String(err.message || err), card };
   }
   acting = false;
   if (!view.isConnected) return;
@@ -673,17 +673,17 @@ async function onMainButton(view, btn) {
   try {
     detail = await loadReviewDetail(target.scope, target.number);
   } catch (err) {
-    result = { key, state: 'failed', text: String(err.message || err) };
+    result = { key, state: 'failed', text: String(err.message || err), card: true };
   }
   if (!view.isConnected) return;
   const main = detail ? mainCommand(btn.dataset.mainMove, detail) : null;
-  if (typeof main === 'string') result = { key, state: 'refused', text: main };
+  if (typeof main === 'string') result = { key, state: 'refused', text: main, card: true };
   if (!main || typeof main === 'string') {
     await renderReviews();
     return;
   }
   btn.disabled = false;
-  const send = command => runCommand(view, target, main.jobId, { command });
+  const send = command => runCommand(view, target, main.jobId, { command }, true);
   if (!main.pickEvent && !main.confirm) {
     send(main.command);
     return;

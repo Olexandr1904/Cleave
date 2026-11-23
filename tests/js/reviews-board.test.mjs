@@ -201,10 +201,20 @@ test('cardHtml: the main button comes before Fix again…, and its PR\'s last re
   const card = B.cardHtml('acme/app', fixed, VIEW);
   assert.ok(card.indexOf('data-main-move="push"') > 0);
   assert.ok(card.indexOf('data-main-move="push"') < card.indexOf('data-review-action="fix-again"'));
-  const done = B.cardHtml('acme/app', fixed, { ...VIEW, result: { key: 'acme/app#1', state: 'done', text: 'Pushed abc.' } });
+  const done = B.cardHtml('acme/app', fixed, { ...VIEW, result: { key: 'acme/app#1', state: 'done', text: 'Pushed abc.', card: true } });
   assert.match(done, /class="review-result is-done" role="status"><b>done<\/b>\s*<span>Pushed abc\.<\/span>/);
-  const other = B.cardHtml('acme/app', fixed, { ...VIEW, result: { key: 'acme/app#2', state: 'done', text: 'x' } });
+  const other = B.cardHtml('acme/app', fixed, { ...VIEW, result: { key: 'acme/app#2', state: 'done', text: 'x', card: true } });
   assert.doesNotMatch(other, /review-result/);
+});
+
+test('cardHtml: only a main button\'s result reaches the card, cut to its first line', () => {
+  const fixed = pr(1, { roles: ['author'], my_turns: ['answer_threads'], fix: fixJob({ pushed: true }) });
+  const fromPanel = { key: 'acme/app#1', state: 'shown', text: 'diff --git a/x b/x\n+one\n+two' };
+  assert.doesNotMatch(B.cardHtml('acme/app', fixed, { ...VIEW, result: fromPanel }), /review-result/);
+  const replies = { key: 'acme/app#1', state: 'posted', text: 'Posted 2 replies.\nhttps://x/1\nhttps://x/2', card: true };
+  const card = B.cardHtml('acme/app', fixed, { ...VIEW, result: replies });
+  assert.match(card, /<b>posted<\/b>\s*<span>Posted 2 replies\. …<\/span>/);
+  assert.doesNotMatch(card, /https:\/\/x\/1/);
 });
 
 test('avatarsHtml: two avatars then +N; a GitHub picture over initials only on GitHub', () => {

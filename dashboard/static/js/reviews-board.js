@@ -404,8 +404,14 @@ export function againConfirm(pr, action) {
   };
 }
 
+// A main button's result as its card shows it: the first line only (the panel shows it whole).
+function cardResult(result) {
+  const [first, ...rest] = String(result.text).split('\n');
+  return { ...result, text: rest.some(line => line.trim()) ? `${first} …` : first };
+}
+
 // One card. `view`: {me, jiraUrl, repoLabel (the repo's name with several repos, else ''), scale, now, result (the
-// last command's {key, state, text}, shown on its PR's card)}.
+// last command's {key, state, text, card}: a main button's (card) shows on its PR's card)}.
 export function cardHtml(scope, pr, view) {
   const key = `${scope}#${pr.number}`;
   const column = columnOf(pr);
@@ -415,7 +421,7 @@ export function cardHtml(scope, pr, view) {
     .map(flag => `<span class="reviews-flag">${flag}</span>`).join('');
   const title = cardTitle(pr.title, pr.ticket_key);
   const buttons = mainButtonHtml(scope, pr, column, 'card') + buttonsHtml(scope, pr, 'card');
-  const result = view.result && view.result.key === key ? resultLineHtml(view.result) : '';
+  const result = view.result && view.result.card && view.result.key === key ? resultLineHtml(cardResult(view.result)) : '';
   const tag = isMine(pr) ? '<span class="reviews-tag is-mine">Your PR</span>'
     : notInvolved(pr) ? '<span class="reviews-tag is-not-involved" title="You are not its author, an assignee or a reviewer">Not involved</span>'
       : '<span class="reviews-tag">Reviewing</span>';

@@ -223,8 +223,6 @@ async def _prepare(
         raise PrepareError("cancelled", "PR closed")
     if pr.head_sha != head:
         raise PrepareError("superseded", "head moved")
-    if pr.base != base:  # the clone has the base branch only: MB and the diff would be wrong
-        raise PrepareError("failed", f"PR base is {pr.base}, not {base}")
     findings = _findings_of(store, job) if job.kind == "findings" else None
     async with ctx.clone.lock:
         await ctx.clone.refresh()
@@ -241,6 +239,8 @@ async def _prepare(
             threads = await ctx.readiness.threads(ctx.clone.path, n)
             if threads["head_sha"] != head:
                 raise PrepareError("superseded", "head moved", drift)
+            if pr.base != base:  # stacked on another PR's branch: the job clone needs it for the merge base
+                await ctx.clone.fetch_branch(pr.base)
             clone = await ctx.clone.make_job_clone(job_clone_dir, n)
         except (ForgeError, CloneError, ReadinessError) as e:
             raise _prepare_error(e, drift) from None
@@ -256,11 +256,13 @@ async def _prepare_job_clone(
 ) -> Prepared:
     """The rest of Prepare, in the job clone, the review clone's lock not held. `findings`: a findings job's
     findings.json."""
-    process, base, n, head = ctx.cfg.process, ctx.cfg.base_branch, pr.number, pr.head_sha
+    process, n, head = ctx.cfg.process, pr.number, pr.head_sha
     await clone.detach_at_base()
     # Again on the job clone's checkout: the base branch may since have put a symlink on the way.
     _check_inside(clone.path.resolve(), paths.run_dir, paths.replies_plan)
-    merge_base = await clone.merge_base(head)
+    # Against the PR's own base, as GitHub diffs it (another PR's branch for a stacked PR): only that branch's objects
+    # are read; the steps below still run from the configured base's checkout.
+    merge_base = await clone.merge_base(head, pr.base)
 
     # Emptied: a run directory the base branch tracks would otherwise be archived with this job
     # (the job keeps its own copies in job_dir).
@@ -274,7 +276,7 @@ async def _prepare_job_clone(
     run = paths.run_dir
     changed = pr.additions + pr.deletions
     (run / "meta.env").write_text(
-        meta_env(head, base, pr.changed_files, changed, merge_base, paths.worktree), encoding="utf-8")
+        meta_env(head, pr.base, pr.changed_files, changed, merge_base, paths.worktree), encoding="utf-8")
     (run / "pr_body.md").write_text(f"{pr.title}\n\n{pr.body}\n", encoding="utf-8")
     (run / "existing_comments.md").write_text(existing_comments_md(await ctx.forge.comments(n)), encoding="utf-8")
     _write_json(run / "threads.json", threads)

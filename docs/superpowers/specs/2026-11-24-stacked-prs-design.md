@@ -27,8 +27,8 @@ the diff would have been wrong.
   right before the job clone is made, so the job clone has `origin/<base>` (the process document's
   `origin/$BASE` resolves too).
 - A base name that is not a plain branch name (`[A-Za-z0-9._/-]+`, not starting with `-`, no `..`, not ending with
-  `/` or `.lock`), or one in Cleave's own `pr-review/` namespace, is refused at Prepare: `PR base <name> is not a
-  branch Cleave fetches`.
+  `/` or `.lock`), or one in Cleave's own `pr-review/` namespace, is refused at Prepare: `'<name>' is not a branch
+  Cleave fetches`.
 - A stacked base that is gone from the remote (its PR merged and the branch deleted, before GitHub retargets the PR)
   fails Prepare with the fetch's error; the next job after the retarget runs as usual.
 - Pushing a fix is unchanged: it goes to the PR's head branch.

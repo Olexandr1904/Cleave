@@ -248,9 +248,39 @@ async def test_prepare_pr_closed(world):
     world.forge.pr = dataclasses.replace(world.forge.pr, state="closed")
     assert await outcome(world) == ("cancelled", "PR closed")
 
-async def test_prepare_pr_base_differs(world):
-    world.forge.pr = dataclasses.replace(world.forge.pr, base="release/2.0")
-    assert await outcome(world) == ("failed", "PR base is release/2.0, not develop")
+async def test_prepare_a_stacked_pr(world, origin):
+    """A PR whose base is another PR's branch: the merge base and BASE are that branch's, as GitHub diffs the PR; the
+    steps still run from develop's checkout, so nothing from the unmerged branch runs."""
+    work = origin.work
+    git("checkout", "-b", "task/parent", cwd=work)
+    (work / "parent.txt").write_text("parent")
+    commit(work, "parent")
+    git("push", "origin", "HEAD:task/parent", cwd=work)
+    parent = git("rev-parse", "HEAD", cwd=work)
+    (work / "child.txt").write_text("child")
+    commit(work, "child")
+    git("push", "origin", "+HEAD:refs/pull/7/head", cwd=work)
+    head = git("rev-parse", "HEAD", cwd=work)
+    world.forge.pr = dataclasses.replace(pr_full(head), base="task/parent")
+    world.job = dataclasses.replace(world.job, head_sha=head)
+    world.readiness.snapshot["head_sha"] = head
+    prepared = await world.prepare()
+    run = world.paths.run_dir
+    meta = (run / "meta.env").read_text().splitlines()
+    assert "BASE=task/parent" in meta and f"MB={parent}" in meta
+    assert json.loads((run / "anchors.json").read_text())["merge_base"] == parent
+    assert git("rev-parse", "HEAD", cwd=prepared.clone.path) == origin.base  # the trusted checkout: develop
+    assert not (prepared.clone.path / "parent.txt").exists()
+    assert git("rev-parse", "refs/remotes/origin/task/parent", cwd=prepared.clone.path) == parent
+
+
+async def test_prepare_refuses_a_base_it_does_not_fetch(world):
+    world.forge.pr = dataclasses.replace(world.forge.pr, base="-x")
+    assert await outcome(world) == ("failed", "'-x' is not a branch Cleave fetches")
+    world.forge.pr = dataclasses.replace(world.forge.pr, base="task/gone")  # its PR merged, the branch deleted
+    reason = (await outcome(world))[1]
+    assert "task/gone" in reason and TOKEN not in reason
+
 
 async def test_prepare_refuses_a_symlink_on_the_way(world, origin, tmp_path):
     outside = tmp_path / "outside" / "runs" / "PR_7"

@@ -20,9 +20,13 @@ _FULL_SHA = re.compile(r"[0-9a-f]{40}")
 _PLAIN_BRANCH = re.compile(r"[A-Za-z0-9._][A-Za-z0-9._/-]*")
 
 
-def _fetchable(branch: str) -> bool:
+def _fetchable(branch: str, base: str) -> bool:
+    """Whether Cleave fetches `branch` beside `base`. Compared without case too: the clone may sit on a
+    case-insensitive file system, where Develop's loose ref is develop's file (the job clone's trusted checkout)."""
+    folded = branch.casefold()
     return (bool(_PLAIN_BRANCH.fullmatch(branch)) and ".." not in branch and "//" not in branch
-            and not branch.endswith(("/", ".lock")) and not branch.startswith(("pr-review/", "refs/")))
+            and not branch.endswith(("/", ".lock")) and not folded.startswith(("pr-review/", "refs/"))
+            and folded not in (base.casefold(), "pr-review", "head"))
 
 
 def git_env(token: str) -> dict[str, str]:
@@ -179,7 +183,7 @@ class ReviewClone:
         <branch>, and return its sha: a job clone made after it has origin/<branch>. Only its objects are used (the
         merge base, the diff): nothing is checked out from it. The caller holds `lock`. CloneError for a name Cleave
         does not fetch (checked before git runs) or a failed fetch."""
-        if not _fetchable(branch):
+        if not _fetchable(branch, self._base):
             raise CloneError(f"{branch!r} is not a branch Cleave fetches")
         await self._git("fetch", ["-C", str(self.path), "fetch", "origin",
                                   f"+refs/heads/{branch}:refs/remotes/origin/{branch}"])
@@ -189,11 +193,17 @@ class ReviewClone:
 
     async def forget_branch(self, branch: str) -> None:
         """Drop a fetch_branch branch (local and origin/) once a job clone has it: none piles up, and a later branch
-        nested under its name fetches without a ref conflict. One that is not there is no error."""
-        if not _fetchable(branch):
-            raise CloneError(f"{branch!r} is not a branch Cleave fetches")
+        nested under its name fetches without a ref conflict. One that is not there, or a name fetch_branch refuses
+        (never fetched: nothing to drop, and never another ref's), is no error."""
+        if not _fetchable(branch, self._base):
+            return
         for ref in (f"refs/heads/{branch}", f"refs/remotes/origin/{branch}"):
             await self._git("update-ref", ["-C", str(self.path), "update-ref", "-d", "--no-deref", ref])
+
+    async def base_sha(self) -> str:
+        """The sha of origin/<base>: a job clone's must be the one its review clone's refresh() returned."""
+        return (await self._git("rev-parse", ["-C", str(self.path), "rev-parse",
+                                              f"refs/remotes/origin/{self._base}"])).strip()
 
     async def merge_base(self, head: str, base: str = "") -> str:
         """The merge base of `head` and origin/<base>, the configured base branch by default."""

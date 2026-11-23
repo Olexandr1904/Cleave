@@ -7,13 +7,13 @@ from types import SimpleNamespace
 import pytest
 from config.schemas import ProcessPartConfig, ReviewerConfig
 from integrations.base.tracker import TicketComment, TicketData
-from orchestrator.reviewer.clone import ReviewClone
+from orchestrator.reviewer.clone import CloneError, ReviewClone
 from orchestrator.reviewer.commands import CommandResult, base_env
 from orchestrator.reviewer.db import connect
 from orchestrator.reviewer.forge_github import ForgeError
 from orchestrator.reviewer.models import Job, JobRun, PRComments, PRFull
 from orchestrator.reviewer.prepare import (
-    JobPaths, PrepareError, existing_comments_md, job_paths, prepare, section_hash, section_text,
+    JobPaths, PrepareError, existing_comments_md, job_paths, meta_env, prepare, section_hash, section_text,
     ticket_json,
 )
 from orchestrator.reviewer.readiness import ReadinessError
@@ -273,8 +273,8 @@ async def test_prepare_a_stacked_pr(world, origin):
     assert not (prepared.clone.path / "parent.txt").exists()
     assert git("rev-parse", "refs/remotes/origin/task/parent", cwd=prepared.clone.path) == parent
     # The review clone keeps no stacked base: the job clone has its own copy
-    assert subprocess.run(["git", "rev-parse", "--verify", "-q", "refs/heads/task/parent"],
-                          cwd=world.ctx.clone.path).returncode != 0
+    for ref in ("refs/heads/task/parent", "refs/remotes/origin/task/parent"):
+        assert subprocess.run(["git", "rev-parse", "--verify", "-q", ref], cwd=world.ctx.clone.path).returncode != 0
 
 
 async def test_prepare_refuses_a_base_it_does_not_fetch(world):
@@ -560,3 +560,55 @@ async def test_findings_job_fails_before_the_review_clones_lock(world, origin):
         assert await asyncio.wait_for(outcome(world), 5) == ("failed", "no confirmed findings")
     finally:
         world.ctx.clone.lock.release()
+
+
+
+def stack_pr7(world, origin):
+    """PR 7 rebuilt on task/parent (one commit on develop); returns the parent's tip."""
+    work = origin.work
+    git("checkout", "-b", "task/parent", cwd=work)
+    (work / "parent.txt").write_text("parent")
+    commit(work, "parent")
+    git("push", "origin", "HEAD:task/parent", cwd=work)
+    parent = git("rev-parse", "HEAD", cwd=work)
+    (work / "child.txt").write_text("child")
+    commit(work, "child")
+    git("push", "origin", "+HEAD:refs/pull/7/head", cwd=work)
+    head = git("rev-parse", "HEAD", cwd=work)
+    world.forge.pr = dataclasses.replace(pr_full(head), base="task/parent")
+    world.job = dataclasses.replace(world.job, head_sha=head)
+    world.readiness.snapshot["head_sha"] = head
+    return parent
+
+
+async def test_prepare_refuses_a_job_clone_whose_base_is_not_the_refreshed_one(world, origin, monkeypatch):
+    """Defense in depth: whatever aliased a ref, the job clone's base must be the commit refresh() fetched, or no
+    step runs from it."""
+    parent = stack_pr7(world, origin)
+    made = ReviewClone.make_job_clone
+
+    async def aliased(self, dest, number):
+        job = await made(self, dest, number)
+        git("update-ref", "refs/remotes/origin/develop", parent, cwd=job.path)  # as if task/parent overwrote it
+        return job
+    monkeypatch.setattr(ReviewClone, "make_job_clone", aliased)
+    assert await outcome(world) == ("failed", "the job clone's develop is not the one just fetched")
+    assert not (world.paths.run_dir / "anchors.json").exists()
+
+
+async def test_prepare_drops_the_stacked_base_when_the_job_clone_fails(world, origin, monkeypatch):
+    stack_pr7(world, origin)
+
+    async def broken(self, dest, number):
+        raise CloneError("job clone path exists: x")
+    monkeypatch.setattr(ReviewClone, "make_job_clone", broken)
+    assert await outcome(world) == ("failed", "job clone path exists: x")
+    for ref in ("refs/heads/task/parent", "refs/remotes/origin/task/parent"):
+        assert subprocess.run(["git", "rev-parse", "--verify", "-q", ref], cwd=world.ctx.clone.path).returncode != 0
+
+
+def test_meta_env_quotes_for_the_shell():
+    """The session's shell sources meta.env, and BASE is a name GitHub gives: never a command."""
+    text = meta_env("a" * 40, "x;touch /tmp/p", 1, 2, "b" * 40, Path("/w/PR 7"))
+    assert "BASE='x;touch /tmp/p'\n" in text and "WT='/w/PR 7'\n" in text
+    assert "BASE=task/parent\n" in meta_env("a" * 40, "task/parent", 1, 2, "b" * 40, Path("/w"))

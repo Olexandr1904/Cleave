@@ -613,7 +613,11 @@ async def test_fetch_branch_follows_the_tip(tmp_path, stacked):
     assert await clone.fetch_branch("task/parent") == git("rev-parse", "HEAD", cwd=work)
 
 
-@pytest.mark.parametrize("name", ["-x", "a..b", "pr-review/7", "bad name", "x/", "x.lock", "", "a:b", "refs/heads/x"])
+# The data dir is on a case-insensitive file system: a name differing from the base or Cleave's own namespace only in
+# case would alias their loose refs (Develop over develop: the job clone's trusted checkout).
+@pytest.mark.parametrize("name", ["-x", "a..b", "pr-review/7", "bad name", "x/", "x.lock", "", "a:b", "refs/heads/x",
+                                  "develop", "Develop", "DEVELOP", "PR-REVIEW/7", "Pr-Review", "pr-review", "HEAD",
+                                  "head"])
 async def test_fetch_branch_refuses_odd_names(tmp_path, stacked, name):
     bare, *_ = stacked
     clone = await refreshed(tmp_path, bare)
@@ -641,3 +645,18 @@ async def test_forget_branch_leaves_room_for_a_nested_name(tmp_path, stacked):
     git("push", "origin", ":task/parent", cwd=work)
     git("push", "origin", f"{parent}:refs/heads/task/parent/child", cwd=work)
     assert await clone.fetch_branch("task/parent/child") == parent
+
+
+
+async def test_forget_branch_of_an_odd_name_does_nothing(tmp_path, stacked):
+    bare, *_ = stacked
+    clone = await refreshed(tmp_path, bare)
+    develop = git("rev-parse", "refs/heads/develop", cwd=clone.path)
+    await clone.forget_branch("Develop")  # never fetched: nothing to drop, and never develop's refs
+    assert git("rev-parse", "refs/heads/develop", cwd=clone.path) == develop
+
+
+async def test_base_sha(tmp_path, stacked):
+    bare, *_ = stacked
+    clone = await refreshed(tmp_path, bare)
+    assert await clone.base_sha() == git("rev-parse", "refs/remotes/origin/develop", cwd=clone.path)

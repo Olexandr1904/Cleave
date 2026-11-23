@@ -32,3 +32,12 @@ the diff would have been wrong.
 - A stacked base that is gone from the remote (its PR merged and the branch deleted, before GitHub retargets the PR)
   fails Prepare with the fetch's error; the next job after the retarget runs as usual.
 - Pushing a fix is unchanged: it goes to the PR's head branch.
+- Any base other than the configured one is fetched the same way, not only another PR's branch: a PR into a release
+  branch or main is reviewed with the configured base's process too (*review call*: the old refusal is gone; a fix is
+  still never pushed to the configured base, and auto reviews stay bounded by the size limit).
+- A name equal to the configured base, `HEAD` or `pr-review…` without regard to case is refused: the clone may sit on
+  a case-insensitive disk, where `Develop`'s loose ref is `develop`'s file. As defense in depth, Prepare checks that
+  the job clone's `origin/<base>` is the commit `refresh()` just fetched before any step runs.
+- meta.env's values are shell-quoted: the session's shell sources it, and `BASE` is a name GitHub gives.
+- The review prompt tells the session the PR's changes are `MB..HEAD`, so a skill that picks its own base reviews
+  only the PR's commits, not the parent PR's.

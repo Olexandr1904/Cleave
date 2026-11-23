@@ -197,6 +197,8 @@ def review_prompt(doc: str, prepare_section: str, number: int, paths: JobPaths) 
         "When the process runs the code-review skill with a PR number, give it the local branch "
         f"pr-review/{number} instead of the number, with the same level and flags: this session has no forge "
         "access.\n"
+        "The PR's changes are MB..HEAD from meta.env (its base, BASE, may be another PR's branch): review only "
+        "those, and when the skill takes a base, give it MB.\n"
         f"{_AGENTS_AND_BASH}"
         f"Also write {paths.run_dir}/tg_lines.json: a JSON object mapping every number in the report (findings, "
         "questions, pre-existing and dropped) to one short English line: what is wrong and why, no file path.\n"

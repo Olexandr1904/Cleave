@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+import shlex
 import shutil
 from dataclasses import dataclass
 from pathlib import Path
@@ -120,7 +121,10 @@ def section_hash(text: str) -> str:
 
 
 def meta_env(head: str, base: str, files: int, changed: int, merge_base: str, worktree: Path) -> str:
-    return f"HEAD={head}\nBASE={base}\nFILES={files}\nCHANGED={changed}\nMB={merge_base}\nWT={worktree}\n"
+    # Quoted: the session's shell sources it, and BASE is a name GitHub gives.
+    q = shlex.quote
+    return (f"HEAD={q(head)}\nBASE={q(base)}\nFILES={files}\nCHANGED={changed}\nMB={q(merge_base)}\n"
+            f"WT={q(str(worktree))}\n")
 
 
 def _one_line(text: str) -> str:
@@ -225,7 +229,7 @@ async def _prepare(
         raise PrepareError("superseded", "head moved")
     findings = _findings_of(store, job) if job.kind == "findings" else None
     async with ctx.clone.lock:
-        await ctx.clone.refresh()
+        base_sha = await ctx.clone.refresh()
         if not ctx.clone.has_file(doc):
             raise PrepareError("failed", f"{doc} not on {base}")
         if job.kind in FIX_KINDS and not ctx.clone.has_file(process.address_doc):
@@ -240,13 +244,17 @@ async def _prepare(
             if threads["head_sha"] != head:
                 raise PrepareError("superseded", "head moved", drift)
             if pr.base != base:  # stacked on another PR's branch: the job clone needs it for the merge base
-                await ctx.clone.fetch_branch(pr.base)
                 try:
+                    await ctx.clone.fetch_branch(pr.base)
                     clone = await ctx.clone.make_job_clone(job_clone_dir, n)
-                finally:  # the job clone has its own copy now
+                finally:  # the job clone has its own copy now, or there is none
                     await ctx.clone.forget_branch(pr.base)
             else:
                 clone = await ctx.clone.make_job_clone(job_clone_dir, n)
+            # The steps run from the job clone's base checkout: it must be the commit just fetched, whatever ref a
+            # stacked base's name could have aliased.
+            if await clone.base_sha() != base_sha:
+                raise PrepareError("failed", f"the job clone's {base} is not the one just fetched", drift)
         except (ForgeError, CloneError, ReadinessError) as e:
             raise _prepare_error(e, drift) from None
     try:

@@ -312,6 +312,8 @@ def test_review_prompt_text(paths):
     prompt = review_prompt(DOC, "Prepare", 1712, paths)
     assert prompt.startswith("You are running unattended inside Cleave. Nobody will answer questions")
     assert f"Follow the review process in {DOC} (in the current directory, the repo's base branch) for PR #1712." in prompt
+    # A stacked PR's base is another PR's branch: the range, not the repo's base branch, is the PR's diff
+    assert "The PR's changes are MB..HEAD from meta.env (its base, BASE, may be another PR's branch)" in prompt
     assert 'Its section "Prepare" is already done.' in prompt
     assert "pr-review/1712" in prompt
     assert str(paths.run_dir) in prompt

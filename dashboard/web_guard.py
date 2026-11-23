@@ -50,13 +50,17 @@ class GuardMiddleware:
         return False
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
-        if scope["type"] != "http":
+        if scope["type"] not in ("http", "websocket"):
             await self.app(scope, receive, send)
             return
         if not self._peer_allowed(scope):
+            if scope["type"] == "websocket":
+                await receive()  # websocket.connect
+                await send({"type": "websocket.close", "code": 1008})
+                return
             await PlainTextResponse("Forbidden", status_code=403)(scope, receive, send)
             return
-        if scope["method"] in _WRITE_METHODS and foreign_origin(Request(scope)):
+        if scope["type"] == "http" and scope["method"] in _WRITE_METHODS and foreign_origin(Request(scope)):
             await JSONResponse({"error": "cross-site request refused"}, status_code=403)(scope, receive, send)
             return
         await self.app(scope, receive, send)

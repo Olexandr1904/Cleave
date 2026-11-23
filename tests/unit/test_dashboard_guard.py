@@ -58,3 +58,34 @@ def test_a_same_origin_write_passes_the_guard(action_client):
 
 def test_default_allow_list():
     assert DashboardConfig().allowed_networks == ALLOWED
+
+
+def _ws_client(peer):
+    from starlette.applications import Starlette
+    from starlette.middleware import Middleware
+    from starlette.routing import WebSocketRoute
+
+    from dashboard.web_guard import GuardMiddleware
+
+    async def ws(websocket):
+        await websocket.accept()
+        await websocket.send_text("hi")
+        await websocket.close()
+
+    app = Starlette(routes=[WebSocketRoute("/ws", ws)],
+                    middleware=[Middleware(GuardMiddleware, allowed_networks=ALLOWED)])
+    return TestClient(app, client=(peer, 5000))
+
+
+def test_a_websocket_from_outside_the_allow_list_is_refused():
+    from starlette.websockets import WebSocketDisconnect
+
+    with pytest.raises(WebSocketDisconnect) as exc:
+        with _ws_client("192.168.31.20").websocket_connect("/ws"):
+            pass
+    assert exc.value.code == 1008
+
+
+def test_a_websocket_from_an_allowed_peer_connects():
+    with _ws_client("100.101.1.2").websocket_connect("/ws") as ws:
+        assert ws.receive_text() == "hi"

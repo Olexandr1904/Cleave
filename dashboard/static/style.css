@@ -1239,14 +1239,17 @@ span.reviews-ticket { color: #6e7681; }
 /* The buttons never cover the card's bottom line (who moves, what to do). With the keyboard focus they get a row
    of their own (a discrete move: the row may push the cards below); on a mouse hover they float over the header's
    right end, so moving the pointer down a column shifts nothing; the open card has none: its panel has them.
-   Touch screens always show the row. */
+   Touch screens always show the row. A card with a main button (the move its line names) always shows the row, with
+   that button alone until the pointer or the focus brings the others into it. */
 .reviews-card .reviews-actions {
   display: none; justify-content: flex-start; flex-wrap: wrap;
   margin-top: 8px; padding-top: 8px; border-top: 1px solid #21262d;
 }
 .reviews-card.focus .reviews-actions, .reviews-card:focus-within .reviews-actions { display: flex; }
+.reviews-card:not(.open) .reviews-actions:has([data-main-move]) { display: flex; }
 @media (hover: hover) {
-  .reviews-card:hover:not(.focus):not(:focus-within):not(.open) .reviews-actions {
+  .reviews-card:not(:hover):not(.focus):not(:focus-within) .reviews-actions > :not([data-main-move]) { display: none; }
+  .reviews-card:hover:not(.focus):not(:focus-within):not(.open):not(:has([data-main-move])) .reviews-actions {
     display: flex; position: absolute; top: 5px; right: 8px; margin: 0; padding: 0 0 0 18px; border: 0;
     background: linear-gradient(90deg, transparent, #161b22 18px);
   }

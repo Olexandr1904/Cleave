@@ -174,7 +174,7 @@ The job runner starts queued jobs as they become runnable, up to `reviewer.max_p
 
 A job whose PR moved on meanwhile ends `superseded` (a new head, or a newer job), `stale` (the PR or your turn is gone) or `skipped` (you skipped that head while it ran), and nothing is sent for it.
 
-Card buttons, shown while the pointer is on the card, the card has the keyboard focus or its panel is open, and always on touch screens. A card of your own PR has none but its main button and **Fix now**; its **Self-review** is in the [side panel](#pr-detail-view). `#<number>` opens the PR on GitHub.
+Card buttons, shown while the pointer is on the card, the card has the keyboard focus or its panel is open, and always on touch screens. The main button is always shown, except on the open card (its panel's header has it). A card of your own PR has none but its main button and **Fix now**; its **Self-review** is in the [side panel](#pr-detail-view). `#<number>` opens the PR on GitHub.
 
 | Button | When it appears | What it does |
 |---|---|---|

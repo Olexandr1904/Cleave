@@ -36,6 +36,10 @@ class NotifierInterface(ABC):
         Returns the message ID for reply tracking.
         """
 
+    async def set_buttons(self, chat_id: str, message_id: int, buttons: list[Button] | None) -> None:
+        """Replace the inline buttons of a sent message (None or empty: remove them). A notifier that cannot does
+        nothing."""
+
     @abstractmethod
     async def wait_for_reply(self, chat_id: str, message_id: int, timeout_seconds: int = 0) -> str | None:
         """Wait for a reply to a specific message.

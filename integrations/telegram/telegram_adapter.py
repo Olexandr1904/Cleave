@@ -9,7 +9,7 @@ from collections.abc import Awaitable
 from typing import Any
 
 from telegram import Bot, InlineKeyboardButton, InlineKeyboardMarkup, Update
-from telegram.error import TelegramError
+from telegram.error import BadRequest, TelegramError
 from telegram.ext import Application, CallbackQueryHandler, MessageHandler, TypeHandler, filters
 from telegram.request import HTTPXRequest
 
@@ -79,10 +79,7 @@ class TelegramAdapter(NotifierInterface):
             "text": message,
         }
         if buttons:
-            rows: dict[int, list[InlineKeyboardButton]] = {}
-            for b in buttons:
-                rows.setdefault(b.row, []).append(InlineKeyboardButton(b.label, callback_data=b.action))
-            kwargs["reply_markup"] = InlineKeyboardMarkup(list(rows.values()))
+            kwargs["reply_markup"] = self._markup(buttons)
         if reply_to_message_id:
             kwargs["reply_to_message_id"] = reply_to_message_id
 
@@ -106,6 +103,32 @@ class TelegramAdapter(NotifierInterface):
             ),
             chat_id=chat_id, message_id=message_id, text=text,
         )
+
+    async def set_buttons(self, chat_id: str, message_id: int, buttons: list[Button] | None) -> None:
+        """Replace the inline keyboard of a sent message; None or no buttons remove it. A keyboard Telegram finds
+        unchanged ("message is not modified") is not an error."""
+        try:
+            await self._call(
+                "buttons",
+                self._bot.edit_message_reply_markup(
+                    chat_id=chat_id, message_id=message_id, reply_markup=self._markup(buttons)),
+                chat_id=chat_id, message_id=message_id,
+                buttons={b.label: b.action for b in buttons} if buttons else None,
+            )
+        except BadRequest as e:
+            if "not modified" not in str(e).lower():
+                raise
+            logger.debug("Buttons of message %s not changed: already as they are", message_id)
+
+    @staticmethod
+    def _markup(buttons: list[Button] | None) -> InlineKeyboardMarkup | None:
+        """The inline keyboard of `buttons`, one row per Button.row in order of first appearance; None for none."""
+        if not buttons:
+            return None
+        rows: dict[int, list[InlineKeyboardButton]] = {}
+        for b in buttons:
+            rows.setdefault(b.row, []).append(InlineKeyboardButton(b.label, callback_data=b.action))
+        return InlineKeyboardMarkup(list(rows.values()))
 
     async def send_typing(self, chat_id: str) -> None:
         """Send 'typing...' chat action (visible for ~5 seconds)."""

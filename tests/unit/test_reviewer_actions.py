@@ -4,6 +4,7 @@ from __future__ import annotations
 from orchestrator.reviewer.actions import ReviewerActions
 from orchestrator.reviewer.grammar import ReplyCommand
 from orchestrator.reviewer.lines import not_understood_line
+from orchestrator.reviewer.models import Post
 from orchestrator.reviewer.posting import PostOutcome
 from orchestrator.reviewer.replies import ReviewerReplies
 from orchestrator.reviewer.report import parse_report
@@ -161,3 +162,89 @@ async def test_understand_answers_the_refusal_without_a_parser(tmp_path):
     login = Rig(tmp_path / "login", parser=[EVERY_BUT_3], failing={"claude_login"})
     assert await actions_of(login).understand(login.job, "пости всё кроме 3") == NO_LOGIN_PARSER
     assert login.parser.calls == []
+
+
+class FakeNotifier:
+    """Records (chat id, message id, labels) per set_buttons; raises `error` when set."""
+
+    def __init__(self):
+        self.buttons_set, self.error = [], None
+
+    async def set_buttons(self, chat_id, message_id, buttons):
+        if self.error:
+            raise self.error
+        self.buttons_set.append((chat_id, message_id, [b.label for b in buttons]))
+
+
+def with_notifier(rig):
+    rig.chat.notifier, rig.chat.chat_id = FakeNotifier(), CHAT
+    return rig.chat.notifier
+
+
+def land_push_on_run(rig, job):
+    """The fake posting records the push in the store, as the real one does."""
+    original = rig.posting.push_fix
+
+    async def push_fix(ctx, job_, anyway=False, then_post=False):
+        rig.store.save_post(Post("p-push", job_.id, SCOPE, job_.number, job_.head_sha, "push", "posted",
+                                 T1.isoformat()))
+        return await original(ctx, job_, anyway=anyway, then_post=then_post)
+
+    rig.posting.push_fix = push_fix
+
+
+async def test_a_telegram_push_refreshes_the_fix_message_buttons(tmp_path):
+    rig = address_rig(tmp_path)
+    notifier = with_notifier(rig)
+    land_push_on_run(rig, rig.job)
+    await rig.tap("rv_push", rig.job.id, 200)
+    assert notifier.buttons_set == [(CHAT, 200, ["Reply all", "Diff"])]
+
+
+async def test_a_refused_push_refreshes_nothing(tmp_path):
+    rig = address_rig(tmp_path)
+    notifier = with_notifier(rig)
+    rig.posting.outcome = PostOutcome("refused", "Nope")
+    await rig.tap("rv_push", rig.job.id, 200)
+    assert notifier.buttons_set == []
+
+
+async def test_diff_refreshes_nothing(tmp_path):
+    rig = address_rig(tmp_path)
+    notifier = with_notifier(rig)
+    await rig.tap("rv_diff", rig.job.id, 200)
+    assert notifier.buttons_set == []
+
+
+async def test_every_reply_posted_removes_reply_all(tmp_path):
+    rig = address_rig(tmp_path)
+    notifier = with_notifier(rig)
+    for n in (1, 3):
+        rig.store.save_post(Post(f"p{n}", rig.job.id, SCOPE, rig.job.number, HEAD, "replies", "posted", T1.isoformat(),
+                                 numbers=[n], landed=[{"n": n, "path": "", "line": None, "title": "",
+                                                       "where": "reply"}]))
+    await rig.replies.refresh_buttons(rig.job.id)
+    assert notifier.buttons_set == [(CHAT, 200, ["Push", "Diff"])]
+
+
+async def test_refresh_is_for_the_last_part_and_never_raises(tmp_path):
+    rig = address_rig(tmp_path)
+    notifier = with_notifier(rig)
+    run = rig.store.run(rig.job.id)
+    run.message_ids = [200, 201]
+    rig.store.save_run(run)
+    await rig.replies.refresh_buttons(rig.job.id)
+    assert notifier.buttons_set[-1][1] == 201
+    notifier.error = RuntimeError("telegram down")
+    await rig.replies.refresh_buttons(rig.job.id)           # logged, not raised
+    await rig.replies.refresh_buttons("no-such-job")
+    assert rig.replies._chat is rig.chat
+    rig.replies._chat = None
+    await rig.replies.refresh_buttons(rig.job.id)
+
+
+async def test_a_review_job_has_no_buttons_to_refresh(tmp_path):
+    rig = Rig(tmp_path)
+    notifier = with_notifier(rig)
+    await rig.replies.refresh_buttons(rig.job.id)
+    assert notifier.buttons_set == []

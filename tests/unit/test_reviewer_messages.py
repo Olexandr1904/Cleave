@@ -282,3 +282,13 @@ def test_review_message_offers_fix_only_when_fixable_with_a_confirmed_finding():
     assert questions.items
     only_questions = review_message("acme/app", 1712, "t", "", URL, 14, questions, TG, fixable=True)
     assert hint in only_questions.splitlines() and '"fix"' not in only_questions
+
+
+def test_after_the_push_only_reply_all_and_diff_remain():
+    labels = lambda buttons: [b.label for b in buttons]
+    assert labels(fix_buttons("address", "j", REPLIES, FIX, pushed=True)) == ["Reply all", "Diff"]
+    assert labels(fix_buttons("address", "j", REPLIES, GUARDED, pushed=True)) == ["Reply all", "Diff"]
+    assert labels(fix_buttons("address", "j", REPLIES, FIX, pushed=True, unposted_replies=False)) == ["Diff"]
+    assert labels(fix_buttons("address", "j", REPLIES, FIX, unposted_replies=False)) == ["Push", "Diff"]
+    assert labels(fix_buttons("address", "j", REPLIES, {}, unposted_replies=False)) == []
+    assert labels(fix_buttons("findings", "j", [], FIX, pushed=True)) == ["Diff"]

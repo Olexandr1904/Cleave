@@ -384,3 +384,30 @@ class TestIncomingTrafficLog:
 
         assert [(direction, kind) for direction, kind, _ in _traffic(caplog)] == [("in", "message")]
         handler.handle_message.assert_called_once_with("status", "12345")
+
+
+class TestSetButtons:
+    async def test_set_buttons_replaces_the_keyboard_in_rows(self):
+        bot = AsyncMock()
+        adapter = _adapter(bot)
+        await adapter.set_buttons("1", 5, [Button("A", "a", row=0), Button("B", "b", row=1)])
+        markup = bot.edit_message_reply_markup.call_args.kwargs["reply_markup"]
+        assert [[b.callback_data for b in row] for row in markup.inline_keyboard] == [["a"], ["b"]]
+        assert bot.edit_message_reply_markup.call_args.kwargs["message_id"] == 5
+        await adapter.set_buttons("1", 5, None)
+        assert bot.edit_message_reply_markup.call_args.kwargs["reply_markup"] is None
+        await adapter.set_buttons("1", 5, [])
+        assert bot.edit_message_reply_markup.call_args.kwargs["reply_markup"] is None
+
+    async def test_an_unchanged_keyboard_is_not_an_error(self):
+        from telegram.error import BadRequest
+        bot = AsyncMock()
+        bot.edit_message_reply_markup = AsyncMock(side_effect=BadRequest("Message is not modified: same"))
+        await _adapter(bot).set_buttons("1", 5, [Button("A", "a")])
+
+    async def test_another_failure_is_raised(self):
+        from telegram.error import BadRequest
+        bot = AsyncMock()
+        bot.edit_message_reply_markup = AsyncMock(side_effect=BadRequest("Message to edit not found"))
+        with pytest.raises(BadRequest):
+            await _adapter(bot).set_buttons("1", 5, [Button("A", "a")])

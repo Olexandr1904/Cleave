@@ -755,6 +755,9 @@ class CommandHandler:
                 d = ticket_actions.decide_comment(
                     ws, str(c.get("comment_id")), decision, wf_reason, via="reply", matched_token=matched_token,
                     raw_text=text.strip()[:200], events=self._events, wake=self._wake_fn)
+                if d.refused:
+                    await self._notifier.send_message(chat_id, d.refused, reply_to_message_id=reply_to_msg_id)
+                    return True
                 if decision == "fix":
                     decision_label = tr("FIX (matched: {token!r}). Dev-agent will re-engage on {file_line}.",
                                         token=matched_token, file_line=file_line)

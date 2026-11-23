@@ -207,3 +207,31 @@ def test_a_hint_is_staged_and_wakes(pr_review_ws_two_comments):
 def test_a_decision_outside_pr_review_is_refused(tmp_ws):
     assert ticket_actions.decide_comment(tmp_ws, "11", "fix", via="dashboard").refused == \
         "No workspace in PR_REVIEW for ACME-1."
+
+
+def test_a_reply_decision_emits_the_matched_token_and_raw_text(pr_review_ws_two_comments):
+    events = FakeEvents()
+    ticket_actions.decide_comment(pr_review_ws_two_comments, "11", "fix", via="reply", matched_token="fix it",
+                                  raw_text="fix it", events=events)
+    kind, data = events.calls[-1]
+    assert kind == "pr_comment_decision_recorded"
+    assert data["matched_token"] == "fix it" and data["raw_text"] == "fix it" and data["via"] == "reply"
+
+
+def test_a_button_decision_emits_the_matched_token_but_no_raw_text(pr_review_ws_two_comments):
+    events = FakeEvents()
+    ticket_actions.decide_comment(pr_review_ws_two_comments, "11", "fix", via="button",
+                                  matched_token="button:fix", events=events)
+    data = events.calls[-1][1]
+    assert data["matched_token"] == "button:fix" and "raw_text" not in data
+
+
+def test_the_fourth_hint_emits_exhausted_and_changes_nothing(pr_review_ws_hint_rounds_3):
+    events, woke = FakeEvents(), []
+    d = ticket_actions.decide_comment(pr_review_ws_hint_rounds_3, "11", "reinvestigate", "look at the null case",
+                                      via="reply", events=events, wake=lambda: woke.append(1))
+    kind, data = events.calls[-1]
+    assert kind == "pr_comment_hint_exhausted" and data["attempted_hint_excerpt"] == "look at the null case"
+    c = pr_review_ws_hint_rounds_3.state.pending_review_comments[0]
+    assert "last_hint" not in c and "pending_reinvestigation" not in c and c["hint_rounds"] == 3
+    assert d.stored == "" and woke == []

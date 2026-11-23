@@ -1508,6 +1508,7 @@ async def test_pr_move_refuses_a_move_the_row_no_longer_names(tmp_path):
     (["-dash"], "Not a GitHub login: -dash"),
     ([f"r{i}" for i in range(11)], "At most 10 reviewers at once."),
     (["rev1", "octo"], "The PR's author cannot review it."),
+    (["Octo"], "The PR's author cannot review it."),  # GitHub logins ignore case
     ("rev1", "Pick at least one reviewer."),
 ])
 async def test_pr_move_refuses_bad_logins_and_the_author(tmp_path, reviewers, text):
@@ -1529,19 +1530,69 @@ async def test_pr_move_merge_checks_the_head_and_method(tmp_path):
     assert forge.calls == [("merge", 1, A, "squash")]  # the row's full head: GitHub checks it again
 
 
-async def test_pr_move_merge_refused_or_unanswered(tmp_path):
-    rig, _, forge = await moves_rig(tmp_path, Turn("octo", "merge"), fail=ForgeError("GitHub 405"))
-    assert await rig.service.pr_move("acme/app", 1, "merge", method="merge", head=A[:9]) == (
-        "failed", "GitHub refused the merge (GitHub 405): checks, reviews or conflicts block it.")
-    forge.fail = ForgeError("ReadTimeout", unavailable=True)
-    assert await rig.service.pr_move("acme/app", 1, "merge", method="merge", head=A[:9]) == (
-        "failed", "GitHub did not answer: check #1 on GitHub before trying again.")
-    forge.fail = ForgeError("GitHub 422")
+@pytest.mark.parametrize("error, answer", [
+    (ForgeError("GitHub 405"), ("failed", "GitHub refused the merge (GitHub 405): checks, reviews or conflicts block it.")),
+    (ForgeError("GitHub 409"), ("failed", "The PR's head moved on GitHub: refresh the board.")),
+    (ForgeError("GitHub 403"), ("failed", "GitHub refused it (GitHub 403).")),
+    # It may have landed: not a failure, a check (Review Focus 3)
+    (ForgeError("ReadTimeout", unavailable=True),
+     ("unverified", "GitHub did not answer: check #1 on GitHub before trying again.")),
+])
+async def test_pr_move_merge_refused_or_unanswered(tmp_path, error, answer):
+    rig, _, forge = await moves_rig(tmp_path, Turn("octo", "merge"), fail=error)
+    assert await rig.service.pr_move("acme/app", 1, "merge", method="merge", head=A[:9]) == answer
+
+
+async def test_pr_move_request_refused_by_github(tmp_path):
+    rig, _, _ = await moves_rig(tmp_path, fail=ForgeError("GitHub 422"))
     assert await rig.service.pr_move("acme/app", 1, "request_review", reviewers=["x"]) == (
-        "refused", "The board no longer shows this move for #1: refresh it.")  # the merge row has no request
-    rig2, _, forge2 = await moves_rig(tmp_path / "2", fail=ForgeError("GitHub 422"))
-    assert await rig2.service.pr_move("acme/app", 1, "request_review", reviewers=["x"]) == (
         "failed", "GitHub refused it (GitHub 422).")
+
+
+async def test_a_second_merge_is_answered_until_a_poll_shows_it(tmp_path):
+    """The row names merge until the next poll: a second Merge… is answered here, not by GitHub's 405 (which
+    would read as blocked right after "Merged")."""
+    rig, c, forge = await moves_rig(tmp_path, Turn("octo", "merge"))
+    assert (await rig.service.pr_move("acme/app", 1, "merge", method="merge", head=A[:9]))[0] == "done"
+    assert await rig.service.pr_move("acme/app", 1, "merge", method="merge", head=A[:9]) == (
+        "refused", "Already merged: the board shows it within a minute.")
+    assert len(forge.calls) == 1
+    rig.t += timedelta(seconds=5)
+    await rig.service.poll(c)  # a poll after the merge: GitHub's answer is the board's again
+    assert (await rig.service.pr_move("acme/app", 1, "merge", method="merge", head=A[:9]))[0] == "done"
+    assert len(forge.calls) == 2
+
+
+class HeldReadiness(FakeReadiness):
+    """Its board() waits for `release`: a poll that runs while the test acts."""
+    def __init__(self, snapshot):
+        super().__init__(snapshot)
+        self.entered, self.release = asyncio.Event(), asyncio.Event()
+    async def board(self, clone_dir):
+        self.entered.set()
+        await self.release.wait()
+        return await super().board(clone_dir)
+
+
+async def test_poll_soon_during_a_poll_keeps_the_repo_due(tmp_path):
+    """A move made while a poll runs: that poll's snapshot may predate it, so the repo stays due after it."""
+    readiness = HeldReadiness(snap(spr(1, [Turn("octo", "merge")], author="octo")))
+    c = ctx(tmp_path, readiness, MovesForge({1: det(1, author="octo", requested=())}))
+    rig = Rig(tmp_path, c)
+    readiness.release.set()
+    rig.service.poll_soon("acme/app")  # before a poll: that poll shows the move
+    await rig.service.poll(c)
+    assert rig.service._seconds_to_due(c, rig.t) > 0
+    readiness.release.clear()
+    readiness.entered.clear()
+    rig.t += timedelta(seconds=10)
+    running = asyncio.create_task(rig.service.poll(c))
+    await readiness.entered.wait()
+    rig.t += timedelta(seconds=1)
+    rig.service.poll_soon("acme/app")
+    readiness.release.set()
+    await running
+    assert rig.service._seconds_to_due(c, rig.t) == 0
 
 
 async def test_pr_move_refused_while_the_forge_credential_fails(tmp_path):

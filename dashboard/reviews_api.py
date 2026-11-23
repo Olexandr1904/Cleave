@@ -47,9 +47,7 @@ def _pr(row: BoardRow, repo: dict) -> dict:
         "number": row.number, "title": row.title, "url": row.url, "ticket_key": row.ticket_key,
         "roles": row.roles,
         "my_turns": list(dict.fromkeys(row.my_actions)),  # one address_review per reviewer
-        # The reviewers who asked for changes on an older head: Re-request asks them again.
-        "rerequest": list(dict.fromkeys(t["reviewer"] for t in row.my_turns
-                                        if t["action"] == "request_review" and t.get("reviewer"))),
+        "rerequest": _rerequest(row),
         "other_turns": [{"login": t["login"], "action": t["action"]} for t in row.other_turns],
         "pipeline": row.pipeline, "draft": row.draft, "changed_files": row.changed_files,
         "head": row.head_sha[:9],
@@ -62,6 +60,15 @@ def _pr(row: BoardRow, repo: dict) -> dict:
         "can_fix_findings": row.number in repo["findings_fixable"],  # Fix findings… applies
         "fix": repo["fixes"].get(row.number),  # the newest fix job of either kind, whatever job is newer
     }
+
+
+def _rerequest(row: BoardRow) -> list[str]:
+    """The reviewers who asked for changes on an older head, whom Re-request asks again; none when a request_review
+    turn names nobody too: someone new is to be asked, which Request review… does (its dialog lists them)."""
+    turns = [t for t in row.my_turns if t["action"] == "request_review"]
+    if any(not t.get("reviewer") for t in turns):
+        return []
+    return list(dict.fromkeys(t["reviewer"] for t in turns))
 
 
 def _jira_url(projects: dict, project_id: str) -> str:
@@ -265,7 +272,7 @@ def build_review_routes(service: Any, get_projects: Callable[[], dict] = dict, a
         args = _move_args(body)
         if isinstance(args, JSONResponse):
             return args
-        what = f"pr-move {move}"
+        what = f"pr-move {move!r}"  # quoted: the client's string, never a line of its own
         try:
             state, text = await service.pr_move(*target, move, **args)
         except LookupError as e:

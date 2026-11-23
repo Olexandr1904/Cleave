@@ -198,6 +198,8 @@ function paintList(view) {
     ? boardHtml(shown, query, now)
     : '<div class="state-msg">No repo has reviews enabled.</div>');
   markRows(view);
+  // An Auto refresh redraws the main buttons: they stay disabled while a push, post or move waits for its answer.
+  if (acting) view.querySelectorAll('[data-main-move]').forEach(btn => { btn.disabled = true; });
 }
 
 // ── Side panel ──
@@ -629,7 +631,10 @@ function askConfirmation(answer) {
 // One push, post or typed command on a job of `target`. It can push to GitHub or post a public review, so the panel and
 // the main buttons wait for the answer, then the board reloads. `card`: a main button's, whose result its card shows.
 async function runCommand(view, target, jobId, body, card = false) {
-  if (acting) return;
+  if (acting) {
+    busy(target);
+    return;
+  }
   acting = true;
   const key = rowKey(target.scope, target.number);
   const open = Boolean(openPr) && rowKey(openPr.scope, openPr.number) === key;
@@ -667,10 +672,20 @@ function eventPickHtml(detail) {
 // The main buttons of a GitHub move (reviews-board.js turnMove), which go to /api/reviews/pr-move.
 const GITHUB_MOVES = ['rerequest', 'request', 'ready', 'merge'];
 
+// A press while another push, post or move waits for its answer: said on its card, never dropped in silence.
+function busy(target) {
+  result = { key: rowKey(target.scope, target.number), state: 'refused', card: true,
+    text: 'Another action is running: wait for its answer, then try again.' };
+  renderReviews();
+}
+
 // One GitHub move on `target`: the main buttons and the panel wait for the answer, which its card shows; then the board
 // reloads (the server polls the repo soon after a move, so the card's line follows within a minute).
 async function runMove(view, target, body) {
-  if (acting) return;
+  if (acting) {
+    busy(target);
+    return;
+  }
   acting = true;
   const key = rowKey(target.scope, target.number);
   if (openPr) lockPanel(view.querySelector('.review-panel'));
@@ -690,7 +705,6 @@ async function runMove(view, target, body) {
 // dialog whose data (who to ask, the merge methods) is read at the click. The PR, its reviewers and its head are taken
 // at the click: a refresh while the dialog is open changes nothing that is sent.
 async function onPrMove(view, btn) {
-  if (acting) return;
   const target = { scope: btn.dataset.scope, number: Number(btn.dataset.number) };
   const key = rowKey(target.scope, target.number);
   const kind = btn.dataset.mainMove;
@@ -740,7 +754,10 @@ async function onPrMove(view, btn) {
 // A card's or the panel header's main button: a GitHub move (onPrMove), or Cleave's: the PR's detail, read at the
 // click, gives its command (mainCommand). A push of protected files and a post of the review ask first.
 async function onMainButton(view, btn) {
-  if (acting) return;
+  if (acting) {
+    busy({ scope: btn.dataset.scope, number: Number(btn.dataset.number) });
+    return;
+  }
   if (GITHUB_MOVES.includes(btn.dataset.mainMove)) {
     onPrMove(view, btn);
     return;

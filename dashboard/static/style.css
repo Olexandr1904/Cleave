@@ -1381,7 +1381,8 @@ span.reviews-ticket { color: #6e7681; }
   display: flex; gap: 8px; align-items: baseline; padding: 8px 10px; background: #0d1117; color: #c9d1d9;
   border: 1px solid #30363d; border-radius: 6px; white-space: pre-wrap; word-break: break-word;
 }
-.review-result.is-posted, .review-result.is-queued, .review-result.is-shown { color: #56d364; border-color: #2ea043; }
+.review-result.is-posted, .review-result.is-queued, .review-result.is-shown, .review-result.is-done,
+.review-result.is-skipped { color: #56d364; border-color: #2ea043; }
 .review-result.is-partial, .review-result.is-unverified { color: #e3b341; border-color: #9e6a03; }
 .review-result.is-refused, .review-result.is-failed { color: #f85149; border-color: #da3633; }
 

@@ -348,10 +348,11 @@ export function candidatesHtml(candidates) {
 }
 
 // The logins a Request review… dialog picked: the ticked ones, then the typed ones (split on commas and spaces, a
-// leading @ dropped), each once. The server checks each is a GitHub login.
+// leading @ dropped), each once whatever its case (GitHub logins ignore case). The server checks each is a login.
 export function pickedReviewers(checked, other) {
   const typed = String(other ?? '').split(/[\s,]+/).map(login => login.replace(/^@/, '')).filter(Boolean);
-  return [...new Set([...checked, ...typed])];
+  const seen = new Set();
+  return [...checked, ...typed].filter(login => !seen.has(login.toLowerCase()) && seen.add(login.toLowerCase()));
 }
 
 const MERGE_NAMES = { merge: 'Create a merge commit', squash: 'Squash and merge', rebase: 'Rebase and merge' };
@@ -392,6 +393,7 @@ export function buttonsHtml(scope, pr, where) {
         : retry ? `Deferred; retries at ${fmtClock(retry)}` : 'Deferred; retries automatically';
       out.push(disabled(PENDING_LABEL.review[pending], title));
     } else if (reportAtHead(pr)) {
+      mainOf = '';  // a paid re-run of a review: never the always-shown button
       out.push(mine ? button('self-review-again', 'Self-review again…') : button('review-again', 'Review again…'));
     } else {
       out.push(mine ? button('self-review', 'Self-review', true)

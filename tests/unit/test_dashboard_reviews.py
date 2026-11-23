@@ -749,16 +749,18 @@ def test_create_app_serves_the_command_routes_with_the_layer_only(store, tmp_pat
 
 
 def test_rows_carry_the_reviewers_to_rerequest(store):
-    turns = [
+    rerequest = [
         {"action": "request_review", "threads": [], "reviewer": "rev1"},
         {"action": "request_review", "threads": [], "reviewer": "rev1"},
-        {"action": "request_review", "threads": []},
         {"action": "address_review", "threads": []},
         {"action": "request_review", "threads": [], "reviewer": "rev2"},
     ]
-    c = TestClient(create_app(EventBus(), store, reviewer=FakeService([_row(4, my_turns=turns), _row(5)])))
+    # A plain request_review turn too: someone new is to be asked, so the board offers Request review… (Review Focus 4)
+    both = [*rerequest, {"action": "request_review", "threads": []}]
+    rows = [_row(4, my_turns=rerequest), _row(6, my_turns=both), _row(5)]
+    c = TestClient(create_app(EventBus(), store, reviewer=FakeService(rows)))
     [repo] = c.get("/api/reviews").json()["repos"]
-    assert repo["my_turn"][0]["rerequest"] == ["rev1", "rev2"]
+    assert [(p["number"], p["rerequest"]) for p in repo["my_turn"]] == [(6, []), (4, ["rev1", "rev2"])]
     assert repo["waiting"][0]["rerequest"] == []
 
 
@@ -822,7 +824,7 @@ def test_dashboard_actions_are_logged(moves, caplog):
     lines = [r.getMessage() for r in caplog.records if r.name == "dashboard.reviews_api"]
     assert lines == ["Dashboard review-now on acme/app #1: queued j1",
                      "Dashboard review-now on acme/app #1: 409 already queued",
-                     "Dashboard pr-move ready on acme/app #1: done"]
+                     "Dashboard pr-move 'ready' on acme/app #1: done"]  # quoted: the client's string
 
 
 def test_a_typed_command_is_logged_without_its_text(dash, caplog):

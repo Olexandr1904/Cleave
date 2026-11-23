@@ -289,6 +289,10 @@ class ReviewerService:
         # When each repo is next due, kept here too: a store that cannot be read or written
         # must neither end run() nor have it poll a repo back to back.
         self._next_due: dict[str, datetime] = {}
+        # When the board last asked for a poll after a move (poll_soon), and the merges done since the last poll: until
+        # a poll shows a merge, its row still names merge, so a second Merge… is answered here.
+        self._soon: dict[str, datetime] = {}
+        self._merged: dict[str, dict[int, datetime]] = {}
 
     async def run(self, stop: asyncio.Event) -> None:
         """Poll every due repo, then wait until the next one is due (at most 60 s) or `stop`."""
@@ -343,6 +347,12 @@ class ReviewerService:
             self._next_due[ctx.scope] = now + timedelta(seconds=_CLONE_BUSY_RETRY_SECONDS)
             return
         self._next_due[ctx.scope] = outcome.next_poll_at
+        asked = self._soon.get(ctx.scope)
+        if asked is not None and asked > now:  # a move made while this poll ran: its snapshot may predate it
+            self._next_due[ctx.scope] = asked
+        merged = self._merged.get(ctx.scope, {})
+        for number in [n for n, at in merged.items() if at < now]:  # this poll's snapshot shows that merge
+            del merged[number]
         try:
             await self._finish(ctx, outcome, now.isoformat())
         except Exception as e:  # after the last state write: the poll stays recorded as it is
@@ -625,20 +635,25 @@ class ReviewerService:
                 self._store.set_job_state(job.id, "skipped", "skipped by operator", stamp)
 
     def poll_soon(self, scope: str) -> None:
-        """The repo is due now: run() polls it within its wait (at most a minute), so the board shows a move made."""
-        self._next_due[scope] = self._now()
+        """The repo is due now: run() polls it within its wait (at most a minute), so the board shows a move made. A
+        poll running meanwhile leaves it due: its snapshot may predate the move."""
+        now = self._now()
+        self._soon[scope] = self._next_due[scope] = now
 
     async def pr_move(self, scope: str, number: int, move: str, *, reviewers: Any = (), method: str = "",
                       head: str = "") -> tuple[str, str]:
         """A board move on GitHub, as (state, text): request_review asks `reviewers`, ready marks the draft ready,
         merge merges with `method` at the head the board showed (`head`, a prefix of the row's). It runs only while
-        the stored row names it as my turn. State done (the repo is then polled soon), refused (nothing was sent) or
-        failed (GitHub refused it, or did not answer). LookupError: repo or row unknown; ValueError: no such move."""
+        the stored row names it as my turn, a merge once until a poll shows it. State done (the repo is then polled
+        soon), refused (nothing was sent), failed (GitHub refused it) or unverified (GitHub did not answer: it may
+        have landed). LookupError: repo or row unknown; ValueError: no such move."""
         if move not in _MOVE_TURNS:
             raise ValueError(f"no move {move!r}")
         ctx, row = self._repo(scope), self._row(scope, number)
         if _MOVE_TURNS[move] not in row.my_actions:
             return "refused", f"The board no longer shows this move for #{number}: refresh it."
+        if move == "merge" and number in self._merged.get(scope, {}):
+            return "refused", "Already merged: the board shows it within a minute."
         if self._credential_failing(f"forge:{scope}"):
             return "refused", f"The GitHub token of {scope} is failing (see the dashboard): nothing was done."
         if move == "request_review":
@@ -658,11 +673,15 @@ class ReviewerService:
         try:
             await call
         except ForgeError as e:
-            if e.unavailable:
-                return "failed", f"GitHub did not answer: check #{number} on GitHub before trying again."
-            if move == "merge":
+            if e.unavailable:  # it may have landed: the operator checks, nothing says it failed
+                return "unverified", f"GitHub did not answer: check #{number} on GitHub before trying again."
+            if move == "merge" and str(e) == "GitHub 405":
                 return "failed", f"GitHub refused the merge ({e}): checks, reviews or conflicts block it."
+            if move == "merge" and str(e) == "GitHub 409":  # the sha check: a push after the board's last poll
+                return "failed", "The PR's head moved on GitHub: refresh the board."
             return "failed", f"GitHub refused it ({e})."
+        if move == "merge":
+            self._merged.setdefault(scope, {})[number] = self._now()
         self.poll_soon(scope)
         return "done", done
 
@@ -819,6 +838,6 @@ def _reviewers_refusal(reviewers: Any, author: str) -> str:
             return f"Not a GitHub login: {login}"
     if len(reviewers) > _MAX_REVIEWERS:
         return f"At most {_MAX_REVIEWERS} reviewers at once."
-    if author in reviewers:
+    if author.casefold() in {login.casefold() for login in reviewers}:  # GitHub logins ignore case
         return "The PR's author cannot review it."
     return ""

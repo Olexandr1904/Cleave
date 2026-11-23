@@ -220,7 +220,7 @@ class GitHubForgeReader:
         except RuntimeError as e:
             if _STATUS.search(str(e)):
                 raise _forge_error(e) from None
-            raise ForgeError("GitHub refused it") from None  # a GraphQL error: GitHub's text is not ours to show
+            raise ForgeError("GitHub GraphQL error") from None  # GitHub's text is not ours to show
         except Exception as e:
             raise _forge_error(e) from None
 
@@ -243,7 +243,9 @@ class GitHubForgeReader:
         if answer.get("errors") or not answer.get("data"):
             raise ForgeError("GitHub GraphQL error")
         pr = (answer["data"].get("repository") or {}).get("pullRequest") or {}
-        asked = {(n.get("requestedReviewer") or {}).get("login") for n in pr.get("reviewRequests", {}).get("nodes", [])}
+        # GraphQL answers null for a connection it could not resolve: each is read as empty.
+        requests = (pr.get("reviewRequests") or {}).get("nodes") or []
+        asked = {(n.get("requestedReviewer") or {}).get("login") for n in requests}
         skip = {author, (pr.get("author") or {}).get("login"), *asked} - {None}
         out: dict[str, str] = {}
         for item in pr.get("suggestedReviewers") or []:
@@ -251,8 +253,8 @@ class GitHubForgeReader:
             if login and login not in skip:
                 out.setdefault(login, "suggested by GitHub")
         counts: dict[str, int] = {}
-        for node in answer["data"].get("search", {}).get("nodes", []):
-            authors = [review.get("author") or {} for review in (node.get("reviews") or {}).get("nodes", [])]
+        for node in (answer["data"].get("search") or {}).get("nodes") or []:
+            authors = [review.get("author") or {} for review in (node.get("reviews") or {}).get("nodes") or []]
             reviewers = {who.get("login") for who in authors if who.get("__typename") == "User"}
             for login in reviewers - skip:  # PRs, not reviews: one PR reviewed in three rounds counts once
                 counts[login] = counts.get(login, 0) + 1

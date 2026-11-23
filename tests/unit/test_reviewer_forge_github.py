@@ -382,5 +382,17 @@ async def test_review_candidates_graphql_error():
 async def test_mark_ready_error_is_forge_error():
     respx.get(f"{BASE}/pulls/1712").respond(200, json={**PR, "draft": True, "node_id": "PR_1"})
     respx.post(GRAPHQL).respond(200, json={"errors": [{"message": "no tok"}]})
-    with pytest.raises(ForgeError, match="^GitHub refused it$"):
+    with pytest.raises(ForgeError, match="^GitHub GraphQL error$"):  # the service says "GitHub refused it (…)"
         await reader().mark_ready(1712)
+
+
+
+@respx.mock
+async def test_review_candidates_null_fields():
+    """GraphQL answers null for a connection it could not resolve: no candidates from it, never a crash."""
+    respx.post(GRAPHQL).respond(200, json={"data": {"repository": {"pullRequest": {
+        "author": None, "suggestedReviewers": None, "reviewRequests": None}}, "search": None}})
+    assert await reader().review_candidates(1712, "octo-author") == []
+    respx.post(GRAPHQL).respond(200, json={"data": {"repository": None, "search": {"nodes": [
+        {"reviews": None}, {"reviews": {"nodes": [{"author": None}]}}]}}})
+    assert await reader().review_candidates(1712, "octo-author") == []

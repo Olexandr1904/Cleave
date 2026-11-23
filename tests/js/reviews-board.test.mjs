@@ -515,6 +515,10 @@ test('buttonsHtml: Review now and Fix now are marked main when the line names th
   assert.doesNotMatch(B.buttonsHtml('acme/app', notMine, 'card'), /is-main/);
   const fixable = pr(4, { roles: ['author'], my_turns: ['answer_threads'], can_fix: true });
   assert.match(B.buttonsHtml('acme/app', fixable, 'card'), /class="reviews-btn primary is-main"\s+data-review-action="fix-now"/);
+  // Review again… re-runs a paid review: it stays a hover button
+  const reviewed = pr(3, { my_turns: ['review'], review: review({}, { state: 'done', message_sent: false }) });
+  assert.match(B.buttonsHtml('acme/app', reviewed, 'card'), /data-review-action="review-again"/);
+  assert.doesNotMatch(B.buttonsHtml('acme/app', reviewed, 'card'), /is-main/);
   const merge = pr(4, { roles: ['author'], my_turns: ['merge'], can_fix: true });
   assert.doesNotMatch(B.buttonsHtml('acme/app', merge, 'card'), /is-main/);  // the line names Merge…
 });
@@ -523,6 +527,7 @@ test('pickedReviewers: ticked first, then typed ones split on commas and spaces,
   assert.deepEqual(B.pickedReviewers(['rev-a'], ' @rev-b, rev-c  rev-a,,'), ['rev-a', 'rev-b', 'rev-c']);
   assert.deepEqual(B.pickedReviewers([], ''), []);
   assert.deepEqual(B.pickedReviewers([], undefined), []);
+  assert.deepEqual(B.pickedReviewers(['Rev-A'], 'rev-a REV-B rev-b'), ['Rev-A', 'REV-B']);  // logins ignore case
 });
 
 test('candidatesHtml and mergeHtml: the move dialogs\' bodies', () => {

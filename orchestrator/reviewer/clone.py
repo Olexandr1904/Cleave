@@ -15,6 +15,14 @@ from orchestrator.reviewer.commands import NO_HOST_GIT_ENV, base_env, redact, ru
 # directory's config). A job saves them before its session.
 _GUARDED_GIT_FILES = ("config", "info/attributes", "commondir")
 _FULL_SHA = re.compile(r"[0-9a-f]{40}")
+# A branch fetched beside the base (a stacked PR's base): a plain name, never an option, a range, a refspec or a full
+# ref, and none in Cleave's own pr-review/ namespace.
+_PLAIN_BRANCH = re.compile(r"[A-Za-z0-9._][A-Za-z0-9._/-]*")
+
+
+def _fetchable(branch: str) -> bool:
+    return (bool(_PLAIN_BRANCH.fullmatch(branch)) and ".." not in branch and "//" not in branch
+            and not branch.endswith(("/", ".lock")) and not branch.startswith(("pr-review/", "refs/")))
 
 
 def git_env(token: str) -> dict[str, str]:
@@ -166,8 +174,22 @@ class ReviewClone:
         ref = f"refs/heads/pr-review/{number}"
         await self._git("update-ref", ["-C", str(self.path), "update-ref", "-d", "--no-deref", ref])
 
-    async def merge_base(self, head: str) -> str:
-        args = ["-C", str(self.path), "merge-base", f"refs/remotes/origin/{self._base}", head]
+    async def fetch_branch(self, branch: str) -> str:
+        """Fetch `branch` (the base of a PR stacked on another PR's branch) to origin/<branch> and the local branch
+        <branch>, and return its sha: a job clone made after it has origin/<branch>. Only its objects are used (the
+        merge base, the diff): nothing is checked out from it. The caller holds `lock`. CloneError for a name Cleave
+        does not fetch (checked before git runs) or a failed fetch."""
+        if not _fetchable(branch):
+            raise CloneError(f"{branch!r} is not a branch Cleave fetches")
+        await self._git("fetch", ["-C", str(self.path), "fetch", "origin",
+                                  f"+refs/heads/{branch}:refs/remotes/origin/{branch}"])
+        await self._git("update-ref", ["-C", str(self.path), "update-ref", f"refs/heads/{branch}",
+                                       f"refs/remotes/origin/{branch}"])
+        return (await self._git("rev-parse", ["-C", str(self.path), "rev-parse", f"refs/heads/{branch}"])).strip()
+
+    async def merge_base(self, head: str, base: str = "") -> str:
+        """The merge base of `head` and origin/<base>, the configured base branch by default."""
+        args = ["-C", str(self.path), "merge-base", f"refs/remotes/origin/{base or self._base}", head]
         return (await self._git("merge-base", args)).strip()
 
     async def add_worktree(self, path: Path, head: str) -> None:

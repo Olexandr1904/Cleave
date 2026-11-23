@@ -563,3 +563,66 @@ async def test_push_patch_refuses_a_patch_that_does_not_apply(tmp_path, pr7):
     with pytest.raises(CloneError, match="^git apply failed: "):
         await push(clone, tmp_path, head, bad)
     assert git("rev-parse", "feature/pr7", cwd=bare) == head
+
+
+@pytest.fixture
+def stacked(tmp_path, origin):
+    """origin plus task/parent (one commit on develop) and PR 8 on top of it at refs/pull/8/head; develop then moves
+    on. Returns (bare, work, parent tip, PR 8 head)."""
+    bare, work = origin
+    git("checkout", "-b", "task/parent", cwd=work)
+    (work / "parent.txt").write_text("parent")
+    git("add", ".", cwd=work)
+    git("-c", "user.name=t", "-c", "user.email=t@t", "commit", "-m", "parent", cwd=work)
+    git("push", "origin", "HEAD:task/parent", cwd=work)
+    parent = git("rev-parse", "HEAD", cwd=work)
+    (work / "child.txt").write_text("child")
+    git("add", ".", cwd=work)
+    git("-c", "user.name=t", "-c", "user.email=t@t", "commit", "-m", "child", cwd=work)
+    git("push", "origin", "HEAD:refs/pull/8/head", cwd=work)
+    head = git("rev-parse", "HEAD", cwd=work)
+    git("checkout", "--detach", parent + "~1", cwd=work)
+    commit_and_push(work, "later.txt")  # develop moves on after both forked
+    return bare, work, parent, head
+
+
+async def test_fetch_branch_and_merge_base_against_it(tmp_path, stacked):
+    bare, _, parent, head = stacked
+    clone = await refreshed(tmp_path, bare)
+    assert await clone.fetch_branch("task/parent") == parent
+    assert git("rev-parse", "task/parent", cwd=clone.path) == parent
+    assert await clone.fetch_pr_head(8) == head
+    assert await clone.merge_base(head, "task/parent") == parent
+    assert await clone.merge_base(head) == git("rev-parse", "develop~1", cwd=clone.path)  # the configured base
+    async with clone.lock:
+        job = await clone.make_job_clone(tmp_path / "work" / "job1" / "clone", 8)
+    await job.detach_at_base()
+    assert git("rev-parse", "HEAD", cwd=job.path) == git("rev-parse", "develop", cwd=clone.path)  # the trusted checkout
+    assert await job.merge_base(head, "task/parent") == parent
+
+
+async def test_fetch_branch_follows_the_tip(tmp_path, stacked):
+    bare, work, parent, _ = stacked
+    clone = await refreshed(tmp_path, bare)
+    await clone.fetch_branch("task/parent")
+    git("checkout", "--detach", parent, cwd=work)
+    (work / "more.txt").write_text("more")
+    git("add", ".", cwd=work)
+    git("-c", "user.name=t", "-c", "user.email=t@t", "commit", "-m", "more", cwd=work)
+    git("push", "origin", "HEAD:task/parent", cwd=work)
+    assert await clone.fetch_branch("task/parent") == git("rev-parse", "HEAD", cwd=work)
+
+
+@pytest.mark.parametrize("name", ["-x", "a..b", "pr-review/7", "bad name", "x/", "x.lock", "", "a:b", "refs/heads/x"])
+async def test_fetch_branch_refuses_odd_names(tmp_path, stacked, name):
+    bare, *_ = stacked
+    clone = await refreshed(tmp_path, bare)
+    with pytest.raises(CloneError, match="is not a branch Cleave fetches"):
+        await clone.fetch_branch(name)
+
+
+async def test_fetch_branch_of_a_gone_branch_is_a_clone_error(tmp_path, stacked):
+    bare, *_ = stacked
+    clone = await refreshed(tmp_path, bare)
+    with pytest.raises(CloneError):
+        await clone.fetch_branch("task/gone")

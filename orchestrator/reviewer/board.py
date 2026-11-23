@@ -85,8 +85,11 @@ def build_board(
         # A PR I have no role on stays, with roles []: the snapshot decides which PRs the board shows (a status
         # command with --all lists every open one), and such a PR's turns are someone else's.
         roles = _roles(d, me, reviewed.get(pr.number, False))
+        # A request_review turn keeps the reviewer who asked for changes: the board's Re-request asks them again.
         my_turns = [
-            {"action": t.action, "threads": list(t.threads)} for t in pr.turns if t.login == me
+            {"action": t.action, "threads": list(t.threads),
+             **({"reviewer": t.reviewer} if t.action == "request_review" and t.reviewer else {})}
+            for t in pr.turns if t.login == me
         ]
         other_turns = [{"login": t.login, "action": t.action} for t in pr.turns if t.login != me]
         prev = previous.get(pr.number)

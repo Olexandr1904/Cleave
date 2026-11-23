@@ -104,7 +104,7 @@ class BoardRow:
     head_first_seen_at: str
     draft: bool
     changed_files: int
-    my_turns: list[dict]  # {"action": str, "threads": list[str]}
+    my_turns: list[dict]  # {"action": str, "threads": list[str]}, and "reviewer": str on a request_review turn
     other_turns: list[dict]  # {"login": str, "action": str}
     threads_truncated: bool
     pipeline: bool

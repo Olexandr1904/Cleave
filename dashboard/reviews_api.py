@@ -45,6 +45,9 @@ def _pr(row: BoardRow, repo: dict) -> dict:
         "number": row.number, "title": row.title, "url": row.url, "ticket_key": row.ticket_key,
         "roles": row.roles,
         "my_turns": list(dict.fromkeys(row.my_actions)),  # one address_review per reviewer
+        # The reviewers who asked for changes on an older head: Re-request asks them again.
+        "rerequest": list(dict.fromkeys(t["reviewer"] for t in row.my_turns
+                                        if t["action"] == "request_review" and t.get("reviewer"))),
         "other_turns": [{"login": t["login"], "action": t["action"]} for t in row.other_turns],
         "pipeline": row.pipeline, "draft": row.draft, "changed_files": row.changed_files,
         "head": row.head_sha[:9],

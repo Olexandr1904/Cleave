@@ -111,3 +111,14 @@ def test_my_turns_change_on_same_head_moves_last_change_only():
     u = build_board(snap(spr(1, [Turn("octo", "answer_threads", ("T1", "T2"))])), {1: det(1)}, {1: False},
                     first, set(), T1)
     assert (u.rows[1].last_change, u.rows[1].head_first_seen_at) == (T1, T0)
+
+
+def test_my_request_review_turn_keeps_its_reviewer():
+    """The status command names the reviewer who asked for changes: Re-request asks that one again. Only a
+    request_review turn keeps it (an address_review turn's rows stay as stored)."""
+    turns = [Turn("octo", "request_review", (), "rev-a"), Turn("octo", "request_review"),
+             Turn("octo", "address_review", (), "rev-b")]
+    u = build_board(snap(spr(1, turns, author="octo")), {1: det(1, author="octo", requested=())}, {}, {}, set(), T0)
+    assert u.rows[1].my_turns == [{"action": "request_review", "threads": [], "reviewer": "rev-a"},
+                                  {"action": "request_review", "threads": []},
+                                  {"action": "address_review", "threads": []}]

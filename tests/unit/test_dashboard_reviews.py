@@ -36,7 +36,7 @@ STAMP = "2026-11-12T10:00:00+00:00"
 PR_KEYS = {
     "number", "title", "url", "ticket_key", "roles", "my_turns", "other_turns", "pipeline",
     "draft", "changed_files", "head", "job", "last_change", "skipped", "large", "review", "can_fix", "fix",
-    "can_fix_findings",
+    "can_fix_findings", "rerequest",
 }
 QUEUED_INFO = {"retry_at": "", "started_at": "", "reason": "", "message_sent": False, "findings": None}
 # A PR's newest review as the service gives it (ReviewerService._review_info), passed through.
@@ -719,3 +719,17 @@ def test_create_app_serves_the_command_routes_with_the_layer_only(store, tmp_pat
     c = TestClient(create_app(EventBus(), store, reviewer=FakeService()))
     for path in ("/api/reviews/action", "/api/reviews/confirm"):
         assert c.post(path, json={}).status_code == 404
+
+
+def test_rows_carry_the_reviewers_to_rerequest(store):
+    turns = [
+        {"action": "request_review", "threads": [], "reviewer": "rev1"},
+        {"action": "request_review", "threads": [], "reviewer": "rev1"},
+        {"action": "request_review", "threads": []},
+        {"action": "address_review", "threads": []},
+        {"action": "request_review", "threads": [], "reviewer": "rev2"},
+    ]
+    c = TestClient(create_app(EventBus(), store, reviewer=FakeService([_row(4, my_turns=turns), _row(5)])))
+    [repo] = c.get("/api/reviews").json()["repos"]
+    assert repo["my_turn"][0]["rerequest"] == ["rev1", "rev2"]
+    assert repo["waiting"][0]["rerequest"] == []

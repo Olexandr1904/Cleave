@@ -246,6 +246,16 @@ async def test_refresh_is_for_the_last_part_and_never_raises(tmp_path):
     await rig.replies.refresh_buttons(rig.job.id)
 
 
+async def test_a_job_no_longer_postable_has_its_buttons_removed(tmp_path):
+    """A superseded or stale fix's message stops offering Push: none of its buttons would run."""
+    for state in ("superseded", "stale"):
+        rig = address_rig(tmp_path / state)
+        notifier = with_notifier(rig)
+        rig.store.set_job_state(rig.job.id, state, "new head", T1.isoformat())
+        await rig.replies.refresh_buttons(rig.job.id)
+        assert notifier.buttons_set == [(CHAT, 200, [])], state
+
+
 async def test_a_review_job_has_no_buttons_to_refresh(tmp_path):
     rig = Rig(tmp_path)
     notifier = with_notifier(rig)

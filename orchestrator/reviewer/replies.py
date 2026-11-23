@@ -23,7 +23,7 @@ from orchestrator.reviewer.chat import ReviewerChat
 from orchestrator.reviewer.grammar import ReplyCommand, describe, parse_reply
 from orchestrator.reviewer.lines import interrupted_line
 from orchestrator.reviewer.messages import MESSAGE_LIMIT, fix_buttons, message_parts
-from orchestrator.reviewer.models import Anchor, Confirmation, Job
+from orchestrator.reviewer.models import POSTABLE_STATES, Anchor, Confirmation, Job
 from orchestrator.reviewer.posting import Posting
 from orchestrator.reviewer.reply_llm import ReplyParser
 from orchestrator.reviewer.service import RepoContext, ReviewerService, _where, utcnow
@@ -331,8 +331,8 @@ class ReviewerReplies:
 
     async def refresh_buttons(self, job_id: str) -> None:
         """Put the job's fix message's buttons (its last part) as the job's state has them now: no Push once it is
-        pushed, no "Reply all" once every reply is posted. Only an address, findings or recheck message has buttons.
-        Never raises (cancellation aside): a failure is logged."""
+        pushed, no "Reply all" once every reply is posted, none once the job is superseded or stale. Only an address,
+        findings or recheck message has buttons. Never raises (cancellation aside): a failure is logged."""
         try:
             job = self._store.job(job_id)
             run = self._store.run(job_id)
@@ -340,12 +340,15 @@ class ReviewerReplies:
                 return
             if job.kind not in ("address", "findings", "recheck"):
                 return
-            posted = self._store.posted_numbers(job, None)
-            with telegram_language(run.language):  # "": English
-                buttons = fix_buttons(
-                    job.kind, job.id, run.replies, run.fix,
-                    pushed=self._store.push_of(job) is not None,
-                    unposted_replies=any(entry["n"] not in posted for entry in run.replies))
+            if job.state not in POSTABLE_STATES:
+                buttons = []
+            else:
+                posted = self._store.posted_numbers(job, None)
+                with telegram_language(run.language):  # "": English
+                    buttons = fix_buttons(
+                        job.kind, job.id, run.replies, run.fix,
+                        pushed=self._store.push_of(job) is not None,
+                        unposted_replies=any(entry["n"] not in posted for entry in run.replies))
             await self._chat.notifier.set_buttons(self._chat.chat_id, run.message_ids[-1], buttons)
         except Exception as e:
             logger.warning("Reviewer buttons not refreshed: %s", _where(e))

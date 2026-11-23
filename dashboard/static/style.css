@@ -1448,3 +1448,15 @@ span.reviews-ticket { color: #6e7681; }
   .comparison-table td.comparison-note:empty { display: none; }
   .comparison-note { min-width: 0; }
 }
+
+  /* ticket panel controls */
+  .stage-select { background: #21262d; color: #c9d1d9; border: 1px solid #30363d; border-radius: 6px; padding: 4px 6px; font-size: 12px; }
+  .answer-box { background: #161b22; border: 1px solid #e3b341; border-radius: 8px; padding: 14px 16px; width: 320px; display: flex; flex-direction: column; gap: 8px; }
+  .answer-question { font-size: 12px; color: #c9d1d9; line-height: 1.5; white-space: pre-wrap; }
+  .pr-comment { border: 1px solid #30363d; border-radius: 6px; padding: 10px 12px; margin-bottom: 10px; display: flex; flex-direction: column; gap: 6px; }
+  .pr-comment-head { font-size: 12px; font-weight: 600; color: #c9d1d9; }
+  .pr-comment-loc { font-weight: 400; color: #8b949e; font-family: monospace; }
+  .pr-comment-body { font-size: 12px; color: #c9d1d9; white-space: pre-wrap; }
+  .pr-comment-assessment { font-size: 12px; color: #8b949e; white-space: pre-wrap; }
+  .pr-comment-text { background: #0d1117; color: #c9d1d9; border: 1px solid #30363d; border-radius: 6px; padding: 6px 8px; font-size: 12px; }
+  .pr-comment-actions { display: flex; gap: 6px; }

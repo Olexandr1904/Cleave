@@ -11,8 +11,25 @@ export async function rejectWorkspace(ticketId) {
   return postJSON(`/api/workspaces/${encodeURIComponent(ticketId)}/reject`);
 }
 
-export async function retryWorkspace(ticketId) {
-  return postJSON(`/api/workspaces/${encodeURIComponent(ticketId)}/retry`);
+export async function retryWorkspace(ticketId, stage) {
+  return postJSON(`/api/workspaces/${encodeURIComponent(ticketId)}/retry`, stage ? { from: stage } : {});
+}
+
+export async function skipWorkspace(ticketId) {
+  return postJSON(`/api/workspaces/${encodeURIComponent(ticketId)}/skip`, {});
+}
+
+export async function answerWorkspace(ticketId, text) {
+  return postJSON(`/api/workspaces/${encodeURIComponent(ticketId)}/answer`, { text });
+}
+
+export async function decideComment(ticketId, commentId, body) {
+  return postJSON(
+    `/api/workspaces/${encodeURIComponent(ticketId)}/comments/${encodeURIComponent(commentId)}/decision`, body);
+}
+
+export async function markReviewed(ticketId) {
+  return postJSON(`/api/workspaces/${encodeURIComponent(ticketId)}/reviewed`, {});
 }
 
 export async function clearGradleAndRetry(ticketId) {

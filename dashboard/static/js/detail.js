@@ -4,7 +4,8 @@ import { loadWorkspaces, loadEvents } from './api.js';
 import { esc, timeAgo, fmtIso, stateBadgeHtml, PIPELINE_STAGES, STAGE_ORDER } from './helpers.js';
 import { renderEventsHtml } from './events.js';
 import { renderReportTabs, bindReportTabClicks } from './reports.js';
-import { approveWorkspace, rejectWorkspace, retryWorkspace, takeControl, releaseControl, resumeWorkspace, archiveWorkspace, pauseWorkspace, unpauseWorkspace, showConfirmDialog, rerunWorkspace } from './actions.js';
+import { ticketControls, refusalOf, decisionBody } from './ticket-actions.js';
+import { approveWorkspace, rejectWorkspace, retryWorkspace, skipWorkspace, answerWorkspace, decideComment, markReviewed, takeControl, releaseControl, resumeWorkspace, archiveWorkspace, pauseWorkspace, unpauseWorkspace, showConfirmDialog, rerunWorkspace } from './actions.js';
 
 export async function renderDetail(ticketId, onBack) {
   const content = document.getElementById('content');
@@ -54,6 +55,7 @@ export async function renderDetail(ticketId, onBack) {
         ${pipelineHtml}
       </div>
       ${infoHtml}
+      ${buildPrComments(ws)}
       ${reportsHtml}
       <div class="detail-section">
         <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;">
@@ -97,6 +99,7 @@ function buildActionBar(ws, stateVal) {
   const isAwaiting = stateVal === 'AWAITING_APPROVAL';
   const isBlockedLike = stateVal === 'BLOCKED' || stateVal === 'FAILED';
   const isDeferred = stateVal === 'DEFERRED';
+  const ctl = ticketControls(ws);
   const canArchive = ['FAILED', 'DONE', 'DEFERRED'].includes(stateVal);
   const canTakeControl = !['DONE', 'ARCHIVED', 'MANUAL_CONTROL'].includes(stateVal);
 
@@ -107,6 +110,14 @@ function buildActionBar(ws, stateVal) {
   }
   if (isBlockedLike) {
     buttons += `<button class="action-btn btn-retry" id="act-retry">Retry</button>`;
+    buttons += `<select class="stage-select" id="act-retry-stage" title="Restart from a stage">
+      <option value="">From stage…</option>
+      ${ctl.stages.map(s => `<option value="${esc(s)}">${esc(s)}</option>`).join('')}
+    </select>`;
+    buttons += `<button class="action-btn btn-reject" id="act-skip">Skip</button>`;
+  }
+  if (ctl.reviewed) {
+    buttons += `<button class="action-btn btn-approve" id="act-reviewed">Reviewed</button>`;
   }
   if (isDeferred) {
     buttons += `<button class="action-btn btn-retry" id="act-resume">Resume now</button>`;
@@ -276,6 +287,14 @@ function buildInfoSection(ws) {
       <div style="font-size:12px;color:#f85149;line-height:1.5;">${esc(ws.error)}</div>
     </div>`;
   }
+  if (ticketControls(ws).answer) {
+    const q = ws.human_input_question
+      ? `<div class="answer-question">${esc(ws.human_input_question)}</div>` : '';
+    errorPanel += `<div class="answer-box">${q}
+      <textarea class="manual-comment" id="answer-text" placeholder="Your answer to the agent"></textarea>
+      <button class="action-btn btn-approve" id="act-answer">Send answer</button>
+    </div>`;
+  }
 
   return `<div style="display:flex;gap:14px;margin-bottom:14px;">
     <div class="detail-section" style="flex:1;min-width:0;margin-bottom:0;">
@@ -285,7 +304,37 @@ function buildInfoSection(ws) {
   </div>`;
 }
 
+function buildPrComments(ws) {
+  const comments = ticketControls(ws).comments;
+  if (!comments.length) return '';
+  const items = comments.map(c => {
+    const id = esc(String(c.comment_id));
+    const loc = c.file ? `${esc(c.file)}${c.line ? ':' + esc(String(c.line)) : ''}` : '';
+    return `<div class="pr-comment" data-comment="${id}">
+      <div class="pr-comment-head">${esc(c.author || '')} <span class="pr-comment-loc">${loc}</span></div>
+      <div class="pr-comment-body">${esc(c.body || '')}</div>
+      ${c.assessment ? `<div class="pr-comment-assessment">${esc(c.assessment)}</div>` : ''}
+      <input class="pr-comment-text" type="text" placeholder="Reason (won't fix, optional) or hint (re-investigate, required)">
+      <div class="pr-comment-actions">
+        <button class="action-btn btn-approve" data-decision="fix">Fix</button>
+        <button class="action-btn btn-retry" data-decision="wont_fix">Won't fix</button>
+        <button class="action-btn btn-retry" data-decision="reinvestigate">Re-investigate</button>
+      </div>
+    </div>`;
+  }).join('');
+  return `<div class="detail-section"><div class="detail-section-title">PR comments awaiting a decision</div>${items}</div>`;
+}
+
 function bindActionButtons(ticketId, ws, stateVal, onBack) {
+  // Run a request; a refusal (400, status "error") is shown, success reloads the ticket.
+  const run = async (label, request) => {
+    try {
+      const refused = refusalOf(await request());
+      if (refused) { alert(`${label}: ${refused}`); return; }
+      await renderDetail(ticketId, onBack);
+    } catch (e) { alert(`${label} failed: ` + e.message); }
+  };
+
   // Back
   const backBtn = document.getElementById('back-btn');
   if (backBtn) backBtn.addEventListener('click', () => onBack(ws.company_id));
@@ -316,12 +365,49 @@ function bindActionButtons(ticketId, ws, stateVal, onBack) {
   const retryBtn = document.getElementById('act-retry');
   if (retryBtn) {
     retryBtn.addEventListener('click', async () => {
-      try {
-        await retryWorkspace(ticketId);
-        await renderDetail(ticketId, onBack);
-      } catch (e) { alert('Retry failed: ' + e.message); }
+      const stage = document.getElementById('act-retry-stage')?.value || '';
+      await run('Retry', () => retryWorkspace(ticketId, stage));
     });
   }
+
+  // Skip
+  const skipBtn = document.getElementById('act-skip');
+  if (skipBtn) {
+    skipBtn.addEventListener('click', () => {
+      showConfirmDialog(
+        `Skip ${ticketId}?`,
+        '<p>The ticket moves on without finishing the stage it stopped in.</p>',
+        'Skip',
+        () => run('Skip', () => skipWorkspace(ticketId)),
+      );
+    });
+  }
+
+  // Reviewed
+  const reviewedBtn = document.getElementById('act-reviewed');
+  if (reviewedBtn) {
+    reviewedBtn.addEventListener('click', () => run('Reviewed', () => markReviewed(ticketId)));
+  }
+
+  // Answer the agent's question
+  const answerBtn = document.getElementById('act-answer');
+  if (answerBtn) {
+    answerBtn.addEventListener('click', () => {
+      const text = (document.getElementById('answer-text')?.value || '').trim();
+      if (!text) { alert('Type an answer first.'); return; }
+      run('Answer', () => answerWorkspace(ticketId, text));
+    });
+  }
+
+  // PR comment decisions
+  document.querySelectorAll('.pr-comment [data-decision]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const box = btn.closest('.pr-comment');
+      const d = decisionBody(btn.dataset.decision, box.querySelector('.pr-comment-text').value);
+      if (d.error) { alert(d.error); return; }
+      run('Decision', () => decideComment(ticketId, box.dataset.comment, d.body));
+    });
+  });
 
   // Resume (from DEFERRED)
   const resumeBtn = document.getElementById('act-resume');

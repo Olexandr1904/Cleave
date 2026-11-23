@@ -7,6 +7,7 @@ import logging
 import os
 import tempfile
 import time
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any
 
@@ -164,18 +165,29 @@ def _dir_size_bytes(root: Path) -> int:
 # only matter for operator cleanup decisions, so short staleness is fine.
 _DISK_SIZE_TTL_SECONDS = 300.0
 _disk_size_cache: dict[str, tuple[int, float]] = {}
+# The walk takes seconds per checkout (15 s for five Android ones) and the board's scan runs on the daemon's
+# event loop, so one background thread measures and the scan returns the last size it measured.
+_disk_size_pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="workspace-disk-size")
+_disk_size_pending: set[str] = set()
 
 
-def _workspace_disk_bytes(ws_root: Path) -> int:
-    """Cached `_dir_size_bytes` for a workspace root (TTL-bounded, in-process)."""
+def _measure_disk_bytes(key: str) -> None:
+    try:
+        _disk_size_cache[key] = (_dir_size_bytes(Path(key)), time.monotonic())
+    finally:
+        _disk_size_pending.discard(key)
+
+
+def _workspace_disk_bytes(ws_root: Path) -> int | None:
+    """The last measured size of a workspace root, None before the first; a missing or stale one is measured
+    in the background for a later refresh."""
     key = str(ws_root)
-    now = time.monotonic()
     cached = _disk_size_cache.get(key)
-    if cached is not None and now - cached[1] < _DISK_SIZE_TTL_SECONDS:
-        return cached[0]
-    size = _dir_size_bytes(ws_root)
-    _disk_size_cache[key] = (size, now)
-    return size
+    stale = cached is None or time.monotonic() - cached[1] >= _DISK_SIZE_TTL_SECONDS
+    if stale and key not in _disk_size_pending:
+        _disk_size_pending.add(key)
+        _disk_size_pool.submit(_measure_disk_bytes, key)
+    return cached[0] if cached else None
 
 
 def _review_comment_row(c: dict[str, Any]) -> dict[str, Any]:
@@ -207,7 +219,8 @@ def _scan_all_workspaces(
     if not base.exists():
         return []
     results = []
-    for state_file in base.rglob("state.json"):
+    # The layout the daemon writes (workspace_manager, setup_workspace); an rglob walked every checkout's files.
+    for state_file in [*base.glob("*/*/tickets/*/state.json"), *base.glob("*/*/setup/state.json")]:
         try:
             data = json.loads(state_file.read_text(encoding="utf-8"))
             ws_root = state_file.parent

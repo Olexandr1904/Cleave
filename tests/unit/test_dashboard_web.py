@@ -2,11 +2,14 @@ from __future__ import annotations
 
 import json
 import re
+import threading
+import time
 from pathlib import Path
 
 import pytest
 from starlette.testclient import TestClient
 
+from dashboard import web
 from dashboard.event_store import EventStore
 from dashboard.events import Event, EventBus
 from dashboard.web import create_app, _dir_size_bytes, _scan_all_workspaces
@@ -47,10 +50,44 @@ class TestScanIncludesDiskBytes:
         (ws / "source").mkdir()
         (ws / "source" / "big.bin").write_bytes(b"q" * 1234)
 
+        _scan_all_workspaces(str(tmp_path))
+        web._disk_size_pool.submit(lambda: None).result(5)  # the one worker has measured the workspace
         results = _scan_all_workspaces(str(tmp_path))
 
         assert results[0]["disk_bytes"] >= 1234
         assert isinstance(results[0]["disk_bytes"], int)
+
+    def test_scan_does_not_wait_for_the_disk_size_walk(self, tmp_path, monkeypatch):
+        """Summing a multi-GB checkout takes seconds, and the board's scan runs on the daemon's event loop: the
+        card shows the last measured size (none before the first) while a background thread measures."""
+        self._write_state(tmp_path / "acme" / "acme-app" / "tickets" / "T-1")
+        release = threading.Event()
+
+        def slow_size(root):
+            release.wait(2)
+            return 4321
+
+        monkeypatch.setattr(web, "_dir_size_bytes", slow_size)
+        started = time.monotonic()
+        assert _scan_all_workspaces(str(tmp_path))[0]["disk_bytes"] is None
+        assert time.monotonic() - started < 1
+        release.set()
+        web._disk_size_pool.submit(lambda: None).result(5)
+        assert _scan_all_workspaces(str(tmp_path))[0]["disk_bytes"] == 4321
+
+
+def test_scan_reads_the_workspace_layout_not_the_checkouts(tmp_path):
+    """The board scans on every load: an rglob walked every file of every checkout (10 s for 21 GB). Workspaces sit
+    at <project>/<repo>/tickets/<id>/ and <project>/<repo>/setup/; a state.json inside a checkout is not one."""
+    for root, ticket_id in ((tmp_path / "acme" / "acme-app" / "tickets" / "T-1", "T-1"),
+                            (tmp_path / "acme" / "acme-app" / "setup", "setup")):
+        root.mkdir(parents=True)
+        (root / "state.json").write_text(json.dumps({"ticket_id": ticket_id, "company_id": "acme", "title": "t"}))
+    stray = tmp_path / "acme" / "acme-app" / "tickets" / "T-1" / "source" / "fixtures" / "state.json"
+    stray.parent.mkdir(parents=True)
+    stray.write_text(json.dumps({"ticket_id": "FIXTURE", "title": "t"}))
+
+    assert sorted(w["ticket_id"] for w in _scan_all_workspaces(str(tmp_path))) == ["T-1", "setup"]
 
 
 @pytest.fixture
@@ -257,7 +294,7 @@ def test_auto_refresh_label_names_its_interval(client):
 
 
 def test_scan_rows_carry_the_question_the_comments_and_the_escalation_message(tmp_path):
-    ws_dir = tmp_path / "acme" / "ACME-123"
+    ws_dir = tmp_path / "acme" / "acme-app" / "tickets" / "ACME-123"
     ws_dir.mkdir(parents=True)
     (ws_dir / "state.json").write_text(json.dumps({
         "ticket_id": "ACME-123", "company_id": "acme", "current_state": "PR_REVIEW",

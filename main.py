@@ -1011,6 +1011,17 @@ def main(argv: list[str] | None = None) -> int:
                 language_of=lambda chat_id: chat_language(global_config, projects, chat_id),
             )
 
+    # The reviewer's commands, checked and run alike for a reply in Telegram and a click in the
+    # dashboard: both share this one Posting, so one post or push runs at a time.
+    from orchestrator.reviewer.actions import ReviewerActions
+    from orchestrator.reviewer.posting import Posting
+
+    reviewer_actions = ReviewerActions(
+        reviewer_contexts, reviewer_store, reviewer,
+        Posting(reviewer_store, ledgers_dir=reviewer_data / "ledgers", work_dir=reviewer_data / "work"),
+        review_edits, reply_parser, credential_failing=credential_health.failing,
+    )
+
     # Initialize command handler for Telegram free-text control
     command_handler = None
     reviewer_replies = None
@@ -1020,17 +1031,15 @@ def main(argv: list[str] | None = None) -> int:
         from integrations.telegram.command_handler import CommandHandler
         from integrations.telegram.intent_parser import IntentParser
         from integrations.telegram.telegram_adapter import TelegramAdapter
-        from orchestrator.reviewer.posting import Posting
         from orchestrator.reviewer.replies import ReviewerReplies
 
         if isinstance(notifier, TelegramAdapter):
             # The replies to reviewer messages: the only way anything is posted. With no repo to
             # review they answer that reviewer mode is off.
             reviewer_replies = ReviewerReplies(
-                reviewer_contexts, reviewer_store, reviewer, reviewer_chat,
-                Posting(reviewer_store, ledgers_dir=reviewer_data / "ledgers", work_dir=reviewer_data / "work"),
+                reviewer_contexts, reviewer_store, reviewer, reviewer_chat, reviewer_actions.posting,
                 review_edits, reply_parser, credential_failing=credential_health.failing,
-                language_of=_language_of,
+                language_of=_language_of, actions=reviewer_actions,
             )
             intent_parser = IntentParser(
                 llm_adapter=llm,

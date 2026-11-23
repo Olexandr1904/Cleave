@@ -44,6 +44,7 @@ from main import (
     _stop_background,
 )
 from orchestrator.orchestrator import Orchestrator
+from orchestrator.reviewer.actions import ReviewerActions
 from orchestrator.reviewer.forge_github import ForgeError
 from orchestrator.reviewer.posting import Posting
 from orchestrator.reviewer.reply_llm import ReplyParser
@@ -512,7 +513,10 @@ def test_main_wires_replies_with_telegram(tmp_path, monkeypatch, capsys):
     assert parser._job_cfg == ReviewerJobConfig("sonnet", "", 60)   # reviewer.jobs.command
     assert parser._work_dir == tmp_path / "rv" / "command"
     language_of = runner.kwargs["language_of"]
+    actions = replies.kwargs.pop("actions")
     assert replies.kwargs == {"credential_failing": runner.args[3], "language_of": language_of}
+    # The replies run their commands through the layer the dashboard gets too: one Posting for both channels.
+    assert isinstance(actions, ReviewerActions) and actions.posting is posting
     # Every part of the reviewer writes in the project's Telegram language (English by default), and the chat
     # translates the model-written text of its messages.
     assert small.kwargs["language_of"] is service.kwargs["language_of"] is language_of

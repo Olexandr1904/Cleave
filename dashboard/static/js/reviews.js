@@ -9,11 +9,12 @@ import {
 } from './api.js';
 import { showConfirmDialog } from './actions.js';
 import { renderSwitchPanel } from './switches.js';
-import { EVENTS, prActions, resolveCommand } from './review-actions.js';
+import { EVENTS, mainCommand, prActions, resolveCommand } from './review-actions.js';
 import { esc, fmtIso, timeAgo } from './helpers.js';
 import {
   COLUMNS, againConfirm, avatarsHtml, boardColumns, boardTiles, buttonsHtml, cardHtml, cardTitle, columnOf,
-  findingsScale, jobLineHtml, moveText, notInvolved, panelParts, repoFilterOf, ticketLinkHtml, verdictsHtml,
+  findingsScale, jobLineHtml, mainButtonHtml, moveText, notInvolved, panelParts, repoFilterOf, resultLineHtml,
+  ticketLinkHtml, verdictsHtml,
 } from './reviews-board.js';
 
 // The board's names for the report's finding kinds (orchestrator/reviewer/service.py's _FINDING_KINDS).
@@ -73,8 +74,9 @@ let statusTimer = null;
 let ticked = { finding: new Set(), reply: new Set() };  // the open PR's ticked rows, by number
 let postEvent = 'COMMENT';  // the review event a post carries
 let cmdText = '';           // the command field's text, kept across the panel's redraws
-let result = null;          // {key, state, text}: what the last push, post or command did, shown in the panel
-let acting = false;         // a push, post or command is running: the panel's buttons wait
+let result = null;          // {key, state, text}: what the last push, post or command did, shown in the panel and
+                            // on its PR's card
+let acting = false;         // a push, post or command is running: the panel's and the main buttons wait
 let panelDetail = null;     // the open panel's detail, for the click that resolves a button
 
 const rowKey = (scope, number) => `${scope}#${number}`;
@@ -152,6 +154,7 @@ function boardHtml(shown, query, now) {
     const repo = repoOf.get(pr);
     return cardHtml(repo.scope, pr, {
       me: repo.me, jiraUrl: repo.jira_url, repoLabel: repos.length > 1 ? repo.scope.split('/').pop() : '', scale, now,
+      result,
     });
   };
   return `<div class="reviews-board">${COLUMNS.map(c => `<section class="reviews-col is-${c.key}" aria-label="${c.title}">
@@ -225,7 +228,8 @@ function panelHeadHtml(target, pr) {
     <h3 class="review-panel-title" id="review-panel-title">${esc(cardTitle(pr.title, pr.ticket_key))}</h3>
     <div class="review-panel-row">${avatarsHtml(move.logins, pr.url)}<span class="review-panel-move">${esc(move.text)}</span>
       ${jobLineHtml(pr, Date.now())}<span class="review-spacer"></span>
-      <div class="reviews-actions">${buttonsHtml(target.scope, pr, 'panel')}</div></div>
+      <div class="reviews-actions">${mainButtonHtml(target.scope, pr, columnOf(pr), 'panel')}${
+        buttonsHtml(target.scope, pr, 'panel')}</div></div>
   </div>`;
 }
 
@@ -277,11 +281,10 @@ function eventHtml() {
       value === postEvent ? ' checked' : ''}${lockAttr()}> ${name}</label>`).join('')}</fieldset>`;
 }
 
-// What the last action did, coloured by its state (a word as well: the state is the first thing it says).
+// What the last action on the open PR did (resultLineHtml).
 function resultHtml(target) {
   if (!result || result.key !== rowKey(target.scope, target.number)) return '';
-  return `<div class="review-result is-${esc(result.state)}" role="status"><b>${esc(result.state)}</b>
-    <span>${esc(result.text)}</span></div>`;
+  return resultLineHtml(result);
 }
 
 // The command field: free text for the newest job the operator could reply to, as in Telegram.
@@ -548,7 +551,7 @@ function openRow(view, row) {
   focusKey = row.dataset.reviewRow;
   panelOpen = {};
   ticked = { finding: new Set(), reply: new Set() };
-  result = null;
+  if (result && result.key !== focusKey) result = null;  // a main button's result on this PR's card stays
   cmdText = '';
   markRows(view);
   paintPanel(view);  // its header is drawn before it awaits the detail
@@ -620,26 +623,78 @@ function askConfirmation(answer) {
   });
 }
 
-// One push, post or typed command. It can push to GitHub or post a public review, so the panel waits for the answer,
-// then reloads.
-async function runPanelCommand(view, jobId, body) {
-  const target = openPr;
-  if (!target || acting) return;
+// One push, post or typed command on a job of `target`. It can push to GitHub or post a public review, so the panel and
+// the main buttons wait for the answer, then the board reloads.
+async function runCommand(view, target, jobId, body) {
+  if (acting) return;
   acting = true;
-  lockPanel(view.querySelector('.review-panel'));
   const key = rowKey(target.scope, target.number);
+  const open = Boolean(openPr) && rowKey(openPr.scope, openPr.number) === key;
+  if (openPr) lockPanel(view.querySelector('.review-panel'));
+  view.querySelectorAll('[data-main-move]').forEach(btn => { btn.disabled = true; });
   try {
     let answer = await reviewAction(target.scope, target.number, jobId, body);
     if (answer.state === 'confirm') answer = await askConfirmation(answer);
     result = { key, state: answer.state, text: (answer.texts || []).join('\n') };
-    if (answer.state !== 'refused') ticked = { finding: new Set(), reply: new Set() };
-    if (body.text != null) cmdText = '';
+    if (open && answer.state !== 'refused') ticked = { finding: new Set(), reply: new Set() };
+    if (open && body.text != null) cmdText = '';
   } catch (err) {
     result = { key, state: 'failed', text: String(err.message || err) };
   }
   acting = false;
   if (!view.isConnected) return;
   await renderReviews();
+}
+
+async function runPanelCommand(view, jobId, body) {
+  if (openPr) await runCommand(view, openPr, jobId, body);
+}
+
+// The question before Post review…: the event the post carries (Comment checked, as in the panel) and the report's
+// suggestion.
+function eventPickHtml(detail) {
+  const report = detail.report || {};
+  const suggested = report.event ? `<div class="reviews-sub">Suggested: ${esc(report.event)}${
+    report.event_reason ? ` · ${esc(report.event_reason)}` : ''}</div>` : '';
+  return `<p>Posts every confirmed finding of the review to GitHub as:</p>
+    <fieldset class="review-event-pick">${EVENTS.map(([value, name]) => `<label><input type="radio" name="main-event"
+      value="${value}"${value === 'COMMENT' ? ' checked' : ''}> ${name}</label>`).join('')}</fieldset>${suggested}`;
+}
+
+// A card's or the panel header's main button: the PR's detail, read at the click, gives its command (mainCommand). A
+// push of protected files and a post of the review ask first.
+async function onMainButton(view, btn) {
+  if (acting) return;
+  const target = { scope: btn.dataset.scope, number: Number(btn.dataset.number) };
+  const key = rowKey(target.scope, target.number);
+  const label = btn.textContent.trim().replace(/…$/, '');
+  btn.disabled = true;
+  let detail;
+  try {
+    detail = await loadReviewDetail(target.scope, target.number);
+  } catch (err) {
+    result = { key, state: 'failed', text: String(err.message || err) };
+  }
+  if (!view.isConnected) return;
+  const main = detail ? mainCommand(btn.dataset.mainMove, detail) : null;
+  if (typeof main === 'string') result = { key, state: 'refused', text: main };
+  if (!main || typeof main === 'string') {
+    await renderReviews();
+    return;
+  }
+  btn.disabled = false;
+  const send = command => runCommand(view, target, main.jobId, { command });
+  if (!main.pickEvent && !main.confirm) {
+    send(main.command);
+    return;
+  }
+  let dialog;
+  showConfirmDialog(label, main.pickEvent ? eventPickHtml(detail) : esc(main.confirm), label, () => {
+    const picked = dialog.querySelector('input[name="main-event"]:checked');
+    return send(main.pickEvent ? { ...main.command, event: picked ? picked.value : 'COMMENT' } : main.command);
+  });
+  dialog = [...document.querySelectorAll('.dialog-overlay')].pop();
+  dialog.querySelector('#dlg-cancel')?.focus();  // Enter on the button behind it would open a second one
 }
 
 // A panel button: its command with the ticked rows and the event filled in.
@@ -689,6 +744,11 @@ function onClick(view, e) {
   const prBtn = e.target.closest('[data-pr-btn]');
   if (prBtn) {
     onPanelButton(view, prBtn);
+    return;
+  }
+  const mainBtn = e.target.closest('[data-main-move]');
+  if (mainBtn) {
+    onMainButton(view, mainBtn);
     return;
   }
   const action = e.target.closest('[data-review-action]');

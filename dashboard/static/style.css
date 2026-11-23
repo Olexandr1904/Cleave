@@ -1254,6 +1254,8 @@ span.reviews-ticket { color: #6e7681; }
 .reviews-card.open .reviews-actions { display: none; }
 @media (hover: none) { .reviews-card:not(.open) .reviews-actions { display: flex; } }
 .reviews-card .reviews-btn { padding: 2px 8px; font-size: 11.5px; }
+/* What the card's main button did (the panel shows the same line). */
+.reviews-card .review-result { margin-top: 8px; padding: 4px 8px; font-size: 12px; }
 
 .reviews-num {
   color: #58a6ff; text-decoration: none;

@@ -47,10 +47,13 @@ from main import (
 )
 from orchestrator.orchestrator import Orchestrator
 from orchestrator.reviewer.actions import ReviewerActions
+from orchestrator.reviewer.db import connect
 from orchestrator.reviewer.forge_github import ForgeError
+from orchestrator.reviewer.models import Post
 from orchestrator.reviewer.posting import Posting
 from orchestrator.reviewer.reply_llm import ReplyParser
 from orchestrator.reviewer.small_jobs import SmallRunnerConfig
+from orchestrator.reviewer.store import ReviewerStore
 from tests.unit.test_main_startup import _MINIMAL_GLOBAL_YAML
 
 
@@ -622,6 +625,39 @@ def test_dry_run_starts_no_replies(tmp_path, monkeypatch):
 
     assert built["handler"]._reviewer is built["replies"]   # a reply is still kept from the intent parser
     assert events == ["start_polling", "replies.aclose", "stop_polling"]
+
+
+def _cut_short_push(tmp_path) -> ReviewerStore:
+    """The reviewer store main opens, holding a push the last daemon left `posting`."""
+    store = ReviewerStore(connect(tmp_path / "rv" / "reviewer.db"))
+    store.save_post(Post("p-cut", "j1", "acme/app", 1712, "a" * 40, "push", "posting", "2026-11-23T10:00:00+00:00"))
+    return store
+
+
+@pytest.mark.parametrize("dry_run", [False, True])
+def test_without_telegram_the_posts_a_restart_cut_short_are_recovered_before_the_dashboard_serves(
+        tmp_path, monkeypatch, caplog, dry_run):
+    """The dashboard posts on a daemon with no Telegram too: a post the last one left `posting` is marked
+    interrupted (and logged) before the dashboard serves, else its PR's fixes are refused and the board shows
+    "Posting" for good. A dry run writes nothing."""
+    store = _cut_short_push(tmp_path)
+    served: list[str] = []
+
+    class Server(_NoServer):
+        async def serve(self):
+            served.append(store.post("p-cut").state)
+
+    monkeypatch.setattr(dashboard.web, "create_app", lambda *args, **kwargs: "app")
+    monkeypatch.setattr(uvicorn, "Config", lambda app, **kwargs: app)
+    monkeypatch.setattr(uvicorn, "Server", Server)
+    with caplog.at_level(logging.WARNING, logger="main"):
+        _run_main(tmp_path, monkeypatch, [SimpleNamespace(scope="acme/app")], with_dashboard=True, dry_run=dry_run)
+
+    expected = "posting" if dry_run else "interrupted"
+    assert served == [expected] and store.post("p-cut").state == expected
+    recovered = [r.getMessage() for r in caplog.records if "interrupted by a restart" in r.getMessage()]
+    assert recovered == ([] if dry_run else ["Reviewer push on acme/app#1712 interrupted by a restart: "
+                                             "marked interrupted"])
 
 
 def test_main_gives_the_reviewer_chat_the_store(tmp_path, monkeypatch):

@@ -356,6 +356,19 @@ def _start_reviewer(
     return background
 
 
+def _recover_posts(posting) -> None:
+    """Without Telegram, whose replies' start() does this and announces each: the reviewer posts a restart left
+    `posting`, marked interrupted and logged. Never raises (cancellation aside)."""
+    try:
+        posts = posting.recover()
+    except Exception as e:
+        logger.warning("Reviewer posts not recovered: %s", type(e).__name__)
+        return
+    for post in posts:
+        logger.warning("Reviewer %s on %s#%d interrupted by a restart: marked interrupted",
+                       post.kind, post.scope, post.number)
+
+
 def _start_skill(
     runner, ready: asyncio.Event, wait: float = FIRST_ROUND_WAIT_SECONDS,
 ) -> dict[str, tuple[asyncio.Task, asyncio.Event]]:
@@ -1118,6 +1131,11 @@ def main(argv: list[str] | None = None) -> int:
         from dashboard.settings_store import init_settings
         async with _aiosqlite.connect(db_path) as _conn:
             await init_settings(_conn)
+
+        if not isinstance(notifier, TelegramAdapter) and not args.dry_run:
+            # The dashboard posts without Telegram too: a post a restart cut short is marked interrupted before it
+            # serves (with Telegram, the replies' start() does it). A dry run writes nothing.
+            _recover_posts(reviewer_actions.posting)
 
         # Start dashboard web server
         dash_config = global_config.dashboard

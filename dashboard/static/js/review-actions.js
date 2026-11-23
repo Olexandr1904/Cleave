@@ -9,6 +9,11 @@ export const EVENTS = [
 
 const isOpen = (states, n) => !states || states[n] !== 'posted';
 
+// The question before pushing a fix that touches protected files (the panel's Push anyway… and the main button's).
+export function protectedConfirm(files) {
+  return `The fix touches protected files: ${files.join(', ')}. Push it anyway?`;
+}
+
 function fixButtons(detail, withReplies) {
   const fix = detail.fix;
   if (!fix) return [];
@@ -18,7 +23,7 @@ function fixButtons(detail, withReplies) {
     return [{
       label: withReplies ? 'Push anyway + reply all…' : 'Push anyway…',
       command: { action: withReplies ? 'push_post' : 'push', anyway: true },
-      confirm: `The fix touches protected files: ${protectedFiles.join(', ')}. Push it anyway?`,
+      confirm: protectedConfirm(protectedFiles),
     }];
   }
   return withReplies
@@ -60,4 +65,23 @@ export function resolveCommand(command, { numbers, event }) {
   }
   if (out.action === 'post') out.event = event;
   return out;
+}
+
+// The command of a card's main move (reviews-board.js cleaveMove) against the PR's detail: its job, the command,
+// the question to ask first and whether to pick the review event; or why there is nothing to send. The push move only
+// pushes, as the card's line says. Whatever else stops it (pushed already, nothing left to post) is the layer's answer.
+export function mainCommand(kind, detail) {
+  if (kind === 'push') {
+    if (!detail.fix_job || !detail.fix) return 'No fix to push.';
+    const files = detail.fix.protected || [];
+    return files.length
+      ? { jobId: detail.fix_job, command: { action: 'push', anyway: true }, confirm: protectedConfirm(files), pickEvent: false }
+      : { jobId: detail.fix_job, command: { action: 'push' }, confirm: null, pickEvent: false };
+  }
+  if (kind === 'replies') {
+    if (!detail.replies_job) return 'No replies drafted.';
+    return { jobId: detail.replies_job, command: { action: 'post_replies', all_replies: true }, confirm: null, pickEvent: false };
+  }
+  if (!detail.report_job) return 'No report to post.';
+  return { jobId: detail.report_job, command: { action: 'post', all_confirmed: true }, confirm: null, pickEvent: true };
 }

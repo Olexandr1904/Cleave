@@ -3,7 +3,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-const { prActions, resolveCommand } = await import('../../dashboard/static/js/review-actions.js');
+const { prActions, resolveCommand, mainCommand } = await import('../../dashboard/static/js/review-actions.js');
 
 const r = n => ({ n, body: `reply ${n}` });
 const detail = fields => ({
@@ -69,4 +69,27 @@ test('the command field addresses the newest job the operator could reply to', (
   assert.equal(prActions(detail({ jobs, report_job: 'r', fix_job: 'f' })).commandJob, 'f');
   assert.equal(prActions(detail({ jobs, report_job: 'r' })).commandJob, 'r');
   assert.equal(prActions(detail({ jobs })).commandJob, null);
+});
+
+test('mainCommand: push only, with the panel text when protected; reply all; post review with an event pick', () => {
+  assert.deepEqual(mainCommand('push', detail({ fix_job: 'f', fix: { protected: [] }, replies: [r(1)] })),
+    { jobId: 'f', command: { action: 'push' }, confirm: null, pickEvent: false });
+  assert.deepEqual(mainCommand('push', detail({ fix_job: 'f', fix: { protected: ['a.yml', 'b.gradle'] } })),
+    { jobId: 'f', command: { action: 'push', anyway: true },
+      confirm: 'The fix touches protected files: a.yml, b.gradle. Push it anyway?', pickEvent: false });
+  assert.deepEqual(mainCommand('replies', detail({ replies_job: 'a', replies: [r(1)] })),
+    { jobId: 'a', command: { action: 'post_replies', all_replies: true }, confirm: null, pickEvent: false });
+  assert.deepEqual(mainCommand('review', detail({ report_job: 'v' })),
+    { jobId: 'v', command: { action: 'post', all_confirmed: true }, confirm: null, pickEvent: true });
+});
+
+test('mainCommand: a refusal when the PR has no job for the move', () => {
+  assert.equal(mainCommand('push', detail({})), 'No fix to push.');
+  assert.equal(mainCommand('replies', detail({})), 'No replies drafted.');
+  assert.equal(mainCommand('review', detail({})), 'No report to post.');
+});
+
+test('the panel and the main button ask the same question before pushing protected files', () => {
+  const d = detail({ fix_job: 'f', fix: { protected: ['a.yml'] } });
+  assert.equal(prActions(d).fix[0].confirm, mainCommand('push', d).confirm);
 });

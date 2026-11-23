@@ -163,6 +163,50 @@ test('moveText: my actions in words, what is left to post, or who holds the move
   assert.equal(B.moveText(undelivered, 'review', 'octo').text, 'review');
 });
 
+test('cleaveMove: the move a card line names, by kind; none for GitHub turns alone', () => {
+  const fixed = pr(1, { roles: ['author'], my_turns: ['answer_threads'], fix: fixJob() });
+  assert.deepEqual(B.cleaveMove(fixed, 'fix'), { kind: 'push', text: 'fix ready: push' });
+  assert.deepEqual(B.cleaveMove({ ...fixed, fix: fixJob({ pushed: true }) }, 'fix'),
+    { kind: 'replies', text: 'fix pushed: post the replies' });
+  assert.deepEqual(B.cleaveMove({ ...fixed, fix: fixJob({ fix: false }) }, 'fix'),
+    { kind: 'replies', text: 'replies ready: post' });
+  assert.equal(B.cleaveMove({ ...fixed, fix: fixJob({ kind: 'findings' }) }, 'fix').kind, 'push');
+  assert.equal(B.cleaveMove({ ...fixed, fix: fixJob({ kind: 'findings', pushed: true }) }, 'fix'), null);
+  const recheck = pr(1, { my_turns: ['recheck'], job: { kind: 'recheck', state: 'done', head: H, message_sent: true } });
+  assert.deepEqual(B.cleaveMove(recheck, 'review'), { kind: 'replies', text: 'post the replies' });
+  const toPost = pr(1, { my_turns: ['review'], review: review({ critical: 1 }) });
+  assert.deepEqual(B.cleaveMove(toPost, 'review'), { kind: 'review', text: 'post the review' });
+  assert.equal(B.cleaveMove(byNumber(12), 'fix'), null);
+});
+
+test('mainButtonHtml: the move as a primary button; Push anyway… on protected files; none while posting', () => {
+  const fixed = pr(1, { roles: ['author'], my_turns: ['answer_threads'], fix: fixJob() });
+  const push = B.mainButtonHtml('acme/app', fixed, 'fix', 'card');
+  assert.match(push, /class="reviews-btn primary"[^>]*data-main-move="push"[^>]*>Push</);
+  assert.match(push, /data-scope="acme\/app" data-number="1"/);
+  assert.match(push, /data-fk="card:main:acme\/app#1"/);
+  assert.match(B.mainButtonHtml('acme/app', { ...fixed, fix: fixJob({ protected: true }) }, 'fix', 'card'),
+    /data-main-move="push"[^>]*>Push anyway…</);
+  assert.equal(B.mainButtonHtml('acme/app', { ...fixed, fix: fixJob({ posting: true }) }, 'fix', 'card'), '');
+  assert.match(B.mainButtonHtml('acme/app', { ...fixed, fix: fixJob({ pushed: true }) }, 'fix', 'card'),
+    /data-main-move="replies"[^>]*>Reply all</);
+  const toPost = pr(1, { my_turns: ['review'], review: review({ critical: 1 }) });
+  assert.match(B.mainButtonHtml('acme/app', toPost, 'review', 'panel'), /data-main-move="review"[^>]*>Post review…</);
+  assert.match(B.mainButtonHtml('acme/app', toPost, 'review', 'panel'), /data-fk="panel:main:acme\/app#1"/);
+  assert.equal(B.mainButtonHtml('acme/app', byNumber(12), 'fix', 'card'), '');
+});
+
+test('cardHtml: the main button comes before Fix again…, and its PR\'s last result shows on the card', () => {
+  const fixed = pr(1, { roles: ['author'], my_turns: ['answer_threads'], can_fix: true, fix: fixJob() });
+  const card = B.cardHtml('acme/app', fixed, VIEW);
+  assert.ok(card.indexOf('data-main-move="push"') > 0);
+  assert.ok(card.indexOf('data-main-move="push"') < card.indexOf('data-review-action="fix-again"'));
+  const done = B.cardHtml('acme/app', fixed, { ...VIEW, result: { key: 'acme/app#1', state: 'done', text: 'Pushed abc.' } });
+  assert.match(done, /class="review-result is-done" role="status"><b>done<\/b>\s*<span>Pushed abc\.<\/span>/);
+  const other = B.cardHtml('acme/app', fixed, { ...VIEW, result: { key: 'acme/app#2', state: 'done', text: 'x' } });
+  assert.doesNotMatch(other, /review-result/);
+});
+
 test('avatarsHtml: two avatars then +N; a GitHub picture over initials only on GitHub', () => {
   const three = B.avatarsHtml(['a1', 'b2', 'c3'], 'https://github.com/acme-org/acme-app/pull/1');
   assert.equal(three.split('class="reviews-avatar"').length - 1, 2);

@@ -158,6 +158,31 @@ export function boardTiles(prs, now) {
   };
 }
 
+// The move Cleave can make on my card, as the card's line names it: push its fix, post its replies or post its review
+// (the card's and the panel's main button, mainButtonHtml); null when the line names none.
+export function cleaveMove(pr, column) {
+  if (notInvolved(pr)) return null;
+  const job = pr.job;
+  const fix = pr.fix;
+  // Posting is done here or from the Telegram message: only once it was delivered. The card's line is a single line,
+  // so it names no channel.
+  if (column === 'review' && job && job.kind === 'recheck' && job.state === 'done' && job.message_sent) {
+    return { kind: 'replies', text: 'post the replies' };
+  }
+  if (column === 'review' && pr.review && pr.review.state === 'done' && pr.review.head === pr.head
+    && pr.review.message_sent) {
+    return { kind: 'review', text: 'post the review' };
+  }
+  if (column === 'fix' && fix && fix.state === 'done' && fix.kind === 'findings') {
+    return readyFix(pr) ? { kind: 'push', text: 'fix ready: push' } : null;  // pushed or no patch: nothing left to do
+  }
+  if (column === 'fix' && fix && fix.state === 'done') {
+    return fix.pushed ? { kind: 'replies', text: 'fix pushed: post the replies' }
+      : fix.fix ? { kind: 'push', text: 'fix ready: push' } : { kind: 'replies', text: 'replies ready: post' };
+  }
+  return null;
+}
+
 // What the card's bottom line says and whose avatars it shows.
 export function moveText(pr, column, me) {
   if (column === 'others' || notInvolved(pr)) {  // a PR I am not on: whose move it really is
@@ -166,21 +191,8 @@ export function moveText(pr, column, me) {
     const of = login => [...new Set(pr.other_turns.filter(t => t.login === login).map(t => actionWords(t.action)))];
     return { logins, text: logins.map(login => `${login}: ${of(login).join(', ')}`).join('; ') };
   }
-  const job = pr.job;
-  const fix = pr.fix;
-  let text = [...new Set(pr.my_turns.map(actionWords))].join(', ');
-  // Posting is done here or from the Telegram message: only once it was delivered. The card's line is a single line,
-  // so it names no channel.
-  if (column === 'review' && job && job.kind === 'recheck' && job.state === 'done' && job.message_sent) {
-    text = 'post the replies';
-  } else if (column === 'review' && pr.review && pr.review.state === 'done' && pr.review.head === pr.head
-    && pr.review.message_sent) {
-    text = 'post the review';
-  } else if (column === 'fix' && fix && fix.state === 'done' && fix.kind === 'findings') {
-    if (readyFix(pr)) text = 'fix ready: push';  // pushed or no patch: nothing left to do with it
-  } else if (column === 'fix' && fix && fix.state === 'done') {
-    text = fix.pushed ? 'fix pushed: post the replies' : fix.fix ? 'fix ready: push' : 'replies ready: post';
-  }
+  const move = cleaveMove(pr, column);
+  const text = move ? move.text : [...new Set(pr.my_turns.map(actionWords))].join(', ');
   return { logins: me ? [me] : [], text };
 }
 
@@ -283,6 +295,24 @@ const PENDING_LABEL = { review: { queued: 'Queued', running: 'Running', deferred
   fix: { queued: 'Queued', running: 'Fixing', deferred: 'Deferred' },
   findings: { queued: 'Queued', running: 'Running', deferred: 'Deferred' } };
 
+const MAIN_LABEL = { push: 'Push', replies: 'Reply all', review: 'Post review…' };
+
+// The main button of a card ('card') or of the panel header ('panel'): the move its line names (cleaveMove), which
+// reviews.js sends as the panel's command does. None while a post of its fix is under way (buttonsHtml shows Posting).
+export function mainButtonHtml(scope, pr, column, where) {
+  const move = cleaveMove(pr, column);
+  if (!move || (pr.fix && pr.fix.posting)) return '';
+  const label = move.kind === 'push' && pr.fix.protected ? 'Push anyway…' : MAIN_LABEL[move.kind];
+  return `<button class="reviews-btn primary" data-main-move="${move.kind}" data-scope="${esc(scope)}" data-number="${
+    esc(pr.number)}" data-fk="${where}:main:${esc(`${scope}#${pr.number}`)}">${esc(label)}</button>`;
+}
+
+// What the last command on a PR did, coloured by its state (a word as well: the state is the first thing it says).
+export function resultLineHtml(result) {
+  return `<div class="review-result is-${esc(result.state)}" role="status"><b>${esc(result.state)}</b>
+    <span>${esc(result.text)}</span></div>`;
+}
+
 // The buttons of a card ('card') or of the panel header ('panel'). Nothing here opens GitHub: #number does.
 export function buttonsHtml(scope, pr, where) {
   const key = `${scope}#${pr.number}`;
@@ -374,7 +404,8 @@ export function againConfirm(pr, action) {
   };
 }
 
-// One card. `view`: {me, jiraUrl, repoLabel (the repo's name with several repos, else ''), scale, now}.
+// One card. `view`: {me, jiraUrl, repoLabel (the repo's name with several repos, else ''), scale, now, result (the
+// last command's {key, state, text}, shown on its PR's card)}.
 export function cardHtml(scope, pr, view) {
   const key = `${scope}#${pr.number}`;
   const column = columnOf(pr);
@@ -383,7 +414,8 @@ export function cardHtml(scope, pr, view) {
   const flags = [pr.large && 'large', pr.draft && 'draft', pr.pipeline && 'pipeline'].filter(Boolean)
     .map(flag => `<span class="reviews-flag">${flag}</span>`).join('');
   const title = cardTitle(pr.title, pr.ticket_key);
-  const buttons = buttonsHtml(scope, pr, 'card');
+  const buttons = mainButtonHtml(scope, pr, column, 'card') + buttonsHtml(scope, pr, 'card');
+  const result = view.result && view.result.key === key ? resultLineHtml(view.result) : '';
   const tag = isMine(pr) ? '<span class="reviews-tag is-mine">Your PR</span>'
     : notInvolved(pr) ? '<span class="reviews-tag is-not-involved" title="You are not its author, an assignee or a reviewer">Not involved</span>'
       : '<span class="reviews-tag">Reviewing</span>';
@@ -397,6 +429,6 @@ export function cardHtml(scope, pr, view) {
     ${findingsHtml(pr, view.scale)}${jobLineHtml(pr, view.now)}
     <div class="reviews-card-foot">${avatarsHtml(move.logins, pr.url)}<span class="reviews-move">${esc(move.text)}</span>
       <span class="reviews-age${age.old ? ' is-old' : ''}">${esc(age.text)}</span></div>
-    ${buttons ? `<div class="reviews-actions">${buttons}</div>` : ''}
+    ${result}${buttons ? `<div class="reviews-actions">${buttons}</div>` : ''}
   </article>`;
 }

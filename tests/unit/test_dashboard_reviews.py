@@ -1,22 +1,34 @@
 from __future__ import annotations
 
 import dataclasses
+import json
+from datetime import timedelta
 from types import SimpleNamespace
 
 import pytest
+from starlette.applications import Starlette
 from starlette.testclient import TestClient
 
 from config.schemas import ReviewerConfig
+from dashboard import reviews_api
 from dashboard.event_store import EventStore
 from dashboard.events import EventBus
 from dashboard.reviews_api import build_review_routes
 from dashboard.web import create_app
 from orchestrator.reviewer.db import connect
+from orchestrator.reviewer.grammar import ReplyCommand
+from orchestrator.reviewer.lines import not_understood_line
 from orchestrator.reviewer.models import BoardRow, Job, JobRun
+from orchestrator.reviewer.posting import PostOutcome
+from orchestrator.reviewer.replies import CONFIRM_TTL
 from orchestrator.reviewer.report import parse_report
 from orchestrator.reviewer.service import RepoContext, ReviewerService
 from orchestrator.reviewer.store import ReviewerStore
 from orchestrator.switches import Switches
+from orchestrator.tg_i18n import telegram_language
+from tests.unit.test_reviewer_replies import (
+    CHAT, EVERY_BUT_3, N, NEW_HEAD, SCOPE, T1, address_rig, confirmations,
+)
 from tests.unit.test_reviewer_report import HEAD as RHEAD, REPORT
 
 HEAD = "0123456789abcdef0123456789abcdef01234567"
@@ -372,9 +384,9 @@ def test_detail_route(client):
 
 
 def test_no_posting_route():
-    """Nothing in the dashboard posts or confirms: its review routes are the board, a PR's detail, Review now, Skip
-    and Fix now and Fix findings…, which only queue a fix job (Starlette answers HEAD on a GET route with the GET
-    handler)."""
+    """Without the action layer nothing in the dashboard posts or confirms: its review routes are the board, a PR's
+    detail, Review now, Skip and Fix now and Fix findings…, which only queue a fix job (Starlette answers HEAD on a GET
+    route with the GET handler)."""
     routes = build_review_routes(FakeService())
     assert sorted((method, r.path) for r in routes for method in r.methods - {"HEAD"}) == [
         ("GET", "/api/reviews"), ("GET", "/api/reviews/pr"), ("POST", "/api/reviews/fix-findings"),
@@ -424,3 +436,272 @@ def test_detail_carries_verdicts(client):
     c, _ = client
     d = c.get("/api/reviews/pr", params={"scope": "acme/app", "number": "1"}).json()
     assert (d["verdicts_job"], d["verdicts"]) == ("f1", [{"n": 1, "verdict": "FIXED", "why": "null check added"}])
+
+
+# --- Commands on a reviewer job: the action layer Telegram's replies call too ---
+
+class FakeReplies:
+    """Records (job id, action, state) per announcement, then raises `error` when set."""
+
+    def __init__(self):
+        self.announced, self.error = [], None
+
+    async def announce_dashboard(self, job_id, cmd, state):
+        self.announced.append((job_id, cmd.action, state))
+        if self.error is not None:
+            raise self.error
+
+
+def _in_ukrainian(app):
+    """`app` run with Ukrainian as the current Telegram language: the dashboard's answers must be English anyway."""
+    async def run(scope, receive, send):
+        with telegram_language("uk"):
+            await app(scope, receive, send)
+    return run
+
+
+@pytest.fixture
+def dash(tmp_path):
+    """address_rig's done review (message 100) and threads (message 200) jobs of PR 1712 at RHEAD, the review routes
+    on the rig's action layer and clock, a recording replies; the parser understands EVERY_BUT_3 once."""
+    rig = address_rig(tmp_path, parser=[EVERY_BUT_3])
+    rig.posting.outcomes = {"push_fix": PostOutcome("posted", "Pushed …")}
+    replies = FakeReplies()
+    routes = build_review_routes(FakeService(), dict, rig.replies.actions, replies, now=lambda: rig.clock[0])
+    return SimpleNamespace(c=TestClient(_in_ukrainian(Starlette(routes=routes))), rig=rig, replies=replies)
+
+
+def act(d, job_id, **body):
+    return d.c.post("/api/reviews/action", json={"scope": SCOPE, "number": N, "job_id": job_id, **body})
+
+
+def confirm(d, conf_id, yes=True):
+    return d.c.post("/api/reviews/confirm", json={"confirmation": conf_id, "yes": yes})
+
+
+ASK = "please post all but the third"   # free text: the parser's EVERY_BUT_3
+EVERY_BUT_3_LINE = f"post 1 2 4 5 6 + COMMENT at {RHEAD[:9]}"
+HANDLED = {"state": "refused", "texts": ["Already handled."]}
+
+
+def test_a_button_command_runs_and_answers_in_english(dash):
+    d = dash
+    r = act(d, d.rig.job.id, command={"action": "push"})
+    assert r.status_code == 200 and r.json() == {"state": "posted", "texts": ["Pushed …"], "command": "push"}
+    assert d.rig.posting.calls == [("push_fix", SCOPE, d.rig.job.id, None)]
+    assert d.replies.announced == [(d.rig.job.id, "push", "posted")]
+    assert d.rig.chat.sent == []   # Telegram hears of it through the announcement only
+    r = act(d, d.rig.review.id, command={"action": "post", "numbers": [2, 1], "event": "APPROVE"})
+    assert r.json() == {"state": "posted", "texts": ["Posted …"], "command": f"post 1 2 + APPROVE at {RHEAD[:9]}"}
+    assert d.rig.posting.calls[-1] == ("post_review", SCOPE, d.rig.review.id, ReplyCommand("post", (1, 2), "APPROVE"))
+    r = act(d, d.rig.job.id, command={"action": "post", "numbers": [1]})   # the layer's refusal, in English
+    assert r.json() == {"state": "refused", "texts": [
+        'This is a threads message: reply "push", "post all", "text 2", "diff" or "again: …". Nothing was done.']}
+    assert len(d.rig.posting.calls) == 2 and len(d.replies.announced) == 2
+
+
+def test_a_superseded_job_is_refused_and_no_newer_job_runs(dash):                     # Review Focus 2
+    d = dash
+    d.rig.add_job("review", 300)   # the newer review, done
+    d.rig.store.set_job_state(d.rig.review.id, "superseded", "new head", T1.isoformat())
+    r = act(d, d.rig.review.id, command={"action": "post", "numbers": [1]})
+    assert r.status_code == 200
+    assert r.json() == {"state": "refused", "texts": ["Outdated: there is a review of a newer head. Nothing was done."]}
+    assert d.rig.posting.calls == [] and d.replies.announced == []
+
+
+def test_a_job_of_another_pr_is_400_and_an_unknown_job_404(dash):
+    d = dash
+    for other in ({"number": 1730}, {"scope": "acme/other"}):
+        r = d.c.post("/api/reviews/action", json={"scope": SCOPE, "number": N, "job_id": d.rig.job.id,
+                                                  "command": {"action": "push"}, **other})
+        assert r.status_code == 400 and r.json()["error"]
+    r = act(d, "no-such-job", command={"action": "push"})
+    assert r.status_code == 404 and r.json()["error"]
+    assert d.rig.posting.calls == [] and d.replies.announced == []
+
+
+def test_text_the_grammar_reads_runs_and_free_text_asks_first(dash):
+    d, review = dash, dash.rig.review
+    r = act(d, review.id, text="post 1 2")
+    assert r.json() == {"state": "posted", "texts": ["Posted …"], "command": f"post 1 2 + COMMENT at {RHEAD[:9]}"}
+    assert d.rig.posting.calls == [("post_review", SCOPE, review.id, ReplyCommand("post", (1, 2)))]
+    assert d.rig.parser.calls == []
+    body = act(d, review.id, text=ASK).json()
+    assert body == {"state": "confirm", "question": f"Understood: {EVERY_BUT_3_LINE}. Correct?",
+                    "confirmation": body["confirmation"]}
+    conf = d.rig.store.confirmation(body["confirmation"])
+    assert (conf.job_id, conf.chat_id, conf.state, conf.command) == (
+        review.id, "dashboard", "pending", EVERY_BUT_3.to_dict())
+    assert len(d.rig.posting.calls) == 1   # nothing runs before Yes
+    r = confirm(d, conf.id)
+    assert r.json() == {"state": "posted", "texts": ["Posted …"], "command": EVERY_BUT_3_LINE}
+    assert d.rig.posting.calls[-1] == ("post_review", SCOPE, review.id, EVERY_BUT_3)
+    assert d.replies.announced == [(review.id, "post", "posted")] * 2
+    assert confirm(d, conf.id).json() == HANDLED
+    assert len(d.rig.posting.calls) == 2
+
+
+def test_an_expired_dashboard_confirmation_runs_nothing(dash):                        # Review Focus 5
+    d = dash
+    conf_id = act(d, d.rig.review.id, text=ASK).json()["confirmation"]
+    d.rig.clock[0] += timedelta(minutes=16)
+    r = confirm(d, conf_id)
+    assert r.json() == {"state": "refused", "texts": ["Expired: reply again; nothing was done."]}
+    assert d.rig.posting.calls == [] and d.replies.announced == []
+    assert confirm(d, conf_id).json() == HANDLED   # spent
+
+
+def test_a_confirmation_runs_until_its_ttl_is_over(dash):
+    d = dash
+    conf_id = act(d, d.rig.review.id, text=ASK).json()["confirmation"]
+    d.rig.clock[0] += CONFIRM_TTL
+    assert confirm(d, conf_id).json()["state"] == "posted" and len(d.rig.posting.calls) == 1
+
+
+def test_no_cancels_and_a_second_answer_is_already_handled(dash):
+    d = dash
+    conf_id = act(d, d.rig.review.id, text=ASK).json()["confirmation"]
+    assert confirm(d, conf_id, yes=False).json() == {"state": "refused", "texts": ["Cancelled: nothing was done."]}
+    assert confirm(d, conf_id, yes=False).json() == HANDLED
+    assert confirm(d, conf_id).json() == HANDLED
+    assert d.rig.store.confirmation(conf_id).state == "declined"
+    assert d.rig.posting.calls == [] and d.replies.announced == []
+
+
+def test_a_yes_runs_against_the_job_as_it_is_now(dash):
+    d = dash
+    conf_id = act(d, d.rig.review.id, text=ASK).json()["confirmation"]
+    d.rig.store.set_job_state(d.rig.review.id, "superseded", "new head", T1.isoformat())
+    assert confirm(d, conf_id).json() == {
+        "state": "refused", "texts": ["Outdated: there is a review of a newer head. Nothing was done."]}
+    assert d.rig.posting.calls == [] and d.replies.announced == []
+
+
+def test_confirm_takes_the_dashboards_confirmations_only(dash):
+    d = dash
+    telegram = d.rig.store.add_confirmation(d.rig.review.id, CHAT, EVERY_BUT_3.to_dict(), T1.isoformat())
+    for conf_id in (telegram.id, "no-such-confirmation"):
+        for yes in (True, False):
+            r = confirm(d, conf_id, yes)
+            assert r.status_code == 404 and r.json()["error"]
+    assert d.rig.store.confirmation(telegram.id).state == "pending"   # Telegram's echo still answers
+    assert d.rig.posting.calls == []
+
+
+def test_free_text_goes_to_the_model_only_where_the_layer_lets_it(dash):             # Ruling 9
+    d = dash
+    r = act(d, d.rig.job.id, text="please push it now")
+    assert r.json() == {"state": "refused", "texts": [not_understood_line("address")]}
+    assert d.rig.parser.calls == [] and confirmations(d.rig) == 0
+
+
+def test_an_understood_command_the_layer_refuses_asks_nothing(dash):
+    d = dash
+    d.rig.failing.add(f"forge:{SCOPE}")   # understand() passes it; check() refuses it
+    r = act(d, d.rig.review.id, text=ASK)
+    assert r.json() == {"state": "refused",
+                        "texts": ["The forge token is failing (see the dashboard): nothing posted."]}
+    d.rig.parser.results = [ReplyCommand("post", (12,))]
+    r = act(d, d.rig.review.id, text=ASK)
+    assert r.json() == {"state": "refused", "texts": ["Unknown number: 12. Nothing was done."]}
+    assert len(d.rig.parser.calls) == 2 and confirmations(d.rig) == 0 and d.rig.posting.calls == []
+
+
+def test_only_what_changed_something_is_announced(dash):
+    d = dash
+    shown = act(d, d.rig.review.id, command={"action": "text", "numbers": [2]}).json()
+    assert (shown["state"], len(shown["texts"]), shown["command"]) == ("shown", 1, "text 2")
+    d.rig.posting.outcomes = {"push_fix": PostOutcome("refused", "The fix touches …")}
+    r = act(d, d.rig.job.id, command={"action": "push"})
+    assert r.json() == {"state": "refused", "texts": ["The fix touches …"], "command": "push"}
+    assert d.replies.announced == []
+    r = act(d, d.rig.review.id, command={"action": "review_again"})
+    assert r.json() == {"state": "queued", "texts": [f"Queued a review of #{N} at {NEW_HEAD[:9]}."],
+                        "command": "review again"}
+    assert d.replies.announced == [(d.rig.review.id, "review_again", "queued")]
+
+
+def test_the_action_completes_when_the_announcement_fails(dash, caplog):              # Review Focus 3
+    d = dash
+    d.replies.error = RuntimeError("telegram down: ghp_not_real")
+    r = act(d, d.rig.job.id, command={"action": "push"})
+    assert r.status_code == 200 and r.json() == {"state": "posted", "texts": ["Pushed …"], "command": "push"}
+    assert d.replies.announced == [(d.rig.job.id, "push", "posted")]
+    assert any("not announced in Telegram: RuntimeError" in rec.getMessage() for rec in caplog.records)
+    assert "ghp_not_real" not in caplog.text
+
+
+@pytest.mark.parametrize("body", [
+    {},                                                               # neither a command nor a text
+    {"command": {"action": "push"}, "text": "push"},
+    {"command": "push"},
+    {"command": {}},
+    {"command": {"action": "deploy"}},
+    {"command": {"action": "push", "force": True}},
+    {"command": {"action": "post", "numbers": "1 2"}},
+    {"command": {"action": "post", "numbers": [1, "2"]}},
+    {"command": {"action": "post", "numbers": [True]}},
+    {"command": {"action": "post", "numbers": [1], "event": "MERGE"}},
+    {"command": {"action": "push", "anyway": "yes"}},
+    {"command": {"action": "again", "instruction": 7}},
+    {"text": ""},
+    {"text": "   "},
+    {"text": 7},
+    {"command": {"action": "push"}, "job_id": ""},
+    {"command": {"action": "push"}, "job_id": 7},
+    {"command": {"action": "push"}, "number": "1712"},
+])
+def test_a_malformed_action_is_400(dash, body):
+    d = dash
+    r = d.c.post("/api/reviews/action", json={"scope": SCOPE, "number": N, "job_id": d.rig.job.id, **body})
+    assert r.status_code == 400 and r.json()["error"]
+    assert d.rig.posting.calls == [] and d.rig.parser.calls == [] and d.replies.announced == []
+
+
+@pytest.mark.parametrize("body", [
+    b"not json", b"[1]", b"{}", b'{"confirmation": "c1"}', b'{"confirmation": "c1", "yes": "true"}',
+    b'{"confirmation": 5, "yes": true}', b'{"confirmation": "", "yes": true}',
+])
+def test_a_malformed_confirm_is_400(dash, body):
+    d = dash
+    r = d.c.post("/api/reviews/confirm", content=body, headers={"Content-Type": "application/json"})
+    assert r.status_code == 400 and r.json()["error"]
+
+
+@pytest.mark.parametrize("path", ["/api/reviews/action", "/api/reviews/confirm"])
+@pytest.mark.parametrize("headers", [
+    {"Content-Type": "text/plain"},
+    {"Content-Type": "application/json", "Origin": "http://evil.example"},
+    {"Content-Type": "application/json", "Sec-Fetch-Site": "cross-site"},
+])
+def test_a_cross_site_command_is_refused(dash, path, headers):
+    d = dash
+    conf = d.rig.store.add_confirmation(d.rig.review.id, "dashboard", EVERY_BUT_3.to_dict(), T1.isoformat())
+    body = {"scope": SCOPE, "number": N, "job_id": d.rig.job.id, "command": {"action": "push"},
+            "confirmation": conf.id, "yes": True}
+    r = d.c.post(path, content=json.dumps(body).encode(), headers=headers)
+    assert r.status_code == 403 and r.json() == {"error": "cross-site request refused"}
+    assert d.rig.posting.calls == [] and d.rig.store.confirmation(conf.id).state == "pending"
+
+
+def test_the_command_fields_are_reply_commands(dash):
+    """A button may send any field of ReplyCommand.to_dict() and no other."""
+    assert set(reviews_api._COMMAND_FIELDS) == set(ReplyCommand("push").to_dict())
+
+
+def test_create_app_serves_the_command_routes_with_the_layer_only(store, tmp_path):
+    rig = address_rig(tmp_path)
+    c = TestClient(create_app(EventBus(), store, reviewer=FakeService(), reviewer_actions=rig.replies.actions))
+    r = c.post("/api/reviews/action", json={"scope": SCOPE, "number": N, "job_id": rig.job.id,
+                                            "command": {"action": "push"}})
+    assert r.json() == {"state": "posted", "texts": ["Posted …"], "command": "push"}   # no replies: no announcement
+    replies = FakeReplies()
+    c = TestClient(create_app(EventBus(), store, reviewer=FakeService(), reviewer_actions=rig.replies.actions,
+                              reviewer_replies=replies))
+    c.post("/api/reviews/action", json={"scope": SCOPE, "number": N, "job_id": rig.job.id,
+                                        "command": {"action": "push"}})
+    assert replies.announced == [(rig.job.id, "push", "posted")] and len(rig.posting.calls) == 2
+    c = TestClient(create_app(EventBus(), store, reviewer=FakeService()))
+    for path in ("/api/reviews/action", "/api/reviews/confirm"):
+        assert c.post(path, json={}).status_code == 404

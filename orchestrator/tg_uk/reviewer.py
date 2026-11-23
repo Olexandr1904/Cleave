@@ -340,6 +340,14 @@ TEXTS: dict[str, str] = {
     "Internal error ({name}); nothing was done.": "Внутрішня помилка ({name}); нічого не зроблено.",
     "This reply is from {at}; send it again to act on it. Nothing was done.":
         "Ця відповідь від {at}; надішліть її ще раз, щоб її виконати. Нічого не зроблено.",
+    # replies.py: what a command run from the dashboard did (announce_dashboard, OUTCOME)
+    "🖥 Dashboard: {command} — {outcome}": "🖥 Дашборд: {command} — {outcome}",
+    "done": "виконано",
+    "partly done": "виконано частково",
+    "failed": "не вдалося",
+    "not verified": "не перевірено",
+    "nothing to do": "нема чого робити",
+    "queued": "поставлено в чергу",
     "reply in thread {thread}, then resolve it": "відповідь у треді {thread}, потім тред закрити",
     "reply in thread {thread}, left unresolved": "відповідь у треді {thread}, тред лишається відкритим",
     "answer to review {review}": "відповідь на рев'ю {review}",

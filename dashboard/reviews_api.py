@@ -1,9 +1,13 @@
-"""Dashboard routes for the Reviews tab: the board, a PR's detail, Review now, Skip, Fix now and Fix findings…. Nothing
-here posts: Fix now only queues an address job and Fix findings… a findings job, whose result is pushed (and posted)
-from Telegram."""
+"""Dashboard routes for the Reviews tab: the board, a PR's detail, Review now, Skip, Fix now and Fix findings…, and,
+given the reviewer's action layer, a command on a job (a button's or a typed one) and the Yes or No on one the model
+understood. Fix now only queues an address job and Fix findings… a findings job. A command is checked and run by
+ReviewerActions, the layer Telegram's replies call, so a post or a push goes through the one Posting both channels
+share; Telegram is told what it did."""
 from __future__ import annotations
 
+import logging
 from collections.abc import Callable
+from datetime import datetime
 from typing import Any
 
 from starlette.requests import Request
@@ -11,7 +15,23 @@ from starlette.responses import JSONResponse
 from starlette.routing import Route
 
 from dashboard.web_guard import foreign_origin
+from orchestrator.reviewer.grammar import ReplyCommand, describe, parse_reply
 from orchestrator.reviewer.models import BoardRow, Job
+from orchestrator.reviewer.replies import _CANCELLED, _EXPIRED, _HANDLED, CONFIRM_TTL
+from orchestrator.reviewer.service import _where, utcnow
+from orchestrator.tg_i18n import ENGLISH, telegram_language, tr
+
+logger = logging.getLogger(__name__)
+
+_DASHBOARD_CHAT = "dashboard"  # the chat id of the confirmations the dashboard stores
+# A button's command, as ReplyCommand.to_dict() gives it: the fields it may hold, with their types (a field left out
+# takes its default), and the values of action and event.
+_COMMAND_FIELDS = {"action": str, "numbers": list, "event": str, "all_confirmed": bool, "no_summary": bool,
+                   "anyway": bool, "instruction": str, "all_replies": bool}
+_COMMAND_ACTIONS = ("post", "post_replies", "text", "edit", "draft", "review_again", "skip", "push", "push_post",
+                    "diff", "again", "fix")
+_COMMAND_EVENTS = ("COMMENT", "APPROVE", "REQUEST_CHANGES")
+_UNANNOUNCED = ("refused", "shown")  # the results that changed nothing: Telegram is not told
 
 
 def _job(job: Job | None) -> dict | None:
@@ -72,8 +92,8 @@ def _cross_site(request: Request) -> bool:
     return foreign_origin(request)
 
 
-async def _target(request: Request) -> tuple[str, int] | JSONResponse:
-    """The body's (scope, number), a 403 response for a cross-site request, or a 400 response."""
+async def _body(request: Request) -> dict | JSONResponse:
+    """The request's JSON object, a 403 response for a cross-site request, or a 400 response."""
     if _cross_site(request):
         return JSONResponse({"error": "cross-site request refused"}, status_code=403)
     try:
@@ -82,6 +102,11 @@ async def _target(request: Request) -> tuple[str, int] | JSONResponse:
         return JSONResponse({"error": "invalid JSON body"}, status_code=400)
     if not isinstance(body, dict):
         return JSONResponse({"error": "body must be an object"}, status_code=400)
+    return body
+
+
+def _scope_number(body: dict) -> tuple[str, int] | JSONResponse:
+    """The body's (scope, number), or a 400 response."""
     scope, number = body.get("scope"), body.get("number")
     if not isinstance(scope, str) or not scope:
         return JSONResponse({"error": "scope must be a non-empty string"}, status_code=400)
@@ -90,7 +115,33 @@ async def _target(request: Request) -> tuple[str, int] | JSONResponse:
     return scope, number
 
 
-def build_review_routes(service: Any, get_projects: Callable[[], dict] = dict) -> list[Route]:
+async def _target(request: Request) -> tuple[str, int] | JSONResponse:
+    """The body's (scope, number), a 403 response for a cross-site request, or a 400 response."""
+    body = await _body(request)
+    return body if isinstance(body, JSONResponse) else _scope_number(body)
+
+
+def _command(data: Any) -> ReplyCommand | None:
+    """The command a button sent (ReplyCommand.to_dict(), any field left out taking its default); None for anything
+    else. type(), not isinstance(): a bool is no int and 1 no bool."""
+    if not (isinstance(data, dict) and data.keys() <= _COMMAND_FIELDS.keys()
+            and all(type(value) is _COMMAND_FIELDS[name] for name, value in data.items())):
+        return None
+    if data.get("action") not in _COMMAND_ACTIONS or data.get("event", "COMMENT") not in _COMMAND_EVENTS:
+        return None
+    if not all(type(n) is int for n in data.get("numbers", [])):
+        return None
+    return ReplyCommand.from_dict(data)
+
+
+def _refused(text: str) -> JSONResponse:
+    return JSONResponse({"state": "refused", "texts": [text]})
+
+
+def build_review_routes(service: Any, get_projects: Callable[[], dict] = dict, actions: Any | None = None,
+                        replies: Any | None = None, *, now: Callable[[], datetime] = utcnow) -> list[Route]:
+    """The Reviews tab's routes; with `actions` (ReviewerActions) the command routes too, whose results `replies`
+    (ReviewerReplies, None without Telegram) announces in Telegram."""
     async def get_reviews(request: Request) -> JSONResponse:
         projects = get_projects()
         return JSONResponse({"repos": [_repo(r, projects) for r in service.overview()]})
@@ -154,7 +205,91 @@ def build_review_routes(service: Any, get_projects: Callable[[], dict] = dict) -
             return JSONResponse({"error": str(e)}, status_code=409)
         return JSONResponse({"job": _job(job)})
 
-    return [
+    async def post_action(request: Request) -> JSONResponse:
+        """A command on a job of the body's PR: a button's (`command`, a ReplyCommand dict) or a typed one (`text`).
+        Text the grammar knows runs at once, as in Telegram; any other goes to the model (where the layer lets it),
+        and what the model understood runs only after a Yes (post_confirm)."""
+        body = await _body(request)
+        if isinstance(body, JSONResponse):
+            return body
+        target = _scope_number(body)
+        if isinstance(target, JSONResponse):
+            return target
+        job_id, command, text = body.get("job_id"), body.get("command"), body.get("text")
+        if not isinstance(job_id, str) or not job_id:
+            return JSONResponse({"error": "job_id must be a non-empty string"}, status_code=400)
+        if (command is None) == (text is None):
+            return JSONResponse({"error": "give a command or a text"}, status_code=400)
+        cmd = None if command is None else _command(command)
+        if command is not None and cmd is None:
+            return JSONResponse({"error": "command is not a reviewer command"}, status_code=400)
+        if text is not None and (not isinstance(text, str) or not text.strip()):
+            return JSONResponse({"error": "text must be a non-empty string"}, status_code=400)
+        job = actions.store.job(job_id)
+        if job is None:
+            return JSONResponse({"error": f"no reviewer job {job_id}"}, status_code=404)
+        if (job.scope, job.number) != target:
+            return JSONResponse({"error": f"job {job_id} is not one of #{target[1]} in {target[0]}"}, status_code=400)
+        if cmd is None and (cmd := parse_reply(text)) is None:
+            return await _understand(job, text)
+        return await _run(job, cmd)
+
+    async def post_confirm(request: Request) -> JSONResponse:
+        """The Yes or No on a command the model understood from the dashboard's text (Telegram's own echoes are
+        answered there). A Yes runs it against its job as the store has it now, unless it was answered already or is
+        older than CONFIRM_TTL."""
+        body = await _body(request)
+        if isinstance(body, JSONResponse):
+            return body
+        conf_id, yes = body.get("confirmation"), body.get("yes")
+        if not isinstance(conf_id, str) or not conf_id:
+            return JSONResponse({"error": "confirmation must be a non-empty string"}, status_code=400)
+        if not isinstance(yes, bool):
+            return JSONResponse({"error": "yes must be true or false"}, status_code=400)
+        store = actions.store
+        conf = store.confirmation(conf_id)
+        if conf is None or conf.chat_id != _DASHBOARD_CHAT:
+            return JSONResponse({"error": f"no dashboard confirmation {conf_id}"}, status_code=404)
+        with telegram_language(ENGLISH):
+            if not yes:
+                declined = store.claim_confirmation(conf_id, "declined")
+                return _refused(tr(_CANCELLED if declined else _HANDLED))
+            conf = store.claim_confirmation(conf_id, "confirmed")
+            if conf is None:
+                return _refused(tr(_HANDLED))
+            if now() - datetime.fromisoformat(conf.created_at) > CONFIRM_TTL:
+                return _refused(tr(_EXPIRED))
+        return await _run(store.job(conf.job_id), ReplyCommand.from_dict(conf.command))
+
+    async def _understand(job: Job, text: str) -> JSONResponse:
+        """The model's command for `text`, checked and kept for a Yes, or why nothing is done (the layer decides what
+        free text may reach the model)."""
+        with telegram_language(ENGLISH):
+            understood = await actions.understand(job, text)
+            checked = understood if isinstance(understood, str) else actions.check(job, understood)
+            if isinstance(checked, str):
+                return _refused(checked)
+            conf = actions.store.add_confirmation(job.id, _DASHBOARD_CHAT, checked.to_dict(), now().isoformat())
+            question = tr("Understood: {command}. Correct?", command=describe(checked, job.head_sha))
+        return JSONResponse({"state": "confirm", "question": question, "confirmation": conf.id})
+
+    async def _run(job: Job, cmd: ReplyCommand) -> JSONResponse:
+        """`cmd` checked against `job` and run, its texts in English; a result that changed something is announced
+        in Telegram."""
+        with telegram_language(ENGLISH):
+            checked = actions.check(job, cmd)
+            if isinstance(checked, str):
+                return _refused(checked)
+            result = await actions.run(job, checked)
+            command = describe(checked, job.head_sha)
+        if replies is not None and result.state not in _UNANNOUNCED:
+            try:
+                await replies.announce_dashboard(job.id, checked, result.state)
+            except Exception as e:  # the command is done: its answer does not depend on Telegram
+                logger.warning("Dashboard reviewer command not announced in Telegram: %s", _where(e))
+        return JSONResponse({"state": result.state, "texts": result.texts, "command": command})
+
+    routes = [
         Route("/api/reviews", get_reviews, methods=["GET"]),
         Route("/api/reviews/pr", get_pr, methods=["GET"]),
         Route("/api/reviews/review-now", post_review_now, methods=["POST"]),
@@ -162,3 +297,9 @@ def build_review_routes(service: Any, get_projects: Callable[[], dict] = dict) -
         Route("/api/reviews/fix-now", post_fix_now, methods=["POST"]),
         Route("/api/reviews/fix-findings", post_fix_findings, methods=["POST"]),
     ]
+    if actions is not None:
+        routes += [
+            Route("/api/reviews/action", post_action, methods=["POST"]),
+            Route("/api/reviews/confirm", post_confirm, methods=["POST"]),
+        ]
+    return routes

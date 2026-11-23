@@ -1215,6 +1215,9 @@ def main(argv: list[str] | None = None) -> int:
                 allowed_networks=global_config.dashboard.allowed_networks,
                 wake=lambda: orchestrator._wake_event.set(),
                 ticket_announcer=ticket_announcer,
+                # The layer the replies run their commands through: one Posting for both channels.
+                reviewer_actions=reviewer_actions,
+                reviewer_replies=reviewer_replies,
             )
             config = uvicorn.Config(
                 app, host=dash_config.host, port=dash_config.port,

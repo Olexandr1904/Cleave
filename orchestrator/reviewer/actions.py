@@ -69,6 +69,11 @@ class ReviewerActions:
         self._parser = parser
         self._credential_failing = credential_failing
 
+    @property
+    def store(self) -> ReviewerStore:
+        """The store the commands are checked against: the dashboard reads a job, and keeps its confirmations, there."""
+        return self._store
+
     def check(self, job: Job, cmd: ReplyCommand) -> ReplyCommand | str:
         """The command as it runs against the job as the store has it now ("all confirmed" expanded), or why nothing
         is done: the repo is no longer reviewed, the job or its report refuses it, or a credential it needs is

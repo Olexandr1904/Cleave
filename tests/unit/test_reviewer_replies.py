@@ -4,6 +4,8 @@ from __future__ import annotations
 import logging
 from datetime import datetime, timedelta, timezone
 
+import pytest
+
 from config.schemas import ReviewerConfig
 from integrations.base.notifier import Button
 from orchestrator.reviewer.db import connect
@@ -139,10 +141,12 @@ class FakeService:
 
 class Rig:
     """A done review job of PR 1712 at HEAD in a real store (its run with plan 4's report, started at T0), its
-    message anchored at (CHAT, 100), the PR on the board at NEW_HEAD; the router on fakes, on a clock tests move."""
+    message anchored at (CHAT, 100), the PR on the board at NEW_HEAD; the router on fakes, on a clock tests move,
+    answering in `language`."""
 
-    def __init__(self, tmp_path, *, parser=(), failing=(), contexts=None):
+    def __init__(self, tmp_path, *, parser=(), failing=(), contexts=None, language="en"):
         self.tmp = tmp_path
+        self.language = language
         self.store = ReviewerStore(connect(tmp_path / "rv" / "reviewer.db"))
         self.store.replace_board(SCOPE, {N: board_row(NEW_HEAD), 1730: board_row(NEW_HEAD, number=1730)})
         self.job = self.add_job("review", 100)
@@ -156,7 +160,8 @@ class Rig:
 
     def router(self, posting, contexts):
         return ReviewerReplies(contexts, self.store, self.service, self.chat, posting, self.small, self.parser,
-                               credential_failing=self.failing.__contains__, now=lambda: self.clock[0])
+                               credential_failing=self.failing.__contains__, now=lambda: self.clock[0],
+                               language_of=lambda project_id: self.language)
 
     def add_job(self, kind, message_id, scope=SCOPE):
         key = {"review": HEAD, "address": f"{HEAD}:T1", "findings": f"{HEAD}:r1"}.get(kind, f"recheck:{HEAD}")
@@ -937,3 +942,71 @@ async def test_free_text_on_a_findings_message_is_not_parsed_by_the_model(tmp_pa
     await rig.reply("давай пуш уже", 300)
     assert rig.chat.sent == [(not_understood_line("findings"), rig.at(300))]
     assert rig.parser.calls == [] and rig.posting.calls == []
+
+
+# --- What the dashboard did, told in Telegram ---
+
+COMMIT_URL = "https://github.com/acme/app/commit/abc"
+
+
+def recorded_refreshes(rig):
+    """The job ids whose buttons announce_dashboard refreshes (refresh_buttons has its own tests)."""
+    refreshed = []
+
+    async def refresh(job_id):
+        refreshed.append(job_id)
+
+    rig.replies.refresh_buttons = refresh
+    return refreshed
+
+
+def save_post(rig, post_id, at, *, job=None, state="posted", urls=(COMMIT_URL,)):
+    rig.store.save_post(Post(post_id, (job or rig.job).id, SCOPE, N, HEAD, "push", state, at.isoformat(),
+                             urls=list(urls)))
+
+
+async def test_announce_dashboard_replies_to_the_job_message_in_its_language(tmp_path):
+    rig = address_rig(tmp_path, language="uk")
+    refreshed = recorded_refreshes(rig)
+    save_post(rig, "p-push", T1)
+    await rig.replies.announce_dashboard(rig.job.id, ReplyCommand("push"), "posted")
+    assert rig.chat.sent == [("🖥 Дашборд: push — виконано https://github.com/acme/app/commit/abc", rig.at(200))]
+    assert refreshed == [rig.job.id]
+
+
+async def test_announce_dashboard_links_the_newest_posted_post_of_the_job(tmp_path):
+    rig = address_rig(tmp_path)
+    recorded_refreshes(rig)
+    run = rig.store.run(rig.job.id)
+    run.message_ids = [200, 201]
+    rig.store.save_run(run)
+    save_post(rig, "p-old", T0, urls=("https://github.com/acme/app/pull/1712#old",))
+    save_post(rig, "p-new", T1, urls=("https://github.com/acme/app/pull/1712#new", "https://x.test/second"))
+    save_post(rig, "p-failed", T1 + timedelta(minutes=1), state="failed", urls=("https://x.test/failed",))
+    save_post(rig, "p-other-job", T1 + timedelta(minutes=2), job=rig.review, urls=("https://x.test/review",))
+    await rig.replies.announce_dashboard(rig.job.id, ReplyCommand("post_replies", (1, 3)), "partial")
+    assert rig.chat.sent == [("🖥 Dashboard: post replies 1 3 — partly done https://github.com/acme/app/pull/1712#new",
+                              rig.at(201))]
+
+
+@pytest.mark.parametrize("state, outcome", [
+    ("posted", "done"), ("partial", "partly done"), ("failed", "failed"), ("unverified", "not verified"),
+    ("nothing", "nothing to do"), ("queued", "queued"),
+])
+async def test_announce_dashboard_names_the_outcome_and_no_link_without_a_posted_post(tmp_path, state, outcome):
+    rig = address_rig(tmp_path)
+    recorded_refreshes(rig)
+    save_post(rig, "p-failed", T1, state="failed")
+    save_post(rig, "p-no-url", T0, urls=())
+    await rig.replies.announce_dashboard(rig.job.id, ReplyCommand("push"), state)
+    assert rig.chat.sent == [(f"🖥 Dashboard: push — {outcome}", rig.at(200))]
+
+
+async def test_announce_dashboard_without_a_message_still_refreshes(tmp_path):
+    rig = address_rig(tmp_path)
+    refreshed = recorded_refreshes(rig)
+    run = rig.store.run(rig.job.id)
+    run.message_ids = []
+    rig.store.save_run(run)
+    await rig.replies.announce_dashboard(rig.job.id, ReplyCommand("push"), "posted")
+    assert rig.chat.sent == [] and refreshed == [rig.job.id]

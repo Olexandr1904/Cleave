@@ -11,7 +11,9 @@ from types import SimpleNamespace
 
 import pytest
 import respx
+import uvicorn
 
+import dashboard.web
 import main
 import orchestrator.reviewer.replies as replies_module
 import orchestrator.reviewer.runner as runner_module
@@ -363,11 +365,12 @@ class _Built(_Part):
 
 
 def _run_main(tmp_path, monkeypatch, contexts, telegram_events=None, *, default_chat="42", reviewer_chat="",
-              dry_run=False):
-    """main() from start to shutdown, over a config with no project and the dashboard off, with
-    `contexts` as the reviewer's. Returns the config directory, what main built as the reviewer
-    service, the job runner and the small runner (and the replies, and the command handler as
-    "handler", with Telegram), and the names it gave _stop_background.
+              dry_run=False, with_dashboard=False):
+    """main() from start to shutdown, over a config with no project and the dashboard off (on with
+    `with_dashboard`: the caller stubs its app and server), with `contexts` as the reviewer's.
+    Returns the config directory, what main built as the reviewer service, the job runner and the
+    small runner (and the replies, and the command handler as "handler", with Telegram), and the
+    names it gave _stop_background.
 
     With `telegram_events`, Telegram is on (a bot token, `default_chat` as telegram.default_chat_id and
     `reviewer_chat` as reviewer.telegram_chat_id; no request is made): the list gets the replies' start
@@ -377,7 +380,7 @@ def _run_main(tmp_path, monkeypatch, contexts, telegram_events=None, *, default_
     (cfg / "projects").mkdir(parents=True)
     global_yaml = _MINIMAL_GLOBAL_YAML.format(
         ws=tmp_path / "ws", log=tmp_path / "log", db=tmp_path / "events.db", rv=tmp_path / "rv" / "reviewer.db",
-    ) + f"dashboard:\n  enabled: false\n  db_path: {tmp_path / 'events.db'}\n"
+    ) + f"dashboard:\n  enabled: {str(with_dashboard).lower()}\n  db_path: {tmp_path / 'events.db'}\n"
     if telegram_events is not None:
         global_yaml = global_yaml.replace("bot_token: ''", "bot_token: '123:not-a-real-bot-token'", 1)
         global_yaml = global_yaml.replace("default_chat_id: ''", f"default_chat_id: '{default_chat}'", 1)
@@ -457,6 +460,31 @@ def _run_main(tmp_path, monkeypatch, contexts, telegram_events=None, *, default_
             if handler not in before:
                 handler.close()
     return cfg, built, stopped
+
+
+class _NoServer:
+    """Stands in for uvicorn.Server: serves nothing."""
+
+    def __init__(self, config):
+        self.should_exit = False
+
+    async def serve(self):
+        return None
+
+
+def test_main_gives_the_dashboard_the_replies_action_layer(tmp_path, monkeypatch):
+    """A command from the dashboard runs through the layer the replies run theirs through: one Posting for both."""
+    apps: list[dict] = []
+    monkeypatch.setattr(dashboard.web, "create_app", lambda *args, **kwargs: apps.append(kwargs) or "app")
+    monkeypatch.setattr(uvicorn, "Config", lambda app, **kwargs: app)
+    monkeypatch.setattr(uvicorn, "Server", _NoServer)
+    _, built, _ = _run_main(tmp_path, monkeypatch, [SimpleNamespace(scope="acme/app")], telegram_events=[],
+                            with_dashboard=True)
+    [kwargs] = apps
+    assert kwargs["reviewer"] is built["service"]
+    assert isinstance(kwargs["reviewer_actions"], ReviewerActions)
+    assert kwargs["reviewer_actions"] is built["replies"].kwargs["actions"]
+    assert kwargs["reviewer_replies"] is built["replies"]
 
 
 def test_main_builds_the_runner_with_reviewer_contexts(tmp_path, monkeypatch, capsys):

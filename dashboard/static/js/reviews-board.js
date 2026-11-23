@@ -344,7 +344,7 @@ export function againConfirm(pr, action) {
     const what = n === 1
       ? `weighs the 1 confirmed finding of the self-review at ${r.head}, fixes it if it holds and says why if not.`
       : `weighs each of the ${n} confirmed findings of the self-review at ${r.head}, fixes those that hold and says why for the rest.`;
-    let body = `Claude (Opus) ${what} Nothing is pushed until you reply "push" in Telegram.`;
+    let body = `Claude (Opus) ${what} Nothing is pushed until you push it, here or in Telegram.`;
     if (action === 'fix-findings-again') {
       const when = fmtWhen((pr.fix || {}).started_at);
       body += ` ${when ? `The fix from ${when}` : 'The current fix'} is replaced; it was not pushed.`;

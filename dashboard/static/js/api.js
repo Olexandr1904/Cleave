@@ -149,3 +149,30 @@ export async function fixNow(scope, number) {
 export async function fixFindings(scope, number) {
   return postReviewAction('/api/reviews/fix-findings', scope, number);
 }
+
+// These two can push to GitHub or post a public review: JSON, same-origin, and the caller waits for the answer.
+// An unexpected server error is a plain-text 500, so the body is read as text first.
+async function postReview(url, body) {
+  const resp = await fetch(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  const raw = await resp.text();
+  let data = null;
+  try {
+    data = JSON.parse(raw);
+  } catch { /* not JSON */ }
+  if (!resp.ok) throw new Error((data && data.error) || raw.trim().slice(0, 200) || `HTTP ${resp.status}`);
+  if (!data) throw new Error(`HTTP ${resp.status}: the answer is not JSON`);
+  return data;
+}
+
+// `body` is {command} or {text}, exactly one.
+export async function reviewAction(scope, number, jobId, body) {
+  return postReview('/api/reviews/action', { scope, number, job_id: jobId, ...body });
+}
+
+export async function reviewConfirm(id, yes) {
+  return postReview('/api/reviews/confirm', { confirmation: id, yes });
+}

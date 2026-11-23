@@ -1,12 +1,15 @@
 // reviews.js — Reviews tab: one board of the repos with reviews, in four columns (To review · To fix · With others ·
 // To merge) under a status line per repo, a repo filter, four tiles and a search; a card opens the PR in a side
-// panel (report, replies, verdicts, posts, jobs). Read-only plus Review now, Skip, Fix now, Fix findings… and the
-// reviews switches: nothing is posted from the dashboard. The board's model (columns, tiles, cards, buttons) is
-// reviews-board.js.
+// panel (report, replies, verdicts, posts, jobs). Review now, Skip, Fix now, Fix findings…, the reviews switches, and
+// in the panel push, post and reply (also by a typed command), the same actions as Telegram's. The board's model
+// (columns, tiles, cards, buttons) is reviews-board.js, the panel's actions are review-actions.js.
 
-import { fixFindings, fixNow, loadReviewDetail, loadReviews, reviewNow, skipReview } from './api.js';
+import {
+  fixFindings, fixNow, loadReviewDetail, loadReviews, reviewAction, reviewConfirm, reviewNow, skipReview,
+} from './api.js';
 import { showConfirmDialog } from './actions.js';
 import { renderSwitchPanel } from './switches.js';
+import { EVENTS, prActions, resolveCommand } from './review-actions.js';
 import { esc, fmtIso, timeAgo } from './helpers.js';
 import {
   COLUMNS, againConfirm, avatarsHtml, boardColumns, boardTiles, buttonsHtml, cardHtml, cardTitle, columnOf,
@@ -67,6 +70,12 @@ let panelOpen = {};     // the open PR's <details> as the operator left them, by
 let listLoads = 0;      // a newer load makes an older one's answer stale
 let panelLoads = 0;
 let statusTimer = null;
+let ticked = { finding: new Set(), reply: new Set() };  // the open PR's ticked rows, by number
+let postEvent = 'COMMENT';  // the review event a post carries
+let cmdText = '';           // the command field's text, kept across the panel's redraws
+let result = null;          // {key, state, text}: what the last push, post or command did, shown in the panel
+let acting = false;         // a push, post or command is running: the panel's buttons wait
+let panelDetail = null;     // the open panel's detail, for the click that resolves a button
 
 const rowKey = (scope, number) => `${scope}#${number}`;
 
@@ -246,6 +255,44 @@ function numberBadge(states, n) {
     state}</span>`;
 }
 
+const lockAttr = () => (acting ? ' disabled' : '');
+
+// A checkbox on a row that is not posted yet; the ticked ones are what "… checked" sends.
+function tickHtml(kind, states, n) {
+  if (states && states[n] === 'posted') return '';
+  return `<input type="checkbox" class="review-tick" data-tick="${kind}" value="${esc(n)}" data-fk="tick:${kind}:${esc(n)}"
+    aria-label="Select ${esc(n)}"${ticked[kind].has(Number(n)) ? ' checked' : ''}${lockAttr()}>`;
+}
+
+// A bar of the panel's push / post / reply buttons; `group` and the index find the button again at the click.
+function actionBarHtml(group, buttons) {
+  if (!buttons.length) return '';
+  return `<div class="review-pr-actions">${buttons.map((b, i) => `<button class="reviews-btn primary"
+    data-pr-btn="${group}:${i}" data-fk="pr:${group}:${i}"${lockAttr()}>${esc(b.label)}</button>`).join('')}</div>`;
+}
+
+function eventHtml() {
+  return `<fieldset class="review-event-pick"><legend class="reviews-sub">Post as</legend>${EVENTS.map(([value, name]) =>
+    `<label><input type="radio" name="review-event" value="${value}" data-fk="event:${value}"${
+      value === postEvent ? ' checked' : ''}${lockAttr()}> ${name}</label>`).join('')}</fieldset>`;
+}
+
+// What the last action did, coloured by its state (a word as well: the state is the first thing it says).
+function resultHtml(target) {
+  if (!result || result.key !== rowKey(target.scope, target.number)) return '';
+  return `<div class="review-result is-${esc(result.state)}" role="status"><b>${esc(result.state)}</b>
+    <span>${esc(result.text)}</span></div>`;
+}
+
+// The command field: free text for the newest job the operator could reply to, as in Telegram.
+function commandHtml(detail) {
+  if (!prActions(detail).commandJob) return '';
+  return section('Command', null, `<form class="review-cmd" data-pr-cmd>
+    <input type="text" class="reviews-search" name="text" value="${esc(cmdText)}" data-fk="cmd"
+      placeholder='e.g. "push", "post replies 1 2", "again: …"' aria-label="Command"${lockAttr()}>
+    <button class="reviews-btn primary" type="submit"${lockAttr()}>Send</button></form>`);
+}
+
 function findingHtml(detail, item) {
   const kind = KIND_OF[item.kind];
   const where = item.path ? `${item.path}${item.line == null ? '' : `:${item.line}`}` : '';
@@ -253,7 +300,7 @@ function findingHtml(detail, item) {
   const body = itemBody(item.body);
   return details(`${detail.report_job}:${item.number}`, item.kind === 'red',
     `<span class="review-sq kind-${kind}" title="${KIND_NAME[kind]}"></span>
-      <span class="review-n">${esc(item.number)}.</span><span class="review-t">${esc(item.title)}</span>
+      <span class="review-n">${tickHtml('finding', detail.number_states, item.number)}${esc(item.number)}.</span><span class="review-t">${esc(item.title)}</span>
       ${numberBadge(detail.number_states, item.number)}${meta ? `<span class="review-where">${meta}</span>` : ''}`,
     body ? `<div class="review-body">${esc(body)}</div>` : '', 'review-finding');
 }
@@ -275,6 +322,7 @@ function reportHtml(detail) {
     return section('', null, '<div class="reviews-reason">The report could not be read; the raw report is below.</div>');
   }
   const job = detail.jobs.find(j => j.id === detail.report_job);
+  const actions = prActions(detail);
   const kinds = report.items.map(item => KIND_OF[item.kind]);
   const counts = Object.fromEntries(Object.keys(KIND_NAME).map(kind => [kind, kinds.filter(k => k === kind).length]));
   const legend = Object.keys(KIND_NAME).map(kind => counts[kind]
@@ -288,7 +336,8 @@ function reportHtml(detail) {
     </div>
     ${kinds.length ? `<div class="review-meter" role="img" aria-label="${findingsText(counts)}">${meter}</div>` : ''}
     <div class="review-legend">${legend}</div>
-    ${job ? `<div class="reviews-sub">Telegram: ${esc(telegramText(job))}</div>` : ''}`;
+    ${job ? `<div class="reviews-sub">Telegram: ${esc(telegramText(job))}</div>` : ''}
+    ${actions.report.length ? eventHtml() + actionBarHtml('report', actions.report) : ''}`;
   const groups = FINDING_GROUPS.map(([title, group]) => {
     const items = report.items.filter(item => group.includes(item.kind));
     return items.length ? section(title, items.length, items.map(i => findingHtml(detail, i)).join('')) : '';
@@ -310,11 +359,12 @@ function repliesHtml(detail) {
   const title = `Replies <span>${detail.replies.length}</span> · job ${esc(detail.replies_job)}`;
   if (!detail.replies.length) return section(title, null, '<div class="reviews-empty">No replies drafted.</div>');
   const rows = detail.replies.map(entry => `<tr>
-    <td>${esc(entry.n)}</td><td>${numberBadge(detail.reply_states, entry.n)}</td><td>${esc(replyTarget(entry))}</td>
+    <td>${tickHtml('reply', detail.reply_states, entry.n)}${esc(entry.n)}</td><td>${numberBadge(detail.reply_states, entry.n)}</td><td>${esc(replyTarget(entry))}</td>
     <td class="review-body">${esc(entry.body)}</td>
   </tr>`).join('');
   return section(title, null, `<div class="reviews-table-wrap"><table class="review-jobs">
-    <thead><tr><th>N</th><th>State</th><th>Target</th><th>Body</th></tr></thead><tbody>${rows}</tbody></table></div>`);
+    <thead><tr><th>N</th><th>State</th><th>Target</th><th>Body</th></tr></thead><tbody>${rows}</tbody></table></div>
+    ${actionBarHtml('replies', prActions(detail).replies)}`);
 }
 
 // A findings job's verdicts, shown under the report they fix (panelParts).
@@ -324,20 +374,20 @@ function verdictsSectionHtml(detail) {
 }
 
 // A fix job's fix (address or findings): its files, the protected ones, whether it was pushed, and the patch.
-// Pushing is done by replying "push" in Telegram.
+// Pushing is done here or by replying "push" in Telegram.
 function fixHtml(detail) {
   const fix = detail.fix;
   if (!fix) return '';
   const rows = fix.files.map(f => `<tr><td><code>${esc(f.path)}</code></td><td>+${esc(f.added)}</td>
     <td>−${esc(f.deleted)}</td></tr>`).join('');
   const pushed = detail.pushed_sha
-    ? `Pushed <code>${esc(detail.pushed_sha.slice(0, 9))}</code>` : 'Not pushed: reply "push" in Telegram.';
+    ? `Pushed <code>${esc(detail.pushed_sha.slice(0, 9))}</code>` : 'Not pushed yet: push here or in Telegram.';
   const guarded = fix.protected.length
     ? `<div class="review-body">Protected files, never pushed: ${esc(fix.protected.join(', '))}</div>` : '';
   const patch = detail.fix_patch == null ? '' : details('patch', false, 'Patch',
     `<pre class="report-content">${esc(detail.fix_patch)}</pre>`, 'review-raw');
   return section('Fix', fix.files.length, `<div class="reviews-sub">${pushed} · not built or tested by Cleave</div>
-    ${guarded}<div class="reviews-table-wrap"><table class="review-jobs">
+    ${guarded}${actionBarHtml('fix', prActions(detail).fix)}<div class="reviews-table-wrap"><table class="review-jobs">
     <thead><tr><th>File</th><th>Added</th><th>Deleted</th></tr></thead><tbody>${rows}</tbody></table></div>${patch}`);
 }
 
@@ -370,11 +420,11 @@ function postHtml(post) {
   </li>`;
 }
 
-// What Cleave posted from Telegram, newest first: the dashboard only shows it.
+// What Cleave posted, from Telegram or here, newest first.
 function postsHtml(posts) {
   if (!posts.length) {
     return section('Posts', null,
-      '<div class="reviews-empty">Nothing posted yet. Posting is done by replying to the review in Telegram.</div>');
+      '<div class="reviews-empty">Nothing posted yet. Post here or by replying to the review in Telegram.</div>');
   }
   return section('Posts', posts.length, `<ul class="review-posts">${posts.map(postHtml).join('')}</ul>`);
 }
@@ -439,7 +489,8 @@ function panelBodyHtml(pr, detail) {
   const raw = detail.report_text == null ? '' : section('', null, details('raw', false,
     `Raw report · job ${esc(detail.report_job)}`, `<pre class="report-content">${esc(detail.report_text)}</pre>`,
     'review-raw'));
-  return main + postsHtml(detail.posts) + jobsHtml(detail.jobs) + raw;
+  panelDetail = detail;
+  return resultHtml(openPr) + commandHtml(detail) + main + postsHtml(detail.posts) + jobsHtml(detail.jobs) + raw;
 }
 
 // A side panel beside the list; a modal dialog where it covers the screen.
@@ -488,6 +539,7 @@ async function paintPanel(view) {
   redraw(panel, panelHeadHtml(target, pr) + (error
     ? section('', null, `<div class="reviews-error">Error: ${esc(String(error))}</div>`)
     : panelBodyHtml(pr, detail)));
+  if (acting) lockPanel(panel);
 }
 
 // Opening moves the focus to the panel's Back; closing returns it to the row.
@@ -495,6 +547,9 @@ function openRow(view, row) {
   openPr = { scope: row.dataset.scope, number: Number(row.dataset.number) };
   focusKey = row.dataset.reviewRow;
   panelOpen = {};
+  ticked = { finding: new Set(), reply: new Set() };
+  result = null;
+  cmdText = '';
   markRows(view);
   paintPanel(view);  // its header is drawn before it awaits the detail
   view.querySelector('.review-panel [data-review-close]').focus();
@@ -552,7 +607,90 @@ async function runAction(view, btn, inPanel) {
   }
 }
 
+// The panel's buttons and fields wait while a request runs (the panel's Back stays).
+function lockPanel(panel) {
+  panel.querySelectorAll('button:not([data-review-close]), input').forEach(el => { el.disabled = true; });
+}
+
+// A free-text answer the model understood: the operator says Yes or No to its question.
+function askConfirmation(answer) {
+  return new Promise((resolve, reject) => {
+    const send = yes => reviewConfirm(answer.confirmation, yes).then(resolve, reject);
+    showConfirmDialog('Confirm', esc(answer.question), 'Yes', () => send(true), () => send(false));
+  });
+}
+
+// One push, post or typed command. It can push to GitHub or post a public review, so the panel waits for the answer,
+// then reloads.
+async function runPanelCommand(view, jobId, body) {
+  const target = openPr;
+  if (!target || acting) return;
+  acting = true;
+  lockPanel(view.querySelector('.review-panel'));
+  const key = rowKey(target.scope, target.number);
+  try {
+    let answer = await reviewAction(target.scope, target.number, jobId, body);
+    if (answer.state === 'confirm') answer = await askConfirmation(answer);
+    result = { key, state: answer.state, text: (answer.texts || []).join('\n') };
+    if (answer.state !== 'refused') ticked = { finding: new Set(), reply: new Set() };
+    if (body.text != null) cmdText = '';
+  } catch (err) {
+    result = { key, state: 'failed', text: String(err.message || err) };
+  }
+  acting = false;
+  if (!view.isConnected) return;
+  await renderReviews();
+}
+
+// A panel button: its command with the ticked rows and the event filled in.
+function onPanelButton(view, btn) {
+  const [group, index] = btn.dataset.prBtn.split(':');
+  const actions = prActions(panelDetail);
+  const button = actions[group][Number(index)];
+  const jobId = panelDetail[group === 'report' ? 'report_job' : group === 'replies' ? 'replies_job' : 'fix_job'];
+  const send = () => {
+    const command = resolveCommand(button.command, {
+      numbers: [...ticked[group === 'report' ? 'finding' : 'reply']], event: postEvent,
+    });
+    if (!command) {
+      result = { key: rowKey(openPr.scope, openPr.number), state: 'refused', text: 'Tick at least one row first.' };
+      paintPanel(view);
+      return;
+    }
+    runPanelCommand(view, jobId, { command });
+  };
+  if (button.confirm) {
+    showConfirmDialog(button.label.replace(/…$/, ''), esc(button.confirm), button.label.replace(/…$/, ''), send);
+    document.querySelector('.dialog-overlay #dlg-cancel')?.focus();
+  } else {
+    send();
+  }
+}
+
+function onChange(e) {
+  const tick = e.target.closest('[data-tick]');
+  if (tick) {
+    ticked[tick.dataset.tick][tick.checked ? 'add' : 'delete'](Number(tick.value));
+  } else if (e.target.name === 'review-event') {
+    postEvent = e.target.value;
+  }
+}
+
+function onSubmit(view, e) {
+  const form = e.target.closest('[data-pr-cmd]');
+  if (!form) return;
+  e.preventDefault();
+  const text = form.elements.text.value.trim();
+  const jobId = prActions(panelDetail).commandJob;
+  if (text && jobId) runPanelCommand(view, jobId, { text });
+}
+
 function onClick(view, e) {
+  const prBtn = e.target.closest('[data-pr-btn]');
+  if (prBtn) {
+    onPanelButton(view, prBtn);
+    return;
+  }
   const action = e.target.closest('[data-review-action]');
   if (action) {
     const kind = action.dataset.reviewAction;
@@ -637,6 +775,9 @@ function mount(content) {
   focusKey = null;
   panelOpen = {};
   view.addEventListener('click', e => onClick(view, e));
+  view.addEventListener('change', onChange);
+  view.addEventListener('submit', e => onSubmit(view, e));
+  view.addEventListener('input', e => { if (e.target.name === 'text') cmdText = e.target.value; });
   // An avatar's GitHub picture that does not load leaves its initials (an error does not bubble: capture it).
   view.addEventListener('error', e => {
     if (e.target instanceof HTMLImageElement && e.target.closest('.reviews-avatar')) e.target.remove();

@@ -1362,6 +1362,21 @@ span.reviews-ticket { color: #6e7681; }
 .review-raw { color: #8b949e; }
 .review-raw summary { cursor: pointer; margin-bottom: 6px; }
 
+/* The PR panel's push, post and command controls */
+.review-pr-actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+.review-event-pick { display: flex; flex-wrap: wrap; gap: 4px 12px; align-items: baseline; border: 0; margin-top: 8px; padding: 0; }
+.review-event-pick label { color: #c9d1d9; font-size: 12px; }
+.review-tick { margin-right: 6px; vertical-align: middle; }
+.review-cmd { display: flex; gap: 6px; }
+.review-cmd .reviews-search { flex: 1; min-width: 0; }
+.review-result {
+  display: flex; gap: 8px; align-items: baseline; padding: 8px 10px; background: #0d1117; color: #c9d1d9;
+  border: 1px solid #30363d; border-radius: 6px; white-space: pre-wrap; word-break: break-word;
+}
+.review-result.is-posted, .review-result.is-queued, .review-result.is-shown { color: #56d364; border-color: #2ea043; }
+.review-result.is-partial, .review-result.is-unverified { color: #e3b341; border-color: #9e6a03; }
+.review-result.is-refused, .review-result.is-failed { color: #f85149; border-color: #da3633; }
+
 /* What an action did: a non-blocking line at the bottom of the screen */
 .reviews-status {
   position: fixed; left: 50%; bottom: 16px; transform: translateX(-50%); z-index: 60; max-width: calc(100% - 32px);

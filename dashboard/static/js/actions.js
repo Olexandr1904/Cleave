@@ -92,7 +92,7 @@ export async function setMode(mode) {
   return postJSON('/api/daemon/mode', { mode });
 }
 
-export function showConfirmDialog(title, bodyHtml, confirmLabel, onConfirm) {
+export function showConfirmDialog(title, bodyHtml, confirmLabel, onConfirm, onCancel) {
   const overlay = document.createElement('div');
   overlay.className = 'dialog-overlay';
   overlay.innerHTML = `<div class="dialog">
@@ -105,10 +105,11 @@ export function showConfirmDialog(title, bodyHtml, confirmLabel, onConfirm) {
   </div>`;
   document.body.appendChild(overlay);
 
-  overlay.querySelector('#dlg-cancel').onclick = () => overlay.remove();
+  const cancel = () => { overlay.remove(); if (onCancel) onCancel(); };
+  overlay.querySelector('#dlg-cancel').onclick = cancel;
   overlay.querySelector('#dlg-confirm').onclick = async () => {
     overlay.remove();
     await onConfirm();
   };
-  overlay.onclick = (e) => { if (e.target === overlay) overlay.remove(); };
+  overlay.onclick = (e) => { if (e.target === overlay) cancel(); };
 }

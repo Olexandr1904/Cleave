@@ -365,13 +365,13 @@ test('Fix findings… asks first, naming the confirmed findings and the head', (
   assert.equal(c.title, 'Fix the findings of the self-review?');
   assert.equal(c.label, 'Fix findings');
   assert.equal(c.bodyHtml, 'Claude (Opus) weighs each of the 4 confirmed findings of the self-review at 8f01a2b3c, '
-    + 'fixes those that hold and says why for the rest. Nothing is pushed until you reply &quot;push&quot; in Telegram.');
+    + 'fixes those that hold and says why for the rest. Nothing is pushed until you push it, here or in Telegram.');
   const one = B.againConfirm(mineNoTurn({ review: review({ minor: 1 }, { head: '8f01a2b3c' }) }), 'fix-findings');
   assert.match(one.bodyHtml, /weighs the 1 confirmed finding of the self-review at 8f01a2b3c, fixes it if it holds and says why if not\./);
   const again = B.againConfirm({ ...p, fix: fixJob({ kind: 'findings', started_at: '2026-11-19T10:00:00Z' }) },
     'fix-findings-again');
   assert.equal(again.title, 'Fix the findings of the self-review?');
-  assert.ok(again.bodyHtml.endsWith(' in Telegram. The fix from 19 Nov 10:00 is replaced; it was not pushed.'), again.bodyHtml);
+  assert.ok(again.bodyHtml.endsWith(' or in Telegram. The fix from 19 Nov 10:00 is replaced; it was not pushed.'), again.bodyHtml);
   const noTime = B.againConfirm({ ...p, fix: fixJob({ kind: 'findings', started_at: '' }) }, 'fix-findings-again');
   assert.ok(noTime.bodyHtml.endsWith(' The current fix is replaced; it was not pushed.'), noTime.bodyHtml);
   const hostile = B.againConfirm(mineNoTurn({ review: review({ critical: 1 }, { head: '<b>' }) }), 'fix-findings');

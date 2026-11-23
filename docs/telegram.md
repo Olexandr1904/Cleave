@@ -151,6 +151,8 @@ Recognized intents (from `integrations/telegram/intent_parser.py`):
 | `reviewed` | `reviewed`, `review done`, `review complete` | Mark a PR_REVIEW workspace as reviewed and advance to DONE |
 | `unanswered` | `/unanswered`, `/repeat`, `what's pending`, `which comments are open` | List PR review comments still waiting on your decision |
 
+A typed `reject` at a plan review sends the plan back to analysis, as the **Reject** button does: `Rejected ACME-123. Back to ANALYSIS.`
+
 Unrecognized text gets a fallback reply listing what the bot can do. If intent classification itself errors out (network/timeout), the bot says so and asks you to retry.
 
 ---
@@ -175,6 +177,10 @@ For messages that expect discrete choices, Cleave attaches inline keyboard butto
 
 Only the buttons of what can run are shown. A tap on a reviewer button runs nothing unless the tapped message is that job's own message.
 
+A **Retry** or **Retry Now** tap on a ticket that is no longer BLOCKED, FAILED or DEFERRED (it runs again already, say) is refused: `ACME-1 is DEV now: nothing was done.`
+
+**Push anyway…** while the repo's forge token is failing is refused at once, without the Yes / No question: `The forge token is failing (see the dashboard): nothing posted.`
+
 A fix message's buttons follow the job's state. After any action on the job, from Telegram or from the dashboard, the buttons of its message are recomputed from the job as it is now: a button of something already done (a push, say) goes, and when nothing can run any more the keyboard is removed.
 
 ### Actions from the dashboard
@@ -192,8 +198,6 @@ So that this chat stays the full record, an action taken from the dashboard is a
 - A refusal (nothing was done) and a read-only command (`text`, `diff`) are not announced
 - If this announcement cannot be sent, the dashboard action is still done and the failure is logged
 - The dashboard only answers the host itself and the Tailscale ranges by default; see `dashboard.allowed_networks` in [dashboard.md](dashboard.md#starting-and-reaching-it)
-
-A typed `reject` at a plan review sends the plan back to analysis, as the **Reject** button does: `Rejected ACME-123. Back to ANALYSIS.`
 
 Escalation messages that need a free-text answer (BLOCKED on requirements, ambiguity, etc.) deliberately don't carry buttons — the answer text is what's needed, not a yes/no.
 

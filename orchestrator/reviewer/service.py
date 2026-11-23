@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 import traceback
 from collections.abc import Awaitable, Callable
 from dataclasses import asdict, dataclass, field, replace
@@ -33,6 +34,12 @@ _CLONE_BUSY_RETRY_SECONDS = 5  # a repo whose clone a job prepares or cleans up 
 # and the repos are polled in turn.
 _CLONE_WAIT_SECONDS = 5
 _MAX_REPORT_TEXT = 200_000  # characters of a report the detail view returns
+# The board's GitHub moves on a PR: the turn of mine each needs on the row, the methods a merge takes and a GitHub login.
+_MOVE_TURNS = {"request_review": "request_review", "ready": "finish_draft", "merge": "merge"}
+_MERGE_METHODS = ("merge", "squash", "rebase")
+_LOGIN = re.compile(r"[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})")
+_MAX_REVIEWERS = 10
+_MIN_HEAD = 7  # characters of the head the board showed: a shorter prefix names no commit
 
 
 def utcnow() -> datetime:
@@ -617,6 +624,60 @@ class ReviewerService:
                     and job.state in ("queued", "deferred")):
                 self._store.set_job_state(job.id, "skipped", "skipped by operator", stamp)
 
+    def poll_soon(self, scope: str) -> None:
+        """The repo is due now: run() polls it within its wait (at most a minute), so the board shows a move made."""
+        self._next_due[scope] = self._now()
+
+    async def pr_move(self, scope: str, number: int, move: str, *, reviewers: Any = (), method: str = "",
+                      head: str = "") -> tuple[str, str]:
+        """A board move on GitHub, as (state, text): request_review asks `reviewers`, ready marks the draft ready,
+        merge merges with `method` at the head the board showed (`head`, a prefix of the row's). It runs only while
+        the stored row names it as my turn. State done (the repo is then polled soon), refused (nothing was sent) or
+        failed (GitHub refused it, or did not answer). LookupError: repo or row unknown; ValueError: no such move."""
+        if move not in _MOVE_TURNS:
+            raise ValueError(f"no move {move!r}")
+        ctx, row = self._repo(scope), self._row(scope, number)
+        if _MOVE_TURNS[move] not in row.my_actions:
+            return "refused", f"The board no longer shows this move for #{number}: refresh it."
+        if self._credential_failing(f"forge:{scope}"):
+            return "refused", f"The GitHub token of {scope} is failing (see the dashboard): nothing was done."
+        if move == "request_review":
+            refusal = _reviewers_refusal(reviewers, row.author)
+            if refusal:
+                return "refused", refusal
+            call, done = ctx.forge.request_reviewers(number, list(reviewers)), (
+                f"Asked {', '.join(reviewers)} to review #{number}.")
+        elif move == "ready":
+            call, done = ctx.forge.mark_ready(number), f"#{number} is ready for review."
+        else:
+            if method not in _MERGE_METHODS:
+                return "refused", f"Not a merge method: {method}"
+            if len(head) < _MIN_HEAD or not row.head_sha.startswith(head):
+                return "refused", "The PR's head moved since the board showed it: refresh it."
+            call, done = ctx.forge.merge(number, row.head_sha, method), f"Merged #{number} ({method})."
+        try:
+            await call
+        except ForgeError as e:
+            if e.unavailable:
+                return "failed", f"GitHub did not answer: check #{number} on GitHub before trying again."
+            if move == "merge":
+                return "failed", f"GitHub refused the merge ({e}): checks, reviews or conflicts block it."
+            return "failed", f"GitHub refused it ({e})."
+        self.poll_soon(scope)
+        return "done", done
+
+    async def review_candidates(self, scope: str, number: int) -> list[dict]:
+        """Who to ask for a review of the row's PR (the forge's review_candidates). LookupError: repo or row
+        unknown; ForgeError from GitHub."""
+        ctx, row = self._repo(scope), self._row(scope, number)
+        return await ctx.forge.review_candidates(number, row.author)
+
+    async def merge_options(self, scope: str) -> dict:
+        """The merge methods the repo allows and the one a merge dialog preselects (the first). LookupError: repo
+        unknown; ForgeError from GitHub."""
+        methods = await self._repo(scope).forge.merge_methods()
+        return {"methods": methods, "default": methods[0] if methods else ""}
+
     def _row(self, scope: str, number: int) -> BoardRow:
         row = self._store.board(scope).get(number)
         if row is None:
@@ -746,3 +807,18 @@ class ReviewerService:
             "fix_patch": _patch_text(runs[fix_job.id]) if fix_job else None,
             "pushed_sha": pushed.sha if pushed else None,
         }
+
+
+def _reviewers_refusal(reviewers: Any, author: str) -> str:
+    """Why `reviewers` cannot be asked to review a PR of `author`, or "": a list of 1 to 10 GitHub logins, the
+    author not among them."""
+    if not isinstance(reviewers, (list, tuple)) or not reviewers:
+        return "Pick at least one reviewer."
+    for login in reviewers:
+        if not isinstance(login, str) or not _LOGIN.fullmatch(login):
+            return f"Not a GitHub login: {login}"
+    if len(reviewers) > _MAX_REVIEWERS:
+        return f"At most {_MAX_REVIEWERS} reviewers at once."
+    if author in reviewers:
+        return "The PR's author cannot review it."
+    return ""

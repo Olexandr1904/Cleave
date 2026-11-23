@@ -1442,3 +1442,123 @@ async def test_detail_without_a_findings_job(tmp_path):
     finished_job(rig, tmp_path, "failed", kind="findings", verdicts=VERDICTS, fix=FINDINGS_FIX)
     d = rig.service.detail("acme/app", 1)
     assert (d["verdicts_job"], d["verdicts"], d["fix"]) == (None, [], None)
+
+
+class MovesForge(FakeForge):
+    """FakeForge with the board's GitHub moves: each call recorded, `fail` raised by the next write."""
+    def __init__(self, details, fail=None, methods=("merge", "squash", "rebase")):
+        super().__init__(details)
+        self.calls, self.fail, self.methods = [], fail, list(methods)
+    async def _write(self, *call):
+        self.calls.append(call)
+        if self.fail:
+            raise self.fail
+    async def request_reviewers(self, n, logins): await self._write("request_reviewers", n, logins)
+    async def mark_ready(self, n): await self._write("mark_ready", n)
+    async def merge(self, n, head, method): await self._write("merge", n, head, method)
+    async def merge_methods(self): return self.methods
+    async def review_candidates(self, n, author):
+        self.calls.append(("review_candidates", n, author))
+        return [{"login": "rev1", "reason": "suggested by GitHub"}]
+
+
+async def moves_rig(tmp_path, *turns, fail=None, failing=None, methods=("merge", "squash", "rebase")):
+    """My PR #1 on the board with my `turns` (a request_review turn by default)."""
+    forge = MovesForge({1: det(1, author="octo", requested=())}, fail=fail, methods=methods)
+    c = ctx(tmp_path, FakeReadiness(snap(spr(1, turns or [Turn("octo", "request_review")], author="octo"))), forge)
+    keys = failing if failing is not None else set()
+    rig = Rig(tmp_path, c, failing=lambda key: key in keys)
+    await rig.service.poll(c)
+    rig.t = T0 + timedelta(seconds=30)
+    return rig, c, forge
+
+
+async def test_pr_move_requests_reviewers_and_polls_soon(tmp_path):
+    rig, c, forge = await moves_rig(tmp_path)
+    assert rig.service._seconds_to_due(c, rig.t) > 0  # polled: next due after the interval
+    answer = await rig.service.pr_move("acme/app", 1, "request_review", reviewers=["rev1", "rev2"])
+    assert answer == ("done", "Asked rev1, rev2 to review #1.")
+    assert forge.calls == [("request_reviewers", 1, ["rev1", "rev2"])]
+    assert rig.service._seconds_to_due(c, rig.t) == 0  # the board catches up at once
+
+
+async def test_pr_move_ready_and_unknown_move(tmp_path):
+    rig, _, forge = await moves_rig(tmp_path, Turn("octo", "finish_draft"))
+    assert await rig.service.pr_move("acme/app", 1, "ready") == ("done", "#1 is ready for review.")
+    assert forge.calls == [("mark_ready", 1)]
+    with pytest.raises(ValueError):
+        await rig.service.pr_move("acme/app", 1, "close")
+    with pytest.raises(LookupError):
+        await rig.service.pr_move("acme/app", 2, "ready")
+    with pytest.raises(LookupError):
+        await rig.service.pr_move("acme/other", 1, "ready")
+
+
+async def test_pr_move_refuses_a_move_the_row_no_longer_names(tmp_path):
+    rig, c, forge = await moves_rig(tmp_path)  # request_review only
+    refused = ("refused", "The board no longer shows this move for #1: refresh it.")
+    assert await rig.service.pr_move("acme/app", 1, "ready") == refused
+    assert await rig.service.pr_move("acme/app", 1, "merge", method="merge", head=A[:9]) == refused
+    assert forge.calls == [] and rig.service._seconds_to_due(c, rig.t) > 0
+
+
+@pytest.mark.parametrize("reviewers, text", [
+    ([], "Pick at least one reviewer."),
+    (["bad login"], "Not a GitHub login: bad login"),
+    (["-dash"], "Not a GitHub login: -dash"),
+    ([f"r{i}" for i in range(11)], "At most 10 reviewers at once."),
+    (["rev1", "octo"], "The PR's author cannot review it."),
+    ("rev1", "Pick at least one reviewer."),
+])
+async def test_pr_move_refuses_bad_logins_and_the_author(tmp_path, reviewers, text):
+    rig, _, forge = await moves_rig(tmp_path)
+    assert await rig.service.pr_move("acme/app", 1, "request_review", reviewers=reviewers) == ("refused", text)
+    assert forge.calls == []
+
+
+async def test_pr_move_merge_checks_the_head_and_method(tmp_path):
+    rig, _, forge = await moves_rig(tmp_path, Turn("octo", "merge"))
+    moved = ("refused", "The PR's head moved since the board showed it: refresh it.")
+    assert await rig.service.pr_move("acme/app", 1, "merge", method="merge", head="b" * 9) == moved
+    assert await rig.service.pr_move("acme/app", 1, "merge", method="merge", head=A[:6]) == moved
+    assert await rig.service.pr_move("acme/app", 1, "merge", method="fast", head=A[:9]) == (
+        "refused", "Not a merge method: fast")
+    assert forge.calls == []
+    assert await rig.service.pr_move("acme/app", 1, "merge", method="squash", head=A[:9]) == (
+        "done", "Merged #1 (squash).")
+    assert forge.calls == [("merge", 1, A, "squash")]  # the row's full head: GitHub checks it again
+
+
+async def test_pr_move_merge_refused_or_unanswered(tmp_path):
+    rig, _, forge = await moves_rig(tmp_path, Turn("octo", "merge"), fail=ForgeError("GitHub 405"))
+    assert await rig.service.pr_move("acme/app", 1, "merge", method="merge", head=A[:9]) == (
+        "failed", "GitHub refused the merge (GitHub 405): checks, reviews or conflicts block it.")
+    forge.fail = ForgeError("ReadTimeout", unavailable=True)
+    assert await rig.service.pr_move("acme/app", 1, "merge", method="merge", head=A[:9]) == (
+        "failed", "GitHub did not answer: check #1 on GitHub before trying again.")
+    forge.fail = ForgeError("GitHub 422")
+    assert await rig.service.pr_move("acme/app", 1, "request_review", reviewers=["x"]) == (
+        "refused", "The board no longer shows this move for #1: refresh it.")  # the merge row has no request
+    rig2, _, forge2 = await moves_rig(tmp_path / "2", fail=ForgeError("GitHub 422"))
+    assert await rig2.service.pr_move("acme/app", 1, "request_review", reviewers=["x"]) == (
+        "failed", "GitHub refused it (GitHub 422).")
+
+
+async def test_pr_move_refused_while_the_forge_credential_fails(tmp_path):
+    failing = set()
+    rig, _, forge = await moves_rig(tmp_path, failing=failing)
+    failing.add("forge:acme/app")
+    assert await rig.service.pr_move("acme/app", 1, "request_review", reviewers=["rev1"]) == (
+        "refused", "The GitHub token of acme/app is failing (see the dashboard): nothing was done.")
+    assert forge.calls == []
+
+
+async def test_review_candidates_and_merge_options(tmp_path):
+    rig, _, forge = await moves_rig(tmp_path, methods=("squash", "rebase"))
+    assert await rig.service.review_candidates("acme/app", 1) == [{"login": "rev1", "reason": "suggested by GitHub"}]
+    assert forge.calls == [("review_candidates", 1, "octo")]  # the row's author
+    assert await rig.service.merge_options("acme/app") == {"methods": ["squash", "rebase"], "default": "squash"}
+    with pytest.raises(LookupError):
+        await rig.service.review_candidates("acme/app", 2)
+    with pytest.raises(LookupError):
+        await rig.service.merge_options("acme/other")

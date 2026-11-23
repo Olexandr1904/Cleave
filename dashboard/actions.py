@@ -18,6 +18,7 @@ from orchestrator.tg_i18n import ENGLISH, telegram_language, tr
 from workspace.workspace import Stage, archive_workspace
 
 from config.host_os import terminal_launch_command
+from dashboard.web import workspace_state_files
 
 logger = logging.getLogger(__name__)
 
@@ -54,7 +55,7 @@ def _find_workspace(
         return None
 
     from workspace.workspace import Workspace
-    for state_file in base_dir.rglob("state.json"):
+    for state_file in workspace_state_files(base_dir):
         try:
             ws = Workspace(str(state_file.parent))
             if ws.state.ticket_id == ticket_id:
@@ -439,7 +440,7 @@ def build_action_routes(
             # Not in active list — scan disk for it
             base = Path(global_config.workspaces.base_dir) if global_config else None
             if base:
-                for state_file in base.rglob("state.json"):
+                for state_file in workspace_state_files(base):
                     try:
                         w = Workspace(str(state_file.parent))
                         if w.state.ticket_id == ticket_id:
@@ -480,7 +481,7 @@ def build_action_routes(
             # Scan disk
             base = Path(global_config.workspaces.base_dir) if global_config else None
             if base:
-                for state_file in base.rglob("state.json"):
+                for state_file in workspace_state_files(base):
                     try:
                         w = Workspace(str(state_file.parent))
                         if w.state.ticket_id == ticket_id:

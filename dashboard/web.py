@@ -204,6 +204,12 @@ def _review_comment_row(c: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def workspace_state_files(base: Path) -> list[Path]:
+    """Every workspace's state.json, in the layout the daemon writes (workspace_manager, setup_workspace).
+    An rglob walked every checkout's files instead: 10 s for 21 GB, on the daemon's event loop."""
+    return [*base.glob("*/*/tickets/*/state.json"), *base.glob("*/*/setup/state.json")]
+
+
 def _scan_all_workspaces(
     base_dir: str,
     projects: dict[str, Any] | None = None,
@@ -219,8 +225,7 @@ def _scan_all_workspaces(
     if not base.exists():
         return []
     results = []
-    # The layout the daemon writes (workspace_manager, setup_workspace); an rglob walked every checkout's files.
-    for state_file in [*base.glob("*/*/tickets/*/state.json"), *base.glob("*/*/setup/state.json")]:
+    for state_file in workspace_state_files(base):
         try:
             data = json.loads(state_file.read_text(encoding="utf-8"))
             ws_root = state_file.parent

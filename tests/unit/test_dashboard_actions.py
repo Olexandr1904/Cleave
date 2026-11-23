@@ -706,6 +706,22 @@ class TestPauseFallsBackToDiskScan:
             for w in orchestrator._active_workspaces
         )
 
+    def test_a_state_json_inside_a_checkout_is_not_a_workspace(
+        self, disk_client, orchestrator, tmp_path
+    ):
+        """The disk lookup reads the workspace layout: an rglob walked every checkout's files (10 s for 21 GB, on
+        the daemon's event loop) and took a checkout's own state.json for a ticket."""
+        from dataclasses import asdict
+        stray = self._seed_disk_ws(tmp_path, "T-9", "DONE") / "source" / "fixtures"
+        stray.mkdir(parents=True)
+        (stray / "state.json").write_text(json.dumps(asdict(WorkspaceState(
+            ticket_id="FIXTURE-1", company_id="co", repo_id="repo",
+            workspace_root=str(stray), current_state="DEV"))))
+        orchestrator.get_active_workspaces.return_value = []
+        resp = disk_client.post("/api/workspaces/FIXTURE-1/pause",
+                                content=json.dumps({"confirm": True}))
+        assert resp.status_code == 404
+
     def test_pause_returns_404_when_not_in_active_and_not_on_disk(
         self, disk_client, orchestrator
     ):

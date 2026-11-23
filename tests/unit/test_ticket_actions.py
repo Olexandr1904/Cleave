@@ -140,3 +140,70 @@ def test_reviewed_sets_the_signal_and_wakes(pr_review_ws):
 
 def test_reviewed_outside_pr_review_is_refused(tmp_ws):
     assert ticket_actions.reviewed(tmp_ws).refused == "No workspace in PR_REVIEW for ACME-1."
+
+
+class FakeEvents:
+    """Records emit(); `last` is the last event with `data` reduced to the keys the tests assert."""
+
+    KEYS = ("comment_id", "decision", "via")
+
+    def __init__(self):
+        self.calls = []
+
+    def emit(self, kind, text, ticket_id=None, data=None):
+        self.calls.append((kind, data or {}))
+
+    @property
+    def last(self):
+        kind, data = self.calls[-1]
+        return kind, {k: v for k, v in data.items() if k in self.KEYS}
+
+
+def _comment(comment_id, **fields):
+    return {"comment_id": comment_id, "file": "src/app.py", "line": 7, "author": "octo", "decision": None, **fields}
+
+
+@pytest.fixture
+def pr_review_ws_two_comments(tmp_path):
+    return _workspace(tmp_path / "ws", "PR_REVIEW", "PUSHED",
+                      pending_review_comments=[_comment("11"), _comment("12")])
+
+
+@pytest.fixture
+def pr_review_ws_hint_rounds_3(tmp_path):
+    return _workspace(tmp_path / "ws", "PR_REVIEW", "PUSHED",
+                      pending_review_comments=[_comment("11", hint_rounds=3)])
+
+
+def test_a_decision_from_each_channel_is_stored_the_same(pr_review_ws_two_comments):
+    events, woke = FakeEvents(), []
+    d = ticket_actions.decide_comment(pr_review_ws_two_comments, "11", "wont_fix", "", via="dashboard", events=events)
+    assert d.stored == "won't fix: operator decision" and d.remaining == 1 and woke == []
+    assert events.last == ("pr_comment_decision_recorded", {"comment_id": "11", "decision": d.stored, "via": "dashboard"})
+    d = ticket_actions.decide_comment(pr_review_ws_two_comments, "12", "fix", via="button",
+                                      events=events, wake=lambda: woke.append(1))
+    assert d.stored == "fix" and d.remaining == 0 and woke == [1]
+
+
+def test_a_fourth_hint_is_refused(pr_review_ws_hint_rounds_3):
+    d = ticket_actions.decide_comment(pr_review_ws_hint_rounds_3, "11", "reinvestigate", "look at the null case",
+                                      via="dashboard")
+    assert d.refused.startswith("Hint limit reached (3/3)")
+
+
+def test_an_unknown_comment_is_refused(pr_review_ws_two_comments):
+    assert ticket_actions.decide_comment(pr_review_ws_two_comments, "99", "fix", via="dashboard").refused == "Comment not found."
+
+
+def test_a_hint_is_staged_and_wakes(pr_review_ws_two_comments):
+    woke = []
+    d = ticket_actions.decide_comment(pr_review_ws_two_comments, "11", "reinvestigate", "check null",
+                                      via="reply", wake=lambda: woke.append(1))
+    c = pr_review_ws_two_comments.state.pending_review_comments[0]
+    assert d.stored == "reinvestigate" and d.remaining == 2 and woke == [1]
+    assert c["pending_reinvestigation"] is True and c["last_hint"] == "check null"
+
+
+def test_a_decision_outside_pr_review_is_refused(tmp_ws):
+    assert ticket_actions.decide_comment(tmp_ws, "11", "fix", via="dashboard").refused == \
+        "No workspace in PR_REVIEW for ACME-1."

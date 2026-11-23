@@ -372,7 +372,7 @@ async def test_button_press_echo_includes_matched_token():
 
     ws = MagicMock()
     ws.state = SimpleNamespace(
-        ticket_id="T-1", company_id="acme",
+        ticket_id="T-1", company_id="acme", current_state="PR_REVIEW",
         pending_review_comments=[
             {"comment_id": 7, "msg_ids": [10], "decision": None,
              "author": "C", "file": "x.kt", "line": 1, "body": "b",

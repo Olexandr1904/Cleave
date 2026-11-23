@@ -752,59 +752,40 @@ class CommandHandler:
                     return await self._stage_reinvestigation(c, ws, text.strip(), chat_id)
 
                 file_line = f"{c.get('file','?')}:{c.get('line','?')}"
+                d = ticket_actions.decide_comment(
+                    ws, str(c.get("comment_id")), decision, wf_reason, via="reply", matched_token=matched_token,
+                    raw_text=text.strip()[:200], events=self._events, wake=self._wake_fn)
                 if decision == "fix":
-                    c["decision"] = "fix"
                     decision_label = tr("FIX (matched: {token!r}). Dev-agent will re-engage on {file_line}.",
                                         token=matched_token, file_line=file_line)
                     recorded_label = "FIX"
-                    stored_decision = "fix"
                 else:  # wont_fix
-                    reason_text = wf_reason or "operator decision"
-                    c["decision"] = f"won't fix: {reason_text}"
                     decision_label = tr("WON'T FIX (matched: {token!r}). Posting on GitHub: \"{reason}\".",
-                                        token=matched_token, reason=reason_text)
+                                        token=matched_token, reason=wf_reason or "operator decision")
                     recorded_label = "WON'T FIX"
-                    stored_decision = c["decision"]
 
-                ws.save_state()
                 _title = tg_format.read_ticket_title(ws)
                 _emoji = "✅" if decision == "fix" else "❌"
                 _hdr = tg_format.tg_header(_emoji, ws.state.company_id, ws.state.ticket_id, _title)
                 confirm = f"{_hdr}\n" + tr("✓ Recognized as {label}. {decision}", label=recorded_label,
                                            decision=decision_label)
-                if self._events is not None:
-                    self._events.emit(
-                        "pr_comment_decision_recorded",
-                        f"{ws.state.ticket_id}: {stored_decision} for comment {c.get('comment_id')}",
-                        ticket_id=ws.state.ticket_id,
-                        data={
-                            "comment_id": c.get("comment_id"),
-                            "decision": stored_decision,
-                            "via": "reply",
-                            "matched_token": matched_token,
-                            "raw_text": text.strip()[:200],
-                        },
-                    )
-                undecided = [x for x in pending if x.get("decision") is None]
-                if undecided:
+                if d.remaining:
                     # The button label's count reflects the count at send time. If the
                     # operator decides on N-1 comments before tapping it, the recall
                     # loops over live state and resends only the actual remaining ones —
                     # the label is a hint, not a guarantee.
                     btn = [Button(
-                        label=tr("Show {n} unanswered", n=len(undecided)),
+                        label=tr("Show {n} unanswered", n=d.remaining),
                         action=f"unanswered:{ws.state.ticket_id}",
                     )]
                     await self._notifier.send_message(
-                        chat_id, f"{confirm}\n" + tr("{n} comment(s) remaining.", n=len(undecided)), buttons=btn,
+                        chat_id, f"{confirm}\n" + tr("{n} comment(s) remaining.", n=d.remaining), buttons=btn,
                     )
                 else:
                     await self._notifier.send_message(
                         chat_id, f"{confirm}\n" + tr("All decisions in for {ticket_id}. Executing now.",
                                                      ticket_id=ws.state.ticket_id),
                     )
-                    if hasattr(self, '_wake_fn') and self._wake_fn:
-                        self._wake_fn()
                 return True
 
         for ws in workspaces:
@@ -920,30 +901,13 @@ class CommandHandler:
         """
         rounds = int(c.get("hint_rounds", 0) or 0)
         file_line = f"{c.get('file','?')}:{c.get('line','?')}"
-        if rounds >= 3:
+        d = ticket_actions.decide_comment(ws, str(c.get("comment_id")), "reinvestigate", hint_text, via="reply",
+                                          events=self._events, wake=self._wake_fn)
+        if d.refused:
             _title = tg_format.read_ticket_title(ws)
             _hdr = tg_format.tg_header("⚠️", ws.state.company_id, ws.state.ticket_id, _title)
-            msg = f"{_hdr}\n" + tr(
-                "Hint limit reached (3/3) for @{author} on {file_line}. "
-                "Reply \"fix\" or \"won't fix: <reason>\" to close this comment.",
-                author=c.get('author', '?'), file_line=file_line,
-            )
-            await self._notifier.send_message(chat_id, msg)
-            if self._events is not None:
-                self._events.emit(
-                    "pr_comment_hint_exhausted",
-                    f"{ws.state.ticket_id}: hint cap reached for comment {c.get('comment_id')}",
-                    ticket_id=ws.state.ticket_id,
-                    data={
-                        "comment_id": c.get("comment_id"),
-                        "attempted_hint_excerpt": hint_text[:120],
-                    },
-                )
+            await self._notifier.send_message(chat_id, f"{_hdr}\n{d.refused}")
             return True
-
-        c["last_hint"] = hint_text
-        c["pending_reinvestigation"] = True
-        ws.save_state()
 
         # rounds is the count of completed re-investigations. If a hint is
         # already staged but not yet processed by the orchestrator, sending a
@@ -959,19 +923,6 @@ class CommandHandler:
             round=next_round, author=c.get('author', '?'), file_line=file_line,
         )
         await self._notifier.send_message(chat_id, msg)
-        if self._events is not None:
-            self._events.emit(
-                "pr_comment_reinvestigation_staged",
-                f"{ws.state.ticket_id}: hint round {next_round} for comment {c.get('comment_id')}",
-                ticket_id=ws.state.ticket_id,
-                data={
-                    "comment_id": c.get("comment_id"),
-                    "hint_round": next_round,
-                    "hint_excerpt": hint_text[:200],
-                },
-            )
-        if hasattr(self, "_wake_fn") and self._wake_fn:
-            self._wake_fn()
         return True
 
     async def handle_callback(self, action: str, ticket_id: str, chat_id: str, message_id: int) -> None:
@@ -1153,59 +1104,37 @@ class CommandHandler:
                 )
                 return
 
-            matched_comment = None
-            for c in ws.state.pending_review_comments:
-                if str(c.get("comment_id")) == comment_id_str:
-                    if action == "pr_fix":
-                        c["decision"] = "fix"
-                        stored_decision = "fix"
-                        matched_token = "button:fix"
-                        recognized = N_("✓ Recognized as FIX (matched: 'Fix' button). "
-                                        "Dev-agent will re-engage on {file_line}.")
-                    else:
-                        c["decision"] = "won't fix: operator decision"
-                        stored_decision = c["decision"]
-                        matched_token = "button:wontfix"
-                        recognized = N_("✓ Recognized as WON'T FIX (matched: 'Won't Fix' button). "
-                                        "Posting on GitHub: \"operator decision\" on {file_line}.")
-                    matched_comment = c
-                    break
-
-            if matched_comment is None:
-                await self._notifier.send_message(chat_id, tr("Comment not found."), reply_to_message_id=message_id)
+            if action == "pr_fix":
+                d = ticket_actions.decide_comment(ws, comment_id_str, "fix", via="button",
+                                                  matched_token="button:fix", events=self._events,
+                                                  wake=self._wake_fn)
+                recognized = N_("✓ Recognized as FIX (matched: 'Fix' button). "
+                                "Dev-agent will re-engage on {file_line}.")
+            else:
+                d = ticket_actions.decide_comment(ws, comment_id_str, "wont_fix", via="button",
+                                                  matched_token="button:wontfix", events=self._events,
+                                                  wake=self._wake_fn)
+                recognized = N_("✓ Recognized as WON'T FIX (matched: 'Won't Fix' button). "
+                                "Posting on GitHub: \"operator decision\" on {file_line}.")
+            if d.refused:
+                await self._notifier.send_message(chat_id, d.refused, reply_to_message_id=message_id)
                 return
 
-            ws.save_state()
-            file_line = f"{matched_comment.get('file','?')}:{matched_comment.get('line','?')}"
+            file_line = f"{d.comment.get('file','?')}:{d.comment.get('line','?')}"
             _title = tg_format.read_ticket_title(ws)
             _emoji = "✅" if action == "pr_fix" else "❌"
             _hdr = tg_format.tg_header(_emoji, ws.state.company_id, ws.state.ticket_id, _title)
             confirm = f"{_hdr}\n" + tr(recognized, file_line=file_line)
-            if self._events is not None:
-                self._events.emit(
-                    "pr_comment_decision_recorded",
-                    f"{tid}: {stored_decision} for comment {comment_id_str}",
-                    ticket_id=tid,
-                    data={
-                        "comment_id": comment_id_str,
-                        "decision": stored_decision,
-                        "via": "button",
-                        "matched_token": matched_token,
-                    },
-                )
 
-            undecided = [x for x in ws.state.pending_review_comments if x.get("decision") is None]
-            if undecided:
+            if d.remaining:
                 btn = [Button(
-                    label=tr("Show {n} unanswered", n=len(undecided)),
+                    label=tr("Show {n} unanswered", n=d.remaining),
                     action=f"unanswered:{tid}",
                 )]
-                msg_text = f"{confirm}\n" + tr("{n} comment(s) remaining.", n=len(undecided))
+                msg_text = f"{confirm}\n" + tr("{n} comment(s) remaining.", n=d.remaining)
                 await self._notifier.send_message(chat_id, msg_text, buttons=btn, reply_to_message_id=message_id)
             else:
                 msg_text = f"{confirm}\n" + tr("All decisions in for {ticket_id}. Executing now.", ticket_id=tid)
-                if hasattr(self, '_wake_fn') and self._wake_fn:
-                    self._wake_fn()
                 await self._notifier.send_message(chat_id, msg_text, reply_to_message_id=message_id)
 
         else:

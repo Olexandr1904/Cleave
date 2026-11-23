@@ -205,6 +205,79 @@ def reviewed(ws: Any, *, wake: Callable[[], None] | None = None) -> TicketResult
     return TicketResult(ws.state.current_state)
 
 
+@dataclass(frozen=True)
+class CommentDecision:
+    refused: str = ""          # why nothing was recorded, in the current language; "" when it was
+    comment: dict | None = None
+    stored: str = ""           # "fix", "won't fix: <reason>", or "reinvestigate"
+    remaining: int = 0         # comments of the ticket still undecided
+
+
+HINT_ROUNDS_MAX = 3
+
+
+def decide_comment(ws: Any, comment_id: str, decision: str, text: str = "", *, via: str, matched_token: str = "",
+                   raw_text: str = "", events: Any = None,
+                   wake: Callable[[], None] | None = None) -> CommentDecision:
+    """Record the operator's decision on a pending PR comment of a ticket in PR_REVIEW. `decision` is "fix",
+    "wont_fix" (`text` is the reason) or "reinvestigate" (`text` is the hint, capped at HINT_ROUNDS_MAX rounds).
+    `via` ("button", "reply" or "dashboard") goes into the event. The loop wakes when a fix or won't-fix leaves
+    no comment undecided, and for every hint."""
+    if ws.state.current_state != Stage.PR_REVIEW:
+        return CommentDecision(refused=tr("No workspace in PR_REVIEW for {ticket_id}.", ticket_id=ws.state.ticket_id))
+    pending = ws.state.pending_review_comments or []
+    c = next((x for x in pending if str(x.get("comment_id")) == str(comment_id)), None)
+    if c is None:
+        return CommentDecision(refused=tr("Comment not found."))
+    ticket_id = ws.state.ticket_id
+
+    if decision == "reinvestigate":
+        rounds = int(c.get("hint_rounds", 0) or 0)
+        if rounds >= HINT_ROUNDS_MAX:
+            if events is not None:
+                events.emit("pr_comment_hint_exhausted",
+                            f"{ticket_id}: hint cap reached for comment {c.get('comment_id')}",
+                            ticket_id=ticket_id,
+                            data={"comment_id": c.get("comment_id"), "attempted_hint_excerpt": text[:120]})
+            return CommentDecision(comment=c, remaining=_undecided(pending), refused=tr(
+                "Hint limit reached (3/3) for @{author} on {file_line}. "
+                "Reply \"fix\" or \"won't fix: <reason>\" to close this comment.",
+                author=c.get("author", "?"), file_line=f"{c.get('file', '?')}:{c.get('line', '?')}"))
+        # rounds counts completed re-investigations: a second hint staged before the first ran only overwrites it.
+        c["last_hint"] = text
+        c["pending_reinvestigation"] = True
+        ws.save_state()
+        if events is not None:
+            events.emit("pr_comment_reinvestigation_staged",
+                        f"{ticket_id}: hint round {rounds + 1} for comment {c.get('comment_id')}",
+                        ticket_id=ticket_id,
+                        data={"comment_id": c.get("comment_id"), "hint_round": rounds + 1,
+                              "hint_excerpt": text[:200]})
+        if wake:
+            wake()
+        return CommentDecision(comment=c, stored="reinvestigate", remaining=_undecided(pending))
+
+    stored = "fix" if decision == "fix" else f"won't fix: {text or 'operator decision'}"
+    c["decision"] = stored
+    ws.save_state()
+    data = {"comment_id": c.get("comment_id"), "decision": stored, "via": via}
+    if matched_token:
+        data["matched_token"] = matched_token
+    if raw_text:
+        data["raw_text"] = raw_text
+    if events is not None:
+        events.emit("pr_comment_decision_recorded", f"{ticket_id}: {stored} for comment {c.get('comment_id')}",
+                    ticket_id=ticket_id, data=data)
+    remaining = _undecided(pending)
+    if remaining == 0 and wake:
+        wake()
+    return CommentDecision(comment=c, stored=stored, remaining=remaining)
+
+
+def _undecided(pending: list) -> int:
+    return len([x for x in pending if x.get("decision") is None])
+
+
 def _write_human_input(workspace: Any, text: str) -> None:
     """Write human reply to meta/human-input.md so the agent sees it on next run.
 

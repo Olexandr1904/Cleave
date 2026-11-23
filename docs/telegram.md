@@ -175,6 +175,26 @@ For messages that expect discrete choices, Cleave attaches inline keyboard butto
 
 Only the buttons of what can run are shown. A tap on a reviewer button runs nothing unless the tapped message is that job's own message.
 
+A fix message's buttons follow the job's state. After any action on the job, from Telegram or from the dashboard, the buttons of its message are recomputed from the job as it is now: a button of something already done (a push, say) goes, and when nothing can run any more the keyboard is removed.
+
+### Actions from the dashboard
+
+The [dashboard](dashboard.md) can do what Telegram does: answer a blocked ticket, retry it (from its stage or a chosen one), skip it, decide a PR comment (fix, won't fix, re-investigate), mark a PR reviewed, and push, post or send a command on a reviewer job. Each one runs through the same code as the Telegram answer, so the outcome is the same.
+
+So that this chat stays the full record, an action taken from the dashboard is announced here as a reply to the message it acted on, in the project's Telegram language:
+
+```
+🖥 Dashboard: push — done
+```
+
+- A reviewer command replies to the job's message; a PR comment decision to that comment's escalation message; any other ticket action to the ticket's escalation message, else to a message with the ticket header. A push or post adds the commit or review link
+- The line is short; the full outcome text is shown in the dashboard
+- A refusal (nothing was done) and a read-only command (`text`, `diff`) are not announced
+- If this announcement cannot be sent, the dashboard action is still done and the failure is logged
+- The dashboard only answers the host itself and the Tailscale ranges by default; see `dashboard.allowed_networks` in [dashboard.md](dashboard.md#starting-and-reaching-it)
+
+A typed `reject` at a plan review sends the plan back to analysis, as the **Reject** button does: `Rejected ACME-123. Back to ANALYSIS.`
+
 Escalation messages that need a free-text answer (BLOCKED on requirements, ambiguity, etc.) deliberately don't carry buttons — the answer text is what's needed, not a yes/no.
 
 ---

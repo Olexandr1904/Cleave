@@ -4,7 +4,7 @@ import { loadWorkspaces, loadEvents } from './api.js';
 import { esc, timeAgo, fmtIso, stateBadgeHtml, PIPELINE_STAGES, STAGE_ORDER } from './helpers.js';
 import { renderEventsHtml } from './events.js';
 import { renderReportTabs, bindReportTabClicks } from './reports.js';
-import { ticketControls, refusalOf, decisionBody } from './ticket-actions.js';
+import { ticketControls, refusalOf, decisionBody, isDecided } from './ticket-actions.js';
 import { approveWorkspace, rejectWorkspace, retryWorkspace, skipWorkspace, answerWorkspace, decideComment, markReviewed, takeControl, releaseControl, resumeWorkspace, archiveWorkspace, pauseWorkspace, unpauseWorkspace, showConfirmDialog, rerunWorkspace } from './actions.js';
 
 export async function renderDetail(ticketId, onBack) {
@@ -310,10 +310,16 @@ function buildPrComments(ws) {
   const items = comments.map(c => {
     const id = esc(String(c.comment_id));
     const loc = c.file ? `${esc(c.file)}${c.line ? ':' + esc(String(c.line)) : ''}` : '';
-    return `<div class="pr-comment" data-comment="${id}">
-      <div class="pr-comment-head">${esc(c.author || '')} <span class="pr-comment-loc">${loc}</span></div>
+    const rounds = Number(c.hint_rounds) > 0 ? ` &middot; hint round ${esc(String(c.hint_rounds))}` : '';
+    const head = `<div class="pr-comment-head">${esc(c.author || '')} <span class="pr-comment-loc">${loc}</span>${rounds}</div>
       <div class="pr-comment-body">${esc(c.body || '')}</div>
-      ${c.assessment ? `<div class="pr-comment-assessment">${esc(c.assessment)}</div>` : ''}
+      ${c.assessment ? `<div class="pr-comment-assessment">${esc(c.assessment)}</div>` : ''}`;
+    if (isDecided(c)) {
+      return `<div class="pr-comment" data-comment="${id}">${head}
+      <div class="pr-comment-decision">Decision: ${esc(c.decision)}</div>
+    </div>`;
+    }
+    return `<div class="pr-comment" data-comment="${id}">${head}
       <input class="pr-comment-text" type="text" placeholder="Reason (won't fix, optional) or hint (re-investigate, required)">
       <div class="pr-comment-actions">
         <button class="action-btn btn-approve" data-decision="fix">Fix</button>
@@ -322,17 +328,25 @@ function buildPrComments(ws) {
       </div>
     </div>`;
   }).join('');
-  return `<div class="detail-section"><div class="detail-section-title">PR comments awaiting a decision</div>${items}</div>`;
+  return `<div class="detail-section"><div class="detail-section-title">PR comments</div>${items}</div>`;
 }
 
 function bindActionButtons(ticketId, ws, stateVal, onBack) {
   // Run a request; a refusal (400, status "error") is shown, success reloads the ticket.
+  let busy = false;
   const run = async (label, request) => {
+    if (busy) return;
+    busy = true;
+    const controls = document.querySelectorAll(
+      '#detail-view .action-bar button, #detail-view .action-bar select, .answer-box button, .pr-comment button');
+    controls.forEach(el => { el.disabled = true; });
     try {
       const refused = refusalOf(await request());
-      if (refused) { alert(`${label}: ${refused}`); return; }
-      await renderDetail(ticketId, onBack);
+      if (refused) alert(`${label}: ${refused}`);
     } catch (e) { alert(`${label} failed: ` + e.message); }
+    // A refusal usually means the state changed meanwhile: reload on every outcome.
+    busy = false;
+    await renderDetail(ticketId, onBack);
   };
 
   // Back

@@ -7,7 +7,7 @@ export function ticketControls(ws) {
   const stopped = state === 'BLOCKED' || state === 'FAILED';
   const prReview = state === 'PR_REVIEW';
   const comments = prReview && Array.isArray(ws.pending_review_comments)
-    ? ws.pending_review_comments.filter(c => !c.decision)
+    ? ws.pending_review_comments
     : [];
   return {
     retry: stopped,
@@ -29,4 +29,9 @@ export function decisionBody(decision, text) {
   const t = (decision === 'fix' ? '' : (text || '')).trim();
   if (decision === 'reinvestigate' && !t) return { error: 'A hint is required to re-investigate.' };
   return { body: { decision, text: t } };
+}
+
+// A comment is decided once it has a decision; a hint round in progress leaves it undecided.
+export function isDecided(c) {
+  return !!c.decision;
 }

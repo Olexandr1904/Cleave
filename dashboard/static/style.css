@@ -1460,3 +1460,4 @@ span.reviews-ticket { color: #6e7681; }
   .pr-comment-assessment { font-size: 12px; color: #8b949e; white-space: pre-wrap; }
   .pr-comment-text { background: #0d1117; color: #c9d1d9; border: 1px solid #30363d; border-radius: 6px; padding: 6px 8px; font-size: 12px; }
   .pr-comment-actions { display: flex; gap: 6px; }
+  .pr-comment-decision { font-size: 12px; color: #3fb950; }

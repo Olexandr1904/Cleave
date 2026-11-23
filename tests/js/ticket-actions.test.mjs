@@ -3,7 +3,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-const { ticketControls, RETRY_STAGES, refusalOf, decisionBody } =
+const { ticketControls, RETRY_STAGES, refusalOf, decisionBody, isDecided } =
   await import('../../dashboard/static/js/ticket-actions.js');
 
 const ws = (state, fields = {}) => ({ ticket_id: 'ACME-123', current_state: state, pending_review_comments: null, ...fields });
@@ -25,9 +25,10 @@ test('the stage list is the retry stages in pipeline order', () => {
   assert.deepEqual(ticketControls(ws('DEV')).stages, ['analysis', 'plan_review', 'dev', 'scope_check', 'code_review', 'qa', 'push']);
   assert.deepEqual(RETRY_STAGES, ticketControls(ws('DEV')).stages);
 });
-test('a PR_REVIEW ticket lists only undecided comments and offers reviewed', () => {
+test('a PR_REVIEW ticket lists every escalated comment, decided or not, and offers reviewed', () => {
   const c = ticketControls(ws('PR_REVIEW', { pending_review_comments: [cm('1', null), cm('2', 'fix')] }));
-  assert.deepEqual(c.comments.map(x => x.comment_id), ['1']);
+  assert.deepEqual(c.comments.map(x => x.comment_id), ['1', '2']);
+  assert.deepEqual(c.comments.map(isDecided), [false, true]);
   assert.equal(c.reviewed, true);
   assert.equal(c.retry, false);
 });
@@ -46,4 +47,10 @@ test('a decision body: reinvestigate needs a hint, wont_fix may have none', () =
   assert.deepEqual(decisionBody('wont_fix', ''), { body: { decision: 'wont_fix', text: '' } });
   assert.equal(decisionBody('reinvestigate', '  ').error, 'A hint is required to re-investigate.');
   assert.deepEqual(decisionBody('reinvestigate', 'look at x'), { body: { decision: 'reinvestigate', text: 'look at x' } });
+});
+test('a decided comment is listed with its decision; a hint round in progress is still undecided', () => {
+  const c = ticketControls(ws('PR_REVIEW', { pending_review_comments: [cm('1', "won't fix: old"), { ...cm('2', null), hint_rounds: 1, pending_reinvestigation: true }] }));
+  assert.equal(c.comments[0].decision, "won't fix: old");
+  assert.equal(isDecided(c.comments[0]), true);
+  assert.equal(isDecided(c.comments[1]), false);
 });

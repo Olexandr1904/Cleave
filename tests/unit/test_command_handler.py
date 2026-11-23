@@ -1428,3 +1428,31 @@ def test_a_reply_to_no_recorded_question_is_recorded_alone(tmp_path):
 
     recorded = (tmp_path / "human-input.md").read_text(encoding="utf-8")
     assert "In reply to" not in recorded and recorded.endswith("\n\nuse option B\n")
+
+
+async def test_a_reply_to_the_pr_message_is_reviewed_through_ticket_actions(monkeypatch):
+    """A reply to the PR message of a ticket in PR_REVIEW records "reviewed" through ticket_actions.reviewed, as the
+    Review Complete button and the dashboard do; its answer is as before."""
+    from integrations.telegram import command_handler as module
+
+    ws = _make_workspace("ACME-123", Stage.PR_REVIEW)
+    ws.state.escalation_msg_id = 100
+    ws.state.pending_review_comments = None
+    ws.meta_dir = "/nonexistent"
+    notifier = AsyncMock()
+    notifier.send_message = AsyncMock(return_value=1)
+    handler = CommandHandler(intent_parser=AsyncMock(), notifier=notifier, mode_handler=MagicMock(),
+                             active_workspaces_fn=lambda: [ws])
+    handler._wake_fn = MagicMock()
+    calls = []
+    reviewed = module.ticket_actions.reviewed
+    monkeypatch.setattr(module.ticket_actions, "reviewed",
+                        lambda w, *, wake=None: calls.append((w, wake)) or reviewed(w, wake=wake))
+
+    assert await handler.handle_reply(100, "done, have a look", "12345") is True
+    assert calls == [(ws, handler._wake_fn)]
+    assert ws.state.human_input_reply == "reviewed"
+    ws.save_state.assert_called_once()
+    handler._wake_fn.assert_called_once()
+    [(chat_id, text)] = [c.args for c in notifier.send_message.await_args_list]
+    assert chat_id == "12345" and text.endswith("\nGot it. Fetching PR comments now.")

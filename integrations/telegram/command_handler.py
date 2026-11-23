@@ -795,18 +795,15 @@ class CommandHandler:
             if ws.state.escalation_msg_id != reply_to_msg_id:
                 continue
 
-            # PR_REVIEW: user signals review is done — store reply and wake immediately
+            # PR_REVIEW: user signals review is done — recorded as "reviewed", the loop woken
             if ws.state.current_state == "PR_REVIEW":
-                ws.state.human_input_reply = text
-                ws.save_state()
+                ticket_actions.reviewed(ws, wake=self._wake_fn)
                 _title = tg_format.read_ticket_title(ws)
                 _hdr = tg_format.tg_header("🔍", ws.state.company_id, ws.state.ticket_id, _title)
                 await self._notifier.send_message(
                     chat_id,
                     f"{_hdr}\n" + tr("Got it. Fetching PR comments now."),
                 )
-                if hasattr(self, '_wake_fn') and self._wake_fn:
-                    self._wake_fn()
                 logger.info("PR review signal for %s via reply to msg %d", ws.state.ticket_id, reply_to_msg_id)
                 return True
 

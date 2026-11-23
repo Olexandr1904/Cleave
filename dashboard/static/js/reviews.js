@@ -817,6 +817,8 @@ export async function renderReviews() {
   if (error) {
     view.querySelector('.reviews-list').innerHTML =
       `<div class="state-msg reviews-error">Error: ${esc(String(error))}</div>`;
+    // The panel still loads its own detail: after a command, it unlocks and shows the command's result.
+    await paintPanel(view);
     return;
   }
   repos = data.repos;

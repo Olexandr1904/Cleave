@@ -153,6 +153,19 @@ class TestCommandHandler:
         msg = mock_notifier.edit_message.call_args[0][2]
         assert "T-1" in msg and "T-2" in msg
 
+    @pytest.mark.parametrize("gate, target, answer", [
+        ("PLAN_REVIEW", "ANALYSIS", "Rejected T-1. Back to ANALYSIS."),  # as the gate's own Reject button does
+        ("QA", "FAILED", "Rejected T-1. Marked as FAILED."),
+    ])
+    async def test_typed_reject(self, mock_intent_parser, mock_notifier, mock_mode_handler, gate, target, answer):
+        ws = _make_workspace("T-1", "AWAITING_APPROVAL", previous_state=gate)
+        mock_intent_parser.parse = AsyncMock(return_value=ParsedIntent(intent="reject", params={}, reply=""))
+        handler = CommandHandler(intent_parser=mock_intent_parser, notifier=mock_notifier,
+                                 mode_handler=mock_mode_handler, active_workspaces_fn=lambda: [ws])
+        await handler.handle_message("reject it", "12345")
+        ws.transition.assert_called_once_with(target)
+        assert mock_notifier.edit_message.call_args[0][2] == answer
+
     async def test_analyze_dispatches_callback_and_reports(
         self, mock_intent_parser, mock_notifier, mock_mode_handler,
     ):
@@ -300,10 +313,10 @@ class TestRetryDeferred:
     async def test_retry_deferred_ticket_discriminates_branch(
         self, mock_notifier, mock_mode_handler,
     ):
-        # Use a previous_state whose lowercase form IS a key in _VALID_RETRY_STATES
+        # Use a previous_state whose lowercase form IS a key in RETRY_STAGES
         # but maps to a DIFFERENT value, so the two code paths diverge:
         #   - DEFERRED branch:  target = ws.state.previous_state → "push"
-        #   - fallback path:    target = _VALID_RETRY_STATES.get("push") → "PUSHED"
+        #   - fallback path:    target = RETRY_STAGES.get("push") → "PUSHED"
         # This proves the DEFERRED branch in the (BLOCKED, FAILED, DEFERRED) tuple
         # is actually taken; removing DEFERRED from the tuple will fail this test.
         ws = _make_workspace("T-D", "DEFERRED", previous_state="push")
@@ -1392,7 +1405,7 @@ def _blocked_workspace(tmp_path, question):
 
 
 def test_a_reply_is_recorded_with_the_question_it_answers(tmp_path):
-    from integrations.telegram.command_handler import _write_human_input
+    from orchestrator.ticket_actions import _write_human_input
     ws = _blocked_workspace(tmp_path, "May the pipeline edit .github/workflows/release.yml?\nReply yes or no.")
 
     _write_human_input(ws, "yes")
@@ -1408,7 +1421,7 @@ def test_a_reply_is_recorded_with_the_question_it_answers(tmp_path):
 
 
 def test_a_reply_to_no_recorded_question_is_recorded_alone(tmp_path):
-    from integrations.telegram.command_handler import _write_human_input
+    from orchestrator.ticket_actions import _write_human_input
     ws = _blocked_workspace(tmp_path, None)
 
     _write_human_input(ws, "use option B")

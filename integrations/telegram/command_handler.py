@@ -5,58 +5,26 @@ from __future__ import annotations
 import logging
 import time
 from datetime import datetime, timezone
-from pathlib import Path
 from typing import Any, Callable
 
-from integrations.telegram.handlers.approval import (
-    APPROVAL_REJECT_STATE,
-    ApprovalHandler,
-)
+from integrations.telegram.handlers.approval import ApprovalHandler
 from integrations.telegram.handlers.mode import ModeHandler
-from integrations.telegram.handlers.status import STOPPED_STATES, StatusHandler, status_buttons
+from integrations.telegram.handlers.status import StatusHandler, status_buttons
 from integrations.telegram.intent_parser import IntentParser, ParsedIntent, parse_fixed_intent
 from integrations.telegram.switch_commands import (
     format_switch_status,
     parse_switch_command,
     resolve_scope,
 )
-from orchestrator import tg_format
-from orchestrator.constants import (
-    JUDGING_STATES,
-    REPORT_BA,
-    REPORT_DEV,
-    REPORT_QA,
-    REPORT_SCOPE_GUARD,
-)
-from orchestrator.pipeline.driver import reset_attempts_from
+from orchestrator import tg_format, ticket_actions
 from orchestrator.reviewer.grammar import parse_reply
 from orchestrator.skillflow.replies import SKILL_OFF
 from orchestrator.switches import GLOBAL, switch_scopes
 from orchestrator.tg_i18n import ENGLISH, N_, detail, telegram_language, tr
 from integrations.base.notifier import Button
-from workspace.workspace import InvalidTransitionError, Stage
+from workspace.workspace import Stage
 
 logger = logging.getLogger(__name__)
-
-
-def _write_human_input(workspace: Any, text: str) -> None:
-    """Write human reply to meta/human-input.md so the agent sees it on next run.
-
-    The escalation it answers is recorded with it. Operators answer in a word ("yes", "A"): alone, such a reply
-    names nothing, and an agent that must check what was allowed could not tell from the record.
-    """
-    meta = Path(workspace.meta_dir) if hasattr(workspace, 'meta_dir') else Path(workspace.state.workspace_root) / "meta"
-    meta.mkdir(parents=True, exist_ok=True)
-    path = meta / "human-input.md"
-    # Append to preserve history of multiple replies
-    existing = path.read_text(encoding="utf-8") if path.exists() else ""
-    timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
-    question = getattr(workspace.state, "human_input_question", None)
-    asked = ""
-    if isinstance(question, str) and question.strip():
-        asked = "In reply to:\n" + "\n".join(f"> {line}".rstrip() for line in question.strip().splitlines()) + "\n\n"
-    entry = f"\n## Human input ({timestamp})\n\n{asked}{text}\n"
-    path.write_text(existing + entry, encoding="utf-8")
 
 
 def _ensure_msg_ids(c: dict) -> list[int]:
@@ -83,17 +51,6 @@ _WONT_FIX_TOKENS = (
     "won't fix", "wont fix", "do not fix", "don't fix", "dont fix",
     "not fix", "no fix",
 )
-
-
-# Where "skip" sends a ticket: past the stage it stopped at, to the next one.
-_SKIP_NEXT = {
-    Stage.ANALYSIS: Stage.PLAN_REVIEW,
-    Stage.PLAN_REVIEW: Stage.DEV,
-    Stage.DEV: Stage.SCOPE_CHECK,
-    Stage.SCOPE_CHECK: Stage.CODE_REVIEW,
-    Stage.CODE_REVIEW: Stage.QA, Stage.QA: Stage.PUSHED,
-    Stage.PUSHED: Stage.PR_REVIEW, Stage.PR_REVIEW: Stage.DONE,
-}
 
 
 def _classify_reply(text: str) -> tuple[str, str, str]:
@@ -134,6 +91,8 @@ class CommandHandler:
     _reviewer: Any | None = None
     # The skill flow's replies (is_anchor, handle_reply, handle_callback, answer); None: no skill flow on this daemon.
     _skill: Any | None = None
+    # Wakes the orchestrator's loop; main.py sets it. None: nothing to wake.
+    _wake_fn: Callable[[], None] | None = None
     # The Telegram language of a project (its id; "" for the global one) and of a chat: a ticket's answers are in its
     # project's, the others in the chat's. English unless the daemon passes them.
     _language_of: Callable[[str], str] = staticmethod(lambda project_id: ENGLISH)
@@ -464,12 +423,11 @@ class CommandHandler:
             )
             return
         ws = awaiting[0]
-        next_state = self._approval_handler.resolve_next_state(ws)
-        ws.transition(next_state)
+        result = ticket_actions.approve(ws, wake=self._wake_fn)
         await self._reply(
             chat_id,
             intent.reply or tr("Approved {ticket_id}. Moving to {state}.", ticket_id=ws.state.ticket_id,
-                               state=next_state),
+                               state=result.state),
             processing_msg_id,
         )
 
@@ -489,13 +447,12 @@ class CommandHandler:
             )
             return
         ws = awaiting[0]
-        ws.transition(Stage.FAILED)
-        ws.update_state(error="Rejected by operator via Telegram")
-        await self._reply(
-            chat_id,
-            intent.reply or tr("Rejected {ticket_id}. Marked as FAILED.", ticket_id=ws.state.ticket_id),
-            processing_msg_id,
-        )
+        result = ticket_actions.reject(ws, via="Telegram", wake=self._wake_fn)
+        if result.state == Stage.FAILED:
+            outcome = tr("Rejected {ticket_id}. Marked as FAILED.", ticket_id=ws.state.ticket_id)
+        else:
+            outcome = tr("Rejected {ticket_id}. Back to {state}.", ticket_id=ws.state.ticket_id, state=result.state)
+        await self._reply(chat_id, intent.reply or outcome, processing_msg_id)
 
     async def _handle_analyze(self, intent: ParsedIntent, chat_id: str, workspaces: list[Any], processing_msg_id: int | None = None) -> None:
         ticket_ids = intent.params.get("ticket_ids", [])
@@ -531,16 +488,6 @@ class CommandHandler:
             lines.append(intent.reply or tr("No tickets were queued."))
         await self._reply(chat_id, "\n".join(lines), processing_msg_id)
 
-    _VALID_RETRY_STATES = {
-        "analysis": Stage.ANALYSIS,
-        "plan_review": Stage.PLAN_REVIEW,
-        "dev": Stage.DEV,
-        "scope_check": Stage.SCOPE_CHECK,
-        "code_review": Stage.CODE_REVIEW,
-        "qa": Stage.QA,
-        "push": Stage.PUSHED,
-    }
-
     async def _handle_reviewed(self, intent: ParsedIntent, chat_id: str, workspaces: list[Any], processing_msg_id: int | None = None) -> None:
         """Signal that code review is complete for a PR_REVIEW workspace."""
         pr_workspaces = [ws for ws in workspaces if ws.state.current_state == Stage.PR_REVIEW]
@@ -567,16 +514,12 @@ class CommandHandler:
             )
             return
 
-        target.state.human_input_reply = "reviewed"
-        target.save_state()
+        ticket_actions.reviewed(target, wake=self._wake_fn)
         await self._reply(
             chat_id,
             tr("Got it. Fetching PR comments for {ticket_id} now.", ticket_id=target.state.ticket_id),
             processing_msg_id,
         )
-        # Wake the orchestrator immediately
-        if hasattr(self, '_wake_fn') and self._wake_fn:
-            self._wake_fn()
 
     async def _handle_retry(self, intent: ParsedIntent, chat_id: str, workspaces: list[Any], processing_msg_id: int | None = None) -> None:
         ticket_id = intent.params.get("ticket_id")
@@ -597,90 +540,33 @@ class CommandHandler:
 
         ws = matches[0]
         from_stage = intent.params.get("from_stage")
-        target_state, refused = self._retry_target(ws, from_stage)
-        refused = refused or self._restart(ws, target_state, stage_named=bool(from_stage))
-        if refused:
-            await self._reply(chat_id, refused, processing_msg_id)
+        result = ticket_actions.retry(ws, stage=from_stage, furthest=not from_stage, wake=self._wake_fn)
+        if result.refused:
+            await self._reply(chat_id, result.refused, processing_msg_id)
             return
 
         await self._reply(
             chat_id,
-            tr("Retrying {ticket_id} from {state}.", ticket_id=ticket_id, state=target_state),
+            tr("Retrying {ticket_id} from {state}.", ticket_id=ticket_id, state=result.state),
             processing_msg_id,
         )
-        logger.info("Retry %s -> %s", ticket_id, target_state)
-
-    def _retry_target(self, ws: Any, from_stage: str | None) -> tuple[str, str]:
-        """The state a retry of `ws` goes to — the named stage's, else the furthest stage its reports show it
-        reached — and "", or "" and why there is none."""
-        if from_stage:
-            target_state = self._VALID_RETRY_STATES.get(from_stage)
-            if not target_state:
-                valid = ", ".join(self._VALID_RETRY_STATES.keys())
-                return "", tr("Unknown stage '{stage}'. Valid stages: {valid}", stage=from_stage, valid=valid)
-            return target_state, ""
-        # Smart retry: detect furthest completed stage from artifacts
-        reports = Path(ws.reports_dir) if hasattr(ws, 'reports_dir') else Path(ws.state.workspace_root) / "reports"
-        if ws.state.current_state == Stage.BLOCKED and ws.state.previous_state in JUDGING_STATES:
-            return ws.state.previous_state, ""  # back to the judge that blocked it
-        if (reports / REPORT_QA).exists():
-            return Stage.PUSHED, ""
-        if (reports / REPORT_SCOPE_GUARD).exists():
-            return Stage.QA, ""
-        if (reports / REPORT_DEV).exists():
-            return Stage.SCOPE_CHECK, ""
-        if (reports / REPORT_BA).exists():
-            # Not DEV: retrying into dev would hand the dev agent a plan
-            # no reviewer signed off on. Costs one extra reviewer run.
-            return Stage.PLAN_REVIEW, ""
-        return ws.state.previous_state or Stage.ANALYSIS, ""
-
-    def _restart(self, ws: Any, target_state: str, *, stage_named: bool = False) -> str:
-        """Send `ws` to `target_state` with fresh attempts there and at every later stage, and wake the loop: "", or
-        why nothing was done (a ticket that cannot go there from where it is now). `stage_named`: the operator named
-        the stage, which then runs, also a judge that has just rejected the work for the last time."""
-        try:
-            ws.transition(target_state)
-        except InvalidTransitionError:
-            return tr("{ticket_id} is {state} now: nothing was done.", ticket_id=ws.state.ticket_id,
-                      state=ws.state.current_state)
-        if stage_named:
-            ws.state.rejected_at = None
-        ws.state.human_input_pending = False
-        ws.state.error = None
-        reset_attempts_from(ws, target_state)
-        ws.save_state()
-        if getattr(self, "_wake_fn", None):
-            self._wake_fn()
-        return ""
+        logger.info("Retry %s -> %s", ticket_id, result.state)
 
     async def _skip(self, ws: Any, chat_id: str, reply_to: int | None = None) -> None:
         """Advance a stopped ticket past the stage it stopped at, to the next one: the "skip" reply to an escalation
         and the Skip button. A ticket that runs again, or cannot go there from where it is now, is left as it is."""
         prev = ws.state.previous_state or Stage.ANALYSIS
-        resume_state = _SKIP_NEXT.get(prev, Stage.DONE)
         answer: dict[str, Any] = {"reply_to_message_id": reply_to} if reply_to else {}
-        refused = tr("{ticket_id} is {state} now: nothing was done.", ticket_id=ws.state.ticket_id,
-                     state=ws.state.current_state)
-        if ws.state.current_state not in STOPPED_STATES:
-            await self._notifier.send_message(chat_id, refused, **answer)
+        result = ticket_actions.skip(ws, wake=self._wake_fn)
+        if result.refused:
+            await self._notifier.send_message(chat_id, result.refused, **answer)
             return
-        try:
-            ws.transition(resume_state)
-        except InvalidTransitionError:
-            await self._notifier.send_message(chat_id, refused, **answer)
-            return
-        ws.state.human_input_pending = False
-        ws.state.error = None
-        ws.save_state()
         _title = tg_format.read_ticket_title(ws)
         _hdr = tg_format.tg_header("⏭", ws.state.company_id, ws.state.ticket_id, _title)
         await self._notifier.send_message(
-            chat_id, f"{_hdr}\n" + tr("Skipped {stage}. Advanced to {state}.", stage=prev, state=resume_state),
+            chat_id, f"{_hdr}\n" + tr("Skipped {stage}. Advanced to {state}.", stage=prev, state=result.state),
             **answer,
         )
-        if getattr(self, "_wake_fn", None):
-            self._wake_fn()
 
     async def _handle_provide_input(
         self,
@@ -731,27 +617,20 @@ class CommandHandler:
             return
 
         input_text = intent.params.get("input_text", "").strip()
-        if not input_text:
-            await self._reply(chat_id, tr("Empty input — nothing to resume with."), processing_msg_id)
+        result = ticket_actions.answer(target, input_text, wake=self._wake_fn)
+        if result.refused:
+            await self._reply(chat_id, result.refused, processing_msg_id)
             return
-
-        target.state.human_input_reply = input_text
-        target.state.human_input_pending = False
-        _write_human_input(target, input_text)
-        resume_state = target.state.previous_state or "ANALYSIS"
-        reset_attempts_from(target, resume_state)
-        target.transition(resume_state)
-        target.save_state()
-        self._recently_unblocked[target.state.ticket_id] = (time.time(), resume_state)
+        self._recently_unblocked[target.state.ticket_id] = (time.time(), result.state)
 
         await self._reply(
             chat_id,
             intent.reply or tr("Got it. Resuming {ticket_id} from {state} with your input.",
-                               ticket_id=target.state.ticket_id, state=resume_state),
+                               ticket_id=target.state.ticket_id, state=result.state),
             processing_msg_id,
         )
         logger.info(
-            "Unblocked %s via provide_input -> %s", target.state.ticket_id, resume_state,
+            "Unblocked %s via provide_input -> %s", target.state.ticket_id, result.state,
         )
 
     def _format_recent_unblock_notice(self, window_seconds: float = 300.0) -> str | None:
@@ -956,36 +835,29 @@ class CommandHandler:
                     return True
 
                 if reply_lower == "retry":
-                    resume_state = ws.state.previous_state or Stage.ANALYSIS
-                    ws.state.human_input_pending = False
-                    ws.state.error = None
-                    reset_attempts_from(ws, resume_state)
-                    ws.transition(resume_state)
-                    ws.save_state()
+                    result = ticket_actions.retry(ws, wake=self._wake_fn)
+                    if result.refused:
+                        await self._notifier.send_message(chat_id, result.refused)
+                        return True
                     _title = tg_format.read_ticket_title(ws)
                     _hdr = tg_format.tg_header("🔄", ws.state.company_id, ws.state.ticket_id, _title)
                     await self._notifier.send_message(
                         chat_id,
-                        f"{_hdr}\n" + tr("Retrying {state}.", state=resume_state),
+                        f"{_hdr}\n" + tr("Retrying {state}.", state=result.state),
                     )
-                    if hasattr(self, '_wake_fn') and self._wake_fn:
-                        self._wake_fn()
                     return True
 
                 # Default: provide input and resume
-                ws.state.human_input_reply = text
-                ws.state.human_input_pending = False
-                _write_human_input(ws, text)
-                resume_state = ws.state.previous_state or Stage.ANALYSIS
-                reset_attempts_from(ws, resume_state)
-                ws.transition(resume_state)
-                ws.save_state()
-                self._recently_unblocked[ws.state.ticket_id] = (time.time(), resume_state)
+                result = ticket_actions.answer(ws, text, wake=self._wake_fn)
+                if result.refused:
+                    await self._notifier.send_message(chat_id, result.refused)
+                    return True
+                self._recently_unblocked[ws.state.ticket_id] = (time.time(), result.state)
                 _title = tg_format.read_ticket_title(ws)
                 _hdr = tg_format.tg_header("▶", ws.state.company_id, ws.state.ticket_id, _title)
                 await self._notifier.send_message(
                     chat_id,
-                    f"{_hdr}\n" + tr("Resuming from {state} with your input.", state=resume_state),
+                    f"{_hdr}\n" + tr("Resuming from {state} with your input.", state=result.state),
                 )
                 logger.info(
                     "Unblocked %s via reply to msg %d",
@@ -1148,12 +1020,11 @@ class CommandHandler:
                     reply_to_message_id=message_id,
                 )
                 return
-            next_state = self._approval_handler.resolve_next_state(ws)
-            ws.transition(next_state)
+            result = ticket_actions.approve(ws, wake=self._wake_fn)
             _title = tg_format.read_ticket_title(ws)
             _hdr = tg_format.tg_header("✅", ws.state.company_id, ws.state.ticket_id, _title)
             await self._notifier.send_message(
-                chat_id, f"{_hdr}\n" + tr("Approved. Moving to {state}.", state=next_state),
+                chat_id, f"{_hdr}\n" + tr("Approved. Moving to {state}.", state=result.state),
                 reply_to_message_id=message_id,
             )
 
@@ -1165,16 +1036,11 @@ class CommandHandler:
                     reply_to_message_id=message_id,
                 )
                 return
-            # The plan-review gate's own message promises "back to analysis";
-            # marking the ticket FAILED there would make that a lie. Other
-            # gates keep the existing behaviour.
-            target = APPROVAL_REJECT_STATE.get(ws.state.previous_state, "FAILED")
-            ws.transition(target)
-            if target == "FAILED":
-                ws.update_state(error="Rejected by operator via Telegram")
+            result = ticket_actions.reject(ws, via="Telegram", wake=self._wake_fn)
+            if result.state == Stage.FAILED:
                 _outcome = tr("Rejected. Marked as FAILED.")
             else:
-                _outcome = tr("Rejected. Back to {state}.", state=target)
+                _outcome = tr("Rejected. Back to {state}.", state=result.state)
             _title = tg_format.read_ticket_title(ws)
             _hdr = tg_format.tg_header("❌", ws.state.company_id, ws.state.ticket_id, _title)
             await self._notifier.send_message(chat_id, f"{_hdr}\n{_outcome}", reply_to_message_id=message_id)
@@ -1187,15 +1053,12 @@ class CommandHandler:
                     reply_to_message_id=message_id,
                 )
                 return
-            ws.state.human_input_reply = "reviewed"
-            ws.save_state()
+            ticket_actions.reviewed(ws, wake=self._wake_fn)
             _title = tg_format.read_ticket_title(ws)
             _hdr = tg_format.tg_header("🔍", ws.state.company_id, ws.state.ticket_id, _title)
             await self._notifier.send_message(
                 chat_id, f"{_hdr}\n" + tr("Got it. Fetching PR comments now."), reply_to_message_id=message_id,
             )
-            if hasattr(self, '_wake_fn') and self._wake_fn:
-                self._wake_fn()
 
         elif action in ("retry", "retry_from", "retry_pick", "skip"):
             key, _, stage = ticket_id.partition(":")
@@ -1213,21 +1076,20 @@ class CommandHandler:
                 await self._notifier.send_message(
                     chat_id, tr("{ticket_id}: retry from which stage?", ticket_id=key), reply_to_message_id=message_id,
                     buttons=[Button(state, f"retry_from:{key}:{name}", row=1 + i // 4)
-                             for i, (name, state) in enumerate(self._VALID_RETRY_STATES.items())],
+                             for i, (name, state) in enumerate(ticket_actions.RETRY_STAGES.items())],
                 )
                 return
             if action == "retry_from":
-                target_state, refused = self._retry_target(ws, stage)
+                result = ticket_actions.retry(ws, stage=stage, wake=self._wake_fn)
             else:  # the stage it stopped at, as the "retry" reply to its escalation
-                target_state, refused = ws.state.previous_state or Stage.ANALYSIS, ""
-            refused = refused or self._restart(ws, target_state, stage_named=action == "retry_from")
-            if refused:
-                await self._notifier.send_message(chat_id, refused, reply_to_message_id=message_id)
+                result = ticket_actions.retry(ws, wake=self._wake_fn)
+            if result.refused:
+                await self._notifier.send_message(chat_id, result.refused, reply_to_message_id=message_id)
                 return
             _title = tg_format.read_ticket_title(ws)
             _hdr = tg_format.tg_header("🔄", ws.state.company_id, ws.state.ticket_id, _title)
             await self._notifier.send_message(
-                chat_id, f"{_hdr}\n" + tr("Retrying from {state}.", state=target_state),
+                chat_id, f"{_hdr}\n" + tr("Retrying from {state}.", state=result.state),
                 reply_to_message_id=message_id,
             )
 

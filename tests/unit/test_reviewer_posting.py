@@ -1064,7 +1064,8 @@ def test_check_dry_run_matches_an_items_text():
 def test_only_posting_confirms():
     files = [*(path for top in ("orchestrator", "integrations", "dashboard") for path in (ROOT / top).rglob("*.py")),
              ROOT / "main.py"]
-    posts = re.compile(r"confirm\s*=\s*True|\.approve\s*\(")
+    # ticket_actions.approve moves a pipeline ticket past its gate; it posts no review.
+    posts = re.compile(r"confirm\s*=\s*True|(?<!ticket_actions)\.approve\s*\(")
     found = {path.relative_to(ROOT).as_posix() for path in files if posts.search(path.read_text(encoding="utf-8"))}
     assert found == {"orchestrator/reviewer/posting.py"}
 

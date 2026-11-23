@@ -23,6 +23,7 @@ TEXTS: dict[str, str] = {
     "Multiple workspaces awaiting approval: {tickets}. Please specify which one to reject.":
         "На схвалення чекають кілька воркспейсів: {tickets}. Уточніть, який відхилити.",
     "Rejected {ticket_id}. Marked as FAILED.": "{ticket_id} відхилено. Позначено як FAILED.",
+    "Rejected {ticket_id}. Back to {state}.": "{ticket_id} відхилено. Повертаю до {state}.",
     "Please specify ticket IDs to analyze.": "Вкажіть ID тікетів для аналізу.",
     "Analyze is not available — no orchestrator callback configured.":
         "Аналіз недоступний — колбек оркестратора не налаштовано.",

@@ -343,7 +343,8 @@ export function candidatesHtml(candidates) {
   return `<p>${candidates.length ? 'Asks the ticked people to review it on GitHub.'
     : 'GitHub suggests nobody: type the logins to ask.'}</p>
     <fieldset class="review-event-pick">${rows}</fieldset>
-    <label>Others: <input type="text" name="reviewer-other" placeholder="logins, comma-separated" autocomplete="off"></label>`;
+    <label class="review-other">Others: <input class="reviews-search" type="text" name="reviewer-other"
+      placeholder="logins, comma-separated" autocomplete="off"></label>`;
 }
 
 // The logins a Request review… dialog picked: the ticked ones, then the typed ones (split on commas and spaces, a

@@ -168,6 +168,28 @@ async function postReview(url, body) {
   return data;
 }
 
+// A board move on GitHub: {move: 'request_review', reviewers} | {move: 'ready'} | {move: 'merge', method, head}.
+export async function prMove(scope, number, body) {
+  return postReview('/api/reviews/pr-move', { scope, number, ...body });
+}
+
+async function getReview(url) {
+  const resp = await fetch(url);
+  const data = await resp.json().catch(() => ({}));
+  if (!resp.ok) throw new Error(data.error || `HTTP ${resp.status}`);
+  return data;
+}
+
+// Who to ask for a review of the PR (Request review…'s dialog): {candidates: [{login, reason}]}.
+export async function reviewCandidates(scope, number) {
+  return getReview(`/api/reviews/candidates?scope=${encodeURIComponent(scope)}&number=${encodeURIComponent(number)}`);
+}
+
+// The merge methods the repo allows (Merge…'s dialog): {methods, default}.
+export async function mergeOptions(scope) {
+  return getReview(`/api/reviews/merge-options?scope=${encodeURIComponent(scope)}`);
+}
+
 // `body` is {command} or {text}, exactly one.
 export async function reviewAction(scope, number, jobId, body) {
   return postReview('/api/reviews/action', { scope, number, job_id: jobId, ...body });

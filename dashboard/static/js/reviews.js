@@ -5,16 +5,17 @@
 // (columns, tiles, cards, buttons) is reviews-board.js, the panel's actions are review-actions.js.
 
 import {
-  fixFindings, fixNow, loadReviewDetail, loadReviews, reviewAction, reviewConfirm, reviewNow, skipReview,
+  fixFindings, fixNow, loadReviewDetail, loadReviews, mergeOptions, prMove, reviewAction, reviewCandidates,
+  reviewConfirm, reviewNow, skipReview,
 } from './api.js';
 import { showConfirmDialog } from './actions.js';
 import { renderSwitchPanel } from './switches.js';
 import { EVENTS, mainCommand, prActions, resolveCommand } from './review-actions.js';
 import { esc, fmtIso, timeAgo } from './helpers.js';
 import {
-  COLUMNS, againConfirm, avatarsHtml, boardColumns, boardTiles, buttonsHtml, cardHtml, cardTitle, columnOf,
-  findingsScale, jobLineHtml, mainButtonHtml, moveText, notInvolved, panelParts, repoFilterOf, resultLineHtml,
-  ticketLinkHtml, verdictsHtml,
+  COLUMNS, againConfirm, avatarsHtml, boardColumns, boardTiles, buttonsHtml, candidatesHtml, cardHtml, cardTitle,
+  columnOf, findingsScale, jobLineHtml, mainButtonHtml, mergeHtml, moveText, notInvolved, panelParts,
+  pickedReviewers, repoFilterOf, resultLineHtml, ticketLinkHtml, verdictsHtml,
 } from './reviews-board.js';
 
 // The board's names for the report's finding kinds (orchestrator/reviewer/service.py's _FINDING_KINDS).
@@ -601,6 +602,8 @@ async function runAction(view, btn, inPanel) {
   }
   if (!view.isConnected) return;  // the operator left the Reviews view meanwhile: nothing to show it in
   showStatus(view, text, failed);
+  // The card shows it too: the status line is at the top of the page and goes after a few seconds.
+  result = { key: rowKey(scope, Number(number)), state: failed ? 'failed' : skip ? 'skipped' : 'queued', text, card: true };
   await renderReviews();
   // The clicked button lost the focus (disabled, then redrawn as Queued or gone): the panel's Back for a
   // button in the panel, else the PR's row.
@@ -661,10 +664,87 @@ function eventPickHtml(detail) {
       value="${value}"${value === 'COMMENT' ? ' checked' : ''}> ${name}</label>`).join('')}</fieldset>${suggested}`;
 }
 
-// A card's or the panel header's main button: the PR's detail, read at the click, gives its command (mainCommand). A
-// push of protected files and a post of the review ask first.
+// The main buttons of a GitHub move (reviews-board.js turnMove), which go to /api/reviews/pr-move.
+const GITHUB_MOVES = ['rerequest', 'request', 'ready', 'merge'];
+
+// One GitHub move on `target`: the main buttons and the panel wait for the answer, which its card shows; then the board
+// reloads (the server polls the repo soon after a move, so the card's line follows within a minute).
+async function runMove(view, target, body) {
+  if (acting) return;
+  acting = true;
+  const key = rowKey(target.scope, target.number);
+  if (openPr) lockPanel(view.querySelector('.review-panel'));
+  view.querySelectorAll('[data-main-move]').forEach(btn => { btn.disabled = true; });
+  try {
+    const answer = await prMove(target.scope, target.number, body);
+    result = { key, state: answer.state, text: answer.text, card: true };
+  } catch (err) {
+    result = { key, state: 'failed', text: String(err.message || err), card: true };
+  }
+  acting = false;
+  if (!view.isConnected) return;
+  await renderReviews();
+}
+
+// A GitHub move's button: Re-request and Ready for review run at once; Request review… and Merge… ask first, in a
+// dialog whose data (who to ask, the merge methods) is read at the click. The PR, its reviewers and its head are taken
+// at the click: a refresh while the dialog is open changes nothing that is sent.
+async function onPrMove(view, btn) {
+  if (acting) return;
+  const target = { scope: btn.dataset.scope, number: Number(btn.dataset.number) };
+  const key = rowKey(target.scope, target.number);
+  const kind = btn.dataset.mainMove;
+  const pr = findPr(target);
+  if (kind === 'rerequest') {
+    runMove(view, target, { move: 'request_review', reviewers: (pr && pr.rerequest) || [] });
+    return;
+  }
+  if (kind === 'ready') {
+    runMove(view, target, { move: 'ready' });
+    return;
+  }
+  const label = btn.textContent.trim().replace(/…$/, '');
+  const head = pr ? pr.head : '';
+  btn.disabled = true;
+  let data = null;
+  try {
+    data = kind === 'request' ? await reviewCandidates(target.scope, target.number) : await mergeOptions(target.scope);
+  } catch (err) {
+    result = { key, state: 'failed', text: String(err.message || err), card: true };
+  }
+  if (!view.isConnected) return;
+  if (data && kind === 'merge' && !data.methods.length) {
+    result = { key, state: 'refused', text: 'GitHub allows no merge method in this repo.', card: true };
+    data = null;
+  }
+  if (!data) {
+    await renderReviews();
+    return;
+  }
+  btn.disabled = false;
+  let dialog;
+  const bodyHtml = kind === 'request' ? candidatesHtml(data.candidates) : mergeHtml(target.number, data);
+  showConfirmDialog(label, bodyHtml, label, () => {
+    if (kind === 'request') {
+      const checked = [...dialog.querySelectorAll('input[name="reviewer"]:checked')].map(input => input.value);
+      const other = dialog.querySelector('input[name="reviewer-other"]').value;
+      return runMove(view, target, { move: 'request_review', reviewers: pickedReviewers(checked, other) });
+    }
+    const method = dialog.querySelector('input[name="merge-method"]:checked');
+    return runMove(view, target, { move: 'merge', method: method ? method.value : '', head });
+  });
+  dialog = [...document.querySelectorAll('.dialog-overlay')].pop();
+  dialog.querySelector('#dlg-cancel')?.focus();  // Enter on the button behind it would open a second one
+}
+
+// A card's or the panel header's main button: a GitHub move (onPrMove), or Cleave's: the PR's detail, read at the
+// click, gives its command (mainCommand). A push of protected files and a post of the review ask first.
 async function onMainButton(view, btn) {
   if (acting) return;
+  if (GITHUB_MOVES.includes(btn.dataset.mainMove)) {
+    onPrMove(view, btn);
+    return;
+  }
   const target = { scope: btn.dataset.scope, number: Number(btn.dataset.number) };
   const key = rowKey(target.scope, target.number);
   const label = btn.textContent.trim().replace(/…$/, '');

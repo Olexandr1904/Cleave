@@ -222,6 +222,9 @@ class JiraConfig:
     statuses: JiraStatusesConfig = field(default_factory=JiraStatusesConfig)
     # The statuses a move may step through on its way to one it has no transition to, in order; none by default.
     transition_via: list[str] = field(default_factory=list)
+    # Per status: the date fields (field ids) a move into it sets to today when the ticket has none in them, for a
+    # workflow whose transition requires them; none by default.
+    transition_dates: dict[str, list[str]] = field(default_factory=dict)
 
 
 @dataclass

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Callable
+from datetime import date
 from typing import Any
 
 import httpx
@@ -37,6 +38,7 @@ class JiraAdapter(TrackerInterface):
         statuses: dict[str, str] | None = None,
         *, on_auth_failure: Callable[[int], None] | None = None,
         transition_via: list[str] | None = None,
+        transition_dates: dict[str, list[str]] | None = None,
     ) -> None:
         # Every client this adapter builds reports a 401/403 through this hook.
         self._auth_hooks = {"response": [auth_failure_hook(on_auth_failure)]}
@@ -54,6 +56,9 @@ class JiraAdapter(TrackerInterface):
         }
         # The statuses transition_ticket may step through on its way to a status it has no transition to, in order.
         self._transition_via = list(transition_via or [])
+        # Per status (lower-cased): the date fields a move into it sets to today, for a workflow that requires them
+        # on that transition. A field the ticket has a value in keeps it.
+        self._transition_dates = {s.lower(): list(f) for s, f in (transition_dates or {}).items()}
         self._client = httpx.AsyncClient(
             base_url=f"{self._url}/rest/api/3",
             auth=(email, token),
@@ -204,8 +209,30 @@ class JiraAdapter(TrackerInterface):
         raise ValueError(f"Cannot transition {ticket_id} to '{status}'. Available transitions: {offered}")
 
     async def _post_transition(self, ticket_id: str, transition: dict) -> None:
-        await self._request("POST", f"/issue/{ticket_id}/transitions",
-                            json={"transition": {"id": transition["id"]}})
+        """Take `transition`, with the date fields its status gets. Raises ValueError with Jira's own words when
+        Jira refuses it ("Field Due date is required.")."""
+        body: dict[str, Any] = {"transition": {"id": transition["id"]}}
+        dates = await self._dates_to_set(ticket_id, _to(transition))
+        if dates:
+            body["fields"] = dates
+        try:
+            await self._request("POST", f"/issue/{ticket_id}/transitions", json=body)
+        except httpx.HTTPStatusError as e:
+            said = _jira_errors(e.response) if e.response.status_code in (400, 409, 422) else ""
+            if not said:
+                raise
+            name = transition.get("name") or _to(transition)
+            raise ValueError(f"Jira refused '{name}' on {ticket_id}: {said}") from e
+
+    async def _dates_to_set(self, ticket_id: str, status: str) -> dict[str, str]:
+        """The date fields a move into `status` sets to today: those of `transition_dates` the ticket has none in."""
+        names = self._transition_dates.get(status.lower())
+        if not names:
+            return {}
+        data = await self._request("GET", f"/issue/{ticket_id}", params={"fields": ",".join(names)})
+        now = data.get("fields") or {}
+        today = date.today().isoformat()
+        return {n: today for n in names if not now.get(n)}
 
     async def _status(self, ticket_id: str) -> str:
         """The name of the ticket's status now."""
@@ -315,6 +342,18 @@ class JiraAdapter(TrackerInterface):
 def _to(transition: dict) -> str:
     """The name of the status a transition leads to ("" when Jira names none)."""
     return (transition.get("to") or {}).get("name", "") or ""
+
+
+def _jira_errors(response: httpx.Response) -> str:
+    """What Jira said in an error answer: its errorMessages, then its per-field errors ("" when none)."""
+    try:
+        body = response.json()
+    except ValueError:
+        return ""
+    if not isinstance(body, dict):
+        return ""
+    said = list(body.get("errorMessages") or []) + list((body.get("errors") or {}).values())
+    return " ".join(str(s) for s in said)
 
 
 def _extract_adf_text(adf: dict) -> str:

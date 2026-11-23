@@ -86,13 +86,18 @@ tracker:
     token: secret
     project_key: ACME
     transition_via: [Ready For Development, In Progress]
+    transition_dates:
+      In Progress: [customfield_10015, duedate]
 """)
     from main import _build_tracker_for_project
 
     _, projects = load_config(str(config_dir))
     cfg = projects["acme"].config.tracker
     assert cfg.jira.transition_via == ["Ready For Development", "In Progress"]
-    assert _build_tracker_for_project(cfg, "acme")._transition_via == ["Ready For Development", "In Progress"]
+    assert cfg.jira.transition_dates == {"In Progress": ["customfield_10015", "duedate"]}
+    tracker = _build_tracker_for_project(cfg, "acme")
+    assert tracker._transition_via == ["Ready For Development", "In Progress"]
+    assert tracker._transition_dates == {"in progress": ["customfield_10015", "duedate"]}
 
 
 def test_new_tracker_block_trello(make_project):

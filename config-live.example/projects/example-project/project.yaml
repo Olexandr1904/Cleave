@@ -23,6 +23,10 @@ jira:
   # A move to a status with no transition from where the ticket is steps only through these statuses, in order.
   # Without them Cleave takes direct transitions only (it never guesses a step).
   # transition_via: ["Ready For Development", "In Progress"]
+  # When a transition requires dates, the date fields (field ids) a move into a status sets to today. A field the
+  # ticket already has a value in keeps it.
+  # transition_dates:
+  #   "In Progress": ["customfield_10015", "duedate"]
 
 telegram:
   bot_token: "${TELEGRAM_BOT_TOKEN}"

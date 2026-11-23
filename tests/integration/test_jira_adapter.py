@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from datetime import date
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
@@ -194,6 +195,47 @@ class TestJiraTransition:
 
         await adapter.transition_ticket("TEST-123", "in progress")
         assert not posted.called
+
+    @respx.mock
+    async def test_a_move_into_a_dated_status_sets_its_empty_date_fields_to_today(self):
+        """A workflow can require dates on a transition: Cleave sets the ones the ticket has no value for."""
+        adapter = JiraAdapter(url="https://test.atlassian.net", email="e", token="t", project_key="TEST",
+                              transition_via=["In Progress"],
+                              transition_dates={"In Progress": ["customfield_10015", "duedate"]})
+        respx.get("https://test.atlassian.net/rest/api/3/issue/TEST-123/transitions").mock(side_effect=[
+            httpx.Response(200, json={"transitions": [
+                {"id": "62", "name": "Start Progress", "to": {"name": "In Progress"}}]}),
+            httpx.Response(200, json={"transitions": [
+                {"id": "63", "name": "Ready For Build", "to": {"name": "Ready for Build"}}]}),
+        ])
+        fields = respx.get("https://test.atlassian.net/rest/api/3/issue/TEST-123").mock(
+            return_value=httpx.Response(200, json={"fields": {
+                "status": {"name": "Reopened"}, "customfield_10015": None, "duedate": "2026-12-04"}}))
+        posted = respx.post("https://test.atlassian.net/rest/api/3/issue/TEST-123/transitions").mock(
+            return_value=httpx.Response(204))
+
+        await adapter.transition_ticket("TEST-123", "Ready for Build")
+        bodies = [json.loads(call.request.content) for call in posted.calls]
+        assert bodies == [
+            {"transition": {"id": "62"}, "fields": {"customfield_10015": date.today().isoformat()}},
+            {"transition": {"id": "63"}},
+        ]
+        assert any(call.request.url.params.get("fields") == "customfield_10015,duedate" for call in fields.calls)
+
+    @respx.mock
+    async def test_a_refused_transition_says_what_jira_said(self, adapter):
+        respx.get("https://test.atlassian.net/rest/api/3/issue/TEST-123/transitions").mock(
+            return_value=httpx.Response(200, json={"transitions": [
+                {"id": "62", "name": "Start Progress", "to": {"name": "In Progress"}}]}))
+        respx.post("https://test.atlassian.net/rest/api/3/issue/TEST-123/transitions").mock(
+            return_value=httpx.Response(400, json={
+                "errorMessages": ["Field Due date is required.", "Field Start date is required."], "errors": {}}))
+
+        with patch("integrations.jira.jira_adapter.RETRY_BACKOFF", [0, 0, 0]), \
+                pytest.raises(ValueError) as refused:
+            await adapter.transition_ticket("TEST-123", "In Progress")
+        assert str(refused.value) == ("Jira refused 'Start Progress' on TEST-123: "
+                                      "Field Due date is required. Field Start date is required.")
 
 
 class TestJiraComment:

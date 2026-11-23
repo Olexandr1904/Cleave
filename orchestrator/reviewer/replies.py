@@ -18,6 +18,7 @@ from typing import Any
 
 from integrations.base.notifier import Button
 from orchestrator.reviewer.actions import _GONE, _MAX_PARTS, _PR_ACTIONS, LONG_ACTIONS, ReviewerActions
+from orchestrator.reviewer.actions import CONFIRM_TTL  # noqa: F401 (re-exported: the answer window of an echo)
 from orchestrator.reviewer.chat import ReviewerChat
 from orchestrator.reviewer.grammar import ReplyCommand, describe, parse_reply
 from orchestrator.reviewer.lines import interrupted_line
@@ -32,7 +33,6 @@ from orchestrator.tg_i18n import ENGLISH, N_, UKRAINIAN, current_language, teleg
 
 logger = logging.getLogger(__name__)
 
-CONFIRM_TTL = timedelta(minutes=15)
 # TelegramAdapter.start_polling() keeps pending updates: a reply older than this (one sent while the daemon was down,
 # say) runs nothing.
 _REPLY_MAX_AGE = timedelta(minutes=15)
@@ -40,9 +40,6 @@ _REPLY_MAX_AGE = timedelta(minutes=15)
 _OFF = N_("Reviewer mode is off on this daemon: nothing was done.")
 _NO_REPLIES = N_("This line takes no replies; nothing was done.")
 _LINE_ONLY = N_('Only "review again" and "skip" work on this line; nothing was done.')
-_HANDLED = N_("Already handled.")
-_CANCELLED = N_("Cancelled: nothing was done.")
-_EXPIRED = N_("Expired: reply again; nothing was done.")
 # A fix message's buttons (messages.fix_buttons), each the command the typed reply gives; rv_pushx asks first.
 _TAPS = {
     "rv_push": ReplyCommand("push"),
@@ -167,11 +164,8 @@ class ReviewerReplies:
                 to = _To(message_id, anchor.job_id, anchor.scope, anchor.number)
             language = self._anchor_language(conf.job_id if conf is not None else to.job_id, to.scope)
             with telegram_language(language):
-                if action == "rv_no":
-                    declined = self._store.claim_confirmation(conf_id, "declined")
-                    await self._answer(to, tr(_CANCELLED if declined else _HANDLED))
-                elif action == "rv_ok":
-                    await self._confirmed(self._store.claim_confirmation(conf_id, "confirmed"), to)
+                if action in ("rv_ok", "rv_no"):
+                    await self._claimed(conf, self.actions.claim(conf_id, action == "rv_ok", self._now()), to)
                 else:
                     logger.warning("Reviewer callback not known: nothing was done")
         except Exception as e:
@@ -281,37 +275,34 @@ class ReviewerReplies:
         await self._answer(to, tr("Understood: {command}. Correct?", command=describe(checked, job.head_sha)),
                            [Button(tr("Yes"), f"rv_ok:{conf.id}"), Button(tr("No"), f"rv_no:{conf.id}")])
 
-    async def _confirmed(self, conf: Confirmation | None, to: _To) -> None:
-        """A Yes: the stored command run against its job as it is now, unless it was handled or has expired. The
-        answers are anchored to the confirmation's job."""
-        if conf is None:
-            await self._answer(to, tr(_HANDLED))
-            return
-        to = _To(to.reply_to, conf.job_id)
-        if self._now() - datetime.fromisoformat(conf.created_at) > CONFIRM_TTL:
-            await self._answer(to, tr(_EXPIRED))
-            return
-        job = self._store.job(conf.job_id)
-        ctx = self._contexts.get(job.scope)
-        if ctx is None:
-            await self._answer(to, tr(_GONE))
+    async def _claimed(self, conf: Confirmation | None, claimed: ReplyCommand | str, to: _To) -> None:
+        """A Yes or No, claimed by the layer (ReviewerActions.claim): its answer, or the checked command it returned,
+        run against the confirmation's job. The answers are anchored to that job."""
+        if conf is not None:
+            to = _To(to.reply_to, conf.job_id)
+        if isinstance(claimed, str):
+            await self._answer(to, claimed)
         else:
-            await self._execute(job, ReplyCommand.from_dict(conf.command), to)
+            await self._start(self._store.job(conf.job_id), claimed, to)
 
     async def _execute(self, job: Job, cmd: ReplyCommand, to: _To) -> None:
-        """Run `cmd` against `job` as the store has it now, or answer why nothing is done. A post or a push answers its
-        progress line first; it and a text (whose translation may take a model turn) run in a tracked task."""
+        """Run `cmd` against `job` as the store has it now, or answer why nothing is done."""
         checked = self.actions.check(job, cmd)
         if isinstance(checked, str):
             await self._answer(to, checked)
             return
+        await self._start(job, checked, to)
+
+    async def _start(self, job: Job, cmd: ReplyCommand, to: _To) -> None:
+        """Run a checked command. A post or a push answers its progress line first; it and a text (whose translation
+        may take a model turn) run in a tracked task."""
         say = functools.partial(self._answer, to)
-        if checked.action in LONG_ACTIONS:
-            if checked.action != "text":
-                await self._answer(to, self.actions.progress_line(job, checked))
-            self._track(to, self._run_and_refresh(job, checked, say))
+        if cmd.action in LONG_ACTIONS:
+            if cmd.action != "text":
+                await self._answer(to, self.actions.progress_line(job, cmd))
+            self._track(to, self._run_and_refresh(job, cmd, say))
         else:
-            await self._run_and_refresh(job, checked, say)
+            await self._run_and_refresh(job, cmd, say)
 
     async def _run_and_refresh(self, job: Job, cmd: ReplyCommand, say: Callable[[str], Awaitable[None]]) -> None:
         """`actions.run`, then, after a post or a push that was not refused, the fix message's buttons."""

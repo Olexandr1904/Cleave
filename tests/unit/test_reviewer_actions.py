@@ -1,7 +1,9 @@
 # tests/unit/test_reviewer_actions.py
 from __future__ import annotations
 
-from orchestrator.reviewer.actions import ReviewerActions
+from datetime import timedelta
+
+from orchestrator.reviewer.actions import CONFIRM_TTL, ReviewerActions
 from orchestrator.reviewer.grammar import ReplyCommand
 from orchestrator.reviewer.lines import not_understood_line
 from orchestrator.reviewer.models import Post
@@ -10,7 +12,8 @@ from orchestrator.reviewer.replies import ReviewerReplies
 from orchestrator.reviewer.report import parse_report
 from orchestrator.reviewer.report_edit import item_text
 from tests.unit.test_reviewer_replies import (
-    CHAT, EVERY_BUT_3, NEW_HEAD, SCOPE, T1, FakePosting, Rig, address_rig, confirmations, findings_rig, protect,
+    CHAT, EVERY_BUT_3, NEW_HEAD, SCOPE, T1, FakePosting, Rig, address_rig, confirmations, echo_id, findings_rig,
+    protect,
 )
 from tests.unit.test_reviewer_report import HEAD, REPORT
 
@@ -248,3 +251,55 @@ async def test_a_review_job_has_no_buttons_to_refresh(tmp_path):
     notifier = with_notifier(rig)
     await rig.replies.refresh_buttons(rig.job.id)
     assert notifier.buttons_set == []
+
+
+# --- The Yes or No on a confirmation: one gate for both channels ---
+
+HANDLED = "Already handled."
+
+
+def ask(rig, cmd=EVERY_BUT_3):
+    """A pending confirmation of `cmd` on the rig's job, asked at T1 in the rig's chat."""
+    return rig.store.add_confirmation(rig.job.id, CHAT, cmd.to_dict(), T1.isoformat())
+
+
+async def test_claim_answers_a_no_a_second_answer_and_an_expired_yes(tmp_path):
+    rig = Rig(tmp_path)
+    actions = actions_of(rig)
+    declined = ask(rig)
+    assert actions.claim(declined.id, False, T1) == "Cancelled: nothing was done."
+    assert actions.claim(declined.id, False, T1) == HANDLED
+    assert actions.claim(declined.id, True, T1) == HANDLED
+    assert actions.claim("no-such-confirmation", True, T1) == HANDLED
+    expired = ask(rig)
+    assert actions.claim(expired.id, True, T1 + CONFIRM_TTL + timedelta(seconds=1)) == (
+        "Expired: reply again; nothing was done.")
+    assert actions.claim(expired.id, False, T1) == HANDLED   # spent: never "Cancelled" after the Yes
+    assert rig.posting.calls == [] and CONFIRM_TTL == timedelta(minutes=15)
+
+
+async def test_claim_returns_the_command_checked_against_the_job_as_it_is_now(tmp_path):
+    rig = Rig(tmp_path)
+    actions = actions_of(rig)
+    assert actions.claim(ask(rig).id, True, T1 + CONFIRM_TTL) == EVERY_BUT_3   # nothing runs from here
+    superseded = ask(rig)
+    supersede(rig, rig.job)
+    assert actions.claim(superseded.id, True, T1).startswith(outdated_prefix())
+    assert actions.claim(superseded.id, True, T1) == HANDLED   # a refused Yes is spent too
+    rig.store.set_job_state(rig.job.id, "done", "", T1.isoformat())
+    rig.failing.add(f"forge:{SCOPE}")
+    assert actions.claim(ask(rig).id, True, T1) == FORGE_FAILING
+    assert rig.posting.calls == []
+
+
+async def test_a_telegram_yes_and_no_go_through_claim(tmp_path):
+    rig = Rig(tmp_path, parser=[EVERY_BUT_3] * 2)
+    actions, claims = actions_of(rig), []
+    claim = actions.claim
+    actions.claim = lambda *args: claims.append(args) or claim(*args)
+    for action in ("rv_ok", "rv_no"):
+        await rig.reply("пости всё кроме 3")
+        conf_id = echo_id(rig.chat.sent[-1][1])
+        await rig.tap(action, conf_id, rig.last_id())
+        assert claims[-1] == (conf_id, action == "rv_ok", T1)
+    assert len(claims) == 2 and len(rig.posting.calls) == 1

@@ -589,6 +589,20 @@ def test_confirm_takes_the_dashboards_confirmations_only(dash):
     assert d.rig.posting.calls == []
 
 
+def test_a_dashboard_yes_and_no_go_through_the_layers_claim(dash):
+    """The gate (claimed once, CONFIRM_TTL, the job as it is now, checked) is the layer's, as for Telegram's taps."""
+    d = dash
+    d.rig.parser.results = [EVERY_BUT_3] * 2
+    actions, claims = d.rig.replies.actions, []
+    claim = actions.claim
+    actions.claim = lambda *args: claims.append(args) or claim(*args)
+    for yes in (True, False):
+        conf_id = act(d, d.rig.review.id, text=ASK).json()["confirmation"]
+        confirm(d, conf_id, yes)
+        assert claims[-1] == (conf_id, yes, T1)
+    assert len(claims) == 2 and len(d.rig.posting.calls) == 1
+
+
 def test_free_text_goes_to_the_model_only_where_the_layer_lets_it(dash):             # Ruling 9
     d = dash
     r = act(d, d.rig.job.id, text="please push it now")

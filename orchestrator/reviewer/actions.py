@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
+from datetime import datetime, timedelta
 from pathlib import Path
 
 from orchestrator.reviewer.board import FIX_KINDS
@@ -34,6 +35,11 @@ _GONE = N_("This repo is no longer reviewed; nothing was done.")
 _NO_LOGIN = N_("claude is not logged in on the host: nothing was started.")
 _NO_LOGIN_PARSER = N_("claude is not logged in on the host: only exact replies work now; nothing was done.")
 _FORGE_FAILING = N_("The forge token is failing (see the dashboard): nothing posted.")
+_HANDLED = N_("Already handled.")
+_CANCELLED = N_("Cancelled: nothing was done.")
+_EXPIRED = N_("Expired: reply again; nothing was done.")
+
+CONFIRM_TTL = timedelta(minutes=15)  # a Yes on a confirmation older than this runs nothing
 
 LONG_ACTIONS = ("post", "post_replies", "push", "push_post", "text")  # Telegram runs these in a tracked task
 
@@ -117,6 +123,21 @@ class ReviewerActions:
         if cmd is None:
             return not_understood_line(job.kind)
         return self._check(self._store.job(job.id), cmd)
+
+    def claim(self, conf_id: str, yes: bool, now: datetime) -> ReplyCommand | str:
+        """The Yes or No on a confirmation (a command the model understood, or "push anyway"): on a Yes within
+        CONFIRM_TTL, its command checked against its job as the store has it now, for the caller to run; else the
+        answer: Cancelled (a No), Already handled (answered before, or not known), Expired, or why the job refuses it.
+        The store hands a confirmation out once, so a second answer runs nothing. The caller checks first that the
+        confirmation is its chat's."""
+        if not yes:
+            return tr(_CANCELLED if self._store.claim_confirmation(conf_id, "declined") else _HANDLED)
+        conf = self._store.claim_confirmation(conf_id, "confirmed")
+        if conf is None:
+            return tr(_HANDLED)
+        if now - datetime.fromisoformat(conf.created_at) > CONFIRM_TTL:
+            return tr(_EXPIRED)
+        return self.check(self._store.job(conf.job_id), ReplyCommand.from_dict(conf.command))
 
     async def run(self, job: Job, cmd: ReplyCommand,
                   say: Callable[[str], Awaitable[None]] | None = None) -> ActionResult:

@@ -17,7 +17,6 @@ from starlette.routing import Route
 from dashboard.web_guard import foreign_origin
 from orchestrator.reviewer.grammar import ReplyCommand, describe, parse_reply
 from orchestrator.reviewer.models import BoardRow, Job
-from orchestrator.reviewer.replies import _CANCELLED, _EXPIRED, _HANDLED, CONFIRM_TTL
 from orchestrator.reviewer.service import _where, utcnow
 from orchestrator.tg_i18n import ENGLISH, telegram_language, tr
 
@@ -236,8 +235,8 @@ def build_review_routes(service: Any, get_projects: Callable[[], dict] = dict, a
 
     async def post_confirm(request: Request) -> JSONResponse:
         """The Yes or No on a command the model understood from the dashboard's text (Telegram's own echoes are
-        answered there). A Yes runs it against its job as the store has it now, unless it was answered already or is
-        older than CONFIRM_TTL."""
+        answered there). The layer claims it (ReviewerActions.claim): a Yes runs its command against its job as the
+        store has it now, unless it was answered already, is older than CONFIRM_TTL or the job refuses it."""
         body = await _body(request)
         if isinstance(body, JSONResponse):
             return body
@@ -251,15 +250,10 @@ def build_review_routes(service: Any, get_projects: Callable[[], dict] = dict, a
         if conf is None or conf.chat_id != _DASHBOARD_CHAT:
             return JSONResponse({"error": f"no dashboard confirmation {conf_id}"}, status_code=404)
         with telegram_language(ENGLISH):
-            if not yes:
-                declined = store.claim_confirmation(conf_id, "declined")
-                return _refused(tr(_CANCELLED if declined else _HANDLED))
-            conf = store.claim_confirmation(conf_id, "confirmed")
-            if conf is None:
-                return _refused(tr(_HANDLED))
-            if now() - datetime.fromisoformat(conf.created_at) > CONFIRM_TTL:
-                return _refused(tr(_EXPIRED))
-        return await _run(store.job(conf.job_id), ReplyCommand.from_dict(conf.command))
+            claimed = actions.claim(conf_id, yes, now())
+        if isinstance(claimed, str):
+            return _refused(claimed)
+        return await _execute(store.job(conf.job_id), claimed)
 
     async def _understand(job: Job, text: str) -> JSONResponse:
         """The model's command for `text`, checked and kept for a Yes, or why nothing is done (the layer decides what
@@ -274,17 +268,22 @@ def build_review_routes(service: Any, get_projects: Callable[[], dict] = dict, a
         return JSONResponse({"state": "confirm", "question": question, "confirmation": conf.id})
 
     async def _run(job: Job, cmd: ReplyCommand) -> JSONResponse:
-        """`cmd` checked against `job` and run, its texts in English; a result that changed something is announced
-        in Telegram."""
+        """`cmd` checked against `job` and run (_execute), or why nothing is done, in English."""
         with telegram_language(ENGLISH):
             checked = actions.check(job, cmd)
-            if isinstance(checked, str):
-                return _refused(checked)
-            result = await actions.run(job, checked)
-            command = describe(checked, job.head_sha)
+        if isinstance(checked, str):
+            return _refused(checked)
+        return await _execute(job, checked)
+
+    async def _execute(job: Job, cmd: ReplyCommand) -> JSONResponse:
+        """A checked command run against `job`, its texts in English; a result that changed something is announced in
+        Telegram."""
+        with telegram_language(ENGLISH):
+            result = await actions.run(job, cmd)
+            command = describe(cmd, job.head_sha)
         if replies is not None and result.state not in _UNANNOUNCED:
             try:
-                await replies.announce_dashboard(job.id, checked, result.state)
+                await replies.announce_dashboard(job.id, cmd, result.state)
             except Exception as e:  # the command is done: its answer does not depend on Telegram
                 logger.warning("Dashboard reviewer command not announced in Telegram: %s", _where(e))
         return JSONResponse({"state": result.state, "texts": result.texts, "command": command})

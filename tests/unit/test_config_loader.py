@@ -229,3 +229,41 @@ def test_build_memory_caps_are_off_unless_asked(tmp_path):
     # Caps rewrite gradle.properties in the gradle user home: a config that does not ask for them leaves it alone.
     (tmp_path / "global.yaml").write_text("logging:\n  level: DEBUG\n")
     assert load_global_config(str(tmp_path)).defaults.cap_build_memory is False
+
+
+# --- dashboard.allowed_networks and allowed_hosts: checked at load, not by the first request ---
+
+def _dashboard(tmp_path, section):
+    (tmp_path / "global.yaml").write_text("dashboard:\n" + section)
+    return load_global_config(str(tmp_path)).dashboard
+
+
+@pytest.mark.parametrize("section", [
+    "  allowed_networks:\n",                      # an empty value is None, which the guard reads as any peer
+    "  allowed_networks: null\n",
+    "  allowed_networks: ''\n",
+    "  allowed_networks: 127.0.0.0/8\n",          # a string, not a list
+    "  allowed_networks: [192.168.1.10/24]\n",    # host bits set: every request would be a 500
+    "  allowed_networks: [not-a-network]\n",
+    "  allowed_networks: [8]\n",                  # not a string (ip_network would take it as 0.0.0.8/32)
+])
+def test_dashboard_allowed_networks_must_be_a_list_of_networks(tmp_path, section):
+    with pytest.raises(ConfigError, match="dashboard.allowed_networks"):
+        _dashboard(tmp_path, section)
+
+
+@pytest.mark.parametrize("section", ["  allowed_hosts:\n", "  allowed_hosts: box.example.lan\n",
+                                     "  allowed_hosts: [1]\n"])
+def test_dashboard_allowed_hosts_must_be_a_list_of_names(tmp_path, section):
+    with pytest.raises(ConfigError, match="dashboard.allowed_hosts"):
+        _dashboard(tmp_path, section)
+
+
+def test_dashboard_allow_lists_load(tmp_path):
+    from config.schemas import DashboardConfig
+
+    loaded = _dashboard(tmp_path, "  allowed_networks: ['10.0.0.0/8', 'fd00::/8']\n  allowed_hosts: [box.example.lan]\n")
+    assert (loaded.allowed_networks, loaded.allowed_hosts) == (["10.0.0.0/8", "fd00::/8"], ["box.example.lan"])
+    defaults = _dashboard(tmp_path, "  port: 1024\n")
+    assert (defaults.allowed_networks, defaults.allowed_hosts) == (DashboardConfig().allowed_networks, [])
+    assert _dashboard(tmp_path, "  allowed_networks: []\n").allowed_networks == []   # no peer at all

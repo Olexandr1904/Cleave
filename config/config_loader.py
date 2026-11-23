@@ -8,6 +8,7 @@ Environment variable references (${VAR_NAME}) are resolved at load time.
 
 from __future__ import annotations
 
+import ipaddress
 import logging
 import os
 import posixpath
@@ -178,6 +179,33 @@ def _parse_telegram_section(data: dict, file_path: str) -> TelegramConfig:
     return telegram
 
 
+def _parse_dashboard_section(data: dict, file_path: str) -> DashboardConfig:
+    """The `dashboard:` section; its allowed_networks must be a list of CIDR networks (an empty value would read as
+    any peer, a bad one would fail every request) and its allowed_hosts a list of names."""
+    dashboard = _parse_section(data, "dashboard", DashboardConfig, file_path)
+    networks = dashboard.allowed_networks
+    if not isinstance(networks, list) or not all(isinstance(n, str) for n in networks):
+        raise ConfigError(
+            f"'dashboard.allowed_networks' must be a list of CIDR networks (got {networks!r})",
+            file_path=file_path, field="dashboard.allowed_networks",
+        )
+    for network in networks:
+        try:
+            ipaddress.ip_network(network)
+        except ValueError as e:
+            raise ConfigError(
+                f"'dashboard.allowed_networks' has a bad network {network!r}: {e}",
+                file_path=file_path, field="dashboard.allowed_networks",
+            ) from e
+    hosts = dashboard.allowed_hosts
+    if not isinstance(hosts, list) or not all(isinstance(h, str) for h in hosts):
+        raise ConfigError(
+            f"'dashboard.allowed_hosts' must be a list of host names (got {hosts!r})",
+            file_path=file_path, field="dashboard.allowed_hosts",
+        )
+    return dashboard
+
+
 def _mapping(value: Any, field_name: str, file_path: str) -> dict:
     """A copy of a YAML section: {} when empty, ConfigError when it is not a mapping."""
     if not value:
@@ -280,7 +308,7 @@ def load_global_config(config_dir: str) -> GlobalConfig:
         failure_summarizer=_parse_section(data, "failure_summarizer", FailureSummarizerConfig, file_str),
         pipeline=_parse_section(data, "pipeline", PipelineConfig, file_str),
         intent_parser=_parse_section(data, "intent_parser", IntentParserConfig, file_str),
-        dashboard=_parse_section(data, "dashboard", DashboardConfig, file_str),
+        dashboard=_parse_dashboard_section(data, file_str),
         reviewer=_parse_reviewer_global(data, file_str),
         env_refs=env_var_refs(raw_data),
         env_vars=env_var_names(raw_data),

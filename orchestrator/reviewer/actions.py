@@ -32,6 +32,7 @@ _MAX_PARTS = 3  # of one answer: an item's text, a posting result
 # Answers, translated where they are sent (tr).
 _GONE = N_("This repo is no longer reviewed; nothing was done.")
 _NO_LOGIN = N_("claude is not logged in on the host: nothing was started.")
+_NO_LOGIN_PARSER = N_("claude is not logged in on the host: only exact replies work now; nothing was done.")
 _FORGE_FAILING = N_("The forge token is failing (see the dashboard): nothing posted.")
 
 LONG_ACTIONS = ("post", "post_replies", "push", "push_post", "text")  # Telegram runs these in a tracked task
@@ -91,9 +92,20 @@ class ReviewerActions:
             return tr("Checking before pushing; once the push lands, every drafted reply is posted.")
         return tr("Checking before posting: {command}.", command=describe(cmd, job.head_sha))
 
+    def free_text_refusal(self, job: Job) -> str | None:
+        """Why a reply the grammar does not know cannot go to the model, or None: only a done or posted review or
+        re-check takes one, while there is a parser and claude is logged in on the host."""
+        if self._parser is None or job.kind not in ("review", "recheck") or job.state not in POSTABLE_STATES:
+            return not_understood_line(job.kind)
+        if self._credential_failing("claude_login"):
+            return tr(_NO_LOGIN_PARSER)
+        return None
+
     async def understand(self, job: Job, text: str) -> ReplyCommand | str:
         """The LLM fallback: the parser's command, checked against the job as it is once the parser has answered, or
-        why nothing is done. Nothing runs from here: the caller asks Yes / No first."""
+        why nothing is done (free_text_refusal first). Nothing runs from here: the caller asks Yes / No first."""
+        if (refusal := self.free_text_refusal(job)) is not None:
+            return refusal
         run = self._store.run(job.id)
         context = reply_context(job.kind, _report(run), run.replies, set(run.drafted))
         cmd = await self._parser.parse(text, context)

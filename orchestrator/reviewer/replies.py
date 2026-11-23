@@ -20,9 +20,9 @@ from integrations.base.notifier import Button
 from orchestrator.reviewer.actions import _GONE, _MAX_PARTS, _PR_ACTIONS, LONG_ACTIONS, ReviewerActions
 from orchestrator.reviewer.chat import ReviewerChat
 from orchestrator.reviewer.grammar import ReplyCommand, describe, parse_reply
-from orchestrator.reviewer.lines import interrupted_line, not_understood_line
+from orchestrator.reviewer.lines import interrupted_line
 from orchestrator.reviewer.messages import MESSAGE_LIMIT, message_parts
-from orchestrator.reviewer.models import POSTABLE_STATES, Anchor, Confirmation, Job
+from orchestrator.reviewer.models import Anchor, Confirmation, Job
 from orchestrator.reviewer.posting import Posting
 from orchestrator.reviewer.reply_llm import ReplyParser
 from orchestrator.reviewer.service import RepoContext, ReviewerService, _where, utcnow
@@ -40,7 +40,6 @@ _REPLY_MAX_AGE = timedelta(minutes=15)
 _OFF = N_("Reviewer mode is off on this daemon: nothing was done.")
 _NO_REPLIES = N_("This line takes no replies; nothing was done.")
 _LINE_ONLY = N_('Only "review again" and "skip" work on this line; nothing was done.')
-_NO_LOGIN_PARSER = N_("claude is not logged in on the host: only exact replies work now; nothing was done.")
 _HANDLED = N_("Already handled.")
 _CANCELLED = N_("Cancelled: nothing was done.")
 _EXPIRED = N_("Expired: reply again; nothing was done.")
@@ -91,9 +90,7 @@ class ReviewerReplies:
         if actions is None:
             actions = ReviewerActions(contexts, store, service, posting, small, parser,
                                       credential_failing=credential_failing)
-        self.actions = actions
-        self._parser = parser
-        self._credential_failing = credential_failing
+        self.actions = actions  # its parser and credential check decide what free text may reach the model
         self._now = now
         self._tasks: set[asyncio.Task] = set()
         self._closed = False  # aclose() ran: no task is started any more
@@ -244,13 +241,10 @@ class ReviewerReplies:
             await self._answer(to, tr(_GONE))
         elif (cmd := parse_reply(text)) is not None:
             await self._execute(job, cmd, to)
-        elif self._parser is not None and job.kind in ("review", "recheck") and job.state in POSTABLE_STATES:
-            if self._credential_failing("claude_login"):
-                await self._answer(to, tr(_NO_LOGIN_PARSER))
-            else:
-                self._track(to, self._understand(job, chat_id, text, to))
+        elif (refusal := self.actions.free_text_refusal(job)) is not None:
+            await self._answer(to, refusal)
         else:
-            await self._answer(to, not_understood_line(job.kind))
+            self._track(to, self._understand(job, chat_id, text, to))
 
     async def _line_reply(self, anchor: Anchor, text: str, to: _To) -> None:
         """A line about one PR takes "review again" and "skip", in the grammar's words; any other line (number 0:

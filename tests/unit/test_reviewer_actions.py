@@ -9,7 +9,7 @@ from orchestrator.reviewer.replies import ReviewerReplies
 from orchestrator.reviewer.report import parse_report
 from orchestrator.reviewer.report_edit import item_text
 from tests.unit.test_reviewer_replies import (
-    CHAT, EVERY_BUT_3, NEW_HEAD, SCOPE, T1, FakePosting, Rig, address_rig, confirmations,
+    CHAT, EVERY_BUT_3, NEW_HEAD, SCOPE, T1, FakePosting, Rig, address_rig, confirmations, findings_rig, protect,
 )
 from tests.unit.test_reviewer_report import HEAD, REPORT
 
@@ -118,3 +118,46 @@ async def test_replies_given_actions_use_them(tmp_path):                        
     await replies.handle_reply(CHAT, 100, "post 1 2")
     await replies.wait_idle()
     assert [call[0] for call in rig.posting.calls] == ["post_review"] and other.calls == []
+
+
+FORGE_FAILING = "The forge token is failing (see the dashboard): nothing posted."
+NO_LOGIN_PARSER = "claude is not logged in on the host: only exact replies work now; nothing was done."
+
+
+async def test_push_anyway_tap_is_refused_at_once_while_the_forge_token_fails(tmp_path):   # Ruling 8
+    """No Yes / No echo for a push the forge token cannot make: the refusal comes at the tap."""
+    rig = address_rig(tmp_path, failing={f"forge:{SCOPE}"})
+    protect(rig)
+    await rig.tap("rv_pushx", rig.job.id, 200)
+    assert rig.chat.sent == [(FORGE_FAILING, rig.at(200))]   # no buttons
+    assert confirmations(rig) == 0 and rig.posting.calls == []
+
+
+async def test_free_text_goes_to_the_model_only_on_a_done_review_or_recheck(tmp_path):   # Ruling 9
+    rig = Rig(tmp_path, parser=[])
+    actions = actions_of(rig)
+    assert actions.free_text_refusal(rig.job) is None
+    recheck = rig.add_job("recheck", 300)
+    assert actions.free_text_refusal(recheck) is None
+    rig.store.set_job_state(rig.job.id, "failed", "the session failed", T1.isoformat())
+    assert actions.free_text_refusal(rig.store.job(rig.job.id)) == not_understood_line("review")
+    for fix in (address_rig(tmp_path / "address"), findings_rig(tmp_path / "findings")):
+        assert actions_of(fix).free_text_refusal(fix.job) == not_understood_line(fix.job.kind)
+
+
+async def test_free_text_refusals_keep_their_order(tmp_path):
+    """No parser, then the job, then the claude login: the first that refuses is answered."""
+    no_parser = Rig(tmp_path / "none", parser=None, failing={"claude_login"})
+    assert actions_of(no_parser).free_text_refusal(no_parser.job) == not_understood_line("review")
+    address = address_rig(tmp_path / "address", failing={"claude_login"})
+    assert actions_of(address).free_text_refusal(address.job) == not_understood_line("address")
+    login = Rig(tmp_path / "login", failing={"claude_login"})
+    assert actions_of(login).free_text_refusal(login.job) == NO_LOGIN_PARSER
+
+
+async def test_understand_answers_the_refusal_without_a_parser(tmp_path):
+    rig = Rig(tmp_path, parser=None)
+    assert await actions_of(rig).understand(rig.job, "пости всё кроме 3") == not_understood_line("review")
+    login = Rig(tmp_path / "login", parser=[EVERY_BUT_3], failing={"claude_login"})
+    assert await actions_of(login).understand(login.job, "пости всё кроме 3") == NO_LOGIN_PARSER
+    assert login.parser.calls == []

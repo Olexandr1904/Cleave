@@ -220,7 +220,7 @@ constraints already require be treated as data.
 
 The dashboard discovers runs by scanning one directory for `state.json`
 ([web.py:195](../../../dashboard/web.py#L195)), rooted at
-`workspaces.base_dir` = `/Users/olexandrbrazhenko/CleaveData/workspaces`. The
+`workspaces.base_dir` = `~/CleaveData/workspaces`. The
 chat runner writes inside the target repository, outside that root. Isolation
 is therefore structural, not enforced: chat runs are invisible to the
 dashboard, to the daemon, and to `events.db`, and no existing code changes.

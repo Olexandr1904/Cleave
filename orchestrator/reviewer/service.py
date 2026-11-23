@@ -161,10 +161,11 @@ def _review_info(job: Job, run: JobRun | None) -> dict:
 def _fix_info(job: Job, run: JobRun | None, pushed: bool, posting: bool) -> dict:
     """What the board shows of a PR's newest fix job (address or findings), whatever job is newer: its kind and state,
     whether it made a fix, whether that fix was pushed and whether a post of it is under way (Fix now, Fix findings…
-    and their "again" read these)."""
+    and their "again" read these), and whether it touches protected files (the card's Push anyway…)."""
     run = run or JobRun(job.id)
     return {"id": job.id, "kind": job.kind, "state": job.state, "head": job.head_sha[:9],
-            "started_at": run.started_at, "fix": bool(run.fix), "pushed": pushed, "posting": posting}
+            "started_at": run.started_at, "fix": bool(run.fix), "pushed": pushed, "posting": posting,
+            "protected": bool((run.fix or {}).get("protected"))}
 
 
 def _why_not_fixable(cfg: ReviewerConfig, row: BoardRow, held: frozenset[int]) -> str:

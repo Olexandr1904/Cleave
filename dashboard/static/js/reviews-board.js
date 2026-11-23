@@ -169,17 +169,17 @@ export function moveText(pr, column, me) {
   const job = pr.job;
   const fix = pr.fix;
   let text = [...new Set(pr.my_turns.map(actionWords))].join(', ');
-  // Posting is done here or from the Telegram message: only once it was delivered.
+  // Posting is done here or from the Telegram message: only once it was delivered. The card's line is a single line,
+  // so it names no channel.
   if (column === 'review' && job && job.kind === 'recheck' && job.state === 'done' && job.message_sent) {
-    text = 'post the replies here or in Telegram';
+    text = 'post the replies';
   } else if (column === 'review' && pr.review && pr.review.state === 'done' && pr.review.head === pr.head
     && pr.review.message_sent) {
-    text = 'post the review here or in Telegram';
+    text = 'post the review';
   } else if (column === 'fix' && fix && fix.state === 'done' && fix.kind === 'findings') {
-    if (readyFix(pr)) text = 'fix ready: push here or in Telegram';  // pushed or no patch: nothing left to do with it
+    if (readyFix(pr)) text = 'fix ready: push';  // pushed or no patch: nothing left to do with it
   } else if (column === 'fix' && fix && fix.state === 'done') {
-    text = fix.pushed ? 'fix pushed: post the replies here or in Telegram'
-      : fix.fix ? 'fix ready: push here or in Telegram' : 'replies ready: post here or in Telegram';
+    text = fix.pushed ? 'fix pushed: post the replies' : fix.fix ? 'fix ready: push' : 'replies ready: post';
   }
   return { logins: me ? [me] : [], text };
 }

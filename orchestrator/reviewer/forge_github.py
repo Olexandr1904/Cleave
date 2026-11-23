@@ -1,5 +1,6 @@
 """GitHub reads for the reviews board, review jobs and posting: open PRs, PR details, whether a login has
-reviewed, the full PR, its comments, its reviews and one review's comments; and the one approve call."""
+reviewed, the full PR, its comments, its reviews and one review's comments; the one approve call; and the board's
+moves on a PR: request reviewers (and who to ask), mark ready, merge (and the methods the repo allows)."""
 from __future__ import annotations
 
 import re
@@ -12,6 +13,23 @@ from orchestrator.reviewer.models import ForgeReview, PRComments, PRDetails, PRF
 _PAGE = 100
 _MAX_PAGES = 100
 _STATUS = re.compile(r"→ (\d{3})")
+_MERGE_METHODS = (("merge", "allow_merge_commit"), ("squash", "allow_squash_merge"), ("rebase", "allow_rebase_merge"))
+_MAX_CANDIDATES = 10
+# The PR's author, GitHub's suggestions and who is asked already; and the reviews of the author's newest PRs.
+_CANDIDATES_QUERY = """
+query($owner: String!, $name: String!, $number: Int!, $q: String!) {
+  repository(owner: $owner, name: $name) {
+    pullRequest(number: $number) {
+      author { login }
+      suggestedReviewers { reviewer { login } }
+      reviewRequests(first: 20) { nodes { requestedReviewer { __typename ... on User { login } } } }
+    }
+  }
+  search(query: $q, type: ISSUE, first: 20) {
+    nodes { ... on PullRequest { reviews(first: 30) { nodes { author { __typename login } } } } }
+  }
+}
+"""
 
 
 class ForgeError(Exception):
@@ -175,3 +193,69 @@ class GitHubForgeReader:
             # Never the message: it may echo request data.
             raise ForgeError(type(e).__name__, unavailable=True) from None
         raise ForgeError(f"GitHub {response.status_code}", unavailable=response.status_code >= 500)
+
+    async def _write(self, method: str, path: str, body: dict) -> None:
+        """One write, never retried (a retry after a timeout could notify twice, or answer a merge for another):
+        ForgeError("GitHub <status>") when GitHub refuses it, unavailable when it may have landed (no answer, a 5xx)."""
+        try:
+            response = await self._adapter._client.request(method, f"{self._adapter._repo_path}{path}", json=body)
+        except Exception as e:
+            # Never the message: it may echo request data.
+            raise ForgeError(type(e).__name__, unavailable=True) from None
+        if not response.is_success:
+            raise ForgeError(f"GitHub {response.status_code}", unavailable=response.status_code >= 500)
+
+    async def request_reviewers(self, number: int, logins: list[str]) -> None:
+        """Ask `logins` to review the PR (again, for one who reviewed before)."""
+        await self._write("POST", f"/pulls/{number}/requested_reviewers", {"reviewers": logins})
+
+    async def merge(self, number: int, head: str, method: str) -> None:
+        """Merge the PR with `method` (merge, squash, rebase) only while its head is `head`."""
+        await self._write("PUT", f"/pulls/{number}/merge", {"sha": head, "merge_method": method})
+
+    async def mark_ready(self, number: int) -> None:
+        """Mark a draft PR ready for review (one that is not a draft is left alone)."""
+        try:
+            await self._adapter.mark_ready(number)
+        except RuntimeError as e:
+            if _STATUS.search(str(e)):
+                raise _forge_error(e) from None
+            raise ForgeError("GitHub refused it") from None  # a GraphQL error: GitHub's text is not ours to show
+        except Exception as e:
+            raise _forge_error(e) from None
+
+    async def merge_methods(self) -> list[str]:
+        """The merge methods the repo allows, in the order merge, squash, rebase. GitHub leaves the fields out for a
+        token without push access: each missing one counts as allowed, GitHub refuses the merge if it is not."""
+        repo = await self._get(self._adapter._repo_path)
+        return [method for method, field in _MERGE_METHODS if repo.get(field, True)]
+
+    async def review_candidates(self, number: int, author: str) -> list[dict]:
+        """Who to ask for a review of the PR: GitHub's suggestions first, then who reviewed the author's 20 newest
+        PRs, most reviews first; never the author, a bot or one asked already. At most 10, each with its reason."""
+        owner, name = self._adapter._owner, self._adapter._repo
+        variables = {"owner": owner, "name": name, "number": number,
+                     "q": f"repo:{owner}/{name} is:pr author:{author} sort:updated-desc"}
+        try:
+            answer = await self._adapter._graphql_request(_CANDIDATES_QUERY, variables)
+        except Exception as e:
+            raise _forge_error(e) from None
+        if answer.get("errors") or not answer.get("data"):
+            raise ForgeError("GitHub GraphQL error")
+        pr = (answer["data"].get("repository") or {}).get("pullRequest") or {}
+        asked = {(n.get("requestedReviewer") or {}).get("login") for n in pr.get("reviewRequests", {}).get("nodes", [])}
+        skip = {author, (pr.get("author") or {}).get("login"), *asked} - {None}
+        out: dict[str, str] = {}
+        for item in pr.get("suggestedReviewers") or []:
+            login = (item.get("reviewer") or {}).get("login")
+            if login and login not in skip:
+                out.setdefault(login, "suggested by GitHub")
+        counts: dict[str, int] = {}
+        for node in answer["data"].get("search", {}).get("nodes", []):
+            authors = [review.get("author") or {} for review in (node.get("reviews") or {}).get("nodes", [])]
+            reviewers = {who.get("login") for who in authors if who.get("__typename") == "User"}
+            for login in reviewers - skip:  # PRs, not reviews: one PR reviewed in three rounds counts once
+                counts[login] = counts.get(login, 0) + 1
+        for login, count in sorted(counts.items(), key=lambda item: (-item[1], item[0])):
+            out.setdefault(login, f"reviewed {count} of the author's recent PRs")
+        return [{"login": login, "reason": reason} for login, reason in out.items()][:_MAX_CANDIDATES]

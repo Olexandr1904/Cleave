@@ -296,3 +296,91 @@ async def test_pr_full_head_repo_gone():
         **PR, "body": "", "base": {"ref": "develop", "sha": "b" * 40}, "additions": 1, "deletions": 1,
         "head": {"sha": "a" * 40, "ref": "feature/x", "repo": None}})
     assert (await reader().pr_full(1712)).head_repo == ""
+
+
+GRAPHQL = "https://api.github.com/graphql"
+
+
+@respx.mock
+async def test_request_reviewers_posts_once():
+    route = respx.post(f"{BASE}/pulls/1712/requested_reviewers").respond(201, json={})
+    await reader().request_reviewers(1712, ["rev1", "rev2"])
+    assert json.loads(route.calls[0].request.content) == {"reviewers": ["rev1", "rev2"]}
+    route.respond(502, json={"message": "tok"})
+    with pytest.raises(ForgeError, match="^GitHub 502$") as e:
+        await reader().request_reviewers(1712, ["rev1"])
+    assert e.value.unavailable and route.call_count == 2  # never retried: a retry could notify twice
+
+
+@respx.mock
+async def test_merge_sends_head_and_method():
+    route = respx.put(f"{BASE}/pulls/1712/merge").respond(200, json={"merged": True})
+    await reader().merge(1712, "a" * 40, "squash")
+    assert json.loads(route.calls[0].request.content) == {"sha": "a" * 40, "merge_method": "squash"}
+    route.respond(405, json={"message": "Pull Request is not mergeable"})
+    with pytest.raises(ForgeError, match="^GitHub 405$") as e:
+        await reader().merge(1712, "a" * 40, "merge")
+    assert not e.value.unavailable and route.call_count == 2
+
+
+@respx.mock
+async def test_merge_unanswered_is_unavailable():
+    respx.put(f"{BASE}/pulls/1712/merge").mock(side_effect=httpx.ReadTimeout("slow"))
+    with pytest.raises(ForgeError) as e:
+        await reader().merge(1712, "a" * 40, "merge")
+    assert e.value.unavailable
+
+
+@respx.mock
+async def test_merge_methods_in_order():
+    respx.get(BASE).respond(200, json={"allow_merge_commit": False, "allow_squash_merge": True,
+                                       "allow_rebase_merge": True})
+    assert await reader().merge_methods() == ["squash", "rebase"]
+    respx.get(BASE).respond(200, json={})  # the fields are missing without push access: all are offered
+    assert await reader().merge_methods() == ["merge", "squash", "rebase"]
+
+
+def _candidates_answer(**overrides):
+    user = lambda login: {"__typename": "User", "login": login}  # noqa: E731
+    data = {"repository": {"pullRequest": {
+        "author": {"login": "octo-author"},
+        "suggestedReviewers": [{"reviewer": {"login": "sugg"}}, {"reviewer": {"login": "octo-author"}}],
+        "reviewRequests": {"nodes": [{"requestedReviewer": user("asked")}]},
+    }}, "search": {"nodes": [
+        {"reviews": {"nodes": [{"author": user("often")}, {"author": user("often")}, {"author": user("once")},
+                               {"author": {"__typename": "Bot", "login": "ci-bot"}}, {"author": user("octo-author")},
+                               {"author": user("asked")}]}},
+        {"reviews": {"nodes": [{"author": user("often")}, {"author": user("sugg")}]}},
+        {},  # an issue in the search: no PR fields
+    ]}}
+    data.update(overrides)
+    return {"data": data}
+
+
+@respx.mock
+async def test_review_candidates_ranked():
+    route = respx.post(GRAPHQL).respond(200, json=_candidates_answer())
+    assert await reader().review_candidates(1712, "octo-author") == [
+        {"login": "sugg", "reason": "suggested by GitHub"},
+        {"login": "often", "reason": "reviewed 2 of the author's recent PRs"},
+        {"login": "once", "reason": "reviewed 1 of the author's recent PRs"},
+    ]
+    assert route.call_count == 1  # one query: the PR, and the author's recent PRs
+    variables = json.loads(route.calls[0].request.content)["variables"]
+    assert variables == {"owner": "acme-org", "name": "acme-app", "number": 1712,
+                         "q": "repo:acme-org/acme-app is:pr author:octo-author sort:updated-desc"}
+
+
+@respx.mock
+async def test_review_candidates_graphql_error():
+    respx.post(GRAPHQL).respond(200, json={"errors": [{"message": "Something tok"}]})
+    with pytest.raises(ForgeError, match="^GitHub GraphQL error$"):
+        await reader().review_candidates(1712, "octo-author")
+
+
+@respx.mock
+async def test_mark_ready_error_is_forge_error():
+    respx.get(f"{BASE}/pulls/1712").respond(200, json={**PR, "draft": True, "node_id": "PR_1"})
+    respx.post(GRAPHQL).respond(200, json={"errors": [{"message": "no tok"}]})
+    with pytest.raises(ForgeError, match="^GitHub refused it$"):
+        await reader().mark_ready(1712)

@@ -61,6 +61,8 @@ OUTCOME = {
     "nothing": N_("nothing to do"),
     "queued": N_("queued"),
 }
+# The outcomes whose announcement links what landed, and the states of the Post it links (the same two words).
+_LINKED = ("posted", "partial")
 
 
 @dataclass(frozen=True)
@@ -318,19 +320,21 @@ class ReviewerReplies:
             await self.refresh_buttons(job.id)
 
     async def announce_dashboard(self, job_id: str, cmd: ReplyCommand, state: str) -> None:
-        """Tell the chat what a command run from the dashboard did ("🖥 Dashboard: push — done" and the first link of
-        the job's newest posted post), in the job's language, as a reply to its message (the last part); nothing
-        when the job has no message. Then the fix message's buttons, as the job's state has them now."""
+        """Tell the chat what a command run from the dashboard did ("🖥 Dashboard: push — done"), in the job's
+        language, as a reply to its message (the last part); nothing when the job has no message. A post or push that
+        landed, fully or partly, adds the first link of the job's newest Post that did: the one it made. Then the
+        fix message's buttons, as the job's state has them now."""
         job = self._store.job(job_id)
         run = self._store.run(job_id)
         if run is not None and run.message_ids:
             with telegram_language(self._anchor_language(job_id, job.scope)):
                 text = tr("🖥 Dashboard: {command} — {outcome}", command=describe(cmd, job.head_sha),
                           outcome=tr(OUTCOME[state]))
-                post = next((p for p in self._store.posts(job.scope, job.number)
-                             if p.job_id == job_id and p.state == "posted"), None)
-                if post is not None and post.urls:
-                    text += " " + post.urls[0]
+                if state in _LINKED:
+                    post = next((p for p in self._store.posts(job.scope, job.number)
+                                 if p.job_id == job_id and p.state in _LINKED), None)
+                    if post is not None and post.urls:
+                        text += " " + post.urls[0]
                 await self._answer(_To(run.message_ids[-1], job_id), text)
         await self.refresh_buttons(job_id)
 

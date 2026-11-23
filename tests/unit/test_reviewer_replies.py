@@ -974,30 +974,45 @@ async def test_announce_dashboard_replies_to_the_job_message_in_its_language(tmp
     assert refreshed == [rig.job.id]
 
 
-async def test_announce_dashboard_links_the_newest_posted_post_of_the_job(tmp_path):
+@pytest.mark.parametrize("state, outcome", [("posted", "done"), ("partial", "partly done")])
+async def test_announce_dashboard_links_the_post_that_landed(tmp_path, state, outcome):
+    """A post that landed fully or partly links the Post Posting saved for it (posted or partial): the job's newest
+    of either state, whatever an earlier post of the job or a newer one of another job links."""
     rig = address_rig(tmp_path)
     recorded_refreshes(rig)
     run = rig.store.run(rig.job.id)
     run.message_ids = [200, 201]
     rig.store.save_run(run)
-    save_post(rig, "p-old", T0, urls=("https://github.com/acme/app/pull/1712#old",))
-    save_post(rig, "p-new", T1, urls=("https://github.com/acme/app/pull/1712#new", "https://x.test/second"))
-    save_post(rig, "p-failed", T1 + timedelta(minutes=1), state="failed", urls=("https://x.test/failed",))
+    save_post(rig, "p-push", T0, urls=(COMMIT_URL,))
+    save_post(rig, "p-replies", T1, state=state,
+              urls=("https://github.com/acme/app/pull/1712#discussion_r1", "https://x.test/second"))
     save_post(rig, "p-other-job", T1 + timedelta(minutes=2), job=rig.review, urls=("https://x.test/review",))
-    await rig.replies.announce_dashboard(rig.job.id, ReplyCommand("post_replies", (1, 3)), "partial")
-    assert rig.chat.sent == [("🖥 Dashboard: post replies 1 3 — partly done https://github.com/acme/app/pull/1712#new",
-                              rig.at(201))]
+    await rig.replies.announce_dashboard(rig.job.id, ReplyCommand("post_replies", (1, 3)), state)
+    assert rig.chat.sent == [(f"🖥 Dashboard: post replies 1 3 — {outcome} "
+                              "https://github.com/acme/app/pull/1712#discussion_r1", rig.at(201))]
 
 
 @pytest.mark.parametrize("state, outcome", [
-    ("posted", "done"), ("partial", "partly done"), ("failed", "failed"), ("unverified", "not verified"),
-    ("nothing", "nothing to do"), ("queued", "queued"),
+    ("failed", "failed"), ("unverified", "not verified"), ("nothing", "nothing to do"), ("queued", "queued"),
 ])
-async def test_announce_dashboard_names_the_outcome_and_no_link_without_a_posted_post(tmp_path, state, outcome):
+async def test_announce_dashboard_links_nothing_when_nothing_landed(tmp_path, state, outcome):
+    """No link from an earlier post of the job, nor from the failed or unverified Post this one saved."""
     rig = address_rig(tmp_path)
     recorded_refreshes(rig)
-    save_post(rig, "p-failed", T1, state="failed")
-    save_post(rig, "p-no-url", T0, urls=())
+    save_post(rig, "p-push", T0, urls=(COMMIT_URL,))
+    save_post(rig, "p-this", T1, state=state if state in ("failed", "unverified") else "failed",
+              urls=("https://x.test/shown",))
+    await rig.replies.announce_dashboard(rig.job.id, ReplyCommand("push"), state)
+    assert rig.chat.sent == [(f"🖥 Dashboard: push — {outcome}", rig.at(200))]
+
+
+@pytest.mark.parametrize("state, outcome", [("posted", "done"), ("partial", "partly done")])
+async def test_announce_dashboard_links_nothing_when_the_post_has_no_link(tmp_path, state, outcome):
+    """The newest landed Post of the job has no url: no link, and no earlier post's either."""
+    rig = address_rig(tmp_path)
+    recorded_refreshes(rig)
+    save_post(rig, "p-push", T0, urls=(COMMIT_URL,))
+    save_post(rig, "p-this", T1, state=state, urls=())
     await rig.replies.announce_dashboard(rig.job.id, ReplyCommand("push"), state)
     assert rig.chat.sent == [(f"🖥 Dashboard: push — {outcome}", rig.at(200))]
 

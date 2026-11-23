@@ -145,17 +145,17 @@ test('moveText: my actions in words, what is left to post, or who holds the move
   assert.equal(B.moveText(three, 'others', 'octo').logins.length, 3);
   assert.equal(B.moveText(pr(1), 'others', 'octo').text, "nobody's turn");
   const toPost = pr(1, { my_turns: ['review'], review: review({ critical: 1 }) });
-  assert.equal(B.moveText(toPost, 'review', 'octo').text, 'post the review from Telegram');
+  assert.equal(B.moveText(toPost, 'review', 'octo').text, 'post the review here or in Telegram');
   const fixed = pr(1, { roles: ['author'], my_turns: ['answer_threads'], fix: fixJob() });
-  assert.equal(B.moveText(fixed, 'fix', 'octo').text, 'fix ready: push from Telegram');
+  assert.equal(B.moveText(fixed, 'fix', 'octo').text, 'fix ready: push here or in Telegram');
   assert.equal(B.moveText({ ...fixed, fix: fixJob({ pushed: true }) }, 'fix', 'octo').text,
-    'fix pushed: post the replies from Telegram');
+    'fix pushed: post the replies here or in Telegram');
   assert.equal(B.moveText({ ...fixed, fix: fixJob({ fix: false }) }, 'fix', 'octo').text,
-    'replies ready: post from Telegram');
+    'replies ready: post here or in Telegram');
   // A self-review queued after the fix is the row's job now: the fix still says what is left.
   assert.equal(B.moveText({ ...fixed, job: { kind: 'review', state: 'queued', head: H } }, 'fix', 'octo').text,
-    'fix ready: push from Telegram');
-  // A report not delivered yet cannot be posted from Telegram.
+    'fix ready: push here or in Telegram');
+  // A report not delivered yet cannot be posted from Telegram or here.
   const undelivered = pr(1, { my_turns: ['review'], review: review({ critical: 1 }, { message_sent: false }) });
   assert.equal(B.moveText(undelivered, 'review', 'octo').text, 'review');
 });
@@ -213,10 +213,10 @@ test('againConfirm names the last run before replacing its report or fix', () =>
   assert.equal(other15.label, 'Review again');
   const fix = B.againConfirm({ ...byNumber(12), fix: fixJob() }, 'fix-again');
   assert.equal(fix.title, 'Run the fix of #12 again?');
-  assert.ok(fix.bodyHtml.includes('push it from Telegram first'));
+  assert.ok(fix.bodyHtml.includes('push it first (here or in Telegram)'));
   assert.equal(fix.label, 'Run again');
   const pushed = B.againConfirm({ ...byNumber(12), fix: fixJob({ pushed: true }) }, 'fix-again');
-  assert.ok(pushed.bodyHtml.includes('was pushed') && !pushed.bodyHtml.includes('push it from Telegram first'));
+  assert.ok(pushed.bodyHtml.includes('was pushed') && !pushed.bodyHtml.includes('push it first (here or in Telegram)'));
 });
 
 test('shortAge: minutes, hours, days; old from 48 hours', () => {
@@ -295,7 +295,7 @@ const mineNoTurn = (fields = {}) => pr(1, { roles: ['author'], ...fields });
 test('a fix ready to push puts my PR in To fix, of either kind', () => {
   const ready = mineNoTurn({ fix: fixJob({ kind: 'findings' }) });
   assert.equal(B.columnOf(ready), 'fix');
-  assert.equal(B.moveText(ready, 'fix', 'octo').text, 'fix ready: push from Telegram');
+  assert.equal(B.moveText(ready, 'fix', 'octo').text, 'fix ready: push here or in Telegram');
   assert.equal(B.columnOf({ ...ready, fix: fixJob() }), 'fix');                          // an address fix
   assert.equal(B.columnOf({ ...ready, fix: fixJob({ kind: 'findings', pushed: true }) }), 'others');
   assert.equal(B.columnOf({ ...ready, fix: fixJob({ kind: 'findings', fix: false }) }), 'others');
@@ -312,7 +312,7 @@ test('the move line of a findings fix: only while it waits for the push', () => 
       'request review', JSON.stringify(fields));
   }
   // An address fix keeps its lines.
-  assert.equal(B.moveText({ ...turn, fix: fixJob({ fix: false }) }, 'fix', 'octo').text, 'replies ready: post from Telegram');
+  assert.equal(B.moveText({ ...turn, fix: fixJob({ fix: false }) }, 'fix', 'octo').text, 'replies ready: post here or in Telegram');
 });
 
 test('Fix findings… in the panel only, with its states', () => {

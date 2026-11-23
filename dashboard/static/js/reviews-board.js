@@ -37,7 +37,7 @@ export const isMine = pr => pr.roles.includes('author');
 // Not its author, an assignee or a reviewer: the board lists it because the repo's status command lists every PR.
 export const notInvolved = pr => !pr.roles.length;
 
-// The PR's newest fix (of either kind) is done, made a patch and is not pushed: pushing it from Telegram is my move.
+// The PR's newest fix (of either kind) is done, made a patch and is not pushed: pushing it (here or in Telegram) is my move.
 const readyFix = pr => Boolean(pr.fix && pr.fix.state === 'done' && pr.fix.fix && !pr.fix.pushed);
 
 export function columnOf(pr) {
@@ -169,17 +169,17 @@ export function moveText(pr, column, me) {
   const job = pr.job;
   const fix = pr.fix;
   let text = [...new Set(pr.my_turns.map(actionWords))].join(', ');
-  // Posting is done from the Telegram message: only once it was delivered.
+  // Posting is done here or from the Telegram message: only once it was delivered.
   if (column === 'review' && job && job.kind === 'recheck' && job.state === 'done' && job.message_sent) {
-    text = 'post the replies from Telegram';
+    text = 'post the replies here or in Telegram';
   } else if (column === 'review' && pr.review && pr.review.state === 'done' && pr.review.head === pr.head
     && pr.review.message_sent) {
-    text = 'post the review from Telegram';
+    text = 'post the review here or in Telegram';
   } else if (column === 'fix' && fix && fix.state === 'done' && fix.kind === 'findings') {
-    if (readyFix(pr)) text = 'fix ready: push from Telegram';  // pushed or no patch: nothing left to do with it
+    if (readyFix(pr)) text = 'fix ready: push here or in Telegram';  // pushed or no patch: nothing left to do with it
   } else if (column === 'fix' && fix && fix.state === 'done') {
-    text = fix.pushed ? 'fix pushed: post the replies from Telegram'
-      : fix.fix ? 'fix ready: push from Telegram' : 'replies ready: post from Telegram';
+    text = fix.pushed ? 'fix pushed: post the replies here or in Telegram'
+      : fix.fix ? 'fix ready: push here or in Telegram' : 'replies ready: post here or in Telegram';
   }
   return { logins: me ? [me] : [], text };
 }
@@ -221,7 +221,7 @@ export function findingsHtml(pr, scale) {
     Math.max(4, Math.round(total / scale * 100))}%">${kinds.map(([key, cls]) => `<i class="sev-${cls}" style="flex:${f[key]}"></i>`).join('')}</div>` : '';
   const when = fmtWhen(r.started_at);
   const source = isMine(pr) ? `<div class="reviews-src">self-review${when ? ` · ${esc(when)}` : ''}</div>` : '';
-  // A stale report (the PR is on the board, so my turn left it) is not postable from Telegram any more.
+  // A stale report (the PR is on the board, so my turn left it) is not postable any more, here or in Telegram.
   const stale = r.state === 'stale';
   const state = r.state === 'posted' ? 'posted' : stale ? 'turn gone' : r.message_sent ? 'report in Telegram' : 'not delivered yet';
   return `<div class="reviews-findings${older ? ' is-older' : ''}${stale ? ' is-stale' : ''}">${source}${bar}<div class="reviews-sev">${
@@ -356,8 +356,8 @@ export function againConfirm(pr, action) {
     const what = fmtWhen(fix.started_at) ? `The fix from ${fmtWhen(fix.started_at)}` : 'The current fix';
     return { title: `Run the fix of #${pr.number} again?`, label: 'Run again',
       bodyHtml: esc(fix.pushed
-        ? `${what} was pushed; a new run replaces its drafted replies, so post them from Telegram first if you want them.`
-        : `${what} is replaced; push it from Telegram first if you want it.`) };
+        ? `${what} was pushed; a new run replaces its drafted replies, so post them first (here or in Telegram) if you want them.`
+        : `${what} is replaced; push it first (here or in Telegram) if you want it.`) };
   }
   const self = action === 'self-review-again';
   const r = pr.review || {};

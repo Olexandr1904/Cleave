@@ -150,6 +150,16 @@ def _logged(what: str, target: tuple[str, int], outcome: str) -> None:
     logger.info("Dashboard %s on %s #%d: %s", what, target[0], target[1], outcome)
 
 
+_EXPLAINED = ("refused", "failed", "unverified")  # the outcomes whose log line says why
+
+
+def _outcome(answer: dict) -> str:
+    """An answer's state for the log; when the action did not do what was asked, with its first text, Cleave's own
+    answer (a typed text is never one), cut and quoted: never a line of its own."""
+    state, texts = answer.get("state", "?"), answer.get("texts") or [answer.get("text", "")]
+    return f"{state} {texts[0][:300]!r}" if state in _EXPLAINED and texts[0] else state
+
+
 def _queued(what: str, target: tuple[str, int], call: Callable[[], Job]) -> JSONResponse:
     """A button that queues a job (Review now, Fix now, Fix findings…): the job, or 404 / 409 with why."""
     try:
@@ -281,7 +291,7 @@ def build_review_routes(service: Any, get_projects: Callable[[], dict] = dict, a
         except ValueError as e:
             _logged(what, target, f"400 {e}")
             return JSONResponse({"error": str(e)}, status_code=400)
-        _logged(what, target, state)
+        _logged(what, target, _outcome({"state": state, "text": text}))
         return JSONResponse({"state": state, "text": text})
 
     async def get_candidates(request: Request) -> JSONResponse:
@@ -326,7 +336,7 @@ def build_review_routes(service: Any, get_projects: Callable[[], dict] = dict, a
             answer = await _understand(job, text)
         else:
             answer = await _run(job, cmd)
-        _logged(what, target, json.loads(answer.body).get("state", "?"))
+        _logged(what, target, _outcome(json.loads(answer.body)))
         return answer
 
     async def post_confirm(request: Request) -> JSONResponse:
@@ -350,7 +360,7 @@ def build_review_routes(service: Any, get_projects: Callable[[], dict] = dict, a
         job = store.job(conf.job_id)
         answer = _refused(claimed) if isinstance(claimed, str) else await _execute(job, claimed)
         _logged(f"{'yes' if yes else 'no'} to a confirmation", (job.scope, job.number),
-                json.loads(answer.body).get("state", "?"))
+                _outcome(json.loads(answer.body)))
         return answer
 
     async def _understand(job: Job, text: str) -> JSONResponse:

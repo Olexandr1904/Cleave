@@ -85,6 +85,7 @@ class FakeService:
         self.fix_findings_error = None
         self.findings_fixable = {2}
         self.move_error = None
+        self.move_answer = None  # pr_move's (state, text), else done
 
     def overview(self):
         return [{
@@ -122,7 +123,7 @@ class FakeService:
         self.calls.append(("pr_move", scope, number, move, reviewers, method, head))
         if self.move_error is not None:
             raise self.move_error
-        return "done", f"Did {move} on #{number}."
+        return self.move_answer or ("done", f"Did {move} on #{number}.")
 
     async def review_candidates(self, scope, number):
         self.calls.append(("review_candidates", scope, number))
@@ -821,10 +822,15 @@ def test_dashboard_actions_are_logged(moves, caplog):
     svc.review_now_error = ValueError("already queued")
     c.post("/api/reviews/review-now", json={"scope": "acme/app", "number": 1})
     c.post("/api/reviews/pr-move", json={"scope": "acme/app", "number": 1, "move": "ready"})
+    svc.move_answer = ("refused", "Already merged:\nthe board shows it within a minute.")
+    c.post("/api/reviews/pr-move", json={"scope": "acme/app", "number": 1, "move": "merge"})
     lines = [r.getMessage() for r in caplog.records if r.name == "dashboard.reviews_api"]
     assert lines == ["Dashboard review-now on acme/app #1: queued j1",
                      "Dashboard review-now on acme/app #1: 409 already queued",
-                     "Dashboard pr-move 'ready' on acme/app #1: done"]  # quoted: the client's string
+                     "Dashboard pr-move 'ready' on acme/app #1: done",  # quoted: the client's string
+                     # A move that did not happen says why, quoted: never a line of its own.
+                     "Dashboard pr-move 'merge' on acme/app #1: refused 'Already merged:\\nthe board shows it within a"
+                     " minute.'"]
 
 
 def test_a_typed_command_is_logged_without_its_text(dash, caplog):
@@ -834,8 +840,19 @@ def test_a_typed_command_is_logged_without_its_text(dash, caplog):
     confirm(d, conf_id, yes=False)
     lines = [r.getMessage() for r in caplog.records if r.name == "dashboard.reviews_api"]
     assert lines == [f"Dashboard text command on {SCOPE} #{N}: confirm",
-                     f"Dashboard no to a confirmation on {SCOPE} #{N}: refused"]
+                     f"Dashboard no to a confirmation on {SCOPE} #{N}: refused 'Cancelled: nothing was done.'"]
     assert not any(ASK in line for line in lines)
+
+
+def test_a_refused_command_is_logged_with_why(dash, caplog):
+    d = dash
+    caplog.set_level("INFO", logger="dashboard.reviews_api")
+    act(d, d.rig.review.id, command={"action": "post_replies", "all_replies": True})
+    act(d, d.rig.review.id, text="x" * 400)  # a typed text the grammar does not know: its refusal, not the text
+    lines = [r.getMessage() for r in caplog.records if r.name == "dashboard.reviews_api"]
+    assert lines[0] == (f"Dashboard post_replies command on {SCOPE} #{N}: refused 'This is a review message: "
+                        "\"post replies\" works on a re-check message. Nothing was done.'")
+    assert not any("x" * 20 in line for line in lines)
 
 
 

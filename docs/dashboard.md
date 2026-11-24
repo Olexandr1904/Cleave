@@ -223,7 +223,7 @@ A control acts on the job the panel showed. If a newer job has replaced it meanw
 
 Each action is announced in Telegram as a reply to the job's message: `🖥 Dashboard: <the command> — <outcome>` (with the commit or review link when there is one), see [telegram.md](telegram.md#actions-from-the-dashboard). A refusal and a read-only command (`text`, `diff`) are not announced. If Telegram is down, the action still completes and the failure is logged.
 
-The `/api/reviews/action`, `/api/reviews/confirm`, `/api/reviews/pr-move`, `/api/reviews/candidates` and `/api/reviews/merge-options` routes exist only when the daemon has reviews enabled. Every dashboard action logs one line to the daemon log (`Dashboard <what> on <repo> #<n>: <outcome>`); a typed command's text is never logged.
+The `/api/reviews/action`, `/api/reviews/confirm`, `/api/reviews/pr-move`, `/api/reviews/candidates` and `/api/reviews/merge-options` routes exist only when the daemon has reviews enabled. Every dashboard action logs one line to the daemon log (`Dashboard <what> on <repo> #<n>: <outcome>`); a refused, failed or unverified one adds Cleave's answer, quoted (`refused 'Not posted on #12: …'`). A typed command's text is never logged.
 
 Each job's files are kept in `<reviewer data dir>/jobs/<job id>/`: what the session's run directory held (`meta.env`, the report, `tg_lines.json`, …), the session's settings and transcript, and `posting/`, Cleave's own copy of the report that edits, drafts and posts work on. The poster tool's ledgers are in `<reviewer data dir>/ledgers/<project_id>/<repo_id>/PR_<number>/`. Once a day, a PR closed 14 days ago or more loses its job directories, its ledgers and its `pr-review/<number>` branch in the review clone; its rows in `reviewer.db` stay.
 

@@ -13,16 +13,20 @@ two more reasons a press did nothing, and a log line that did not say why.
    The card line of such a fix says `fix ready: push and reply`.
 2. **A thread resolved on GitHub does not block the others.** When the replies tool's dry run fails, Cleave reads
    GitHub's threads once: replies to threads no longer unresolved there are left out, and the dry run runs once
-   more on the rest. The answer names each one left out (`#1 left out: its thread is resolved on GitHub`). When none
-   is gone the refusal stays as it was; when all are gone nothing is posted and the answer says so.
+   more on the rest. The answer names the ones left out (`Left out 1: their threads were resolved on GitHub after
+   the replies were drafted.`). When none is gone the refusal stays as it was; when all are gone nothing is posted
+   and the answer says so.
 3. **A `<` inside code is not HTML.** `body_problems` turned HTML mode on for any `<` and a letter anywhere outside a
    trusted fence, so `` `TEST-<FQN>.xml` `` made `` `@HiltAndroidTest` `` count as a mention. A `<` inside an inline
-   code span Cleave is sure of no longer turns it on, provided no `[` comes before the line's first backtick. An HTML
-   block opens only where a line's content starts, after container markers (`>`, list markers, a footnote label);
-   a `<` inside a span has a backtick before it, so it is not there, unless that backtick sits in a footnote label
-   such as `[^`]: <div>`, which the `[` rule keeps closed.
-4. **The log says why.** A dashboard action that ends `refused`, `failed` or `unverified` logs its first text
-   (repr, cut to 300 characters) after the state.
+   code span of a trusted paragraph no longer turns it on. An HTML block opens only where a line's content starts,
+   after container markers; a `<` inside a span has a backtick before it, so it is not there. A paragraph is trusted
+   only while nothing in it may take a backtick before code spans do (a `[`: a link's destination, title or label,
+   a footnote label; a `$`: math) and no run is left unpaired; a blank line is spaces and tabs only. The final
+   review showed the blanket rule was also the only backstop for an `<img>` behind a backtick a link title takes;
+   the trusted paragraph keeps that caught, and also catches mentions and URLs hidden that way (open on master).
+4. **The log says why.** A dashboard action that ends `refused`, `failed` or `unverified` logs its last text (the
+   post's, after a push and reply all; repr, cut to 300 characters) after the state. A GitHub move logs only
+   GitHub's answers (failed, unverified): its refusals may name a login typed into its dialog.
 
 ## Approaches considered
 

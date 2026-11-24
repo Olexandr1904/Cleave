@@ -120,10 +120,11 @@ function findingsText(counts) {
 // One line per repo: its state, when it was last read, its jobs; a reason under it when it is not ok.
 function statusLineHtml(repo) {
   const prs = prsOf(repo);
-  const running = prs.filter(pr => pr.job?.state === 'running').length;
+  const runningJobs = prs.filter(pr => pr.job?.state === 'running').length;
   const queued = prs.filter(pr => pr.job?.state === 'queued').length;
-  const jobs = running || queued
-    ? [running && `${running} running`, queued && `${queued} queued`].filter(Boolean).join(' · ') : 'no jobs running';
+  const jobs = runningJobs || queued
+    ? [runningJobs && `${runningJobs} running`, queued && `${queued} queued`].filter(Boolean).join(' · ')
+    : 'no jobs running';
   const parts = [esc(repo.scope), repo.status === 'ok' ? '' : esc(repo.status),
     repo.last_poll_at ? `synced ${esc(timeAgo(repo.last_poll_at))}` : '', jobs].filter(Boolean).join(' · ');
   const reason = repo.status === 'ok' || !repo.reason ? ''
@@ -562,6 +563,7 @@ function openRow(view, row) {
   focusKey = row.dataset.reviewRow;
   panelOpen = {};
   ticked = { finding: new Set(), reply: new Set() };
+  for (const [key, shown] of results) if (key !== focusKey && !shown.card) results.delete(key);
   cmdText = '';
   markRows(view);
   paintPanel(view);  // its header is drawn before it awaits the detail
@@ -628,11 +630,15 @@ function lockPanel(panel) {
   panel.querySelectorAll('button:not([data-review-close]), input').forEach(el => { el.disabled = true; });
 }
 
-// A free-text answer the model understood: the operator says Yes or No to its question.
-function askConfirmation(answer) {
+// A free-text answer the model understood: the operator says Yes or No to its question. It may come while another PR's
+// panel is open, so it names its PR, and it takes the focus (Enter must not press a button behind it).
+function askConfirmation(answer, target) {
+  const repo = repos.length > 1 ? `${target.scope.split('/').pop()} ` : '';
   return new Promise((resolve, reject) => {
     const send = yes => reviewConfirm(answer.confirmation, yes).then(resolve, reject);
-    showConfirmDialog('Confirm', esc(answer.question), 'Yes', () => send(true), () => send(false));
+    showConfirmDialog(`Confirm on ${repo}#${target.number}`, esc(answer.question), 'Yes', () => send(true),
+      () => send(false));
+    [...document.querySelectorAll('.dialog-overlay')].pop()?.querySelector('#dlg-cancel')?.focus();
   });
 }
 
@@ -645,7 +651,7 @@ async function runCommand(view, target, jobId, body, card = false) {
   let shown;
   try {
     let answer = await reviewAction(target.scope, target.number, jobId, body);
-    if (answer.state === 'confirm') answer = await askConfirmation(answer);
+    if (answer.state === 'confirm') answer = await askConfirmation(answer, target);
     shown = { key, state: answer.state, text: (answer.texts || []).join('\n'), card };
     // The panel may show another PR by now: its ticks and command text are that PR's.
     if (openKey() === key && answer.state !== 'refused') ticked = { finding: new Set(), reply: new Set() };
@@ -653,7 +659,7 @@ async function runCommand(view, target, jobId, body, card = false) {
   } catch (err) {
     shown = { key, state: 'failed', text: String(err.message || err), card };
   }
-  await finish(view, key, shown);
+  await finish(key, shown);
 }
 
 // An action on `target` starts: false (said on its card) while one on that PR waits for its answer. Its card and, when
@@ -665,20 +671,25 @@ function start(view, target) {
     return false;
   }
   running.add(key);
-  paintList(view);
-  if (openKey() === key) {
-    lockPanel(view.querySelector('.review-panel'));
-    paintPanel(view);  // its result line says it works
+  try {  // painting only: the action runs and finish() clears `running` whatever it throws
+    paintList(view);
+    if (openKey() === key) {
+      lockPanel(view.querySelector('.review-panel'));
+      paintPanel(view);  // its result line says it works
+    }
+  } catch (err) {
+    console.error(err);
   }
   return true;
 }
 
-// The action on `key` answered: its result, then the board reloads.
-async function finish(view, key, shown) {
+// The action on `key` answered: its result, then the board reloads. A panel action whose panel shows another PR by now
+// answers on its card. The Reviews view showing now is repainted, a new one too if the operator left and came back
+// meanwhile; none is mounted over another view.
+async function finish(key, shown) {
   running.delete(key);
-  results.set(key, shown);
-  if (!view.isConnected) return;
-  await renderReviews();
+  results.set(key, openKey() === key || shown.card ? shown : { ...shown, card: true });
+  if (document.getElementById('content')?.querySelector('.reviews-view')) await renderReviews();
 }
 
 async function runPanelCommand(view, jobId, body) {
@@ -718,7 +729,7 @@ async function runMove(view, target, body) {
   } catch (err) {
     shown = { key, state: 'failed', text: String(err.message || err), card: true };
   }
-  await finish(view, key, shown);
+  await finish(key, shown);
 }
 
 // A GitHub move's button: Re-request and Ready for review run at once; Request review… and Merge… ask first, in a
@@ -755,7 +766,7 @@ async function onPrMove(view, btn) {
     await renderReviews();
     return;
   }
-  btn.disabled = false;
+  btn.disabled = running.has(key);
   let dialog;
   const bodyHtml = kind === 'request' ? candidatesHtml(data.candidates) : mergeHtml(target.number, data);
   showConfirmDialog(label, bodyHtml, label, () => {
@@ -799,7 +810,7 @@ async function onMainButton(view, btn) {
     await renderReviews();
     return;
   }
-  btn.disabled = false;
+  btn.disabled = running.has(key);
   const send = command => runCommand(view, target, main.jobId, { command }, true);
   if (!main.pickEvent && !main.confirm) {
     send(main.command);

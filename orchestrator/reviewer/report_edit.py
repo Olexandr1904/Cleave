@@ -207,8 +207,8 @@ def body_problems(text: str, allowed: tuple[str, ...]) -> list[str]:
 
     - Lines end where CommonMark ends them (`split_lines`). A fenced block is skipped only when it opens at
       column 0 and is no math block (`_sure_code`). No code at all is skipped when the text outside those holds
-      a `<` that may open a tag (`_HTML_START`), wherever it sits: it may start an HTML block, where GitHub
-      reads no Markdown.
+      a `<` that may open a tag (`_HTML_START`), wherever it sits but inside a code span Cleave is sure of
+      (`_may_open_html`): it may start an HTML block, where GitHub reads no Markdown.
     - Inline code spans are skipped line by line (`_code_spans`), but a $`…`$ span is math. After a line that
       leaves a backtick run unpaired, holds a `<` outside its code spans or a bare URL that runs into one, the
       paragraph's later lines are checked whole: a span or a tag (its quotes may hold a `>`) may pair across
@@ -219,7 +219,7 @@ def body_problems(text: str, allowed: tuple[str, ...]) -> list[str]:
     """
     lines = split_lines(text.removeprefix(BOM))
     code = _sure_code(lines)
-    in_html = any(_HTML_START.search(line) for line, in_code in zip(lines, code) if not in_code)
+    in_html = any(_may_open_html(line) for line, in_code in zip(lines, code) if not in_code)
     problems: dict[str, None] = {}
     left_open = False
     whole: list[str] = []  # the lines checked, with their code spans
@@ -362,6 +362,16 @@ def _math(line: str) -> bool:
         return False
     words = _ESCAPE.sub(r"\1", html.unescape(m[1])).split()
     return bool(words) and words[0].lower() == "math"
+
+
+def _may_open_html(line: str) -> bool:
+    """Whether `line` holds a `<` that may open a tag, outside the code spans GitHub surely reads as code. An HTML
+    block opens only where a line's content starts, after its container markers; a `<` inside a span has the span's
+    backtick before it, so it is not there, unless a footnote label holds that backtick (`[^`]: <div> `): a line
+    with a `[` before its first backtick is read whole."""
+    clean, sure = _code_spans(line)
+    whole = not sure or "[" in line.partition("`")[0]
+    return bool(_HTML_START.search(line if whole else clean))
 
 
 def _code_spans(line: str) -> tuple[str, bool]:

@@ -172,8 +172,13 @@ BODY_EDGES = {
     "span-across-lines": ("a ` b\nc ` @octo https://evil.example ![i](x) ` d", [IMAGE, EVIL, OCTO, "links to x"]),
     "tag-across-lines": ("x <a title='\n`'>@octo https://evil.example `", [EVIL, OCTO]),
     "paragraph-ends-at-blank": ("a ` b\n\n`@octo` c", []),
-    # Since round 4 a "<" and a letter anywhere turns HTML mode on, so every span is checked as text.
-    "kotlin-generic-in-span": ("`List<String>` and `@Composable`", ["mentions @Composable"]),
+    # Since round 4 a "<" and a letter anywhere turns HTML mode on, so every span is checked as text; since
+    # 2026-11-24 not a "<" inside a span Cleave is sure of: an HTML block opens only where a line's content starts.
+    "kotlin-generic-in-span": ("`List<String>` and `@Composable`", []),
+    "xml-name-in-a-reply": ("Deletes `TEST-<FQN>.xml` first.\nNow a broken `@HiltAndroidTest` is caught.", []),
+    # ... unless a "[" before the line's first backtick may be a footnote label holding it: read whole.
+    "footnote-label-tick": ("See[^`].\n\n[^`]: <div> `\n    `@octo`", [OCTO, "links to div"]),
+    "unpaired-tick-reads-whole": ("`List<String>` and ` @x\n`@octo`", ["mentions @x", OCTO]),
     "xml-in-a-fence": ('```xml\n<ImageView android:src="@drawable/icon" />\n```', []),
     # Since Task 9 fix round 1 bare URLs are also read in the raw line ("//evil.example" after "&#58;").
     "entity-in-dest": ("[x](https&#58;//evil.example)", [EVIL, "links to //evil.example"]),

@@ -30,6 +30,7 @@ _OUTDATED = ("superseded", "stale")  # the job states "review again" and "skip" 
 _PR_ACTIONS = ("review_again", "skip")  # the commands about the PR's head, not the report
 _POSTS = ("post", "post_replies", "push", "push_post")  # the commands that go through Posting
 _MAX_PARTS = 3  # of one answer: an item's text, a posting result
+_MAY_HAVE_LANDED = ("posted", "partial", "unverified")  # the outcomes after which GitHub may show the post
 # Answers, translated where they are sent (tr).
 _GONE = N_("This repo is no longer reviewed; nothing was done.")
 _NO_LOGIN = N_("claude is not logged in on the host: nothing was started.")
@@ -198,6 +199,7 @@ class ReviewerActions:
         if cmd.action in ("push", "push_post"):
             then_post = cmd.action == "push_post"
             outcome = await self.posting.push_fix(ctx, job, anyway=cmd.anyway, then_post=then_post)
+            self._landed(job, outcome.state)
             await say(outcome.text)
             if then_post and outcome.state == "posted":
                 return await self._post_all(ctx, job.id, say) or outcome.state
@@ -205,8 +207,15 @@ class ReviewerActions:
         else:
             post = self.posting.post_review if cmd.action == "post" else self.posting.post_replies
             outcome = await post(ctx, job, cmd)
+            self._landed(job, outcome.state)
         await say(outcome.text)
         return outcome.state
+
+    def _landed(self, job: Job, state: str) -> None:
+        """After a post or push GitHub may show: the repo is polled within a minute, so the board's turns (whose
+        move it is now) follow it, not the next scheduled poll."""
+        if state in _MAY_HAVE_LANDED and self._service is not None:
+            self._service.poll_soon(job.scope)
 
     async def _post_all(self, ctx: RepoContext, job_id: str, say: Callable[[str], Awaitable[None]]) -> str | None:
         """After "push and post" pushed the fix: every drafted reply not posted at the job's new head. The post's
@@ -218,6 +227,7 @@ class ReviewerActions:
             return None
         await say(self.progress_line(job, checked))
         outcome = await self.posting.post_replies(ctx, job, checked)
+        self._landed(job, outcome.state)
         await say(outcome.text)
         return outcome.state
 

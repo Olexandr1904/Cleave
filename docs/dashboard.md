@@ -137,7 +137,7 @@ The PRs of every repo with reviews are on one board of four columns, by whose mo
 
 A PR you have no role on (listed by a status command with `--all`) has a dashed card tagged **Not involved**, and a `not involved` flag in its panel. Its move line says whose move it really is (`<login>: finish draft`); **Review now** reviews it, and no review of it starts by itself, since none of its turns is yours.
 
-Each column lists its PRs the longest unchanged first; an empty one shows a dashed `Nothing to review`, `Nothing to fix`, `Nobody else's move` or `Nothing to merge`. The ticket pipeline's own PRs are on the board too.
+A PR changes column when a poll shows its new turns: at the repo's poll interval, and within a minute after a move on GitHub, a post or a push made here or in Telegram that may have landed (posted, partly posted or not verified), so a posted review or pushed fix moves its card to whose move it is now. Each column lists its PRs the longest unchanged first; an empty one shows a dashed `Nothing to review`, `Nothing to fix`, `Nobody else's move` or `Nothing to merge`. The ticket pipeline's own PRs are on the board too.
 
 With more than one repo, chips above the board (`All`, then each repo with its number of PRs) show one repo's PRs only; the choice is in the address (`#/reviews/<project>/<repo>`), and an address naming a repo without reviews shows them all. Each card then names its repo.
 

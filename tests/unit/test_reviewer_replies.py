@@ -129,6 +129,9 @@ class FakeService:
 
     fix_error = None
 
+    def poll_soon(self, scope):
+        self.calls.append(("poll_soon", scope))
+
     def address_again(self, scope, number, instruction):
         self.calls.append(("address_again", scope, number, instruction))
         if self.again_error is not None:
@@ -586,7 +589,7 @@ async def test_a_long_posting_result_arrives_in_parts(tmp_path):
     assert len(parts) == 2 and "\n".join(parts) == text
     assert rig.chat.sent[1:] == [(part, rig.at(300, recheck)) for part in parts]
     await rig.reply("review again", rig.last_id())  # a reply to a part is a reply to the re-check
-    assert rig.service.calls == [("review_now", SCOPE, N)]
+    assert rig.service.calls == [("poll_soon", SCOPE), ("review_now", SCOPE, N)]  # the post polls the repo soon
 
 
 async def test_start_marks_interrupted_posts(tmp_path):

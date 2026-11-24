@@ -1,6 +1,8 @@
 # tests/unit/test_reviewer_actions.py
 from __future__ import annotations
 
+import pytest
+
 from datetime import timedelta
 
 from orchestrator.reviewer.actions import CONFIRM_TTL, ReviewerActions
@@ -350,3 +352,24 @@ async def test_a_telegram_yes_and_no_go_through_claim(tmp_path):
         await rig.tap(action, conf_id, rig.last_id())
         assert claims[-1] == (conf_id, action == "rv_ok", T1)
     assert len(claims) == 2 and len(rig.posting.calls) == 1
+
+
+
+# --- The board after a post: the card follows within a minute, not the next scheduled poll ---
+
+@pytest.mark.parametrize("state, polled", [
+    ("posted", True), ("partial", True), ("unverified", True),  # it may have landed: the turns may have moved
+    ("failed", False), ("refused", False), ("nothing", False),
+])
+async def test_a_review_post_that_may_have_landed_polls_its_repo_soon(tmp_path, state, polled):
+    rig = Rig(tmp_path)
+    rig.posting.outcome = PostOutcome(state, "…")
+    await rig.reply("post 1 2")
+    assert (("poll_soon", SCOPE) in rig.service.calls) is polled
+
+
+async def test_a_push_and_its_replies_poll_the_repo_soon(tmp_path):
+    rig = address_rig(tmp_path)
+    rig.posting.outcomes = {"push_fix": PostOutcome("posted", "Pushed …")}
+    await rig.tap("rv_pushpost", rig.job.id, 200)
+    assert ("poll_soon", SCOPE) in rig.service.calls

@@ -256,11 +256,28 @@ async def test_a_job_no_longer_postable_has_its_buttons_removed(tmp_path):
         assert notifier.buttons_set == [(CHAT, 200, [])], state
 
 
-async def test_a_review_job_has_no_buttons_to_refresh(tmp_path):
+async def test_a_review_message_keeps_its_event_buttons_until_a_review_is_posted(tmp_path):
     rig = Rig(tmp_path)
     notifier = with_notifier(rig)
     await rig.replies.refresh_buttons(rig.job.id)
-    assert notifier.buttons_set == []
+    assert notifier.buttons_set == [(CHAT, 100, ["Request changes", "Comment", "Approve"])]  # the report suggests RC
+    for state in ("posted", "superseded", "stale"):
+        rig.store.set_job_state(rig.job.id, state, "", T1.isoformat())
+        await rig.replies.refresh_buttons(rig.job.id)
+        assert notifier.buttons_set[-1] == (CHAT, 100, []), state
+
+
+async def test_a_tapped_review_post_removes_the_buttons(tmp_path):
+    rig = Rig(tmp_path)
+    notifier = with_notifier(rig)
+
+    async def post(ctx, job, cmd):  # the real posting marks the job posted once a review lands
+        rig.store.set_job_state(job.id, "posted", "", T1.isoformat())
+        return PostOutcome("posted", "Posted …")
+
+    rig.posting.post_review = post
+    await rig.tap("rv_approve", rig.job.id, 100)
+    assert notifier.buttons_set == [(CHAT, 100, [])]
 
 
 # --- The Yes or No on a confirmation: one gate for both channels ---

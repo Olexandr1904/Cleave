@@ -218,6 +218,9 @@ class JobRun:
     # A review job's run: its message offers "fix" (an own PR in a repo with address_doc), decided when the run
     # finished so every delivery attempt builds the same message.
     findings_fixable: bool = False
+    # A review job's run: a review of the operator's own PR, whose message offers Comment only (GitHub refuses
+    # approving or requesting changes on one's own PR).
+    own_pr: bool = False
 
     def to_json(self) -> str:
         return json.dumps(dataclasses.asdict(self))

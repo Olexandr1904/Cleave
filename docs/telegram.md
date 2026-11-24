@@ -285,7 +285,7 @@ The first poll of a repo records the turns that already exist without sending a 
 
 ### Review and re-check messages
 
-Reviews and re-checks run unattended, up to `reviewer.max_parallel_jobs` (default 6) at once and one per PR: Cleave prepares each PR in a job clone of its own, made from its [review clone](dashboard.md#review-clone), runs the repo's review process in an isolated Claude Code session on the host's claude.ai login, and sends the result to the same chat as the [reviewer lines](#reviewer-lines). Nothing is posted to GitHub until you reply to the message (see [replying to reviewer messages](#replying-to-reviewer-messages)).
+Reviews and re-checks run unattended, up to `reviewer.max_parallel_jobs` (default 6) at once and one per PR: Cleave prepares each PR in a job clone of its own, made from its [review clone](dashboard.md#review-clone), runs the repo's review process in an isolated Claude Code session on the host's claude.ai login, and sends the result to the same chat as the [reviewer lines](#reviewer-lines). Nothing is posted to GitHub until you reply to the message (see [replying to reviewer messages](#replying-to-reviewer-messages)) or tap one of its buttons.
 
 A review sends the review message:
 
@@ -312,6 +312,7 @@ https://github.com/acme-org/acme-app/pull/1712
 - **One line per finding**, numbered as in the report: 🔴 🟠 🟡 a confirmed finding (by the report's severity section), ❓ a question, 🟣 a pre-existing issue; then the file name and line, and the session's one-line summary of it (the finding's title when it wrote none)
 - **Dropped** — the candidates the review dropped, each with why; `No findings.` when the report has neither findings nor dropped candidates
 - **Reply hint** and the PR's URL
+- **Buttons** on its last part, one per event, the suggested one first: **Comment**, **Approve**, **Request changes** (in Ukrainian **Коментувати**, **Схвалити**, **Запросити зміни**). A tap posts every confirmed finding with that event at once, as the reply `post` with the event and the confirmed findings' numbers would (the same checks first; its progress line and result answer the message); a question or a pre-existing issue is posted only by number. A review of your own PR offers **Comment** only: GitHub refuses approving or requesting changes on one's own PR. Once a review of the job is posted, here or on the dashboard, or the job is superseded or stale, the message has no buttons
 
 A re-check sends the re-check message: the header, the head and the number of drafted replies, then one line per drafted reply, with its number and the session's verdict line (fixed, not fixed, convinced or not convinced · path:line · gist), else the reply's first line; `No replies drafted.` when there is none.
 

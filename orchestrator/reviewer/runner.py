@@ -34,6 +34,7 @@ from orchestrator.reviewer.messages import (
     fix_buttons,
     message_parts,
     recheck_message,
+    review_buttons,
     review_message,
 )
 from orchestrator.reviewer.models import POSTABLE_STATES, BoardRow, Job, JobRun
@@ -678,6 +679,7 @@ class JobRunner:
         # A self-review: its message offers "fix" (when its report has a confirmed finding).
         run.findings_fixable = (review and row is not None and "author" in row.roles
                                 and bool(ctx.cfg.process.address_doc))
+        run.own_pr = review and row is not None and "author" in row.roles
         # Saved with the run: the message's parts come from it alone, the same on every attempt.
         run.posted_at_head, run.summary_posted = self._store.posted_count(job.scope, job.number, job.head_sha)
         self._store.save_run(run)
@@ -727,7 +729,8 @@ class JobRunner:
             run.language = current_language()
         with telegram_language(run.language):  # "" (a run from before languages): English
             text = _message(job, run)
-            buttons = fix_buttons(job.kind, job.id, run.replies, run.fix)
+            buttons = (review_buttons(job.id, run.report.get("event", ""), own_pr=run.own_pr) if job.kind == "review"
+                       else fix_buttons(job.kind, job.id, run.replies, run.fix))
             if not run.message_ids and (missing := [t for t in marked_texts(text) if t not in run.translations]):
                 run.translations = {**run.translations, **await self._chat.translations(missing)}
         parts = message_parts(fill(text, run.translations), limit=MESSAGE_LIMIT)

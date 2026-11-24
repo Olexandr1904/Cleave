@@ -231,6 +231,18 @@ async def test_grammar_post_runs_at_once(tmp_path):
     assert rig.parser.calls == []
 
 
+@pytest.mark.parametrize("tap, event", [
+    ("rv_comment", "COMMENT"), ("rv_approve", "APPROVE"), ("rv_changes", "REQUEST_CHANGES"),
+])
+async def test_an_event_button_posts_every_confirmed_finding_with_it(tmp_path, tap, event):
+    rig = Rig(tmp_path)
+    await rig.tap(tap, rig.job.id, 100)
+    [(kind, scope, job_id, cmd)] = rig.posting.calls
+    assert (kind, scope, job_id, cmd.action, cmd.event) == ("post_review", SCOPE, rig.job.id, "post", event)
+    assert cmd.numbers == (1, 2, 3)  # the report's confirmed findings, as the dashboard's Post review… posts them
+    assert rig.texts()[-1] == "Posted …"
+
+
 async def test_superseded_report_answers_outdated(tmp_path):
     rig = Rig(tmp_path)
     rig.store.set_job_state(rig.job.id, "superseded", "new head", T1.isoformat())

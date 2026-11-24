@@ -22,7 +22,7 @@ from orchestrator.reviewer.actions import CONFIRM_TTL  # noqa: F401 (re-exported
 from orchestrator.reviewer.chat import ReviewerChat
 from orchestrator.reviewer.grammar import ReplyCommand, describe, parse_reply
 from orchestrator.reviewer.lines import interrupted_line
-from orchestrator.reviewer.messages import MESSAGE_LIMIT, fix_buttons, message_parts
+from orchestrator.reviewer.messages import MESSAGE_LIMIT, fix_buttons, message_parts, review_buttons
 from orchestrator.reviewer.models import POSTABLE_STATES, Anchor, Confirmation, Job
 from orchestrator.reviewer.posting import Posting
 from orchestrator.reviewer.reply_llm import ReplyParser
@@ -40,12 +40,16 @@ _REPLY_MAX_AGE = timedelta(minutes=15)
 _OFF = N_("Reviewer mode is off on this daemon: nothing was done.")
 _NO_REPLIES = N_("This line takes no replies; nothing was done.")
 _LINE_ONLY = N_('Only "review again" and "skip" work on this line; nothing was done.')
-# A fix message's buttons (messages.fix_buttons), each the command the typed reply gives; rv_pushx asks first.
+# A fix message's buttons (messages.fix_buttons) and a review message's (messages.review_buttons), each the command
+# the typed reply gives; rv_pushx asks first.
 _TAPS = {
     "rv_push": ReplyCommand("push"),
     "rv_pushpost": ReplyCommand("push_post"),
     "rv_post": ReplyCommand("post_replies", all_replies=True),
     "rv_diff": ReplyCommand("diff"),
+    "rv_comment": ReplyCommand("post", event="COMMENT", all_confirmed=True),
+    "rv_approve": ReplyCommand("post", event="APPROVE", all_confirmed=True),
+    "rv_changes": ReplyCommand("post", event="REQUEST_CHANGES", all_confirmed=True),
 }
 _PUSH_ANYWAY_TAP = "rv_pushx"
 _POSTING = ("post", "post_replies", "push", "push_post")
@@ -330,17 +334,22 @@ class ReviewerReplies:
         await self.refresh_buttons(job_id)
 
     async def refresh_buttons(self, job_id: str) -> None:
-        """Put the job's fix message's buttons (its last part) as the job's state has them now: no Push once it is
-        pushed, no "Reply all" once every reply is posted, none once the job is superseded or stale. Only an address,
-        findings or recheck message has buttons. Never raises (cancellation aside): a failure is logged."""
+        """Put the job's message's buttons (its last part) as the job's state has them now: no Push once it is
+        pushed, no "Reply all" once every reply is posted, none once the job is superseded or stale; a review
+        message's event buttons only while the job is done (none once a review of it is posted). Never raises
+        (cancellation aside): a failure is logged."""
         try:
             job = self._store.job(job_id)
             run = self._store.run(job_id)
             if self._chat is None or job is None or run is None or not run.message_ids:
                 return
-            if job.kind not in ("address", "findings", "recheck"):
+            if job.kind not in ("address", "findings", "recheck", "review"):
                 return
-            if job.state not in POSTABLE_STATES:
+            if job.kind == "review":
+                with telegram_language(run.language):  # "": English
+                    buttons = (review_buttons(job.id, run.report.get("event", ""), own_pr=run.own_pr)
+                               if job.state == "done" else [])
+            elif job.state not in POSTABLE_STATES:
                 buttons = []
             else:
                 posted = self._store.posted_numbers(job, None)

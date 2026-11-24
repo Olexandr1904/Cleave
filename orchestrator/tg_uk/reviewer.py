@@ -39,6 +39,9 @@ TEXTS: dict[str, str] = {
     "Push anyway + reply all…": "Push попри захист + відповісти всім…",
     "Push anyway…": "Push попри захист…",
     "Reply all": "Відповісти всім",
+    "Comment": "Коментувати",
+    "Approve": "Схвалити",
+    "Request changes": "Запросити зміни",
     "Reply to this message: {commands}": "Відповідайте на це повідомлення: {commands}",
     "… {lines} — the full report is on the dashboard": "… ще {lines} — повний звіт на дашборді",
 

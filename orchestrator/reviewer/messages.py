@@ -154,6 +154,19 @@ def fix_buttons(kind: str, job_id: str, replies: list[dict], fix: dict, *,
     return buttons
 
 
+# A review message's buttons: each posts every confirmed finding with its event (replies._TAPS), as "post" typed.
+_EVENT_BUTTONS = (("COMMENT", N_("Comment"), "rv_comment"), ("APPROVE", N_("Approve"), "rv_approve"),
+                  ("REQUEST_CHANGES", N_("Request changes"), "rv_changes"))
+
+
+def review_buttons(job_id: str, suggested: str, *, own_pr: bool = False) -> list[Button]:
+    """The buttons of a review message (labels in the current Telegram language): one per event, the report's
+    `suggested` one first; Comment only on a review of the operator's `own_pr`, where GitHub refuses the others."""
+    events = [e for e in _EVENT_BUTTONS if not own_pr or e[0] == "COMMENT"]
+    events.sort(key=lambda e: e[0] != suggested)  # stable: the rest keep their order
+    return [Button(tr(label), f"{tap}:{job_id}") for _, label, tap in events]
+
+
 def address_message(
     scope: str,
     number: int,

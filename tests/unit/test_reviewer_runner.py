@@ -21,7 +21,7 @@ from orchestrator.reviewer.fix import FixError
 from orchestrator.reviewer.forge_github import ForgeError
 from orchestrator.reviewer.lines import drift_line, login_line
 from orchestrator.reviewer.messages import (
-    address_message, findings_message, fix_buttons, recheck_message, review_message, split_message,
+    address_message, findings_message, fix_buttons, recheck_message, review_buttons, review_message, split_message,
 )
 from orchestrator.reviewer.models import (
     Anchor, BoardRow, BoardSnapshot, Job, JobRun, Post, PRDetails, PRFull, RepoState, SnapshotPR, Turn,
@@ -704,7 +704,8 @@ async def test_long_message_is_split_and_anchored(tmp_path, monkeypatch):
     await rig.runner.run_job(job)
     parts = long_parts()
     assert len(parts) >= 3 and rig.chat.texts == parts
-    assert rig.chat.buttons == [None] * len(parts)   # a review message takes typed replies only
+    # The event buttons go on the last part, where the operator ends reading; the report suggests REQUEST_CHANGES.
+    assert rig.chat.buttons == [None] * (len(parts) - 1) + [review_buttons(job.id, "REQUEST_CHANGES")]
     assert max(len(p) for p in parts) == 3900
     ids = list(range(100, 100 + len(parts)))
     assert [rig.store.anchor(CHAT_ID, i).job_id for i in ids] == [job.id] * len(parts)
@@ -1961,3 +1962,16 @@ async def test_a_self_review_run_offers_fix(tmp_path, monkeypatch, roles, addres
     assert rig.state(job) == ("done", "")
     assert rig.store.run(job.id).findings_fixable is fixable
     assert _reply_line(rig.chat.texts[0]).endswith(' · "fix"') is fixable
+
+
+@pytest.mark.parametrize("roles, labels", [
+    (["author"], ["Comment"]),  # GitHub refuses approving or requesting changes on one's own PR
+    (["reviewer"], ["Request changes", "Comment", "Approve"]),
+])
+async def test_a_review_message_offers_the_events_github_takes(tmp_path, monkeypatch, roles, labels):
+    rig = Rig(tmp_path, monkeypatch)
+    rig.store.replace_board(SCOPE, {1712: dataclasses.replace(board_row(actions=()), roles=roles)})
+    job = rig.add_job("review", key=f"{HEAD}:now")
+    await rig.runner.run_job(job)
+    assert rig.store.run(job.id).own_pr is (roles == ["author"])
+    assert [b.label for b in rig.chat.buttons[-1]] == labels

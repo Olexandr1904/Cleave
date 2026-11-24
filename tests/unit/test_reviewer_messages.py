@@ -6,7 +6,8 @@ from orchestrator.reviewer.lines import (
     drift_line, job_deferred_line, job_failed_line, login_line, outdated_line)
 from integrations.base.notifier import Button
 from orchestrator.reviewer.messages import (
-    address_message, findings_message, fix_buttons, message_parts, recheck_message, review_message, split_message)
+    address_message, findings_message, fix_buttons, message_parts, recheck_message, review_buttons, review_message,
+    split_message)
 from orchestrator.reviewer.report import parse_report
 from tests.unit.test_reviewer_report import HEAD, REPORT
 
@@ -292,3 +293,26 @@ def test_after_the_push_only_reply_all_and_diff_remain():
     assert labels(fix_buttons("address", "j", REPLIES, FIX, unposted_replies=False)) == ["Push", "Diff"]
     assert labels(fix_buttons("address", "j", REPLIES, {}, unposted_replies=False)) == []
     assert labels(fix_buttons("findings", "j", [], FIX, pushed=True)) == ["Diff"]
+
+
+COMMENT, APPROVE = Button("Comment", "rv_comment:j1"), Button("Approve", "rv_approve:j1")
+CHANGES = Button("Request changes", "rv_changes:j1")
+
+
+def test_review_buttons_offer_each_event_the_suggested_one_first():
+    assert review_buttons("j1", "REQUEST_CHANGES") == [CHANGES, COMMENT, APPROVE]
+    assert review_buttons("j1", "APPROVE") == [APPROVE, COMMENT, CHANGES]
+    assert review_buttons("j1", "COMMENT") == [COMMENT, APPROVE, CHANGES]
+    assert review_buttons("j1", "") == [COMMENT, APPROVE, CHANGES]  # a run from before: no suggestion read
+
+
+def test_review_buttons_on_my_own_pr_comment_only():
+    """GitHub refuses approving or requesting changes on one's own PR."""
+    assert review_buttons("j1", "APPROVE", own_pr=True) == [COMMENT]
+
+
+def test_review_buttons_in_ukrainian():
+    from orchestrator.tg_i18n import telegram_language
+    with telegram_language("uk"):
+        assert [b.label for b in review_buttons("j1", "REQUEST_CHANGES")] == [
+            "Запросити зміни", "Коментувати", "Схвалити"]

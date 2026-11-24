@@ -258,7 +258,7 @@ REPLY_ALL = Button("Reply all", "rv_post:j1")
 
 
 def test_fix_buttons_offer_only_what_can_run():
-    assert fix_buttons("address", "j1", REPLIES, FIX) == [PUSH_ALL, PUSH, DIFF]
+    assert fix_buttons("address", "j1", REPLIES, FIX) == [PUSH_ALL, DIFF]  # pushing and replying is one move
     assert fix_buttons("address", "j1", REPLIES, GUARDED) == [PUSH_ANYWAY_ALL, DIFF]
     assert fix_buttons("address", "j1", [], FIX) == [PUSH, DIFF]
     assert fix_buttons("address", "j1", [], GUARDED) == [PUSH_ANYWAY, DIFF]

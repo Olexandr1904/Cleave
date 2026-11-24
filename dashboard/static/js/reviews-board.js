@@ -177,8 +177,10 @@ export function cleaveMove(pr, column) {
     return readyFix(pr) ? { kind: 'push', text: 'fix ready: push' } : null;  // pushed or no patch: nothing left to do
   }
   if (column === 'fix' && fix && fix.state === 'done') {
-    return fix.pushed ? { kind: 'replies', text: 'fix pushed: post the replies' }
-      : fix.fix ? { kind: 'push', text: 'fix ready: push' } : { kind: 'replies', text: 'replies ready: post' };
+    // A threads fix: pushing it posts its replies too (one move).
+    if (fix.pushed) return { kind: 'replies', text: 'fix pushed: post the replies' };
+    return fix.fix ? { kind: 'push', text: 'fix ready: push and reply' }
+      : { kind: 'replies', text: 'replies ready: post' };
   }
   return null;
 }
@@ -321,6 +323,14 @@ export function turnMove(pr, column) {
   return null;
 }
 
+// The push move's label: a threads fix posts its replies with the push (review-actions.js mainCommand), a findings
+// fix has none.
+function pushLabel(fix) {
+  const replies = fix.kind !== 'findings';
+  if (fix.protected) return replies ? 'Push anyway + reply all…' : 'Push anyway…';
+  return replies ? 'Push + reply all' : MAIN_LABEL.push;
+}
+
 // The main button of a card ('card') or of the panel header ('panel'): the move its line names, Cleave's own
 // (cleaveMove: none while a post of its fix is under way, buttonsHtml shows Posting) or one on GitHub (turnMove).
 // reviews.js sends it. Review now and Fix now have none here: the card's own button is the main one.
@@ -329,7 +339,7 @@ export function mainButtonHtml(scope, pr, column, where) {
   if (own && pr.fix && pr.fix.posting) return '';
   const move = own || turnMove(pr, column);
   if (!move || move.kind === 'review-now' || move.kind === 'fix') return '';
-  const label = move.kind === 'push' && pr.fix.protected ? 'Push anyway…'
+  const label = move.kind === 'push' ? pushLabel(pr.fix)
     : move.kind === 'rerequest' ? `Re-request ${move.logins.join(', ')}` : MAIN_LABEL[move.kind];
   return `<button class="reviews-btn primary is-main" data-main-move="${move.kind}" data-scope="${esc(scope)}" data-number="${
     esc(pr.number)}" data-fk="${where}:main:${esc(`${scope}#${pr.number}`)}">${esc(label)}</button>`;

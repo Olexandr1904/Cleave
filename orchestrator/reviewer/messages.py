@@ -129,9 +129,10 @@ def _push_command(fix: dict) -> list[str]:
 def fix_buttons(kind: str, job_id: str, replies: list[dict], fix: dict, *,
                 pushed: bool = False, unposted_replies: bool = True) -> list[Button]:
     """The buttons of a job's message: on a threads (address) message, a findings message and a re-check message,
-    only the actions that can run (labels in the current Telegram language). A fix with protected files gets
-    "Push anyway…", which asks for a confirmation first. Once the fix is `pushed`, no Push button is offered; "Reply
-    all" only while some reply is `unposted_replies`; Diff stays while there is a fix."""
+    only the actions that can run (labels in the current Telegram language). A fix with replies to post gets one
+    push button, which posts them too: pushing and replying is one move ("push" typed still pushes alone). A fix
+    with protected files gets "Push anyway…", which asks for a confirmation first. Once the fix is `pushed`, no Push
+    button is offered; "Reply all" only while some reply is `unposted_replies`; Diff stays while there is a fix."""
     if kind not in ("address", "findings", "recheck"):
         return []
     buttons: list[Button] = []
@@ -144,7 +145,7 @@ def fix_buttons(kind: str, job_id: str, replies: list[dict], fix: dict, *,
             label = N_("Push anyway + reply all…") if with_replies else N_("Push anyway…")
             buttons.append(Button(tr(label), f"rv_pushx:{job_id}"))
         elif with_replies:
-            buttons += [Button(tr("Push + reply all"), f"rv_pushpost:{job_id}"), Button(tr("Push"), f"rv_push:{job_id}")]
+            buttons.append(Button(tr("Push + reply all"), f"rv_pushpost:{job_id}"))
         else:
             buttons.append(Button(tr("Push"), f"rv_push:{job_id}"))
         buttons.append(Button(tr("Diff"), f"rv_diff:{job_id}"))

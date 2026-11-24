@@ -9,6 +9,13 @@ export const EVENTS = [
 
 const isOpen = (states, n) => !states || states[n] !== 'posted';
 
+// Whether the detail has a drafted reply not posted yet that is not a findings fix's (its verdicts job has none to
+// post): beside a fix, pushing and replying is then one move.
+function repliesOpen(detail) {
+  const findings = Boolean(detail.fix_job) && detail.fix_job === detail.verdicts_job;
+  return !findings && (detail.replies || []).some(entry => isOpen(detail.reply_states, entry.n));
+}
+
 // The question before pushing a fix that touches protected files (the panel's Push anyway… and the main button's).
 export function protectedConfirm(files) {
   return `The fix touches protected files: ${files.join(', ')}. Push it anyway?`;
@@ -27,15 +34,12 @@ function fixButtons(detail, withReplies) {
     }];
   }
   return withReplies
-    ? [{ label: 'Push + reply all', command: { action: 'push_post' } }, { label: 'Push', command: { action: 'push' } }]
+    ? [{ label: 'Push + reply all', command: { action: 'push_post' } }]
     : [{ label: 'Push', command: { action: 'push' } }];
 }
 
 export function prActions(detail) {
-  const replies = detail.replies || [];
-  // A findings fix (its verdicts job) has no replies to post.
-  const findings = Boolean(detail.fix_job) && detail.fix_job === detail.verdicts_job;
-  const withReplies = !findings && replies.some(entry => isOpen(detail.reply_states, entry.n));
+  const withReplies = repliesOpen(detail);
   const fix = fixButtons(detail, withReplies);
   const replyBar = [];
   if (withReplies) {
@@ -68,15 +72,17 @@ export function resolveCommand(command, { numbers, event }) {
 }
 
 // The command of a card's main move (reviews-board.js cleaveMove) against the PR's detail: its job, the command,
-// the question to ask first and whether to pick the review event; or why there is nothing to send. The push move only
-// pushes, as the card's line says. Whatever else stops it (pushed already, nothing left to post) is the layer's answer.
+// the question to ask first and whether to pick the review event; or why there is nothing to send. The push move
+// sends what the panel's push button does: push and reply all beside replies to post, else the push alone. Whatever
+// else stops it (pushed already, nothing left to post) is the layer's answer.
 export function mainCommand(kind, detail) {
   if (kind === 'push') {
     if (!detail.fix_job || !detail.fix) return 'No fix to push.';
+    const action = repliesOpen(detail) ? 'push_post' : 'push';
     const files = detail.fix.protected || [];
     return files.length
-      ? { jobId: detail.fix_job, command: { action: 'push', anyway: true }, confirm: protectedConfirm(files), pickEvent: false }
-      : { jobId: detail.fix_job, command: { action: 'push' }, confirm: null, pickEvent: false };
+      ? { jobId: detail.fix_job, command: { action, anyway: true }, confirm: protectedConfirm(files), pickEvent: false }
+      : { jobId: detail.fix_job, command: { action }, confirm: null, pickEvent: false };
   }
   if (kind === 'replies') {
     if (!detail.replies_job) return 'No replies drafted.';

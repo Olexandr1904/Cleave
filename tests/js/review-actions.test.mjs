@@ -22,10 +22,10 @@ test('a protected fix offers only push anyway, with a confirm', () => {
   assert.deepEqual(bare.fix[0].command, { action: 'push', anyway: true });
 });
 
-test('an unprotected fix offers push + reply all and push; without replies only push', () => {
+test('an unprotected fix offers push + reply all beside replies (one move); without replies only push', () => {
   const a = prActions(detail({ fix_job: 'f', fix: {}, replies: [r(1)] }));
-  assert.deepEqual(labels(a.fix), ['Push + reply all', 'Push']);
-  assert.deepEqual(a.fix.map(b => b.command), [{ action: 'push_post' }, { action: 'push' }]);
+  assert.deepEqual(labels(a.fix), ['Push + reply all']);
+  assert.deepEqual(a.fix.map(b => b.command), [{ action: 'push_post' }]);
   assert.deepEqual(labels(prActions(detail({ fix_job: 'f', fix: {} })).fix), ['Push']);
 });
 
@@ -71,9 +71,18 @@ test('the command field addresses the newest job the operator could reply to', (
   assert.equal(prActions(detail({ jobs })).commandJob, null);
 });
 
-test('mainCommand: push only, with the panel text when protected; reply all; post review with an event pick', () => {
+test('mainCommand: push and reply all beside replies, else push, with the panel text when protected; reply all; '
+  + 'post review with an event pick', () => {
   assert.deepEqual(mainCommand('push', detail({ fix_job: 'f', fix: { protected: [] }, replies: [r(1)] })),
-    { jobId: 'f', command: { action: 'push' }, confirm: null, pickEvent: false });
+    { jobId: 'f', command: { action: 'push_post' }, confirm: null, pickEvent: false });
+  assert.deepEqual(mainCommand('push', detail({ fix_job: 'f', fix: { protected: ['a.yml'] }, replies: [r(1)] })),
+    { jobId: 'f', command: { action: 'push_post', anyway: true },
+      confirm: 'The fix touches protected files: a.yml. Push it anyway?', pickEvent: false });
+  // Every reply posted already, or a findings fix (no replies of its own): the push alone.
+  const allPosted = detail({ fix_job: 'f', fix: {}, replies: [r(1)], reply_states: { 1: 'posted' } });
+  assert.deepEqual(mainCommand('push', allPosted).command, { action: 'push' });
+  assert.deepEqual(mainCommand('push', detail({ fix_job: 'v', verdicts_job: 'v', fix: {}, replies: [r(1)] })).command,
+    { action: 'push' });
   assert.deepEqual(mainCommand('push', detail({ fix_job: 'f', fix: { protected: ['a.yml', 'b.gradle'] } })),
     { jobId: 'f', command: { action: 'push', anyway: true },
       confirm: 'The fix touches protected files: a.yml, b.gradle. Push it anyway?', pickEvent: false });
@@ -89,7 +98,12 @@ test('mainCommand: a refusal when the PR has no job for the move', () => {
   assert.equal(mainCommand('review', detail({})), 'No report to post.');
 });
 
-test('the panel and the main button ask the same question before pushing protected files', () => {
-  const d = detail({ fix_job: 'f', fix: { protected: ['a.yml'] } });
-  assert.equal(prActions(d).fix[0].confirm, mainCommand('push', d).confirm);
+test('the panel and the main button send the same command and ask the same question before pushing', () => {
+  for (const d of [detail({ fix_job: 'f', fix: { protected: ['a.yml'] } }),
+    detail({ fix_job: 'f', fix: { protected: ['a.yml'] }, replies: [r(1)] }),
+    detail({ fix_job: 'f', fix: {}, replies: [r(1)] }), detail({ fix_job: 'f', fix: {} })]) {
+    const [panel] = prActions(d).fix;
+    const main = mainCommand('push', d);
+    assert.deepEqual([main.command, main.confirm], [panel.command, panel.confirm || null]);
+  }
 });

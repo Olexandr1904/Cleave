@@ -150,14 +150,14 @@ test('moveText: my actions in words, what is left to post, or who holds the move
   const recheck = pr(1, { my_turns: ['recheck'], job: { kind: 'recheck', state: 'done', head: H, message_sent: true } });
   assert.equal(B.moveText(recheck, 'review', 'octo').text, 'post the replies');
   const fixed = pr(1, { roles: ['author'], my_turns: ['answer_threads'], fix: fixJob() });
-  assert.equal(B.moveText(fixed, 'fix', 'octo').text, 'fix ready: push');
+  assert.equal(B.moveText(fixed, 'fix', 'octo').text, 'fix ready: push and reply');
   assert.equal(B.moveText({ ...fixed, fix: fixJob({ pushed: true }) }, 'fix', 'octo').text,
     'fix pushed: post the replies');
   assert.equal(B.moveText({ ...fixed, fix: fixJob({ fix: false }) }, 'fix', 'octo').text,
     'replies ready: post');
   // A self-review queued after the fix is the row's job now: the fix still says what is left.
   assert.equal(B.moveText({ ...fixed, job: { kind: 'review', state: 'queued', head: H } }, 'fix', 'octo').text,
-    'fix ready: push');
+    'fix ready: push and reply');
   // A report not delivered yet cannot be posted from Telegram or here.
   const undelivered = pr(1, { my_turns: ['review'], review: review({ critical: 1 }, { message_sent: false }) });
   assert.equal(B.moveText(undelivered, 'review', 'octo').text, 'review');
@@ -165,12 +165,13 @@ test('moveText: my actions in words, what is left to post, or who holds the move
 
 test('cleaveMove: the move a card line names, by kind; none for GitHub turns alone', () => {
   const fixed = pr(1, { roles: ['author'], my_turns: ['answer_threads'], fix: fixJob() });
-  assert.deepEqual(B.cleaveMove(fixed, 'fix'), { kind: 'push', text: 'fix ready: push' });
+  assert.deepEqual(B.cleaveMove(fixed, 'fix'), { kind: 'push', text: 'fix ready: push and reply' });
   assert.deepEqual(B.cleaveMove({ ...fixed, fix: fixJob({ pushed: true }) }, 'fix'),
     { kind: 'replies', text: 'fix pushed: post the replies' });
   assert.deepEqual(B.cleaveMove({ ...fixed, fix: fixJob({ fix: false }) }, 'fix'),
     { kind: 'replies', text: 'replies ready: post' });
-  assert.equal(B.cleaveMove({ ...fixed, fix: fixJob({ kind: 'findings' }) }, 'fix').kind, 'push');
+  assert.deepEqual(B.cleaveMove({ ...fixed, fix: fixJob({ kind: 'findings' }) }, 'fix'),
+    { kind: 'push', text: 'fix ready: push' });  // a findings fix has no replies
   assert.equal(B.cleaveMove({ ...fixed, fix: fixJob({ kind: 'findings', pushed: true }) }, 'fix'), null);
   const recheck = pr(1, { my_turns: ['recheck'], job: { kind: 'recheck', state: 'done', head: H, message_sent: true } });
   assert.deepEqual(B.cleaveMove(recheck, 'review'), { kind: 'replies', text: 'post the replies' });
@@ -182,11 +183,15 @@ test('cleaveMove: the move a card line names, by kind; none for GitHub turns alo
 test('mainButtonHtml: the move as a primary button; Push anyway… on protected files; none while posting', () => {
   const fixed = pr(1, { roles: ['author'], my_turns: ['answer_threads'], fix: fixJob() });
   const push = B.mainButtonHtml('acme/app', fixed, 'fix', 'card');
-  assert.match(push, /class="reviews-btn primary is-main"[^>]*data-main-move="push"[^>]*>Push</);
+  assert.match(push, /class="reviews-btn primary is-main"[^>]*data-main-move="push"[^>]*>Push \+ reply all</);
   assert.match(push, /data-scope="acme\/app" data-number="1"/);
   assert.match(push, /data-fk="card:main:acme\/app#1"/);
   assert.match(B.mainButtonHtml('acme/app', { ...fixed, fix: fixJob({ protected: true }) }, 'fix', 'card'),
-    /data-main-move="push"[^>]*>Push anyway…</);
+    /data-main-move="push"[^>]*>Push anyway \+ reply all…</);
+  const findings = { ...fixed, fix: fixJob({ kind: 'findings' }) };  // no replies: the push alone
+  assert.match(B.mainButtonHtml('acme/app', findings, 'fix', 'card'), /data-main-move="push"[^>]*>Push</);
+  assert.match(B.mainButtonHtml('acme/app', { ...findings, fix: fixJob({ kind: 'findings', protected: true }) },
+    'fix', 'card'), /data-main-move="push"[^>]*>Push anyway…</);
   assert.equal(B.mainButtonHtml('acme/app', { ...fixed, fix: fixJob({ posting: true }) }, 'fix', 'card'), '');
   assert.match(B.mainButtonHtml('acme/app', { ...fixed, fix: fixJob({ pushed: true }) }, 'fix', 'card'),
     /data-main-move="replies"[^>]*>Reply all</);

@@ -75,12 +75,18 @@ let statusTimer = null;
 let ticked = { finding: new Set(), reply: new Set() };  // the open PR's ticked rows, by number
 let postEvent = 'COMMENT';  // the review event a post carries
 let cmdText = '';           // the command field's text, kept across the panel's redraws
-let result = null;          // {key, state, text, card}: what the last push, post or command did, shown in the panel;
-                            // a main button's (card) on its PR's card too
-let acting = false;         // a push, post or command is running: the panel's and the main buttons wait
+const results = new Map();  // by rowKey: {key, state, text, card}, what the last push, post, command or move on that
+                            // PR did, shown in its panel; a main button's (card) on its card too
+const running = new Set();  // the rowKeys of the PRs whose push, post, command or move waits for its answer: their
+                            // main buttons and panel wait, every other PR's act meanwhile (the server posts in turn)
 let panelDetail = null;     // the open panel's detail, for the click that resolves a button
 
 const rowKey = (scope, number) => `${scope}#${number}`;
+const openKey = () => (openPr ? rowKey(openPr.scope, openPr.number) : null);
+
+// What a card and its panel show while the PR's action waits for its answer.
+const workingResult = key => ({ key, state: 'running', text: 'Working…', card: true });
+const shownResult = key => (running.has(key) ? workingResult(key) : results.get(key));
 
 // The repo filter, from the router (#/reviews/<scope>); an unknown scope shows every repo.
 export function setReviewsRepo(scope) {
@@ -155,7 +161,7 @@ function boardHtml(shown, query, now) {
     const repo = repoOf.get(pr);
     return cardHtml(repo.scope, pr, {
       me: repo.me, jiraUrl: repo.jira_url, repoLabel: repos.length > 1 ? repo.scope.split('/').pop() : '', scale, now,
-      result,
+      result: shownResult(rowKey(repo.scope, pr.number)),
     });
   };
   return `<div class="reviews-board">${COLUMNS.map(c => `<section class="reviews-col is-${c.key}" aria-label="${c.title}">
@@ -198,8 +204,10 @@ function paintList(view) {
     ? boardHtml(shown, query, now)
     : '<div class="state-msg">No repo has reviews enabled.</div>');
   markRows(view);
-  // An Auto refresh redraws the main buttons: they stay disabled while a push, post or move waits for its answer.
-  if (acting) view.querySelectorAll('[data-main-move]').forEach(btn => { btn.disabled = true; });
+  // A PR's main button stays disabled, an Auto refresh too, while its push, post or move waits for its answer.
+  view.querySelectorAll('[data-main-move]').forEach(btn => {
+    if (running.has(rowKey(btn.dataset.scope, Number(btn.dataset.number)))) btn.disabled = true;
+  });
 }
 
 // ── Side panel ──
@@ -262,7 +270,7 @@ function numberBadge(states, n) {
     state}</span>`;
 }
 
-const lockAttr = () => (acting ? ' disabled' : '');
+const lockAttr = () => (running.has(openKey()) ? ' disabled' : '');
 
 // A checkbox on a row that is not posted yet; the ticked ones are what "… checked" sends.
 function tickHtml(kind, states, n) {
@@ -284,10 +292,10 @@ function eventHtml() {
       value === postEvent ? ' checked' : ''}${lockAttr()}> ${name}</label>`).join('')}</fieldset>`;
 }
 
-// What the last action on the open PR did (resultLineHtml).
+// What the last action on the open PR did (resultLineHtml), or that it still runs.
 function resultHtml(target) {
-  if (!result || result.key !== rowKey(target.scope, target.number)) return '';
-  return resultLineHtml(result);
+  const shown = shownResult(rowKey(target.scope, target.number));
+  return shown ? resultLineHtml(shown) : '';
 }
 
 // The command field: free text for the newest job the operator could reply to, as in Telegram.
@@ -545,7 +553,7 @@ async function paintPanel(view) {
   redraw(panel, panelHeadHtml(target, pr) + (error
     ? section('', null, `<div class="reviews-error">Error: ${esc(String(error))}</div>`)
     : panelBodyHtml(pr, detail)));
-  if (acting) lockPanel(panel);
+  if (running.has(rowKey(target.scope, target.number))) lockPanel(panel);
 }
 
 // Opening moves the focus to the panel's Back; closing returns it to the row.
@@ -554,7 +562,6 @@ function openRow(view, row) {
   focusKey = row.dataset.reviewRow;
   panelOpen = {};
   ticked = { finding: new Set(), reply: new Set() };
-  if (result && result.key !== focusKey) result = null;  // a main button's result on this PR's card stays
   cmdText = '';
   markRows(view);
   paintPanel(view);  // its header is drawn before it awaits the detail
@@ -605,7 +612,8 @@ async function runAction(view, btn, inPanel) {
   if (!view.isConnected) return;  // the operator left the Reviews view meanwhile: nothing to show it in
   showStatus(view, text, failed);
   // The card shows it too: the status line is at the top of the page and goes after a few seconds.
-  result = { key: rowKey(scope, Number(number)), state: failed ? 'failed' : skip ? 'skipped' : 'queued', text, card: true };
+  const key = rowKey(scope, Number(number));
+  results.set(key, { key, state: failed ? 'failed' : skip ? 'skipped' : 'queued', text, card: true });
   await renderReviews();
   // The clicked button lost the focus (disabled, then redrawn as Queued or gone): the panel's Back for a
   // button in the panel, else the PR's row.
@@ -628,28 +636,47 @@ function askConfirmation(answer) {
   });
 }
 
-// One push, post or typed command on a job of `target`. It can push to GitHub or post a public review, so the panel and
-// the main buttons wait for the answer, then the board reloads. `card`: a main button's, whose result its card shows.
+// One push, post or typed command on a job of `target`. It can push to GitHub or post a public review, so that PR's main
+// button and panel wait for the answer, its card saying so; every other PR's act meanwhile. Then the board reloads.
+// `card`: a main button's, whose result its card shows.
 async function runCommand(view, target, jobId, body, card = false) {
-  if (acting) {
-    busy(target);
-    return;
-  }
-  acting = true;
   const key = rowKey(target.scope, target.number);
-  const open = Boolean(openPr) && rowKey(openPr.scope, openPr.number) === key;
-  if (openPr) lockPanel(view.querySelector('.review-panel'));
-  view.querySelectorAll('[data-main-move]').forEach(btn => { btn.disabled = true; });
+  if (!start(view, target)) return;
+  let shown;
   try {
     let answer = await reviewAction(target.scope, target.number, jobId, body);
     if (answer.state === 'confirm') answer = await askConfirmation(answer);
-    result = { key, state: answer.state, text: (answer.texts || []).join('\n'), card };
-    if (open && answer.state !== 'refused') ticked = { finding: new Set(), reply: new Set() };
-    if (open && body.text != null) cmdText = '';
+    shown = { key, state: answer.state, text: (answer.texts || []).join('\n'), card };
+    // The panel may show another PR by now: its ticks and command text are that PR's.
+    if (openKey() === key && answer.state !== 'refused') ticked = { finding: new Set(), reply: new Set() };
+    if (openKey() === key && body.text != null) cmdText = '';
   } catch (err) {
-    result = { key, state: 'failed', text: String(err.message || err), card };
+    shown = { key, state: 'failed', text: String(err.message || err), card };
   }
-  acting = false;
+  await finish(view, key, shown);
+}
+
+// An action on `target` starts: false (said on its card) while one on that PR waits for its answer. Its card and, when
+// open, its panel show that it works.
+function start(view, target) {
+  const key = rowKey(target.scope, target.number);
+  if (running.has(key)) {
+    busy(target);
+    return false;
+  }
+  running.add(key);
+  paintList(view);
+  if (openKey() === key) {
+    lockPanel(view.querySelector('.review-panel'));
+    paintPanel(view);  // its result line says it works
+  }
+  return true;
+}
+
+// The action on `key` answered: its result, then the board reloads.
+async function finish(view, key, shown) {
+  running.delete(key);
+  results.set(key, shown);
   if (!view.isConnected) return;
   await renderReviews();
 }
@@ -672,33 +699,26 @@ function eventPickHtml(detail) {
 // The main buttons of a GitHub move (reviews-board.js turnMove), which go to /api/reviews/pr-move.
 const GITHUB_MOVES = ['rerequest', 'request', 'ready', 'merge'];
 
-// A press while another push, post or move waits for its answer: said on its card, never dropped in silence.
+// A press on a PR whose push, post or move waits for its answer: its card already says it works; the status line
+// says this press did nothing, never dropped in silence.
 function busy(target) {
-  result = { key: rowKey(target.scope, target.number), state: 'refused', card: true,
-    text: 'Another action is running: wait for its answer, then try again.' };
-  renderReviews();
+  const view = document.querySelector('.reviews-view');
+  if (view) showStatus(view, `#${target.number} is still working: wait for its answer, then try again.`, true);
 }
 
-// One GitHub move on `target`: the main buttons and the panel wait for the answer, which its card shows; then the board
+// One GitHub move on `target`: that PR's main button and panel wait for the answer, which its card shows; then the board
 // reloads (the server polls the repo soon after a move, so the card's line follows within a minute).
 async function runMove(view, target, body) {
-  if (acting) {
-    busy(target);
-    return;
-  }
-  acting = true;
   const key = rowKey(target.scope, target.number);
-  if (openPr) lockPanel(view.querySelector('.review-panel'));
-  view.querySelectorAll('[data-main-move]').forEach(btn => { btn.disabled = true; });
+  if (!start(view, target)) return;
+  let shown;
   try {
     const answer = await prMove(target.scope, target.number, body);
-    result = { key, state: answer.state, text: answer.text, card: true };
+    shown = { key, state: answer.state, text: answer.text, card: true };
   } catch (err) {
-    result = { key, state: 'failed', text: String(err.message || err), card: true };
+    shown = { key, state: 'failed', text: String(err.message || err), card: true };
   }
-  acting = false;
-  if (!view.isConnected) return;
-  await renderReviews();
+  await finish(view, key, shown);
 }
 
 // A GitHub move's button: Re-request and Ready for review run at once; Request review… and Merge… ask first, in a
@@ -724,11 +744,11 @@ async function onPrMove(view, btn) {
   try {
     data = kind === 'request' ? await reviewCandidates(target.scope, target.number) : await mergeOptions(target.scope);
   } catch (err) {
-    result = { key, state: 'failed', text: String(err.message || err), card: true };
+    results.set(key, { key, state: 'failed', text: String(err.message || err), card: true });
   }
   if (!view.isConnected) return;
   if (data && kind === 'merge' && !data.methods.length) {
-    result = { key, state: 'refused', text: 'GitHub allows no merge method in this repo.', card: true };
+    results.set(key, { key, state: 'refused', text: 'GitHub allows no merge method in this repo.', card: true });
     data = null;
   }
   if (!data) {
@@ -754,7 +774,7 @@ async function onPrMove(view, btn) {
 // A card's or the panel header's main button: a GitHub move (onPrMove), or Cleave's: the PR's detail, read at the
 // click, gives its command (mainCommand). A push of protected files and a post of the review ask first.
 async function onMainButton(view, btn) {
-  if (acting) {
+  if (running.has(rowKey(btn.dataset.scope, Number(btn.dataset.number)))) {
     busy({ scope: btn.dataset.scope, number: Number(btn.dataset.number) });
     return;
   }
@@ -770,11 +790,11 @@ async function onMainButton(view, btn) {
   try {
     detail = await loadReviewDetail(target.scope, target.number);
   } catch (err) {
-    result = { key, state: 'failed', text: String(err.message || err), card: true };
+    results.set(key, { key, state: 'failed', text: String(err.message || err), card: true });
   }
   if (!view.isConnected) return;
   const main = detail ? mainCommand(btn.dataset.mainMove, detail) : null;
-  if (typeof main === 'string') result = { key, state: 'refused', text: main, card: true };
+  if (typeof main === 'string') results.set(key, { key, state: 'refused', text: main, card: true });
   if (!main || typeof main === 'string') {
     await renderReviews();
     return;
@@ -805,7 +825,7 @@ function onPanelButton(view, btn) {
       numbers: [...ticked[group === 'report' ? 'finding' : 'reply']], event: postEvent,
     });
     if (!command) {
-      result = { key: rowKey(openPr.scope, openPr.number), state: 'refused', text: 'Tick at least one row first.' };
+      results.set(openKey(), { key: openKey(), state: 'refused', text: 'Tick at least one row first.' });
       paintPanel(view);
       return;
     }

@@ -213,6 +213,13 @@ test('cardHtml: the main button comes before Fix again…, and its PR\'s last re
   assert.doesNotMatch(other, /review-result/);
 });
 
+test('cardHtml: a PR whose action waits for its answer says so on its card', () => {
+  const fixed = pr(1, { roles: ['author'], my_turns: ['answer_threads'], fix: fixJob() });
+  const working = { key: 'acme/app#1', state: 'running', text: 'Working: the answer shows here.', card: true };
+  assert.match(B.cardHtml('acme/app', fixed, { ...VIEW, result: working }),
+    /class="review-result is-running" role="status"><b>running<\/b>\s*<span>Working: the answer shows here\.<\/span>/);
+});
+
 test('cardHtml: only a main button\'s result reaches the card, cut to its first line', () => {
   const fixed = pr(1, { roles: ['author'], my_turns: ['answer_threads'], fix: fixJob({ pushed: true }) });
   const fromPanel = { key: 'acme/app#1', state: 'shown', text: 'diff --git a/x b/x\n+one\n+two' };

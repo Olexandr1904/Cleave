@@ -57,6 +57,28 @@ class PRDetails:
 
 
 @dataclass(frozen=True)
+class Check:
+    """One check on a PR's head: a check run or a commit status."""
+    name: str
+    state: str  # pending, passed or failed
+    word: str  # GitHub's status or conclusion, lowercase, "_" as a space: queued, in progress, failure…
+
+
+@dataclass(frozen=True)
+class MergeState:
+    """What GitHub says of merging a PR: its mergeStateStatus (BLOCKED, BEHIND, DIRTY, CLEAN, UNKNOWN…), its base and
+    head branches, its head, whether the head branch is in another repo, the review decision ("" for none) and the
+    head's checks, None when no check ran on it."""
+    status: str
+    base: str
+    head_ref: str
+    head_sha: str
+    cross_repo: bool
+    review: str
+    checks: tuple[Check, ...] | None
+
+
+@dataclass(frozen=True)
 class PRFull:
     number: int
     title: str

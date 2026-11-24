@@ -1,14 +1,16 @@
 """GitHub reads for the reviews board, review jobs and posting: open PRs, PR details, whether a login has
 reviewed, the full PR, its comments, its reviews and one review's comments; the one approve call; and the board's
-moves on a PR: request reviewers (and who to ask), mark ready, merge (and the methods the repo allows)."""
+moves on a PR: request reviewers (and who to ask), mark ready, merge (and the methods the repo allows, and what
+blocks a merge), and an empty commit that starts the PR's checks again."""
 from __future__ import annotations
 
 import re
+from urllib.parse import quote
 
 import httpx
 
 from integrations.github.github_adapter import GitHubAdapter
-from orchestrator.reviewer.models import ForgeReview, PRComments, PRDetails, PRFull
+from orchestrator.reviewer.models import Check, ForgeReview, MergeState, PRComments, PRDetails, PRFull
 
 _PAGE = 100
 _MAX_PAGES = 100
@@ -30,6 +32,38 @@ query($owner: String!, $name: String!, $number: Int!, $q: String!) {
   }
 }
 """
+
+# What GitHub says of merging the PR, and the checks on its head (at most 100: a check past them is not read).
+_MERGE_STATE_QUERY = """
+query($owner: String!, $name: String!, $number: Int!) {
+  repository(owner: $owner, name: $name) {
+    pullRequest(number: $number) {
+      mergeStateStatus baseRefName headRefName headRefOid isCrossRepository reviewDecision
+      commits(last: 1) { nodes { commit { statusCheckRollup { contexts(first: 100) { nodes {
+        __typename
+        ... on CheckRun { name status conclusion }
+        ... on StatusContext { context state }
+      } } } } } }
+    }
+  }
+}
+"""
+_PASSED = ("SUCCESS", "NEUTRAL", "SKIPPED")
+
+
+def _check(node: dict) -> Check:
+    """A check run (pending until completed, then passed or failed by its conclusion) or a commit status (pending
+    while PENDING or EXPECTED)."""
+    if node.get("__typename") == "CheckRun":
+        name, status, conclusion = node.get("name") or "", node.get("status") or "", node.get("conclusion") or ""
+        if status != "COMPLETED":
+            state, word = "pending", status
+        else:
+            state, word = ("passed" if conclusion in _PASSED else "failed"), conclusion or "unknown"
+    else:
+        name, word = node.get("context") or "", node.get("state") or ""
+        state = "pending" if word in ("PENDING", "EXPECTED") else "passed" if word == "SUCCESS" else "failed"
+    return Check(name, state, word.lower().replace("_", " "))
 
 
 class ForgeError(Exception):
@@ -194,9 +228,10 @@ class GitHubForgeReader:
             raise ForgeError(type(e).__name__, unavailable=True) from None
         raise ForgeError(f"GitHub {response.status_code}", unavailable=response.status_code >= 500)
 
-    async def _write(self, method: str, path: str, body: dict) -> None:
-        """One write, never retried (a retry after a timeout could notify twice, or answer a merge for another):
-        ForgeError("GitHub <status>") when GitHub refuses it, unavailable when it may have landed (no answer, a 5xx)."""
+    async def _write(self, method: str, path: str, body: dict) -> dict:
+        """One write, never retried (a retry after a timeout could notify twice, or answer a merge for another), and
+        GitHub's answer ({} when it is not a JSON object): ForgeError("GitHub <status>") when GitHub refuses it,
+        unavailable when it may have landed (no answer, a 5xx)."""
         try:
             response = await self._adapter._client.request(method, f"{self._adapter._repo_path}{path}", json=body)
         except Exception as e:
@@ -204,6 +239,11 @@ class GitHubForgeReader:
             raise ForgeError(type(e).__name__, unavailable=True) from None
         if not response.is_success:
             raise ForgeError(f"GitHub {response.status_code}", unavailable=response.status_code >= 500)
+        try:
+            answer = response.json()
+        except ValueError:
+            return {}
+        return answer if isinstance(answer, dict) else {}
 
     async def request_reviewers(self, number: int, logins: list[str]) -> None:
         """Ask `logins` to review the PR (again, for one who reviewed before)."""
@@ -223,6 +263,42 @@ class GitHubForgeReader:
             raise ForgeError("GitHub GraphQL error") from None  # GitHub's text is not ours to show
         except Exception as e:
             raise _forge_error(e) from None
+
+    async def merge_state(self, number: int) -> MergeState:
+        """What GitHub says of merging the PR (MergeState): one GraphQL read. ForgeError when GitHub refuses it or
+        answers no PR."""
+        variables = {"owner": self._adapter._owner, "name": self._adapter._repo, "number": number}
+        try:
+            answer = await self._adapter._graphql_request(_MERGE_STATE_QUERY, variables)
+        except Exception as e:
+            raise _forge_error(e) from None
+        pr = (((answer.get("data") or {}).get("repository") or {}).get("pullRequest")
+              if not answer.get("errors") else None)
+        if not pr:
+            raise ForgeError("GitHub GraphQL error")  # GitHub's text is not ours to show
+        commits = (pr.get("commits") or {}).get("nodes") or []
+        rollup = ((commits[0] or {}).get("commit") or {}).get("statusCheckRollup") if commits else None
+        checks = None if rollup is None else tuple(
+            _check(node) for node in (rollup.get("contexts") or {}).get("nodes") or [] if node)
+        return MergeState(status=pr.get("mergeStateStatus") or "", base=pr.get("baseRefName") or "",
+                          head_ref=pr.get("headRefName") or "", head_sha=pr.get("headRefOid") or "",
+                          cross_repo=bool(pr.get("isCrossRepository")), review=pr.get("reviewDecision") or "",
+                          checks=checks)
+
+    async def empty_commit(self, branch: str, head: str, message: str) -> str:
+        """Push an empty commit to `branch`, whose head is `head`: a commit with the head's tree and the head as its
+        only parent, then the branch moved to it without force (GitHub refuses it, 422, if the branch moved since).
+        Each write once; the new commit's sha. ForgeError as _write's (a commit made but not reached by the branch is
+        left to GitHub's garbage collection)."""
+        tree = ((await self._get(f"{self._adapter._repo_path}/git/commits/{head}")).get("tree") or {}).get("sha")
+        if not isinstance(tree, str):
+            raise ForgeError("GitHub answer unreadable")
+        made = await self._write("POST", "/git/commits", {"message": message, "tree": tree, "parents": [head]})
+        sha = made.get("sha")
+        if not isinstance(sha, str):
+            raise ForgeError("GitHub answer unreadable")
+        await self._write("PATCH", f"/git/refs/heads/{quote(branch, safe='/')}", {"sha": sha, "force": False})
+        return sha
 
     async def merge_methods(self) -> list[str]:
         """The merge methods the repo allows, in the order merge, squash, rebase. GitHub leaves the fields out for a

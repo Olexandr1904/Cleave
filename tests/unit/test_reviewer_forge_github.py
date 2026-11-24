@@ -396,3 +396,102 @@ async def test_review_candidates_null_fields():
     respx.post(GRAPHQL).respond(200, json={"data": {"repository": None, "search": {"nodes": [
         {"reviews": None}, {"reviews": {"nodes": [{"author": None}]}}]}}})
     assert await reader().review_candidates(1712, "octo-author") == []
+
+
+def _merge_state_answer(rollup="default", **pr):
+    if rollup == "default":
+        rollup = {"contexts": {"nodes": [
+            {"__typename": "CheckRun", "name": "build", "status": "QUEUED", "conclusion": None},
+            {"__typename": "CheckRun", "name": "scan", "status": "IN_PROGRESS", "conclusion": None},
+            {"__typename": "CheckRun", "name": "lint", "status": "COMPLETED", "conclusion": "SUCCESS"},
+            {"__typename": "CheckRun", "name": "guard", "status": "COMPLETED", "conclusion": "SKIPPED"},
+            {"__typename": "CheckRun", "name": "tests", "status": "COMPLETED", "conclusion": "FAILURE"},
+            {"__typename": "CheckRun", "name": "e2e", "status": "COMPLETED", "conclusion": "CANCELLED"},
+            {"__typename": "StatusContext", "context": "ci/old", "state": "PENDING"},
+            {"__typename": "StatusContext", "context": "ci/required", "state": "EXPECTED"},
+            {"__typename": "StatusContext", "context": "ci/ok", "state": "SUCCESS"},
+            {"__typename": "StatusContext", "context": "ci/err", "state": "ERROR"},
+        ]}}
+    node = {"mergeStateStatus": "BLOCKED", "baseRefName": "develop", "headRefName": "feature/x",
+            "headRefOid": "a" * 40, "isCrossRepository": False, "reviewDecision": "APPROVED",
+            "commits": {"nodes": [{"commit": {"oid": "a" * 40, "statusCheckRollup": rollup}}]}}
+    node.update(pr)
+    return {"data": {"repository": {"pullRequest": node}}}
+
+
+@respx.mock
+async def test_merge_state_reads_the_checks():
+    route = respx.post(GRAPHQL).respond(200, json=_merge_state_answer())
+    state = await reader().merge_state(1712)
+    assert (state.status, state.base, state.head_ref, state.head_sha, state.cross_repo, state.review) == (
+        "BLOCKED", "develop", "feature/x", "a" * 40, False, "APPROVED")
+    assert [(c.name, c.state, c.word) for c in state.checks] == [
+        ("build", "pending", "queued"), ("scan", "pending", "in progress"), ("lint", "passed", "success"),
+        ("guard", "passed", "skipped"), ("tests", "failed", "failure"), ("e2e", "failed", "cancelled"),
+        ("ci/old", "pending", "pending"), ("ci/required", "pending", "expected"), ("ci/ok", "passed", "success"),
+        ("ci/err", "failed", "error"),
+    ]
+    variables = json.loads(route.calls[0].request.content)["variables"]
+    assert variables == {"owner": "acme-org", "name": "acme-app", "number": 1712}
+
+
+@respx.mock
+async def test_merge_state_without_checks_or_review():
+    respx.post(GRAPHQL).respond(200, json=_merge_state_answer(rollup=None, reviewDecision=None))
+    state = await reader().merge_state(1712)
+    assert state.checks is None and state.review == ""
+    respx.post(GRAPHQL).respond(200, json=_merge_state_answer(commits={"nodes": []}))
+    assert (await reader().merge_state(1712)).checks is None  # no commit: nothing ran
+
+
+@respx.mock
+@pytest.mark.parametrize("answer", [
+    {"errors": [{"message": "Something tok"}]},
+    {"data": {"repository": {"pullRequest": None}}},
+    {"data": {"repository": None}},
+])
+async def test_merge_state_errors(answer):
+    respx.post(GRAPHQL).respond(200, json=answer)
+    with pytest.raises(ForgeError, match="^GitHub GraphQL error$"):
+        await reader().merge_state(1712)
+
+
+@respx.mock
+async def test_merge_state_unanswered_is_unavailable():
+    respx.post(GRAPHQL).respond(502, json={"message": "tok"})
+    with pytest.raises(ForgeError, match="^GitHub 502$") as e:
+        await reader().merge_state(1712)
+    assert e.value.unavailable
+
+
+@respx.mock
+async def test_empty_commit_keeps_the_tree_and_moves_the_branch_without_force():
+    get = respx.get(f"{BASE}/git/commits/{'a' * 40}").respond(200, json={"tree": {"sha": "t" * 40}})
+    post = respx.post(f"{BASE}/git/commits").respond(201, json={"sha": "c" * 40})
+    patch = respx.patch(f"{BASE}/git/refs/heads/feature/x-1").respond(200, json={})
+    assert await reader().empty_commit("feature/x-1", "a" * 40, "ABC-1: re-run CI") == "c" * 40
+    assert get.call_count == 1
+    assert json.loads(post.calls[0].request.content) == {
+        "message": "ABC-1: re-run CI", "tree": "t" * 40, "parents": ["a" * 40]}
+    assert json.loads(patch.calls[0].request.content) == {"sha": "c" * 40, "force": False}
+
+
+@respx.mock
+@pytest.mark.parametrize("status, unavailable", [(422, False), (502, True)])
+async def test_empty_commit_ref_refused_or_unanswered(status, unavailable):
+    respx.get(f"{BASE}/git/commits/{'a' * 40}").respond(200, json={"tree": {"sha": "t" * 40}})
+    respx.post(f"{BASE}/git/commits").respond(201, json={"sha": "c" * 40})
+    patch = respx.patch(f"{BASE}/git/refs/heads/b").respond(status, json={"message": "Update is not a fast forward"})
+    with pytest.raises(ForgeError, match=f"^GitHub {status}$") as e:
+        await reader().empty_commit("b", "a" * 40, "Re-run CI")
+    assert e.value.unavailable is unavailable and patch.call_count == 1  # never retried
+
+
+@respx.mock
+async def test_empty_commit_stops_when_the_commit_is_refused():
+    respx.get(f"{BASE}/git/commits/{'a' * 40}").respond(200, json={"tree": {"sha": "t" * 40}})
+    respx.post(f"{BASE}/git/commits").respond(403, json={"message": "tok"})
+    patch = respx.patch(f"{BASE}/git/refs/heads/b").respond(200, json={})
+    with pytest.raises(ForgeError, match="^GitHub 403$"):
+        await reader().empty_commit("b", "a" * 40, "Re-run CI")
+    assert patch.call_count == 0

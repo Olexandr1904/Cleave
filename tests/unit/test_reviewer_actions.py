@@ -267,6 +267,26 @@ async def test_a_review_message_keeps_its_event_buttons_until_a_review_is_posted
         assert notifier.buttons_set[-1] == (CHAT, 100, []), state
 
 
+async def test_a_review_without_a_confirmed_finding_offers_no_comment(tmp_path):
+    rig = Rig(tmp_path)
+    notifier = with_notifier(rig)
+    run = rig.store.run(rig.job.id)
+    run.report = {**run.report, "items": [i for i in run.report["items"] if i["kind"] in ("question", "preexisting")]}
+    rig.store.save_run(run)
+    await rig.replies.refresh_buttons(rig.job.id)
+    assert notifier.buttons_set == [(CHAT, 100, ["Request changes", "Approve"])]
+
+
+async def test_a_tap_on_a_superseded_review_answers_why_and_removes_the_buttons(tmp_path):
+    """The poll supersedes a review without touching its message: the first tap on it clears the buttons."""
+    rig = Rig(tmp_path)
+    notifier = with_notifier(rig)
+    rig.store.set_job_state(rig.job.id, "superseded", "new head", T1.isoformat())
+    await rig.tap("rv_approve", rig.job.id, 100)
+    assert rig.posting.calls == [] and rig.last().startswith("Outdated")
+    assert notifier.buttons_set == [(CHAT, 100, [])]
+
+
 async def test_a_tapped_review_post_removes_the_buttons(tmp_path):
     rig = Rig(tmp_path)
     notifier = with_notifier(rig)

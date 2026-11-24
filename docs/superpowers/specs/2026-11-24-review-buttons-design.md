@@ -27,7 +27,10 @@ for anything finer.
   on one's own PR. The run records whether it is the operator's own PR (`JobRun.own_pr`, false for runs stored
   before).
 - Once the job is no longer `done` (a review was posted, or it is superseded or stale) its message has no buttons:
-  every post refreshes them, a tap's and the dashboard's.
+  every post refreshes them, a tap's and the dashboard's, and so does a post or push the checks refuse (the poll
+  supersedes a job without touching its message: the first tap clears them). A part resent after a post has none.
+- No **Comment** without a confirmed finding: GitHub posts a Summary alone only with an approval or a request for
+  changes, so the tap would always be refused.
 - Labels, in the message's language: `Comment` / `Коментувати`, `Approve` / `Схвалити` (as the pipeline's),
   `Request changes` / `Запросити зміни`. The reply hint line stays.
 

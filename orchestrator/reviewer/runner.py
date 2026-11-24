@@ -34,8 +34,8 @@ from orchestrator.reviewer.messages import (
     fix_buttons,
     message_parts,
     recheck_message,
-    review_buttons,
     review_message,
+    run_review_buttons,
 )
 from orchestrator.reviewer.models import POSTABLE_STATES, BoardRow, Job, JobRun
 from orchestrator.reviewer.prepare import JobPaths, Prepared, PrepareError, job_paths, prepare
@@ -729,8 +729,12 @@ class JobRunner:
             run.language = current_language()
         with telegram_language(run.language):  # "" (a run from before languages): English
             text = _message(job, run)
-            buttons = (review_buttons(job.id, run.report.get("event", ""), own_pr=run.own_pr) if job.kind == "review"
-                       else fix_buttons(job.kind, job.id, run.replies, run.fix))
+            if job.kind != "review":
+                buttons = fix_buttons(job.kind, job.id, run.replies, run.fix)
+            else:  # none once a review is posted (a part resent after a post): the store's state, not the caller's
+                current = self._store.job(job.id)
+                buttons = (run_review_buttons(job.id, run.report, run.own_pr)
+                           if current is not None and current.state == "done" else [])
             if not run.message_ids and (missing := [t for t in marked_texts(text) if t not in run.translations]):
                 run.translations = {**run.translations, **await self._chat.translations(missing)}
         parts = message_parts(fill(text, run.translations), limit=MESSAGE_LIMIT)

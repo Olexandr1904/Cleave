@@ -1964,6 +1964,20 @@ async def test_a_self_review_run_offers_fix(tmp_path, monkeypatch, roles, addres
     assert _reply_line(rig.chat.texts[0]).endswith(' · "fix"') is fixable
 
 
+async def test_a_resent_review_message_has_no_buttons_once_a_review_is_posted(tmp_path, monkeypatch):
+    """A part not delivered is sent again after a post from the parts already out (or the dashboard): its buttons
+    would post again."""
+    rig = Rig(tmp_path, monkeypatch)
+    job = rig.add_job()
+    await rig.runner.run_job(job)
+    rig.store.set_job_state(job.id, "posted", "", T0.isoformat())
+    run = rig.store.run(job.id)
+    run.message_ids, run.message_sent = [], False
+    rig.chat.buttons.clear()
+    assert await rig.runner._deliver(job, run)  # `job` as run_job had it: done, before the post
+    assert rig.chat.buttons == [None]
+
+
 @pytest.mark.parametrize("roles, labels", [
     (["author"], ["Comment"]),  # GitHub refuses approving or requesting changes on one's own PR
     (["reviewer"], ["Request changes", "Comment", "Approve"]),

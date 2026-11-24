@@ -22,7 +22,7 @@ from orchestrator.reviewer.actions import CONFIRM_TTL  # noqa: F401 (re-exported
 from orchestrator.reviewer.chat import ReviewerChat
 from orchestrator.reviewer.grammar import ReplyCommand, describe, parse_reply
 from orchestrator.reviewer.lines import interrupted_line
-from orchestrator.reviewer.messages import MESSAGE_LIMIT, fix_buttons, message_parts, review_buttons
+from orchestrator.reviewer.messages import MESSAGE_LIMIT, fix_buttons, message_parts, run_review_buttons
 from orchestrator.reviewer.models import POSTABLE_STATES, Anchor, Confirmation, Job
 from orchestrator.reviewer.posting import Posting
 from orchestrator.reviewer.reply_llm import ReplyParser
@@ -147,9 +147,9 @@ class ReviewerReplies:
                 await self._internal_error(to, e)
 
     async def handle_callback(self, action: str, conf_id: str, chat_id: str, message_id: int) -> None:
-        """A tap on an echo's Yes (rv_ok) or No (rv_no), or on a fix message's button (then `conf_id` is the job's id,
-        see _tap). The store hands a confirmation out once, so a second tap or a redelivered Yes runs nothing. A tap
-        in another chat than the echo's is logged only: it neither runs nor spends the echo. Never raises
+        """A tap on an echo's Yes (rv_ok) or No (rv_no), or on a fix or review message's button (then `conf_id` is the
+        job's id, see _tap). The store hands a confirmation out once, so a second tap or a redelivered Yes runs
+        nothing. A tap in another chat than the echo's is logged only: it neither runs nor spends the echo. Never raises
         (cancellation aside)."""
         to = _To(message_id)
         language = self._language_of("")  # until the echo's job names a project
@@ -177,9 +177,9 @@ class ReviewerReplies:
                 await self._internal_error(to, e)
 
     async def _tap(self, action: str, job_id: str, chat_id: str, message_id: int) -> None:
-        """A tap on a fix message's button: its command run as the typed reply to that message runs, answered as a
-        reply to it. The tapped message must be the job's own, else nothing runs (logged only). "Push anyway…"
-        echoes what it would push with Yes / No first."""
+        """A tap on a fix or review message's button: its command run as the typed reply to that message runs,
+        answered as a reply to it. The tapped message must be the job's own, else nothing runs (logged only). "Push
+        anyway…" echoes what it would push with Yes / No first."""
         to = _To(message_id, job_id)
         anchor = self._store.anchor(chat_id, message_id)
         if anchor is None or anchor.job_id != job_id:
@@ -290,10 +290,13 @@ class ReviewerReplies:
             await self._start(self._store.job(conf.job_id), claimed, to)
 
     async def _execute(self, job: Job, cmd: ReplyCommand, to: _To) -> None:
-        """Run `cmd` against `job` as the store has it now, or answer why nothing is done."""
+        """Run `cmd` against `job` as the store has it now, or answer why nothing is done. A post or push refused here
+        refreshes the message's buttons: a job the poll superseded or made stale keeps them until then."""
         checked = self.actions.check(job, cmd)
         if isinstance(checked, str):
             await self._answer(to, checked)
+            if cmd.action in _POSTING:
+                await self.refresh_buttons(job.id)
             return
         await self._start(job, checked, to)
 
@@ -347,8 +350,7 @@ class ReviewerReplies:
                 return
             if job.kind == "review":
                 with telegram_language(run.language):  # "": English
-                    buttons = (review_buttons(job.id, run.report.get("event", ""), own_pr=run.own_pr)
-                               if job.state == "done" else [])
+                    buttons = run_review_buttons(job.id, run.report, run.own_pr) if job.state == "done" else []
             elif job.state not in POSTABLE_STATES:
                 buttons = []
             else:

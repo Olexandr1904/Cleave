@@ -316,3 +316,10 @@ def test_review_buttons_in_ukrainian():
     with telegram_language("uk"):
         assert [b.label for b in review_buttons("j1", "REQUEST_CHANGES")] == [
             "Запросити зміни", "Коментувати", "Схвалити"]
+
+
+def test_review_buttons_without_a_confirmed_finding_leave_out_comment():
+    """A comment review needs a finding to post (a Summary alone posts only with an approval or a request for
+    changes)."""
+    assert review_buttons("j1", "COMMENT", confirmed=False) == [APPROVE, CHANGES]
+    assert review_buttons("j1", "COMMENT", own_pr=True, confirmed=False) == []

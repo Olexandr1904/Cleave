@@ -8,7 +8,7 @@ import posixpath
 
 from integrations.base.notifier import Button
 from orchestrator.reviewer.fix import fix_summary
-from orchestrator.reviewer.report import CONFIRMED, KIND_EMOJI, Report, ReportItem
+from orchestrator.reviewer.report import CONFIRMED, KIND_EMOJI, Report, ReportItem, confirmed_findings
 from orchestrator.tg_i18n import N_, count, model_text, tr
 
 _REVIEW_HINT = N_(
@@ -159,12 +159,20 @@ _EVENT_BUTTONS = (("COMMENT", N_("Comment"), "rv_comment"), ("APPROVE", N_("Appr
                   ("REQUEST_CHANGES", N_("Request changes"), "rv_changes"))
 
 
-def review_buttons(job_id: str, suggested: str, *, own_pr: bool = False) -> list[Button]:
+def review_buttons(job_id: str, suggested: str, *, own_pr: bool = False, confirmed: bool = True) -> list[Button]:
     """The buttons of a review message (labels in the current Telegram language): one per event, the report's
-    `suggested` one first; Comment only on a review of the operator's `own_pr`, where GitHub refuses the others."""
-    events = [e for e in _EVENT_BUTTONS if not own_pr or e[0] == "COMMENT"]
+    `suggested` one first; Comment only on a review of the operator's `own_pr`, where GitHub refuses the others; no
+    Comment without a `confirmed` finding (a Summary alone posts only with an approval or a request for changes)."""
+    events = [e for e in _EVENT_BUTTONS
+              if (not own_pr or e[0] == "COMMENT") and (confirmed or e[0] != "COMMENT")]
     events.sort(key=lambda e: e[0] != suggested)  # stable: the rest keep their order
     return [Button(tr(label), f"{tap}:{job_id}") for _, label, tap in events]
+
+
+def run_review_buttons(job_id: str, run_report: dict, own_pr: bool) -> list[Button]:
+    """review_buttons for a review job's run: its report's suggestion and whether it has a confirmed finding."""
+    return review_buttons(job_id, run_report.get("event", ""), own_pr=own_pr,
+                          confirmed=bool(confirmed_findings(run_report)))
 
 
 def address_message(

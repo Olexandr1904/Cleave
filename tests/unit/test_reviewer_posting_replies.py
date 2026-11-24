@@ -450,6 +450,46 @@ async def test_dry_run_extra_step_stops(tmp_path, case):
     assert rig.confirms() == [] and rig.posts() == [] and rig.state() == "done"
 
 
+GONE = snapshot([THREAD_2], BODIES)  # T1 resolved on GitHub since Prepare
+NOT_OPEN = CommandResult(1, "", "1: T1 is not an unresolved thread of PR #1712\n", False)
+LEFT_OUT_1 = "Left out 1: their threads were resolved on GitHub after the replies were drafted."
+
+
+async def test_a_reply_to_a_thread_resolved_on_github_is_left_out(tmp_path):
+    answered = snapshot([THREAD_2], [review_body(456, True), review_body(457, True)])
+    rig = Rig(tmp_path, dry=(NOT_OPEN, steps(COMMENT_3)), confirm=(json.dumps([json.loads(RESULTS)[2]]),),
+              snapshots=(GONE, GONE, answered))
+    assert await rig.post() == PostOutcome("posted", f"Posted replies on #1712:\n3: answered {COMMENTED}\n{LEFT_OUT_1}")
+    # The failed dry run reads GitHub's threads once; the rest is planned again without #1.
+    assert rig.log == ["pr_full", "dry", "threads", "dry", "pr_full", "threads", "confirm", "threads"]
+    assert rig.poster.plans == [[PLAN[0], PLAN[2]], [PLAN[2]], [PLAN[2]]]
+    [post] = rig.posts()
+    assert (post.state, post.numbers) == ("posted", [3])
+    assert rig.store.posted_replies(rig.job) == {3}
+
+
+async def test_nothing_is_posted_when_every_named_thread_is_resolved_on_github(tmp_path):
+    rig = Rig(tmp_path, dry=(NOT_OPEN,), snapshots=(GONE,))
+    assert await rig.post(ReplyCommand("post_replies", (1,))) == PostOutcome(
+        "nothing", "Nothing posted on #1712: the threads of 1 were resolved on GitHub after the replies were drafted.")
+    assert rig.log == ["pr_full", "dry", "threads"]
+    assert rig.posts() == [] and rig.state() == "done"
+
+
+@pytest.mark.parametrize("snapshots", [(PREPARED,), (ReadinessError("threads: HTTP 502"),)], ids=["open", "unread"])
+async def test_a_failed_dry_run_is_refused_as_before_unless_a_thread_is_gone(tmp_path, snapshots):
+    rig = Rig(tmp_path, dry=(NOT_OPEN,), snapshots=snapshots)
+    assert await rig.post() == PostOutcome(
+        "refused", "Not posted on #1712: the dry run failed: 1: T1 is not an unresolved thread of PR #1712.")
+    assert rig.log == ["pr_full", "dry", "threads"] and rig.posts() == []
+
+
+async def test_a_dry_run_that_times_out_reads_no_threads(tmp_path):
+    rig = Rig(tmp_path, dry=(CommandResult(-9, "", "", True, 300.0),), snapshots=(GONE,))
+    assert (await rig.post()).text == "Not posted on #1712: the dry run failed: timed out after 300 s."
+    assert rig.log == ["pr_full", "dry"]
+
+
 async def test_step_text_still_passes_the_body_check(tmp_path):
     plan = [{**entry, "body": "Fixed.\n```\nhttps://evil.example\n```"} if entry["n"] == 1 else entry for entry in PLAN]
     # The same words, but the fence no longer opens a line: the link is no longer code.

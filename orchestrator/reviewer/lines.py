@@ -163,6 +163,17 @@ def replies_partial_line(number: int, why: str, results: Sequence[str], by_hand:
     return text + ("\n" + tr('Reply "{retry}" to post the rest.', retry=retry) if retry else "")
 
 
+def resolved_left_out_line(numbers: Sequence[int]) -> str:
+    """The replies left out of a post: GitHub resolved their threads after Prepare read them."""
+    return tr("Left out {numbers}: their threads were resolved on GitHub after the replies were drafted.",
+              numbers=_spaced(numbers))
+
+
+def all_resolved_line(number: int, numbers: Sequence[int]) -> str:
+    return tr("Nothing posted on #{number}: the threads of {numbers} were resolved on GitHub after the replies were"
+              " drafted.", number=number, numbers=_spaced(numbers))
+
+
 def left_out_line(number: int, why: str, url: str) -> str:
     """The replies tool plans nothing, but GitHub does not show what it leaves out as posted."""
     return tr("Nothing posted on #{number}: the replies tool has nothing to post, but GitHub does not show"

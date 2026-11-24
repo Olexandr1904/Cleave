@@ -130,6 +130,11 @@ TEXTS: dict[str, str] = {
     "Partly posted replies on #{number} — {why}.": "Відповіді в #{number} опубліковано частково — {why}.",
     "Check the PR on GitHub before posting again: {url}": "Перевірте PR на GitHub, перш ніж публікувати знову: {url}",
     'Reply "{retry}" to post the rest.': 'Відповідайте "{retry}", щоб опублікувати решту.',
+    "Left out {numbers}: their threads were resolved on GitHub after the replies were drafted.":
+        "Пропущено {numbers}: їхні треди закрили на GitHub уже після того, як відповіді було підготовлено.",
+    "Nothing posted on #{number}: the threads of {numbers} were resolved on GitHub after the replies were drafted.":
+        "У #{number} нічого не опубліковано: треди {numbers} закрили на GitHub уже після того, як відповіді було"
+        " підготовлено.",
     "Nothing posted on #{number}: the replies tool has nothing to post, but GitHub does not show everything posted"
     " ({why}). Check the PR on GitHub: {url}":
         "У #{number} нічого не опубліковано: інструменту відповідей нічого публікувати, але GitHub показує не все як"

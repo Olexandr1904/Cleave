@@ -36,6 +36,7 @@ from orchestrator.reviewer.forge_github import ForgeError
 from orchestrator.reviewer.grammar import ReplyCommand, check_command, retry_text
 from orchestrator.reviewer.lines import (
     address_body_problem_line,
+    all_resolved_line,
     already_approved_line,
     already_reviewed_line,
     approve_unknown_line,
@@ -57,6 +58,7 @@ from orchestrator.reviewer.lines import (
     recheck_body_problem_line,
     replies_partial_line,
     replies_posted_line,
+    resolved_left_out_line,
     summary_landed_line,
     unverified_line,
 )
@@ -126,6 +128,10 @@ _APPROVE_PLAN = DryRunPlan(1, 0, "", False, (), (), (), (), ((),))
 
 class _Refused(Exception):
     """The post stops before the confirm run (or the approve): nothing was posted."""
+
+
+class _DryRunFailed(_Refused):
+    """The replies tool's dry run exited non-zero (not a timeout): a thread resolved since Prepare is one cause."""
 
 
 def check_dry_run(dry: ReviewDryRun, report: Report, numbers: tuple[int, ...], event: str, head: str,
@@ -632,7 +638,21 @@ class Posting:
                 await lease.enter_async_context(ctx.clone.reader(wait=self._reader_wait))
             except CloneError as e:
                 raise _Refused(not_posted_line(number, str(e))) from None
-            planned, steps = await self._replies_dry_run(ctx, values, number, entries, prepared)
+            gone: list[int] = []
+            try:
+                planned, steps = await self._replies_dry_run(ctx, values, number, entries, prepared)
+            except _DryRunFailed:
+                # A thread resolved on GitHub since Prepare fails the whole dry run: leave its reply out and plan
+                # the rest once more.
+                if not (gone := await self._resolved_since_prepare(ctx, number, head, entries)):
+                    raise
+                entries = [entry for entry in entries if entry["n"] not in gone]
+                cmd = dataclasses.replace(cmd, numbers=tuple(n for n in cmd.numbers if n not in gone))
+                if not entries:
+                    return PostOutcome("nothing", all_resolved_line(number, gone))
+                _write_plan(job_dir, head9, entries, number, fix_shas)
+                planned, steps = await self._replies_dry_run(ctx, values, number, entries, prepared)
+            note = "\n" + resolved_left_out_line(gone) if gone else ""
             pr = await self._pr_at_head(ctx, number, head)
             before = await self._threads_before(ctx, number, head)
             if (off := _off_aim(steps, entries, prepared, before)) is not None:
@@ -645,8 +665,8 @@ class Posting:
                 if left_out:
                     # No Post and no confirm run: nothing was posted here. "unverified" is the tool's word that
                     # GitHub does not bear out, not a post that may have landed (Task 14: no interrupted line).
-                    return PostOutcome("unverified", left_out_line(number, "; ".join(left_out.values()), pr.url))
-                return PostOutcome("nothing", nothing_left_line(number, head))
+                    return PostOutcome("unverified", left_out_line(number, "; ".join(left_out.values()), pr.url) + note)
+                return PostOutcome("nothing", nothing_left_line(number, head) + note)
             for n in sorted(planned):  # GitHub, right before the confirm run, must still allow each step
                 if (refused := _not_postable_now(by_n[n], planned[n], before, prepared, me, number)) is not None:
                     raise _Refused(refused)
@@ -658,14 +678,16 @@ class Posting:
                 unknown = ""
             except PosterOutputError as e:  # what the tool reports is not known: GitHub alone says what landed
                 results, unknown = None, str(e)
-            return await self._replies_verified(ctx, job, post, pr, me, cmd.numbers, entries, planned, before,
-                                                left_out, results, result, unknown)
+            outcome = await self._replies_verified(ctx, job, post, pr, me, cmd.numbers, entries, planned, before,
+                                                   left_out, results, result, unknown)
+            return dataclasses.replace(outcome, text=outcome.text + note)
 
     async def _replies_dry_run(self, ctx: RepoContext, values: dict[str, str], number: int, entries: list[dict],
                                prepared: dict) -> tuple[dict[int, list[str]], list[dict]]:
         result = await ctx.poster.replies(ctx.clone.path, values, confirm=False)
         if result.timed_out or result.returncode != 0:
-            raise _Refused(not_posted_line(number, f"the dry run failed: {_dry_run_failure(result)}"))
+            refusal = _Refused if result.timed_out else _DryRunFailed
+            raise refusal(not_posted_line(number, f"the dry run failed: {_dry_run_failure(result)}"))
         try:
             steps = parse_replies_steps(result.stdout)
         except PosterOutputError as e:
@@ -675,6 +697,16 @@ class Posting:
         if isinstance(planned, str):
             raise _Refused(not_posted_line(number, planned))
         return planned, steps
+
+    async def _resolved_since_prepare(self, ctx: RepoContext, number: int, head: str, entries: list[dict]) -> list[int]:
+        """After a failed dry run: the entries whose thread GitHub no longer lists as unresolved, from one read of the
+        threads command; none when it cannot be read (the dry run's refusal stands)."""
+        try:
+            current = await self._threads_before(ctx, number, head)
+        except _Refused:
+            return []
+        threads = _listed(current, "threads")
+        return [entry["n"] for entry in entries if "thread_id" in entry and _find(threads, entry["thread_id"]) is None]
 
     @staticmethod
     async def _threads_before(ctx: RepoContext, number: int, head: str) -> dict:

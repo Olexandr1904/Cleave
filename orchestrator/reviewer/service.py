@@ -18,7 +18,8 @@ from orchestrator.reviewer.fix import PATCH_NAME
 from orchestrator.reviewer.forge_github import ForgeError
 from orchestrator.reviewer.jobs import REVIEW_NOW_SUFFIX, Notice, held_prs, plan_jobs
 from orchestrator.reviewer.lines import doc_missing_line, poll_failed_line, readiness_failed_line
-from orchestrator.reviewer.models import BoardRow, BoardSnapshot, Job, JobRun, Post, RepoState
+from orchestrator.reviewer.merge_block import no_checks, refusal_text, rerun_message
+from orchestrator.reviewer.models import BoardRow, BoardSnapshot, Job, JobRun, MergeState, Post, RepoState
 from orchestrator.reviewer.readiness import ReadinessError
 from orchestrator.reviewer.report import Report, confirmed_findings
 from orchestrator.reviewer.store import ReviewerStore
@@ -35,7 +36,7 @@ _CLONE_BUSY_RETRY_SECONDS = 5  # a repo whose clone a job prepares or cleans up 
 _CLONE_WAIT_SECONDS = 5
 _MAX_REPORT_TEXT = 200_000  # characters of a report the detail view returns
 # The board's GitHub moves on a PR: the turn of mine each needs on the row, a merge's methods and a GitHub login.
-_MOVE_TURNS = {"request_review": "request_review", "ready": "finish_draft", "merge": "merge"}
+_MOVE_TURNS = {"request_review": "request_review", "ready": "finish_draft", "merge": "merge", "rerun_ci": "merge"}
 _MERGE_METHODS = ("merge", "squash", "rebase")
 _LOGIN = re.compile(r"[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})")
 _MAX_REVIEWERS = 10
@@ -405,6 +406,9 @@ class ReviewerService:
 
         update = build_board(snapshot, details, reviewed, self._store.board(scope),
                              self._pipeline_prs(ctx.project_id, ctx.repo_id), stamp)
+        for number, row in update.rows.items():
+            if "merge" in row.my_actions:
+                row.no_checks = await self._no_checks(ctx, row)
         jobs = self._store.jobs(scope)
         jobs_by_pr: dict[int, list[Job]] = {}
         for job in jobs:
@@ -447,6 +451,16 @@ class ReviewerService:
             {"scope": scope, "number": job.number, "kind": job.kind, "state": job_state},
         ) for job, job_state in changed]
         return _Outcome(next_at, events, plan.lines, notices + plan.notices)
+
+    @staticmethod
+    async def _no_checks(ctx: RepoContext, row: BoardRow) -> bool:
+        """Whether Re-run CI applies to my merge row (merge_block.no_checks); False when GitHub's merge state cannot
+        be read: the poll goes on, the next one reads it again."""
+        try:
+            return no_checks(await ctx.forge.merge_state(row.number), row.head_sha)
+        except ForgeError as e:
+            logger.info("Merge state of %s #%d not read: %s", ctx.scope, row.number, e)
+            return False
 
     def _answered_threads(self, job: Job) -> frozenset[str]:
         """The thread ids of the job's replies that landed (plan_jobs's `answered`)."""
@@ -643,19 +657,23 @@ class ReviewerService:
     async def pr_move(self, scope: str, number: int, move: str, *, reviewers: Any = (), method: str = "",
                       head: str = "") -> tuple[str, str]:
         """A board move on GitHub, as (state, text): request_review asks `reviewers`, ready marks the draft ready,
-        merge merges with `method` at the head the board showed (`head`, a prefix of the row's). It runs only while
-        the stored row names it as my turn, a merge once until a poll shows it. State done (the repo is then polled
-        soon), refused (nothing was sent), failed (GitHub refused it) or unverified (GitHub did not answer: it may
-        have landed). LookupError: repo or row unknown; ValueError: no such move."""
+        merge merges with `method` at the head the board showed (`head`, a prefix of the row's; a refusal says what
+        blocks it), rerun_ci pushes an empty commit there to start the PR's checks (_rerun_ci). It runs only while
+        the stored row names it as my turn (rerun_ci: my merge, and the row's no_checks), a merge once until a poll
+        shows it. State done (the repo is then polled soon), refused (nothing was sent), failed (GitHub refused it)
+        or unverified (GitHub did not answer: it may have landed). LookupError: repo or row unknown; ValueError: no
+        such move."""
         if move not in _MOVE_TURNS:
             raise ValueError(f"no move {move!r}")
         ctx, row = self._repo(scope), self._row(scope, number)
-        if _MOVE_TURNS[move] not in row.my_actions:
+        if _MOVE_TURNS[move] not in row.my_actions or (move == "rerun_ci" and not row.no_checks):
             return "refused", f"The board no longer shows this move for #{number}: refresh it."
         if move == "merge" and number in self._merged.get(scope, {}):
             return "refused", "Already merged: the board shows it within a minute."
         if self._credential_failing(f"forge:{scope}"):
             return "refused", f"The GitHub token of {scope} is failing (see the dashboard): nothing was done."
+        if move == "rerun_ci":
+            return await self._rerun_ci(ctx, row, head)
         if move == "request_review":
             refusal = _reviewers_refusal(reviewers, row.author)
             if refusal:
@@ -676,7 +694,8 @@ class ReviewerService:
             if e.unavailable:  # it may have landed: the operator checks, nothing says it failed
                 return "unverified", f"GitHub did not answer: check #{number} on GitHub before trying again."
             if move == "merge" and str(e) == "GitHub 405":
-                return "failed", f"GitHub refused the merge ({e}): checks, reviews or conflicts block it."
+                self.poll_soon(scope)  # the card catches up: Re-run CI shows when no check ran
+                return "failed", refusal_text(await self._merge_state(ctx, number), number)
             if move == "merge" and str(e) == "GitHub 409":  # the sha check: a push after the board's last poll
                 return "failed", "The PR's head moved on GitHub: refresh the board."
             return "failed", f"GitHub refused it ({e})."
@@ -684,6 +703,43 @@ class ReviewerService:
             self._merged.setdefault(scope, {})[number] = self._now()
         self.poll_soon(scope)
         return "done", done
+
+    async def _merge_state(self, ctx: RepoContext, number: int) -> MergeState | None:
+        """GitHub's merge state of the PR, None when it cannot be read."""
+        try:
+            return await ctx.forge.merge_state(number)
+        except ForgeError as e:
+            logger.info("Merge state of %s #%d not read: %s", ctx.scope, number, e)
+            return None
+
+    async def _rerun_ci(self, ctx: RepoContext, row: BoardRow, head: str) -> tuple[str, str]:
+        """Push an empty commit to the PR's branch, which starts its checks: at the head the board showed (`head`),
+        only while GitHub's own state still shows that head, no check on it and the branch in this repo. GitHub
+        refuses the branch move if the branch moved meanwhile: nothing is overwritten. pr_move's (state, text)."""
+        number = row.number
+        if len(head) < _MIN_HEAD or not row.head_sha.startswith(head):
+            return "refused", "The PR's head moved since the board showed it: refresh it."
+        try:
+            state = await ctx.forge.merge_state(number)
+        except ForgeError as e:
+            return "failed", f"Could not read #{number} on GitHub ({e}): nothing pushed."
+        if state.head_sha != row.head_sha:  # a second press before a poll lands here: the head is the empty commit
+            return "refused", "The PR's head moved on GitHub: refresh the board."
+        if state.cross_repo:
+            return "refused", f"#{number}'s branch is in another repo: Cleave cannot push to it."
+        if state.checks:
+            return "refused", f"Checks run on {row.head_sha[:9]} now: nothing pushed. Refresh the board."
+        message = rerun_message(row.ticket_key, row.head_sha)
+        try:
+            sha = await ctx.forge.empty_commit(state.head_ref, row.head_sha, message)
+        except ForgeError as e:
+            if e.unavailable:
+                return "unverified", f"GitHub did not answer: check #{number} on GitHub before trying again."
+            if str(e) == "GitHub 422":  # the branch is no longer the head: not a fast-forward
+                return "failed", "The PR's branch moved on GitHub: nothing pushed. Refresh the board."
+            return "failed", f"GitHub refused it ({e})."
+        self.poll_soon(ctx.scope)
+        return "done", f"Pushed an empty commit {sha[:9]} to #{number}: its checks start now; merge once they pass."
 
     async def review_candidates(self, scope: str, number: int) -> list[dict]:
         """Who to ask for a review of the row's PR (the forge's review_candidates). LookupError: repo or row

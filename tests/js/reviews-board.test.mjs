@@ -555,3 +555,15 @@ test('candidatesHtml and mergeHtml: the move dialogs\' bodies', () => {
   assert.match(merge, /value="merge"> Create a merge commit/);
   assert.doesNotMatch(merge, /rebase/);
 });
+
+test('a merge GitHub blocks while no check ran offers Re-run CI on its card and panel', () => {
+  const blocked = pr(7, { roles: ['author'], my_turns: ['merge'], no_checks: true });
+  assert.equal(B.columnOf(blocked), 'merge');
+  assert.deepEqual(B.turnMove(blocked, 'merge'), { kind: 'rerun' });
+  assert.deepEqual(B.turnMove({ ...blocked, my_turns: ['address_review', 'merge'] }, 'fix'), { kind: 'rerun' });
+  assert.deepEqual(B.moveText(blocked, 'merge', 'octo'), { logins: ['octo'], text: 'merge: no checks ran, re-run CI' });
+  assert.match(B.mainButtonHtml('acme/app', blocked, 'merge', 'card'), /data-main-move="rerun"[^>]*>Re-run CI</);
+  assert.match(B.mainButtonHtml('acme/app', blocked, 'merge', 'panel'), /data-fk="panel:main:acme\/app#7"[^>]*>Re-run CI</);
+  assert.deepEqual(B.turnMove({ ...blocked, no_checks: false }, 'merge'), { kind: 'merge' });
+  assert.equal(B.moveText({ ...blocked, no_checks: false }, 'merge', 'octo').text, 'merge');
+});

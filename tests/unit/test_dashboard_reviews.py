@@ -37,7 +37,7 @@ STAMP = "2026-11-12T10:00:00+00:00"
 PR_KEYS = {
     "number", "title", "url", "ticket_key", "roles", "my_turns", "other_turns", "pipeline",
     "draft", "changed_files", "head", "job", "last_change", "skipped", "large", "review", "can_fix", "fix",
-    "can_fix_findings", "rerequest",
+    "can_fix_findings", "rerequest", "no_checks",
 }
 QUEUED_INFO = {"retry_at": "", "started_at": "", "reason": "", "message_sent": False, "findings": None}
 # A PR's newest review as the service gives it (ReviewerService._review_info), passed through.
@@ -765,6 +765,13 @@ def test_rows_carry_the_reviewers_to_rerequest(store):
     assert repo["waiting"][0]["rerequest"] == []
 
 
+def test_rows_say_when_re_run_ci_applies(store):
+    merge = [{"action": "merge", "threads": []}]
+    rows = [dataclasses.replace(_row(4, my_turns=merge), no_checks=True), _row(5, my_turns=merge)]
+    c = TestClient(create_app(EventBus(), store, reviewer=FakeService(rows)))
+    [repo] = c.get("/api/reviews").json()["repos"]
+    assert [(p["number"], p["no_checks"]) for p in repo["my_turn"]] == [(5, False), (4, True)]
+
 
 def test_pr_move_route(moves):
     c, svc = moves
@@ -775,6 +782,8 @@ def test_pr_move_route(moves):
     c.post("/api/reviews/pr-move", json={"scope": "acme/app", "number": 1, "move": "merge", "method": "squash",
                                          "head": "abcdef012"})
     assert svc.calls[-1] == ("pr_move", "acme/app", 1, "merge", (), "squash", "abcdef012")
+    c.post("/api/reviews/pr-move", json={"scope": "acme/app", "number": 1, "move": "rerun_ci", "head": "abcdef012"})
+    assert svc.calls[-1] == ("pr_move", "acme/app", 1, "rerun_ci", (), "", "abcdef012")
 
 
 @pytest.mark.parametrize("extra", [

@@ -134,6 +134,7 @@ class BoardRow:
     updated_at: str
     last_change: str
     thread_turns_change: str = ""  # when my own turns that name threads last changed ("" in rows stored before)
+    no_checks: bool = False  # my merge turn, which GitHub blocks while no check ran on the head: Re-run CI applies
 
     @property
     def my_actions(self) -> list[str]:

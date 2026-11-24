@@ -708,7 +708,7 @@ function eventPickHtml(detail) {
 }
 
 // The main buttons of a GitHub move (reviews-board.js turnMove), which go to /api/reviews/pr-move.
-const GITHUB_MOVES = ['rerequest', 'request', 'ready', 'merge'];
+const GITHUB_MOVES = ['rerequest', 'request', 'ready', 'merge', 'rerun'];
 
 // A press on a PR whose push, post or move waits for its answer: its card already says it works; the status line
 // says this press did nothing, never dropped in silence.
@@ -732,9 +732,9 @@ async function runMove(view, target, body) {
   await finish(key, shown);
 }
 
-// A GitHub move's button: Re-request and Ready for review run at once; Request review… and Merge… ask first, in a
-// dialog whose data (who to ask, the merge methods) is read at the click. The PR, its reviewers and its head are taken
-// at the click: a refresh while the dialog is open changes nothing that is sent.
+// A GitHub move's button: Re-request, Ready for review and Re-run CI run at once; Request review… and Merge… ask
+// first, in a dialog whose data (who to ask, the merge methods) is read at the click. The PR, its reviewers and its
+// head are taken at the click: a refresh while the dialog is open changes nothing that is sent.
 async function onPrMove(view, btn) {
   const target = { scope: btn.dataset.scope, number: Number(btn.dataset.number) };
   const key = rowKey(target.scope, target.number);
@@ -746,6 +746,10 @@ async function onPrMove(view, btn) {
   }
   if (kind === 'ready') {
     runMove(view, target, { move: 'ready' });
+    return;
+  }
+  if (kind === 'rerun') {  // at the head the card shows: a push since, and nothing is pushed
+    runMove(view, target, { move: 'rerun_ci', head: pr ? pr.head : '' });
     return;
   }
   const label = btn.textContent.trim().replace(/…$/, '');

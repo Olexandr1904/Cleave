@@ -194,7 +194,9 @@ export function moveText(pr, column, me) {
     return { logins, text: logins.map(login => `${login}: ${of(login).join(', ')}`).join('; ') };
   }
   const move = cleaveMove(pr, column);
-  const text = move ? move.text : [...new Set(pr.my_turns.map(actionWords))].join(', ');
+  // A merge GitHub blocks while no check ran on the head: Re-run CI is the move (turnMove).
+  const words = action => (action === 'merge' && pr.no_checks ? 'merge: no checks ran, re-run CI' : actionWords(action));
+  const text = move ? move.text : [...new Set(pr.my_turns.map(words))].join(', ');
   return { logins: me ? [me] : [], text };
 }
 
@@ -299,15 +301,16 @@ const PENDING_LABEL = { review: { queued: 'Queued', running: 'Running', deferred
 
 const MAIN_LABEL = {
   push: 'Push', replies: 'Reply all', review: 'Post review…',
-  request: 'Request review…', ready: 'Ready for review', merge: 'Merge…',
+  request: 'Request review…', ready: 'Ready for review', merge: 'Merge…', rerun: 'Re-run CI',
 };
 // My turns an address job takes (board.py ADDRESS_ACTIONS): Fix now's.
 const FIX_TURNS = ['answer_threads', 'resolve_threads', 'address_review'];
 
 // The move my turn names when Cleave's own (cleaveMove) names none: Review now or Fix now (the card's own buttons,
 // which buttonsHtml marks main), or a move on GitHub: re-request the reviewers who asked for changes, request a
-// review, mark the draft ready, merge. The first of my turns that has one; null for none (a re-check, whose job runs
-// on its own; resolve conflicts; fix checks).
+// review, mark the draft ready, merge (Re-run CI instead while GitHub blocks it and no check ran on the head: the
+// row's no_checks). The first of my turns that has one; null for none (a re-check, whose job runs on its own; resolve
+// conflicts; fix checks).
 export function turnMove(pr, column) {
   if (notInvolved(pr) || cleaveMove(pr, column)) return null;
   for (const action of pr.my_turns) {
@@ -318,7 +321,7 @@ export function turnMove(pr, column) {
       return logins.length ? { kind: 'rerequest', logins } : { kind: 'request' };
     }
     if (action === 'finish_draft') return { kind: 'ready' };
-    if (action === 'merge') return { kind: 'merge' };
+    if (action === 'merge') return { kind: pr.no_checks ? 'rerun' : 'merge' };
   }
   return null;
 }

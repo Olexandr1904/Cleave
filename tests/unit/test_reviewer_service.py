@@ -15,7 +15,7 @@ from orchestrator.reviewer.clone import CloneError, ReviewClone
 from orchestrator.reviewer.db import connect
 from orchestrator.reviewer.forge_github import ForgeError
 from orchestrator.reviewer.models import (
-    Anchor, BoardRow, BoardSnapshot, JobRun, Post, PRDetails, RepoState, SnapshotPR, Turn,
+    Anchor, BoardRow, BoardSnapshot, Check, JobRun, MergeState, Post, PRDetails, RepoState, SnapshotPR, Turn,
 )
 from orchestrator.reviewer.readiness import ReadinessError
 from orchestrator.reviewer.report import Report, ReportItem, parse_report
@@ -29,6 +29,9 @@ A = "a" * 40
 DOC = "docs/review/code-review-process.md"
 CFG = ReviewerConfig(enabled=True, base_branch="develop", process=ProcessPartConfig(doc=DOC))
 DOC_LINE = f"[acme/app] reviews are off: {DOC} is not on develop."
+# What GitHub says of merging a PR: nothing blocks it; and blocked with no check on its head (Re-run CI).
+CLEAN = MergeState("CLEAN", "develop", "feature/x", A, False, "APPROVED", (Check("build", "passed", "success"),))
+NO_CHECKS = dataclasses.replace(CLEAN, status="BLOCKED", checks=None)
 
 class FakeClone:
     def __init__(self, path, doc=True, fail=None):
@@ -50,6 +53,7 @@ class FakeForge:
     async def open_prs(self): return {n: "t" for n in self.d}
     async def details(self, n, u): return self.d[n]
     async def reviewed_by(self, n, login, u): return False
+    async def merge_state(self, n): return CLEAN
 
 class Untouchable:
     """Records every attribute read: a poll must not reach this part."""
@@ -1445,10 +1449,21 @@ async def test_detail_without_a_findings_job(tmp_path):
 
 
 class MovesForge(FakeForge):
-    """FakeForge with the board's GitHub moves: each call recorded, `fail` raised by the next write."""
-    def __init__(self, details, fail=None, methods=("merge", "squash", "rebase")):
+    """FakeForge with the board's GitHub moves: each call recorded, `fail` raised by the next write; the merge state
+    is `state` (`state_fail` raised instead), each read's PR in `reads`."""
+    def __init__(self, details, fail=None, methods=("merge", "squash", "rebase"), state=CLEAN, state_fail=None):
         super().__init__(details)
         self.calls, self.fail, self.methods = [], fail, list(methods)
+        self.state, self.state_fail, self.reads = state, state_fail, []
+    async def merge_state(self, n):
+        self.reads.append(n)
+        if self.state_fail:
+            raise self.state_fail
+        return self.state
+    async def empty_commit(self, branch, head, message):
+        await self._write("empty_commit", branch, head, message)
+        self.state = dataclasses.replace(self.state, head_sha="c" * 40)  # GitHub's head is the new commit
+        return "c" * 40
     async def _write(self, *call):
         self.calls.append(call)
         if self.fail:
@@ -1462,9 +1477,11 @@ class MovesForge(FakeForge):
         return [{"login": "rev1", "reason": "suggested by GitHub"}]
 
 
-async def moves_rig(tmp_path, *turns, fail=None, failing=None, methods=("merge", "squash", "rebase")):
+async def moves_rig(tmp_path, *turns, fail=None, failing=None, methods=("merge", "squash", "rebase"), state=CLEAN,
+                    state_fail=None):
     """My PR #1 on the board with my `turns` (a request_review turn by default)."""
-    forge = MovesForge({1: det(1, author="octo", requested=())}, fail=fail, methods=methods)
+    forge = MovesForge({1: det(1, author="octo", requested=())}, fail=fail, methods=methods, state=state,
+                       state_fail=state_fail)
     c = ctx(tmp_path, FakeReadiness(snap(spr(1, turns or [Turn("octo", "request_review")], author="octo"))), forge)
     keys = failing if failing is not None else set()
     rig = Rig(tmp_path, c, failing=lambda key: key in keys)
@@ -1539,7 +1556,8 @@ async def test_pr_move_merge_checks_the_head_and_method(tmp_path):
      ("unverified", "GitHub did not answer: check #1 on GitHub before trying again.")),
 ])
 async def test_pr_move_merge_refused_or_unanswered(tmp_path, error, answer):
-    rig, _, forge = await moves_rig(tmp_path, Turn("octo", "merge"), fail=error)
+    # The merge state unread: a 405 keeps the generic text.
+    rig, _, forge = await moves_rig(tmp_path, Turn("octo", "merge"), fail=error, state_fail=ForgeError("GitHub 502"))
     assert await rig.service.pr_move("acme/app", 1, "merge", method="merge", head=A[:9]) == answer
 
 
@@ -1613,3 +1631,106 @@ async def test_review_candidates_and_merge_options(tmp_path):
         await rig.service.review_candidates("acme/app", 2)
     with pytest.raises(LookupError):
         await rig.service.merge_options("acme/other")
+
+
+async def test_a_refused_merge_says_what_blocks_it_and_polls_soon(tmp_path):
+    running = dataclasses.replace(CLEAN, status="BLOCKED", checks=(Check("build", "pending", "queued"),))
+    rig, c, forge = await moves_rig(tmp_path, Turn("octo", "merge"), fail=ForgeError("GitHub 405"), state=running)
+    assert await rig.service.pr_move("acme/app", 1, "merge", method="merge", head=A[:9]) == (
+        "failed", "GitHub refused the merge: checks still run on aaaaaaaaa: build (queued). Merge once they pass.")
+    assert rig.service._seconds_to_due(c, rig.t) == 0  # the board catches up: Re-run CI shows if no check ran
+
+
+async def test_a_poll_flags_my_blocked_merge_with_no_checks(tmp_path):
+    rig, c, forge = await moves_rig(tmp_path, Turn("octo", "merge"), state=NO_CHECKS)
+    assert rig.store.board("acme/app")[1].no_checks is True
+    assert forge.reads == [1]
+    forge.state = CLEAN
+    rig.t += timedelta(minutes=10)
+    await rig.service.poll(c)
+    assert rig.store.board("acme/app")[1].no_checks is False
+
+
+async def test_a_poll_reads_the_merge_state_of_merge_rows_only(tmp_path):
+    rig, _, forge = await moves_rig(tmp_path, state=NO_CHECKS)  # a request_review turn
+    assert forge.reads == [] and rig.store.board("acme/app")[1].no_checks is False
+
+
+async def test_a_failed_merge_state_read_leaves_the_flag_false(tmp_path):
+    rig, _, _ = await moves_rig(tmp_path, Turn("octo", "merge"), state=NO_CHECKS,
+                                state_fail=ForgeError("GitHub 502", unavailable=True))
+    assert rig.store.board("acme/app")[1].no_checks is False
+    assert rig.state().status == "ok"
+
+
+async def test_a_row_stored_before_no_checks_reads_false(tmp_path):
+    rig, _, _ = await moves_rig(tmp_path, Turn("octo", "merge"), state=NO_CHECKS)
+    data = json.loads(rig.store.board("acme/app")[1].to_json())
+    del data["no_checks"]
+    assert BoardRow.from_json(json.dumps(data)).no_checks is False
+
+
+async def test_rerun_ci_pushes_an_empty_commit_and_polls_soon(tmp_path):
+    rig, c, forge = await moves_rig(tmp_path, Turn("octo", "merge"), state=NO_CHECKS)
+    assert await rig.service.pr_move("acme/app", 1, "rerun_ci", head=A[:9]) == (
+        "done", "Pushed an empty commit ccccccccc to #1: its checks start now; merge once they pass.")
+    assert forge.calls == [("empty_commit", "feature/x", A, "ACME-1: re-run CI (no checks ran on aaaaaaaaa)")]
+    assert forge.reads == [1, 1]  # the poll's, then the press's own: GitHub's state at the press
+    assert rig.service._seconds_to_due(c, rig.t) == 0
+
+
+async def test_a_second_rerun_ci_before_a_poll_is_refused(tmp_path):
+    rig, _, forge = await moves_rig(tmp_path, Turn("octo", "merge"), state=NO_CHECKS)
+    assert (await rig.service.pr_move("acme/app", 1, "rerun_ci", head=A[:9]))[0] == "done"
+    assert await rig.service.pr_move("acme/app", 1, "rerun_ci", head=A[:9]) == (
+        "refused", "The PR's head moved on GitHub: refresh the board.")
+    assert len(forge.calls) == 1
+
+
+async def test_rerun_ci_only_while_the_board_offers_it(tmp_path):
+    refused = ("refused", "The board no longer shows this move for #1: refresh it.")
+    rig, _, forge = await moves_rig(tmp_path, Turn("octo", "merge"))  # nothing blocks the merge
+    assert await rig.service.pr_move("acme/app", 1, "rerun_ci", head=A[:9]) == refused
+    assert forge.calls == []
+
+
+async def test_rerun_ci_needs_my_merge_turn(tmp_path):
+    rig, _, forge = await moves_rig(tmp_path, state=NO_CHECKS)  # a request_review turn
+    assert await rig.service.pr_move("acme/app", 1, "rerun_ci", head=A[:9]) == (
+        "refused", "The board no longer shows this move for #1: refresh it.")
+    assert forge.calls == []
+
+
+@pytest.mark.parametrize("head, live, text", [
+    ("b" * 9, NO_CHECKS, "The PR's head moved since the board showed it: refresh it."),
+    (A[:6], NO_CHECKS, "The PR's head moved since the board showed it: refresh it."),
+    (A[:9], dataclasses.replace(NO_CHECKS, head_sha="b" * 40), "The PR's head moved on GitHub: refresh the board."),
+    (A[:9], dataclasses.replace(NO_CHECKS, checks=(Check("build", "pending", "queued"),)),
+     "Checks run on aaaaaaaaa now: nothing pushed. Refresh the board."),
+    (A[:9], dataclasses.replace(NO_CHECKS, cross_repo=True), "#1's branch is in another repo: Cleave cannot push to it."),
+])
+async def test_rerun_ci_refusals(tmp_path, head, live, text):
+    rig, _, forge = await moves_rig(tmp_path, Turn("octo", "merge"), state=NO_CHECKS)
+    forge.state = live
+    assert await rig.service.pr_move("acme/app", 1, "rerun_ci", head=head) == ("refused", text)
+    assert forge.calls == []
+
+
+@pytest.mark.parametrize("error, answer", [
+    (ForgeError("GitHub 422"), ("failed", "The PR's branch moved on GitHub: nothing pushed. Refresh the board.")),
+    (ForgeError("GitHub 403"), ("failed", "GitHub refused it (GitHub 403).")),
+    (ForgeError("ReadTimeout", unavailable=True),
+     ("unverified", "GitHub did not answer: check #1 on GitHub before trying again.")),
+])
+async def test_rerun_ci_refused_or_unanswered(tmp_path, error, answer):
+    rig, _, forge = await moves_rig(tmp_path, Turn("octo", "merge"), state=NO_CHECKS)
+    forge.fail = error
+    assert await rig.service.pr_move("acme/app", 1, "rerun_ci", head=A[:9]) == answer
+
+
+async def test_rerun_ci_when_the_state_cannot_be_read(tmp_path):
+    rig, _, forge = await moves_rig(tmp_path, Turn("octo", "merge"), state=NO_CHECKS)
+    forge.state_fail = ForgeError("GitHub 502", unavailable=True)
+    assert await rig.service.pr_move("acme/app", 1, "rerun_ci", head=A[:9]) == (
+        "failed", "Could not read #1 on GitHub (GitHub 502): nothing pushed.")
+    assert forge.calls == []

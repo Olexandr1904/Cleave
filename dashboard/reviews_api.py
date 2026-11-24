@@ -59,6 +59,7 @@ def _pr(row: BoardRow, repo: dict) -> dict:
         "can_fix": row.number in repo["fixable"],  # Fix now applies
         "can_fix_findings": row.number in repo["findings_fixable"],  # Fix findings… applies
         "fix": repo["fixes"].get(row.number),  # the newest fix job of either kind, whatever job is newer
+        "no_checks": row.no_checks,  # my merge, blocked while no check ran on the head: Re-run CI applies
     }
 
 
@@ -270,7 +271,7 @@ def build_review_routes(service: Any, get_projects: Callable[[], dict] = dict, a
         return _queued("fix-findings", target, lambda: service.fix_findings(*target))
 
     async def post_pr_move(request: Request) -> JSONResponse:
-        """A board move on GitHub (ReviewerService.pr_move): request_review, ready or merge."""
+        """A board move on GitHub (ReviewerService.pr_move): request_review, ready, merge or rerun_ci."""
         body = await _body(request)
         if isinstance(body, JSONResponse):
             return body

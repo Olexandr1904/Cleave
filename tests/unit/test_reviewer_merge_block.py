@@ -24,6 +24,8 @@ def state(**changes):
                        "that changed starts none): Re-run CI on its card starts them."),
     ({"checks": ()}, "GitHub refused the merge: no checks ran on aaaaaaaaa, and develop waits for them (a base "
                      "that changed starts none): Re-run CI on its card starts them."),
+    # A missing review is what to fix first: an empty commit would start nothing it needs.
+    ({"checks": None, "review": "REVIEW_REQUIRED"}, "GitHub refused the merge: #7 needs an approving review."),
     ({"checks": (Check("build", "pending", "queued"), Check("scan", "pending", "in progress"),
                  Check("lint", "passed", "success"))},
      "GitHub refused the merge: checks still run on aaaaaaaaa: build (queued), scan (in progress). "
@@ -41,6 +43,13 @@ def state(**changes):
 ])
 def test_refusal_text_says_what_blocks_the_merge(changes, text):
     assert refusal_text(state(**changes), 7) == text
+
+
+def test_the_no_checks_text_names_re_run_ci_only_where_the_card_offers_it():
+    blocked = state(checks=None)
+    tail = "no checks ran on aaaaaaaaa, and develop waits for them (a base that changed starts none): "
+    assert refusal_text(blocked, 7, rerun=False) == f"GitHub refused the merge: {tail}push a commit to start them."
+    assert refusal_text(blocked, 7) == f"GitHub refused the merge: {tail}Re-run CI on its card starts them."
 
 
 def test_refusal_text_without_a_state_is_the_generic_text():
@@ -69,6 +78,8 @@ def test_a_base_name_is_cleaned_too():
     ({"checks": None, "status": "UNKNOWN"}, False),  # GitHub still computes: the next poll tells
     ({"checks": None, "head_sha": "b" * 40}, False),  # another head than the board's
     ({"checks": None, "cross_repo": True}, False),  # a fork's branch: Cleave cannot push to it
+    ({"checks": None, "review": "REVIEW_REQUIRED"}, False),  # a review blocks it: an empty commit starts nothing
+    ({"checks": None, "review": "CHANGES_REQUESTED"}, False),
 ])
 def test_no_checks(changes, expected):
     assert no_checks(state(**changes), A) is expected

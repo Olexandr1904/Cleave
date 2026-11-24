@@ -38,19 +38,23 @@ pushes the empty commit on its own; nothing changes in Telegram.
   `reviewDecision` and the head commit's check rollup (each check run's name, status and conclusion; each status
   context's name and state). A check is `pending` (not completed; a status `PENDING` or `EXPECTED`), `passed`
   (`SUCCESS`, `NEUTRAL`, `SKIPPED`) or `failed` (anything else). No rollup means no check ran.
-- The refusal text, first that applies: conflicts (`DIRTY`), behind its base (`BEHIND`), a draft, no check ran,
-  checks failed (named), checks running (named), changes requested, an approval missing, GitHub still computing
-  (`UNKNOWN`), else a rule of the base that names no check. Check names are cut to 40 characters, control characters
+- The refusal text, first that applies: conflicts (`DIRTY`), behind its base (`BEHIND`), a draft, changes
+  requested, an approval missing, no check ran (pointing to Re-run CI only where the card offers it, else to a
+  push), checks failed (named), checks running (named), GitHub still computing (`UNKNOWN`), else a rule of the base
+  that names no check. Check names are cut to 40 characters, control characters
   dropped, at most 5 named (`+N more`). A failed read keeps today's generic text.
 - The poll reads the merge state of each row whose turns include my `merge`; a row is `no_checks` when the state
-  is `BLOCKED`, the head is the row's, it has no rollup and its branch is in the same repo. A failed read leaves
+  is `BLOCKED`, the head is the row's, it has no rollup, no review blocks it (`REVIEW_REQUIRED`, `CHANGES_REQUESTED`: an empty commit starts nothing a review needs) and its branch is in the same repo; never on a head Cleave itself pushed (its checks did not start either). A failed read leaves
   the flag false and the poll goes on. A row stored before the field reads false.
 - The board: a `merge` card with `no_checks` says `merge: no checks ran, re-run CI` and its main button (card and
   panel) is **Re-run CI**, which runs at once (no dialog) with the head the card shows.
 - `pr_move(..., "rerun_ci", head=...)` runs only while the row names `merge` and is `no_checks`, at the head the
   board showed. It reads the merge state again: a head that moved, or checks that now exist, refuse with nothing
-  pushed. Then it creates a commit with the head's tree and the head as its only parent, and moves the branch to it
-  without force (a branch that moved meanwhile is refused by GitHub: nothing is overwritten). The message is
+  pushed, as do a review that blocks the merge and a state other than `BLOCKED` or `UNKNOWN`. Then it creates a
+  commit with the head's tree and the head as its only parent, reads the branch, and moves it to the commit
+  without force only while it is still at the head: a branch force-pushed back to an ancestor would take the move
+  as a fast-forward and get the removed commits back (the read narrows that race to the two calls; GitHub refuses
+  a move that is not a fast-forward). The message is
   `<ticket>: re-run CI (no checks ran on <sha9>)`, or `Re-run CI (no checks ran on <sha9>)` without a ticket key.
   It answers `Pushed an empty commit <sha9> to #<n>: its checks start now; merge once they pass.` and polls soon.
   A second press before the poll is refused by the head check (the live head is the new commit).

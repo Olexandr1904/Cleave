@@ -431,8 +431,12 @@ async def test_merge_state_reads_the_checks():
         ("ci/old", "pending", "pending"), ("ci/required", "pending", "expected"), ("ci/ok", "passed", "success"),
         ("ci/err", "failed", "error"),
     ]
-    variables = json.loads(route.calls[0].request.content)["variables"]
-    assert variables == {"owner": "acme-org", "name": "acme-app", "number": 1712}
+    sent = json.loads(route.calls[0].request.content)
+    assert sent["variables"] == {"owner": "acme-org", "name": "acme-app", "number": 1712}
+    for field in ("mergeStateStatus", "baseRefName", "headRefName", "headRefOid", "isCrossRepository",
+                  "reviewDecision", "statusCheckRollup", "contexts(first: 100)", "... on CheckRun { name status "
+                  "conclusion }", "... on StatusContext { context state }"):
+        assert field in sent["query"], field
 
 
 @respx.mock
@@ -468,6 +472,7 @@ async def test_merge_state_unanswered_is_unavailable():
 async def test_empty_commit_keeps_the_tree_and_moves_the_branch_without_force():
     get = respx.get(f"{BASE}/git/commits/{'a' * 40}").respond(200, json={"tree": {"sha": "t" * 40}})
     post = respx.post(f"{BASE}/git/commits").respond(201, json={"sha": "c" * 40})
+    respx.get(f"{BASE}/git/ref/heads/feature/x-1").respond(200, json={"object": {"sha": "a" * 40}})
     patch = respx.patch(f"{BASE}/git/refs/heads/feature/x-1").respond(200, json={})
     assert await reader().empty_commit("feature/x-1", "a" * 40, "ABC-1: re-run CI") == "c" * 40
     assert get.call_count == 1
@@ -481,6 +486,7 @@ async def test_empty_commit_keeps_the_tree_and_moves_the_branch_without_force():
 async def test_empty_commit_ref_refused_or_unanswered(status, unavailable):
     respx.get(f"{BASE}/git/commits/{'a' * 40}").respond(200, json={"tree": {"sha": "t" * 40}})
     respx.post(f"{BASE}/git/commits").respond(201, json={"sha": "c" * 40})
+    respx.get(f"{BASE}/git/ref/heads/b").respond(200, json={"object": {"sha": "a" * 40}})
     patch = respx.patch(f"{BASE}/git/refs/heads/b").respond(status, json={"message": "Update is not a fast forward"})
     with pytest.raises(ForgeError, match=f"^GitHub {status}$") as e:
         await reader().empty_commit("b", "a" * 40, "Re-run CI")
@@ -495,3 +501,17 @@ async def test_empty_commit_stops_when_the_commit_is_refused():
     with pytest.raises(ForgeError, match="^GitHub 403$"):
         await reader().empty_commit("b", "a" * 40, "Re-run CI")
     assert patch.call_count == 0
+
+
+
+@respx.mock
+async def test_empty_commit_moves_nothing_when_the_branch_is_not_at_the_head():
+    """A branch force-pushed back to an ancestor: moving it to a child of the old head would be a fast-forward that
+    brings the removed commits back. The branch is read just before the move."""
+    respx.get(f"{BASE}/git/commits/{'a' * 40}").respond(200, json={"tree": {"sha": "t" * 40}})
+    respx.post(f"{BASE}/git/commits").respond(201, json={"sha": "c" * 40})
+    respx.get(f"{BASE}/git/ref/heads/b").respond(200, json={"object": {"sha": "e" * 40}})
+    patch = respx.patch(f"{BASE}/git/refs/heads/b").respond(200, json={})
+    with pytest.raises(ForgeError, match="^branch moved$") as e:
+        await reader().empty_commit("b", "a" * 40, "Re-run CI")
+    assert not e.value.unavailable and patch.call_count == 0

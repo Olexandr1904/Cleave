@@ -287,9 +287,11 @@ class GitHubForgeReader:
 
     async def empty_commit(self, branch: str, head: str, message: str) -> str:
         """Push an empty commit to `branch`, whose head is `head`: a commit with the head's tree and the head as its
-        only parent, then the branch moved to it without force (GitHub refuses it, 422, if the branch moved since).
-        Each write once; the new commit's sha. ForgeError as _write's (a commit made but not reached by the branch is
-        left to GitHub's garbage collection)."""
+        only parent, then the branch moved to it without force. The branch is read just before the move:
+        ForgeError("branch moved") when it is not at `head` (a branch force-pushed back to an ancestor would take
+        the move as a fast-forward and get the removed commits back); GitHub refuses the move itself (422) when the
+        branch moved to a commit that is not an ancestor. Each write once; the new commit's sha. ForgeError as
+        _write's (a commit made but not reached by the branch is left to GitHub's garbage collection)."""
         tree = ((await self._get(f"{self._adapter._repo_path}/git/commits/{head}")).get("tree") or {}).get("sha")
         if not isinstance(tree, str):
             raise ForgeError("GitHub answer unreadable")
@@ -297,7 +299,11 @@ class GitHubForgeReader:
         sha = made.get("sha")
         if not isinstance(sha, str):
             raise ForgeError("GitHub answer unreadable")
-        await self._write("PATCH", f"/git/refs/heads/{quote(branch, safe='/')}", {"sha": sha, "force": False})
+        ref = f"heads/{quote(branch, safe='/')}"
+        at = ((await self._get(f"{self._adapter._repo_path}/git/ref/{ref}")).get("object") or {}).get("sha")
+        if at != head:
+            raise ForgeError("branch moved")
+        await self._write("PATCH", f"/git/refs/{ref}", {"sha": sha, "force": False})
         return sha
 
     async def merge_methods(self) -> list[str]:

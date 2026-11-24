@@ -18,7 +18,7 @@ from orchestrator.reviewer.fix import PATCH_NAME
 from orchestrator.reviewer.forge_github import ForgeError
 from orchestrator.reviewer.jobs import REVIEW_NOW_SUFFIX, Notice, held_prs, plan_jobs
 from orchestrator.reviewer.lines import doc_missing_line, poll_failed_line, readiness_failed_line
-from orchestrator.reviewer.merge_block import no_checks, refusal_text, rerun_message
+from orchestrator.reviewer.merge_block import REVIEW_BLOCKS, no_checks, refusal_text, rerun_message
 from orchestrator.reviewer.models import BoardRow, BoardSnapshot, Job, JobRun, MergeState, Post, RepoState
 from orchestrator.reviewer.readiness import ReadinessError
 from orchestrator.reviewer.report import Report, confirmed_findings
@@ -294,6 +294,7 @@ class ReviewerService:
         # a poll shows a merge, its row still names merge, so a second Merge… is answered here.
         self._soon: dict[str, datetime] = {}
         self._merged: dict[str, dict[int, datetime]] = {}
+        self._reran: dict[str, set[str]] = {}  # per repo, the empty commits Re-run CI pushed: never offered on them
 
     async def run(self, stop: asyncio.Event) -> None:
         """Poll every due repo, then wait until the next one is due (at most 60 s) or `stop`."""
@@ -452,10 +453,12 @@ class ReviewerService:
         ) for job, job_state in changed]
         return _Outcome(next_at, events, plan.lines, notices + plan.notices)
 
-    @staticmethod
-    async def _no_checks(ctx: RepoContext, row: BoardRow) -> bool:
-        """Whether Re-run CI applies to my merge row (merge_block.no_checks); False when GitHub's merge state cannot
-        be read: the poll goes on, the next one reads it again."""
+    async def _no_checks(self, ctx: RepoContext, row: BoardRow) -> bool:
+        """Whether Re-run CI applies to my merge row (merge_block.no_checks); never on a head Cleave pushed (its
+        checks did not start either: another empty commit would not start them); False when GitHub's merge state
+        cannot be read: the poll goes on, the next one reads it again."""
+        if row.head_sha in self._reran.get(ctx.scope, ()):
+            return False
         try:
             return no_checks(await ctx.forge.merge_state(row.number), row.head_sha)
         except ForgeError as e:
@@ -695,7 +698,10 @@ class ReviewerService:
                 return "unverified", f"GitHub did not answer: check #{number} on GitHub before trying again."
             if move == "merge" and str(e) == "GitHub 405":
                 self.poll_soon(scope)  # the card catches up: Re-run CI shows when no check ran
-                return "failed", refusal_text(await self._merge_state(ctx, number), number)
+                state = await self._merge_state(ctx, number)
+                rerun = (state is not None and no_checks(state, state.head_sha)
+                         and state.head_sha not in self._reran.get(scope, ()))
+                return "failed", refusal_text(state, number, rerun=rerun)
             if move == "merge" and str(e) == "GitHub 409":  # the sha check: a push after the board's last poll
                 return "failed", "The PR's head moved on GitHub: refresh the board."
             return "failed", f"GitHub refused it ({e})."
@@ -729,15 +735,21 @@ class ReviewerService:
             return "refused", f"#{number}'s branch is in another repo: Cleave cannot push to it."
         if state.checks:
             return "refused", f"Checks run on {row.head_sha[:9]} now: nothing pushed. Refresh the board."
+        if state.review in REVIEW_BLOCKS:
+            return "refused", f"A review blocks the merge of #{number}, not its checks: nothing pushed."
+        if state.status not in ("BLOCKED", "UNKNOWN"):  # UNKNOWN: GitHub recomputes it, as after any change
+            status = "".join(ch for ch in state.status if ch.isalpha() or ch == "_")[:20]
+            return "refused", f"GitHub's merge state of #{number} is {status} now: nothing pushed. Refresh the board."
         message = rerun_message(row.ticket_key, row.head_sha)
         try:
             sha = await ctx.forge.empty_commit(state.head_ref, row.head_sha, message)
         except ForgeError as e:
             if e.unavailable:
                 return "unverified", f"GitHub did not answer: check #{number} on GitHub before trying again."
-            if str(e) == "GitHub 422":  # the branch is no longer the head: not a fast-forward
+            if str(e) in ("GitHub 422", "branch moved"):  # the branch is no longer at the head
                 return "failed", "The PR's branch moved on GitHub: nothing pushed. Refresh the board."
             return "failed", f"GitHub refused it ({e})."
+        self._reran.setdefault(ctx.scope, set()).add(sha)
         self.poll_soon(ctx.scope)
         return "done", f"Pushed an empty commit {sha[:9]} to #{number}: its checks start now; merge once they pass."
 

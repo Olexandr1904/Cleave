@@ -179,6 +179,31 @@ BODY_EDGES = {
     # ... unless a "[" before the line's first backtick may be a footnote label holding it: read whole.
     "footnote-label-tick": ("See[^`].\n\n[^`]: <div> `\n    `@octo`", [OCTO, "links to div"]),
     "unpaired-tick-reads-whole": ("`List<String>` and ` @x\n`@octo`", ["mentions @x", OCTO]),
+    # The final review's inputs: a link's title or label, or math, may take a backtick before code spans do, and a
+    # line of no-break or ideographic spaces is no blank line: from there a paragraph's spans are not trusted.
+    "title-tick-img": ("`a` [x](https://github.com/acme-org/r 'q`') <img src=\"https://evil.example/p.png\"> `",
+                       [IMAGE, "links to https://evil.example/p.png"]),
+    "title-tick-href": ("`a` [x](https://github.com/acme-org/r 'q`') <a href=\"https://evil.example\">y</a> `",
+                        [EVIL]),
+    "paren-title-img": ("`a` [x](https://github.com/acme-org/r (q`)) <img src=\"https://evil.example/p.png\"> `",
+                        [IMAGE, "links to https://evil.example/p.png"]),
+    "title-two-lines-img": ("[x](https://github.com/acme-org/r 'a\nb`') <img src=\"https://evil.example/p.png\"> `",
+                            [IMAGE, "links to https://evil.example/p.png"]),
+    "nbsp-blank-img": (f"a ` b\n{NBSP}\nc ` <img src=\"https://evil.example/p.png\"> `",
+                       [IMAGE, "links to https://evil.example/p.png"]),
+    "ideographic-blank-img": ("a ` b\n\u3000\nc ` <img src=\"https://evil.example/p.png\"> `",
+                              [IMAGE, "links to https://evil.example/p.png"]),
+    "math-tick-img": ("$x`$ <img src=\"https://evil.example/p.png\"> `",
+                      [IMAGE, "links to https://evil.example/p.png"]),
+    "title-tick-mention": ("[x](https://github.com/acme-org/r 'q`') @octo `", [OCTO]),
+    "title-tick-url": ("`a` [x](https://github.com/acme-org/r 'q`') https://evil.example `", [EVIL]),
+    "label-tick-mention": ("[`]: https://github.com/acme-org/r\n\n`a` [x][`] @octo `", [OCTO]),
+    "nbsp-blank-mention": (f"a ` b\n{NBSP}\nc ` @octo `", [OCTO]),
+    # ... while a blank line of spaces and tabs ends that paragraph, and a "[" after a line's last backtick only
+    # reaches the paragraph's later lines.
+    "trust-back-after-blank": ("[x](https://github.com/acme-org/r)\n \t\n`List<String>` and `@Composable`", []),
+    "bracket-after-the-spans": ("`List<String>` and `@Composable` [x](https://github.com/acme-org/r)\n`@octo`",
+                                [OCTO]),
     "xml-in-a-fence": ('```xml\n<ImageView android:src="@drawable/icon" />\n```', []),
     # Since Task 9 fix round 1 bare URLs are also read in the raw line ("//evil.example" after "&#58;").
     "entity-in-dest": ("[x](https&#58;//evil.example)", [EVIL, "links to //evil.example"]),

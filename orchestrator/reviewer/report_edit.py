@@ -74,16 +74,18 @@ _C0_AND_SPACE = "".join(map(chr, range(0x21)))  # ... and strip these from both 
 # A "<" that may open a tag, a comment or an HTML block: a letter, "/", "!" or "?" after it. It is looked for
 # anywhere in a line, since a block may open after any container's marker (a footnote label among them).
 #
-# Deliberately strict, and possibly temporary (operator, 2026-11-15). One such "<" anywhere outside a trusted fence
-# makes the whole text checked as plain text, inline code spans included, because inside raw HTML a backtick does
-# not start code and GitHub would render the mention or link. The cost is false refusals on ordinary Kotlin and
-# Java findings: a generic such as `Provider<Foo>` looks like a tag, so a `@Inject` or a fenced `@Composable` in the
-# same comment is then reported as "mentions @Inject" and the operator has to "edit N". Revisit this once real
-# reviews show how often it happens. A narrower rule (trust code spans unless the "<" sits outside any code span,
-# or starts a line) must keep refusing the known bypasses in tests/unit/test_reviewer_report_edit.py
-# (BODY_EDGES: html-block-hides-fence, details-no-blank, footnote-html-block, tag-across-lines): an inline tag
-# whose quoted attribute holds a backtick defeats the obvious narrowing.
+# One such "<" outside a trusted fence makes the whole text checked as plain text, inline code spans included,
+# because inside raw HTML a backtick does not start code and GitHub would render the mention or link. Since
+# 2026-11-24 (a reply naming `TEST-<FQN>.xml` and `@HiltAndroidTest` in code was refused) a "<" inside a code span
+# of a trusted paragraph (`_span_reads`) does not count: an HTML block opens only where a line's content starts,
+# and a span's backtick comes before it. The paragraph must be trusted because a backtick a link's title or label
+# or math takes (BODY_EDGES: title-tick-img, label-tick-mention, math-tick-img) leaves that "<" outside any span.
+# It must keep refusing the known bypasses in tests/unit/test_reviewer_report_edit.py (BODY_EDGES:
+# html-block-hides-fence, details-no-blank, footnote-html-block, tag-across-lines, footnote-label-tick).
 _HTML_START = re.compile(r"<[A-Za-z/!?]")
+# What may take a backtick before code spans do: a link's destination, title or label, a footnote label ("[" ...),
+# and math ("$").
+_TICK_TAKERS = re.compile(r"[\[$]")
 # A run of 3+ backticks or tildes after nothing but spaces, tabs, ">" and list markers ("-", "*", "+", or 1-9
 # digits and "." or ")", each followed by a space or a tab).
 _FENCE_LOOKING = re.compile(r"(?:[ \t>]|[-*+][ \t]|[0-9]{1,9}[.)][ \t])*(?:`{3,}|~{3,})")
@@ -207,38 +209,31 @@ def body_problems(text: str, allowed: tuple[str, ...]) -> list[str]:
 
     - Lines end where CommonMark ends them (`split_lines`). A fenced block is skipped only when it opens at
       column 0 and is no math block (`_sure_code`). No code at all is skipped when the text outside those holds
-      a `<` that may open a tag (`_HTML_START`), wherever it sits but inside a code span Cleave is sure of
-      (`_may_open_html`): it may start an HTML block, where GitHub reads no Markdown.
-    - Inline code spans are skipped line by line (`_code_spans`), but a $`…`$ span is math. After a line that
-      leaves a backtick run unpaired, holds a `<` outside its code spans or a bare URL that runs into one, the
-      paragraph's later lines are checked whole: a span or a tag (its quotes may hold a `>`) may pair across
-      lines.
+      a `<` that may open a tag (`_HTML_START`), wherever it sits but inside a code span of a trusted paragraph:
+      it may start an HTML block, where GitHub reads no Markdown.
+    - Inline code spans are skipped line by line (`_code_spans`), but a $`…`$ span is math, and only while the
+      paragraph is trusted (`_span_reads`): after a line that leaves a backtick run unpaired, holds a `<` outside its
+      code spans, a bare URL that runs into one, a `[` or a `$`, the paragraph's later lines are checked whole: a
+      span or a tag (its quotes may hold a `>`) may pair across lines, and a link or math may take a backtick.
     - Every link destination must be an allowed absolute URL (`_destinations`): relative paths, anchors and
       other schemes are refused. A bare URL is checked where it stands, line by line, as far as GitHub's
       autolink takes it (`_autolink`).
     """
     lines = split_lines(text.removeprefix(BOM))
     code = _sure_code(lines)
-    in_html = any(_may_open_html(line) for line, in_code in zip(lines, code) if not in_code)
+    reads = _span_reads(lines, code)
+    in_html = any(_HTML_START.search(read) for read in reads if read is not None)
     problems: dict[str, None] = {}
-    left_open = False
     whole: list[str] = []  # the lines checked, with their code spans
     checked: list[str] = []  # ... and without the spans skipped
-    for line, in_code in zip(lines, code):
+    for line, in_code, read in zip(lines, code, reads):
         if in_code and not in_html:
             continue
         whole.append(line)
-        if not line.strip():
-            left_open = False  # a blank line ends the paragraph
-            checked.append(line)
-            continue
-        if in_html or left_open:
-            clean = line
-        else:
-            clean, sure = _code_spans(line)
-            left_open = not sure or "<" in clean
+        clean = line if in_html or read is None else read
         checked.append(clean)
-        _note_problems(clean, allowed, problems)
+        if not _blank(line):
+            _note_problems(clean, allowed, problems)
     for raw, cut in _destinations("\n".join(whole), "\n".join(checked)):
         if (shown := _foreign_destination(raw, cut, allowed)) is not None:
             problems[f"links to {shown[:80]}"] = None
@@ -364,14 +359,33 @@ def _math(line: str) -> bool:
     return bool(words) and words[0].lower() == "math"
 
 
-def _may_open_html(line: str) -> bool:
-    """Whether `line` holds a `<` that may open a tag, outside the code spans GitHub surely reads as code. An HTML
-    block opens only where a line's content starts, after its container markers; a `<` inside a span has the span's
-    backtick before it, so it is not there, unless a footnote label holds that backtick (`[^`]: <div> `): a line
-    with a `[` before its first backtick is read whole."""
-    clean, sure = _code_spans(line)
-    whole = not sure or "[" in line.partition("`")[0]
-    return bool(_HTML_START.search(line if whole else clean))
+def _blank(line: str) -> bool:
+    """A blank line as CommonMark has it: spaces and tabs only (a no-break space is text)."""
+    return not line.strip(" \t")
+
+
+def _span_reads(lines: list[str], skip: list[bool]) -> list[str | None]:
+    """Each line as checked outside a trusted fence (None for a line `skip` names): with its code spans blanked
+    (`_code_spans`) while its paragraph is trusted to pair backticks as Cleave does, else whole. A paragraph stops
+    being trusted after a line that leaves a run unpaired, holds a `<` outside its spans (a span or a tag may pair
+    across lines), or holds a `[` or a `$` (a link's destination, title or label, a footnote label or math may take a
+    backtick before code spans do, on that line or a later one); a line with a `[` or a `$` before its last backtick
+    is read whole itself. A blank line (`_blank`) trusts the next paragraph again."""
+    reads: list[str | None] = []
+    trusted = True
+    for line, skipped in zip(lines, skip):
+        if skipped:
+            reads.append(None)
+            continue
+        if _blank(line):
+            trusted = True
+            reads.append(line)
+            continue
+        clean, sure = _code_spans(line)  # a run left unpaired keeps the spans before it on this line
+        here = trusted and not _TICK_TAKERS.search(line[:line.rfind("`") + 1])
+        reads.append(clean if here else line)
+        trusted = here and sure and "<" not in clean and not _TICK_TAKERS.search(line)
+    return reads
 
 
 def _code_spans(line: str) -> tuple[str, bool]:

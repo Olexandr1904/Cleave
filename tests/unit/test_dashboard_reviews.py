@@ -822,15 +822,19 @@ def test_dashboard_actions_are_logged(moves, caplog):
     svc.review_now_error = ValueError("already queued")
     c.post("/api/reviews/review-now", json={"scope": "acme/app", "number": 1})
     c.post("/api/reviews/pr-move", json={"scope": "acme/app", "number": 1, "move": "ready"})
-    svc.move_answer = ("refused", "Already merged:\nthe board shows it within a minute.")
+    svc.move_answer = ("failed", "GitHub refused it:\nGitHub 422.")
     c.post("/api/reviews/pr-move", json={"scope": "acme/app", "number": 1, "move": "merge"})
+    # A move's refusal may name what was typed into its dialog ("Not a GitHub login: …"): its text is not logged.
+    svc.move_answer = ("refused", "Not a GitHub login: typed-in")
+    c.post("/api/reviews/pr-move", json={"scope": "acme/app", "number": 1, "move": "request_review",
+                                         "reviewers": ["typed-in"]})
     lines = [r.getMessage() for r in caplog.records if r.name == "dashboard.reviews_api"]
     assert lines == ["Dashboard review-now on acme/app #1: queued j1",
                      "Dashboard review-now on acme/app #1: 409 already queued",
                      "Dashboard pr-move 'ready' on acme/app #1: done",  # quoted: the client's string
-                     # A move that did not happen says why, quoted: never a line of its own.
-                     "Dashboard pr-move 'merge' on acme/app #1: refused 'Already merged:\\nthe board shows it within a"
-                     " minute.'"]
+                     # GitHub's answer to a move that did not happen, quoted: never a line of its own.
+                     "Dashboard pr-move 'merge' on acme/app #1: failed 'GitHub refused it:\\nGitHub 422.'",
+                     "Dashboard pr-move 'request_review' on acme/app #1: refused"]
 
 
 def test_a_typed_command_is_logged_without_its_text(dash, caplog):
@@ -849,9 +853,13 @@ def test_a_refused_command_is_logged_with_why(dash, caplog):
     caplog.set_level("INFO", logger="dashboard.reviews_api")
     act(d, d.rig.review.id, command={"action": "post_replies", "all_replies": True})
     act(d, d.rig.review.id, text="x" * 400)  # a typed text the grammar does not know: its refusal, not the text
+    # Push and reply all: the push landed, the post was refused; the line says why the post was.
+    d.rig.posting.outcomes["post_replies"] = PostOutcome("refused", "Not posted on #1712: why.")
+    act(d, d.rig.job.id, command={"action": "push_post"})
     lines = [r.getMessage() for r in caplog.records if r.name == "dashboard.reviews_api"]
     assert lines[0] == (f"Dashboard post_replies command on {SCOPE} #{N}: refused 'This is a review message: "
                         "\"post replies\" works on a re-check message. Nothing was done.'")
+    assert lines[-1] == f"Dashboard push_post command on {SCOPE} #{N}: refused 'Not posted on #1712: why.'"
     assert not any("x" * 20 in line for line in lines)
 
 

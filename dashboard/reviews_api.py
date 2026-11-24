@@ -153,11 +153,12 @@ def _logged(what: str, target: tuple[str, int], outcome: str) -> None:
 _EXPLAINED = ("refused", "failed", "unverified")  # the outcomes whose log line says why
 
 
-def _outcome(answer: dict) -> str:
-    """An answer's state for the log; when the action did not do what was asked, with its first text, Cleave's own
-    answer (a typed text is never one), cut and quoted: never a line of its own."""
+def _outcome(answer: dict, explained: tuple[str, ...] = _EXPLAINED) -> str:
+    """An answer's state for the log; when it is one of `explained` (the action did not do what was asked), with its
+    last text, Cleave's own answer for the step the state is (a push and reply all's post), cut and quoted: never a
+    line of its own. A command's answer never holds what was typed."""
     state, texts = answer.get("state", "?"), answer.get("texts") or [answer.get("text", "")]
-    return f"{state} {texts[0][:300]!r}" if state in _EXPLAINED and texts[0] else state
+    return f"{state} {texts[-1][:300]!r}" if state in explained and texts[-1] else state
 
 
 def _queued(what: str, target: tuple[str, int], call: Callable[[], Job]) -> JSONResponse:
@@ -291,7 +292,8 @@ def build_review_routes(service: Any, get_projects: Callable[[], dict] = dict, a
         except ValueError as e:
             _logged(what, target, f"400 {e}")
             return JSONResponse({"error": str(e)}, status_code=400)
-        _logged(what, target, _outcome({"state": state, "text": text}))
+        # A move's refusal may name what was typed into its dialog (a login): only GitHub's answers are logged.
+        _logged(what, target, _outcome({"state": state, "text": text}, ("failed", "unverified")))
         return JSONResponse({"state": state, "text": text})
 
     async def get_candidates(request: Request) -> JSONResponse:

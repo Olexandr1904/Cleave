@@ -6,6 +6,7 @@ docs/features/orchestrator.md.
 """
 from __future__ import annotations
 
+import asyncio
 import logging
 from pathlib import Path
 from typing import Any, Callable
@@ -60,7 +61,9 @@ async def create_workspace_for_ticket(
     notifier: NotifierInterface | None = None,
 ) -> Workspace:
     """Create workspace, clone repo, write ticket data."""
-    ws = workspace_manager.create(
+    # Off the event loop: other tickets' stages run meanwhile, and a clone takes minutes.
+    ws = await asyncio.to_thread(
+        workspace_manager.create,
         company_id=project_id,
         repo_id=pt.repo_id,
         ticket_id=pt.ticket.id,

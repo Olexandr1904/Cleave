@@ -109,3 +109,35 @@ async def test_shutdown_waits_for_the_stages_still_running():
     release.set()
     await asyncio.wait_for(run, timeout=1)
     assert finished == ["LONG"]
+
+
+async def test_a_ticket_a_cycle_found_busy_wakes_the_loop_when_its_stage_ends():
+    """A Retry pressed while the ticket's last stage still finished (a Telegram send) found it busy; nothing else
+    would start it before the poll interval."""
+    release = asyncio.Event()
+
+    async def advance(ws):
+        await release.wait()
+
+    rt = _runtime(advance, [_ws("T-1", Stage.PUSHED)])
+    await rt.poll_cycle()
+    await asyncio.sleep(0)
+    await rt.poll_cycle()             # the operator's Retry woke a cycle; the ticket was busy
+    rt._wake_event.clear()
+
+    release.set()
+    await rt.wait_for_advances()
+
+    assert rt._wake_event.is_set()
+
+
+async def test_a_stage_no_cycle_found_busy_does_not_wake_the_loop():
+    """Waiting states (PR review, an approval) end at once every cycle: a wake from each would spin the loop."""
+    async def advance(ws):
+        pass
+
+    rt = _runtime(advance, [_ws("T-1", Stage.PR_REVIEW)])
+    await rt.poll_cycle()
+    await rt.wait_for_advances()
+
+    assert not rt._wake_event.is_set()

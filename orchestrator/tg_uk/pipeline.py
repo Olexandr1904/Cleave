@@ -20,8 +20,8 @@ TEXTS: dict[str, str] = {
     "be too complex — consider raising `max_turns` or splitting the work.":
         "Агент вичерпав ліміт ходів (max-turns) на етапі {stage}; повтор відкладено до {when} UTC. Якщо це "
         "повториться, задача для агента, мабуть, надто складна — збільште `max_turns` або розбийте роботу на частини.",
-    "Transient agent failure at {stage}, deferred until {when} UTC. Reason: {reason}":
-        "Тимчасовий збій агента на етапі {stage}, відкладено до {when} UTC. Причина: {reason}",
+    "Transient failure at {stage}, deferred until {when} UTC. Reason: {reason}":
+        "Тимчасовий збій на етапі {stage}, відкладено до {when} UTC. Причина: {reason}",
     "no detail captured": "подробиць немає",
     "FAILED at {stage}.\n⚠️ Architecture mismatch (x86-64 aapt2 on non-x86 host).":
         "ЗБІЙ на етапі {stage}.\n⚠️ Невідповідність архітектури (x86-64 aapt2 на хості не x86).",

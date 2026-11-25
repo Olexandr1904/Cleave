@@ -71,6 +71,8 @@ class Runtime:
         self._active_workspaces: list[Workspace] = []
         # The task advancing each ticket, by ticket id, while its stage runs.
         self._advancing: dict[str, asyncio.Task] = {}
+        # Tickets a cycle wanted to start while their stage still ran.
+        self._found_busy: set[str] = set()
         self._recent_completions: deque[tuple[str, str, float]] = deque(maxlen=20)
         self._shutdown_event = asyncio.Event()
         self._wake_event = asyncio.Event()
@@ -206,6 +208,7 @@ class Runtime:
         """Advance `ws` in a task of its own, unless a stage of it is still running."""
         key = ws.state.ticket_id
         if key in self._advancing:
+            self._found_busy.add(key)
             return
         task = asyncio.create_task(self._advance_one(ws))
         self._advancing[key] = task
@@ -213,6 +216,12 @@ class Runtime:
         def _ended(t: asyncio.Task) -> None:
             if self._advancing.get(key) is t:
                 del self._advancing[key]
+            # A cycle wanted it while it ran (a Retry pressed during the stage's last Telegram send, or its next
+            # stage due): start that now, not after the poll interval. A stage no cycle found busy wakes nothing,
+            # or waiting states, which end at once every cycle, would spin the loop.
+            if key in self._found_busy:
+                self._found_busy.discard(key)
+                self.wake()
 
         task.add_done_callback(_ended)
 

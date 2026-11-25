@@ -232,4 +232,13 @@ A shutdown still lets the running stages end (`wait_for_advances`).
 with a Telegram message naming the line; the third time in a row it goes to the operator as any failed push does,
 and a Retry then gets three more tries. GitHub's storage refused three tickets' packs within eleven seconds; each
 stopped BLOCKED, and the same push went through untouched once GitHub was back. A push a hook refused still goes to
-the operator at once.
+the operator at once. Only git's own lines count (`error:`, `fatal:`, `remote:`, `send-pack:`, `! [remote
+rejected]`): the error carries a pre-push hook's output too, where a failing test may say "Connection refused" about
+the app. `RPC failed` counts with an HTTP 5xx or a curl transport code only (an HTTP 413 pack never goes through). A
+push that goes through, or stops for any other reason, starts the streak again.
+
+After the review (same day): a ticket that a cycle found busy wakes the loop when its stage ends, so a Retry pressed
+during a stage's last Telegram send starts at once rather than after the poll interval (a stage no cycle found busy
+wakes nothing, or waiting states would spin the loop); a new ticket's clone runs in a thread (`ingest.py`), since
+other tickets' stages now run while a cycle takes it in; and the deferral message says "Transient failure at
+<stage>", not "Transient agent failure", since no agent ran for a push or a gate timeout.

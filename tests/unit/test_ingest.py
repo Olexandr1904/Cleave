@@ -198,3 +198,35 @@ async def test_analyze_refuses_when_paused_globally():
     assert result == {"valid": [], "invalid": [
         'ACME-1: tickets are paused globally — send "tickets start"']}
     create.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_the_clone_of_a_new_ticket_runs_off_the_event_loop():
+    """Other tickets' stages run while a cycle takes in a new ticket: a clone of minutes on the loop would stop them
+    reading their agents' output while their wall clocks count."""
+    import threading
+    from unittest.mock import patch
+    from config.schemas import RepoConfig, RepoInfo, TrackerConfig, TrelloConfig
+    from integrations.base.tracker import TicketData
+    from orchestrator.ingest import create_workspace_for_ticket
+    from orchestrator.ticket_prioritizer import PrioritizedTicket
+
+    ticket = TicketData(id="T-9", url="https://trello.com/c/T-9", summary="Card", description="body",
+                        labels=["ai-pipeline"], attachments=[])
+    repo = RepoConfig(repo=RepoInfo(id="main", name="main"), tracker_label="ai-pipeline",
+                      tracker=TrackerConfig(provider="trello", trello=TrelloConfig(api_key="k", token="t", board_id="b")))
+    ws_mock = MagicMock()
+    ws_mock.state.ticket_id, ws_mock.state.model, ws_mock.state.branch = "T-9", "", None
+    ws_mock.meta_dir.__truediv__ = lambda self, other: MagicMock()
+    cloned_on: list[threading.Thread] = []
+    wsm = MagicMock()
+    wsm.create.side_effect = lambda **kw: cloned_on.append(threading.current_thread()) or ws_mock
+
+    with patch("orchestrator.ingest.refetch_ticket_data", new=AsyncMock()), \
+         patch("orchestrator.ingest.resolve_ticket_model", return_value=MagicMock(model="m", warning=None)):
+        await create_workspace_for_ticket(
+            PrioritizedTicket(ticket=ticket, project_id="p", repo_id="main"), "p", repo,
+            workspace_manager=wsm, tracker=AsyncMock(), default_model_provider=lambda: "m", repo_vcs={}, notifier=None,
+        )
+
+    assert cloned_on and cloned_on[0] is not threading.main_thread()

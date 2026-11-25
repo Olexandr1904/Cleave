@@ -43,7 +43,7 @@ def _ws(tmp_path):
     return ws
 
 
-async def _push(ws, error, deferred):
+async def _push(ws, error, deferred, *, success=False):
     with patch("orchestrator.pipeline.action_stage.stage_verifier") as sv, \
          patch("orchestrator.pipeline.action_stage.handle_escalate", new=AsyncMock()) as escalate:
         sv.capture_stage_start = MagicMock(return_value="abc123")
@@ -51,7 +51,7 @@ async def _push(ws, error, deferred):
             ws, "push", SimpleNamespace(action="push_and_open_pr"),
             workflow=None, notifier=None, mode_handler=None, get_chat_id=lambda: "", dry_run=False, event_bus=None,
             action_push_and_open_pr=AsyncMock(return_value=ActionResult(
-                success=False, next_state="", error=error, metadata={})),
+                success=success, next_state=Stage.PR_REVIEW if success else "", error=error or "", metadata={})),
             action_fetch_pr_comments=AsyncMock(), action_finalize=AsyncMock(), advance_to_stage_fn=MagicMock(),
             on_ticket_done_fn=AsyncMock(), build_gate_summary_fn=MagicMock(), notify_deferred_fn=deferred,
         )
@@ -109,3 +109,65 @@ async def test_a_push_the_hook_refused_still_goes_to_the_operator(tmp_path):
     escalate.assert_awaited_once()
     deferred.assert_not_awaited()
     assert ws.state.current_state == Stage.PUSHED
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("error", [
+    "Git command failed: git push\nfatal: unable to access 'https://github.com/o/r.git/': Could not resolve host: github.com",
+    "Git command failed: git push\nerror: RPC failed; HTTP 500 curl 22 The requested URL returned error: 500\n"
+    "fatal: the remote end hung up unexpectedly",
+    "Git command failed: git push\nerror: RPC failed; curl 56 Recv failure: Connection reset by peer\n"
+    "send-pack: unexpected disconnect while reading sideband packet\nfatal: the remote end hung up unexpectedly",
+])
+async def test_git_saying_the_forge_or_the_network_failed_defers(tmp_path, error):
+    ws, deferred = _ws(tmp_path), AsyncMock()
+
+    escalate = await _push(ws, error, deferred)
+
+    deferred.assert_awaited_once()
+    escalate.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("error", [
+    # A pre-push hook's own output: a failing test of the app's network code, not the push.
+    "Git command failed: git push\n    Caused by: java.net.ConnectException: Connection refused\n"
+    "FAILURE: Build failed with an exception.",
+    "Git command failed: git push\nRetryPolicyTest > maps HTTP 503 to retry() FAILED",
+    # A pack the forge will never take, however often it is sent.
+    "Git command failed: git push\nerror: RPC failed; HTTP 413 curl 22 The requested URL returned error: 413\n"
+    "fatal: the remote end hung up unexpectedly",
+])
+async def test_a_failure_git_does_not_blame_on_the_forge_goes_to_the_operator(tmp_path, error):
+    ws, deferred = _ws(tmp_path), AsyncMock()
+
+    escalate = await _push(ws, error, deferred)
+
+    escalate.assert_awaited_once()
+    deferred.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_a_push_stopped_for_another_reason_starts_the_streak_again(tmp_path):
+    ws, deferred = _ws(tmp_path), AsyncMock()
+
+    for error in (FORGE_ERROR, FORGE_ERROR, HOOK_ERROR, FORGE_ERROR):
+        ws.state.current_state = Stage.PUSHED
+        await _push(ws, error, deferred)
+
+    assert deferred.await_count == 3
+    assert ws.state.current_state == Stage.DEFERRED
+
+
+@pytest.mark.asyncio
+async def test_a_push_that_goes_through_ends_the_streak(tmp_path):
+    ws, deferred = _ws(tmp_path), AsyncMock()
+
+    for error in (FORGE_ERROR, FORGE_ERROR):
+        ws.state.current_state = Stage.PUSHED
+        await _push(ws, error, deferred)
+    ws.state.current_state = Stage.PUSHED
+    with patch("orchestrator.pipeline.action_stage.get_next_stage", return_value=None):
+        await _push(ws, None, deferred, success=True)
+
+    assert (ws.state.transient_error, ws.state.transient_count) == (None, 0)

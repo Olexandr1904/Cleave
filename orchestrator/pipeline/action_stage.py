@@ -21,20 +21,30 @@ logger = logging.getLogger(__name__)
 # through once the forge is back. GitHub's storage refused three tickets' packs within eleven seconds
 # ("remote unpack failed: index-pack failed"), and each ticket stopped for the operator.
 _FORGE_FAILED = re.compile(
-    r"remote unpack failed|index-pack failed|RPC failed|returned error: 5\d\d|HTTP 5\d\d"
-    r"|Could not resolve host|Connection (?:reset|refused|timed out)|Operation timed out"
-    r"|remote end hung up unexpectedly|early EOF|Internal Server Error|Service Unavailable|Bad Gateway",
+    r"remote unpack failed|index-pack failed|RPC failed; (?:HTTP 5\d\d|curl \d+)|returned error: 5\d\d"
+    r"|Could not resolve host|Failed to connect|Connection (?:reset|refused|timed out)|Operation timed out"
+    r"|Internal Server Error|Service Unavailable|Bad Gateway",
     re.IGNORECASE,
 )
+# Only git's own lines count: the error carries a pre-push hook's output too, where a failing test of the app's
+# network code says "Connection refused" or "HTTP 503" about the branch, not the push.
+_GIT_LINE = re.compile(r"^\s*(?:error|fatal|remote|send-pack):|^\s*! \[remote rejected\]")
 FORGE_RETRY_DELAY = timedelta(minutes=15)
+_FORGE_STREAK = "the forge failed to take the push"
 
 
 def _forge_failure(error: str | None) -> str:
-    """The line of a failed push that says the forge failed to take it, or "" if none does."""
+    """The line of a failed push where git says the forge failed to take it, or "" if none does."""
     for line in (error or "").splitlines():
-        if _FORGE_FAILED.search(line):
+        if _GIT_LINE.match(line) and _FORGE_FAILED.search(line):
             return line.strip()
     return ""
+
+
+def _end_forge_streak(workspace: Workspace, stage_id: str) -> None:
+    """A push that went through, or stopped for another reason, starts the forge's streak again."""
+    if getattr(workspace.state, "transient_error", None) == f"{stage_id}: {_FORGE_STREAK}":
+        workspace.update_state(transient_error=None, transient_count=0)
 
 
 async def handle_action_stage(
@@ -114,16 +124,17 @@ async def handle_action_stage(
             if forge_failure and notify_deferred_fn is not None:
                 # One streak whatever the git command line was: a hook that fails for the host's reasons makes the
                 # push go again with --no-verify, and alternating first lines would never reach the limit.
-                if not _transient_repeats(workspace, stage_id, "the forge failed to take the push"):
+                if not _transient_repeats(workspace, stage_id, _FORGE_STREAK):
                     rollback_iteration(workspace, stage_id)
                     retry_at = datetime.now(timezone.utc) + FORGE_RETRY_DELAY
-                    reason = f"the forge failed to take the push: {forge_failure}"
+                    reason = f"{_FORGE_STREAK}: {forge_failure}"
                     _log_pipeline(workspace, f"DEFERRED — {reason}; retry at {retry_at.isoformat(timespec='seconds')}")
                     workspace.transition(Stage.DEFERRED, retry_at=retry_at.isoformat())
                     await notify_deferred_fn(workspace, retry_at, reason=reason, quota=False)
                     return
-                # The same failure again and again: the operator's to look at, and a Retry gets three more tries.
-                workspace.update_state(transient_error=None, transient_count=0)
+            # Escalated: the same forge failure again and again, or a failure of another kind. Either way a Retry
+            # gets three more tries.
+            _end_forge_streak(workspace, stage_id)
             # PR creation failures need operator attention — escalate so a
             # Telegram message is sent and the ticket can be recovered.
             workspace.update_state(error=result.error)
@@ -138,6 +149,9 @@ async def handle_action_stage(
             workspace.transition(Stage.FAILED)
             workspace.update_state(error=result.error)
         return
+
+    if action == "push_and_open_pr":
+        _end_forge_streak(workspace, stage_id)
 
     verify_result = stage_verifier.verify(stage_id, workspace, stage_start_commit)
     if not verify_result.ok:

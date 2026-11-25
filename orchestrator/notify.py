@@ -104,7 +104,7 @@ async def notify_deferred(
     else:
         short = detail(reason.splitlines()[0][:200]) if reason else tr("no detail captured")
         headline = tr(
-            "Transient agent failure at {stage}, "
+            "Transient failure at {stage}, "
             "deferred until {when} UTC. "
             "Reason: {reason}",
             stage=stage, when=retry_at.strftime("%H:%M"), reason=short,

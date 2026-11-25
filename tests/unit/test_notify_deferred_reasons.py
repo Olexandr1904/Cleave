@@ -152,8 +152,23 @@ async def test_usage_limit_words_in_a_transient_failure_are_not_a_quota_hit():
 
     msg = notifier.send_message.call_args.args[1]
     assert "Usage limit until" not in msg
-    assert "Transient agent failure" in msg
+    assert "Transient failure at" in msg
     assert window is None
+
+
+@pytest.mark.asyncio
+async def test_a_deferral_no_agent_caused_does_not_blame_an_agent():
+    """A push the forge failed to take, or a quality gate at its timeout, defers a ticket too."""
+    notifier = _notifier()
+
+    await notify_deferred(
+        notifier, "chat-1", _make_workspace(), _future(),
+        "the forge failed to take the push: error: remote unpack failed: index-pack failed", quota=False, window=None,
+    )
+
+    msg = notifier.send_message.call_args.args[1]
+    assert "agent" not in msg.lower()
+    assert "remote unpack failed" in msg
 
 
 @pytest.mark.asyncio

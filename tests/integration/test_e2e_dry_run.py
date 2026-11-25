@@ -83,16 +83,22 @@ def orchestrator(mock_llm, workspace, tmp_path):
     return orch
 
 
+async def _cycle(orch) -> None:
+    """One cycle and the stages it started: a cycle no longer waits for them."""
+    await orch.poll_cycle()
+    await orch._runtime.wait_for_advances()
+
+
 class TestE2EDryRun:
     async def test_dry_run_advances_stages(self, orchestrator, workspace):
         """AC1: Dry run advances through stages without executing agents."""
         # Run one poll cycle
-        await orchestrator.poll_cycle()
+        await _cycle(orchestrator)
         # In dry run, ANALYSIS stage advances to DEV
         assert workspace.state.current_state == "DEV"
 
         # Run another cycle
-        await orchestrator.poll_cycle()
+        await _cycle(orchestrator)
         assert workspace.state.current_state == "SCOPE_CHECK"
 
     async def test_dry_run_full_pipeline(self, orchestrator, workspace):
@@ -101,7 +107,7 @@ class TestE2EDryRun:
 
         # Run enough cycles to complete the pipeline
         for _ in range(20):
-            await orchestrator.poll_cycle()
+            await _cycle(orchestrator)
             stage = workspace.state.current_state
             if stage not in stages_visited:
                 stages_visited.append(stage)
@@ -117,7 +123,7 @@ class TestE2EDryRun:
     async def test_dry_run_no_llm_calls(self, orchestrator, workspace, mock_llm):
         """AC1: Dry run does not call the LLM."""
         for _ in range(10):
-            await orchestrator.poll_cycle()
+            await _cycle(orchestrator)
             if workspace.state.current_state in ("DONE", "FAILED", "ARCHIVED"):
                 break
 
@@ -146,7 +152,7 @@ class TestE2EDryRun:
         orchestrator._active_workspaces.append(ws2)
 
         # Both workspaces should advance independently
-        await orchestrator.poll_cycle()
+        await _cycle(orchestrator)
 
         assert workspace.state.current_state == "DEV"
         assert ws2.state.current_state == "DEV"

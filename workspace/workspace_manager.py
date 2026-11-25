@@ -232,9 +232,8 @@ class WorkspaceManager:
         """Delete only the source/ directory (after merge).
 
         Preserves meta/, logs/, and state.json for history. Note that
-        pipeline reports live inside source/ (at `ai_pipeline/<ticket>/`),
-        so they are dropped from disk here — but they are committed to the
-        repo and recoverable via git.
+        pipeline reports live inside source/ (at `ai_pipeline/<ticket>/`)
+        and are not in git, so they go with it.
         """
         source_dir = workspace.source_dir
         if source_dir.exists():
@@ -298,6 +297,7 @@ class WorkspaceManager:
             raise WorkspaceError(f"Git operation timed out after {SUBPROCESS_TIMEOUT}s")
 
         (source_dir / "reports").mkdir(parents=True, exist_ok=True)
+        _exclude_pipeline_artifacts(source_dir)
         logger.info(
             "Reset source for %s — checked out %s",
             workspace.state.ticket_id,

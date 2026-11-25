@@ -134,10 +134,10 @@ class Workspace:
     @property
     def reports_dir(self) -> Path:
         # Pipeline artifacts live inside the source clone at
-        # `ai_pipeline/<ticket_id>/` so they are committed and pushed alongside
-        # the code changes. Across tickets, each ticket's branch contributes
-        # its own subdirectory, so the repo accumulates a per-ticket archive
-        # of agent outputs over time.
+        # `ai_pipeline/<ticket_id>/` so agents reach them by a path relative to
+        # their cwd. They are never part of the branch: the clone's
+        # .git/info/exclude ignores them, and drop_pipeline_reports takes out
+        # any an agent committed before a push.
         path = self._root / "source" / "ai_pipeline" / self.state.ticket_id
         path.mkdir(parents=True, exist_ok=True)
         return path

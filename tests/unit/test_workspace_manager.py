@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import shutil
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from unittest.mock import patch, MagicMock
@@ -453,6 +454,18 @@ class TestPipelineArtifactsExcluded:
 
         exclude = ws.source_dir / ".git" / "info" / "exclude"
         assert exclude.exists()
+        assert "ai_pipeline/" in exclude.read_text()
+
+    @patch("workspace.workspace_manager.subprocess.run")
+    def test_a_rerun_clone_excludes_pipeline_artifacts_too(self, mock_run, manager):
+        """Rerun re-clones the source; without the exclude its agents' reports were one `git add -A` from the PR."""
+        mock_run.return_value = MagicMock(returncode=0, stderr="")
+        ws = manager.create("acme", "acme-mobile", "ACME-202", "git@github.com:org/repo.git")
+        shutil.rmtree(ws.source_dir)
+
+        manager.reset_source(ws, "https://git.example.com/repo.git", "develop")
+
+        exclude = ws.source_dir / ".git" / "info" / "exclude"
         assert "ai_pipeline/" in exclude.read_text()
 
     @patch("workspace.workspace_manager.subprocess.run")

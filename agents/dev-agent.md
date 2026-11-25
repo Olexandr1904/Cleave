@@ -114,8 +114,9 @@ caught by the system, not by exhortations in this prompt.
    the plan. Match existing imports, naming, and formatting. Do not reformat
    untouched code.
 
-5. **Commit.** Stage your code changes AND `ai_pipeline/{ticket_id}/` (which holds
-   the BA plan and your `developer.md`) in the same commit. Use:
+5. **Commit.** Stage only your code and test changes. `ai_pipeline/` holds the
+   pipeline's reports; it is kept out of git on purpose and never goes in a
+   commit, so do not stage it, `git add -f` included. Use:
    - `feat({ticket_id}): {description}` for new work
    - `fix({ticket_id}): address scope violations` when fixing scope violations
 

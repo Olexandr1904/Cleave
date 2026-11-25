@@ -1,14 +1,17 @@
 """push_and_open_pr action and its git helpers.
 
-Commits any uncommitted pipeline artifacts, ensures the feature branch has
-commits, squashes feature commits on the first push, pushes to remote,
-opens (or updates) the PR.
+Ensures the feature branch has commits, takes the pipeline's reports back out
+of it, squashes feature commits on the first push, pushes to remote, opens
+(or updates) the PR.
 """
 from __future__ import annotations
 
 import logging
+import os
 import subprocess
+import tempfile
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any
 
 from config.schemas import RepoConfig
@@ -27,6 +30,65 @@ logger = logging.getLogger(__name__)
 
 def _now() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M")
+
+
+# Where agents write their reports inside the clone (Workspace.reports_dir).
+_REPORTS_DIR = "ai_pipeline/"
+
+
+def _merge_base(source: str, default_branch: str) -> str:
+    """The commit the branch forked from: against origin/<default_branch>, else origin/HEAD; "" if neither resolves."""
+    for ref in (f"origin/{default_branch}", "origin/HEAD"):
+        result = subprocess.run(["git", "-C", source, "merge-base", ref, "HEAD"],
+                                capture_output=True, text=True, timeout=10)
+        if result.returncode == 0:
+            return result.stdout.strip()
+    return ""
+
+
+def drop_pipeline_reports(workspace: Workspace, repo_config: RepoConfig) -> list[str]:
+    """Take the branch's own changes under ai_pipeline/ back out of it, in a commit of its own; return their paths.
+
+    The reports are the pipeline's paperwork, not the change: in a PR they were hundreds of lines nobody reviews.
+    .git/info/exclude keeps them untracked, but an agent can still `git add -f` them, and the dev agent's prompt once
+    told it to. The commit is built on a temporary index so nothing else staged in the clone goes into it. Files on
+    disk are not touched, and reports the base branch already holds keep the base's content.
+    """
+    source = str(workspace.source_dir)
+    env = {**os.environ, "GIT_LITERAL_PATHSPECS": "1"}
+
+    def git(*args: str, index: str = "") -> str:
+        run_env = {**env, "GIT_INDEX_FILE": index} if index else env
+        return subprocess.run(["git", "-C", source, *args], capture_output=True, text=True, timeout=30,
+                              check=True, env=run_env).stdout
+
+    try:
+        base = _merge_base(source, repo_config.vcs.default_branch)
+        if not base:
+            return []
+        paths = [p for p in git("diff", "-z", "--name-only", base, "HEAD", "--", _REPORTS_DIR).split("\0") if p]
+        if not paths:
+            return []
+        head = git("rev-parse", "HEAD").strip()
+        with tempfile.TemporaryDirectory() as tmp:
+            index = str(Path(tmp) / "index")
+            git("read-tree", "HEAD", index=index)
+            git("reset", "-q", base, "--", *paths, index=index)
+            tree = git("write-tree", index=index).strip()
+        commit = git(
+            "-c", f"user.email={repo_config.git.commit_author_email}",
+            "-c", f"user.name={repo_config.git.commit_author_name}",
+            "commit-tree", tree, "-p", head,
+            "-m", f"chore({workspace.state.ticket_id}): keep pipeline reports out of the PR",
+        ).strip()
+        git("update-ref", "HEAD", commit, head)
+        git("reset", "-q", "HEAD", "--", *paths)
+    except (subprocess.CalledProcessError, subprocess.TimeoutExpired, OSError) as e:
+        detail = getattr(e, "stderr", "") or e
+        logger.warning("Could not take pipeline reports out of %s: %s", workspace.state.ticket_id, detail)
+        return []
+    logger.info("Took %d pipeline report(s) out of %s", len(paths), workspace.state.ticket_id)
+    return paths
 
 
 def ensure_branch_has_commits(
@@ -216,6 +278,7 @@ async def action_push_and_open_pr(
             try:
                 branch = state.branch
                 if branch:
+                    drop_pipeline_reports(workspace, repo_config)
                     skip_hooks = bool(getattr(repo_config.vcs, "skip_pre_push_hook", False))
                     await vcs.push(
                         str(workspace.source_dir), branch,
@@ -292,6 +355,8 @@ async def action_push_and_open_pr(
     # the next push opens an empty PR (GitHub 422 "No commits between
     # develop and feature/...") and operators have to commit by hand.
     ensure_branch_has_commits(workspace, repo_config, event_bus=event_bus)
+
+    drop_pipeline_reports(workspace, repo_config)
 
     # Squash commits into one clean commit before the first PR
     squash_feature_commits(workspace, repo_config)

@@ -80,9 +80,9 @@ class TestWorkspace:
         assert workspace.logs_dir.name == "logs"
 
     def test_reports_dir_lives_in_source_ai_pipeline_with_ticket(self, workspace):
-        """Reports are tracked inside the cloned repo at
-        `source/ai_pipeline/<ticket_id>/` so they get committed and pushed
-        with the code changes."""
+        """Reports live inside the cloned repo at
+        `source/ai_pipeline/<ticket_id>/`, where agents reach them by a
+        relative path; they are kept out of the branch."""
         path = workspace.reports_dir
         assert path.is_dir()
         assert path.relative_to(workspace.source_dir) == Path("ai_pipeline") / "TEST-123"

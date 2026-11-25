@@ -118,6 +118,11 @@ async def test_a_push_the_hook_refused_still_goes_to_the_operator(tmp_path):
     "fatal: the remote end hung up unexpectedly",
     "Git command failed: git push\nerror: RPC failed; curl 56 Recv failure: Connection reset by peer\n"
     "send-pack: unexpected disconnect while reading sideband packet\nfatal: the remote end hung up unexpectedly",
+    # GitHub took the pack and failed to update the ref, saying no more (a second ticket, 34 minutes later).
+    "Git command failed: git push --no-verify -u origin feature/T-1\nremote: \n"
+    "remote: Create a pull request for 'feature/T-1' on GitHub by visiting:        \n"
+    "To https://github.com/o/r.git\n ! [remote rejected] feature/T-1 -> feature/T-1 (failed)\n"
+    "error: failed to push some refs to 'https://github.com/o/r.git'",
 ])
 async def test_git_saying_the_forge_or_the_network_failed_defers(tmp_path, error):
     ws, deferred = _ws(tmp_path), AsyncMock()
@@ -134,6 +139,10 @@ async def test_git_saying_the_forge_or_the_network_failed_defers(tmp_path, error
     "Git command failed: git push\n    Caused by: java.net.ConnectException: Connection refused\n"
     "FAILURE: Build failed with an exception.",
     "Git command failed: git push\nRetryPolicyTest > maps HTTP 503 to retry() FAILED",
+    # The forge's rules refused it: sending it again changes nothing.
+    "Git command failed: git push\nremote: error: GH013: Repository rule violations found for refs/heads/feature/T-1.\n"
+    " ! [remote rejected] feature/T-1 -> feature/T-1 (push declined due to repository rule violations)\n"
+    "error: failed to push some refs to 'https://github.com/o/r.git'",
     # A pack the forge will never take, however often it is sent.
     "Git command failed: git push\nerror: RPC failed; HTTP 413 curl 22 The requested URL returned error: 413\n"
     "fatal: the remote end hung up unexpectedly",

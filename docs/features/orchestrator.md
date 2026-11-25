@@ -234,7 +234,9 @@ and a Retry then gets three more tries. GitHub's storage refused three tickets' 
 stopped BLOCKED, and the same push went through untouched once GitHub was back. A push a hook refused still goes to
 the operator at once. Only git's own lines count (`error:`, `fatal:`, `remote:`, `send-pack:`, `! [remote
 rejected]`): the error carries a pre-push hook's output too, where a failing test may say "Connection refused" about
-the app. `RPC failed` counts with an HTTP 5xx or a curl transport code only (an HTTP 413 pack never goes through). A
+the app. `RPC failed` counts with an HTTP 5xx or a curl transport code only (an HTTP 413 pack never goes through), and so
+does a bare `! [remote rejected] … (failed)`: GitHub took the pack and failed to update the ref (a second ticket hit
+it 34 minutes after the first failures), while its rules always give their reason. A
 push that goes through, or stops for any other reason, starts the streak again.
 
 After the review (same day): a ticket that a cycle found busy wakes the loop when its stage ends, so a Retry pressed

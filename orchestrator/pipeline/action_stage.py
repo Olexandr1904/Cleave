@@ -23,7 +23,9 @@ logger = logging.getLogger(__name__)
 _FORGE_FAILED = re.compile(
     r"remote unpack failed|index-pack failed|RPC failed; (?:HTTP 5\d\d|curl \d+)|returned error: 5\d\d"
     r"|Could not resolve host|Failed to connect|Connection (?:reset|refused|timed out)|Operation timed out"
-    r"|Internal Server Error|Service Unavailable|Bad Gateway",
+    r"|Internal Server Error|Service Unavailable|Bad Gateway"
+    # The forge took the pack and failed to update the ref, saying no more: its rules would give their reason.
+    r"|\[remote rejected\] .+ \(failed\)\s*$",
     re.IGNORECASE,
 )
 # Only git's own lines count: the error carries a pre-push hook's output too, where a failing test of the app's

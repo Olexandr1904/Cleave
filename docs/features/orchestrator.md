@@ -199,4 +199,8 @@ at the same stage, the ticket goes to FAILED with "The same error 3 times in a r
 of being deferred again; a deterministic failure the CLI reports like a transient one ("Session ID … is already in
 use") was deferred ten times in an hour. A usage limit neither counts nor breaks the count; a run that succeeds, a
 different error or another stage starts it again, and so does the failure itself (the operator's Retry gets three
-more tries).
+more tries). Running out of time is one error whichever way it happened (`<stage>: out of time`: a session at its
+wall clock, deferred 30 minutes; a hard quality gate at its timeout, which defers the ticket 30 minutes without
+counting the attempt) and stops the ticket the second time in a row; at QA the agent's successful run does not
+end that streak (the gates may still time out after it), the gates' own run does. A block or a failure for any
+other reason starts every streak again.

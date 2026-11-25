@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -219,6 +220,80 @@ async def test_qa_gate_that_could_not_run_blocks_with_the_gate_named(orchestrato
     assert "gate `tests` could not run" in ws.state.error
     assert "./gradlew :app:testDebugUnitTest" in ws.state.error
     assert "is ambiguous in project" in ws.state.error
+
+
+def _gate_that_timed_out(name: str, hard: bool = True) -> GateResult:
+    return GateResult(name=name, command="./gradlew :app:testGlobalDebugUnitTest", exit_code=124, hard_gate=hard,
+                      output_tail=f"gate '{name}' timed out after 3600s")
+
+
+async def _qa_with_gates(orch, ws, gates, *, routed=False):
+    (ws.reports_dir / "qa-agent-output.md").write_text("## Status: PASS")
+    orch._agent_runtime.execute = AsyncMock(return_value=AgentResult(
+        agent_id="qa-agent", success=True, output="## Status: PASS",
+    ))
+    orch._get_repo_config = MagicMock(return_value=MagicMock())
+    stage_def = MagicMock()
+    stage_def.agent = "qa-agent"
+    stage_def.max_iterations = 2
+    with patch("orchestrator.pipeline.agent_stage.run_gates", return_value=gates), \
+            patch("orchestrator.pipeline.agent_stage.get_next_stage") as next_stage:
+        await orch._handle_agent_stage(ws, "qa", stage_def)
+    if not routed:  # a gate that could not run sends the ticket nowhere: deferred or blocked
+        next_stage.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_qa_gate_that_timed_out_defers_the_ticket_for_a_retry(orchestrator_with_stubs, tmp_path):
+    """A gate out of time on a host slowed by other builds found no defect: the ticket is retried later, as a
+    transient agent error is, and the attempt is not counted."""
+    ws = _make_workspace(tmp_path, "ACME-23", state=Stage.QA)
+    before = datetime.now(timezone.utc)
+    await _qa_with_gates(orchestrator_with_stubs, ws, [_gate_that_timed_out("tests"), _gate("build", 0)])
+    assert ws.state.current_state == Stage.DEFERRED
+    wait = datetime.fromisoformat(ws.state.retry_at) - before
+    assert timedelta(minutes=29) < wait < timedelta(minutes=31)  # a busy host needs time to clear
+    assert ws.state.stage_iterations.get("qa", 0) == 0
+
+
+@pytest.mark.asyncio
+async def test_a_gate_that_times_out_twice_in_a_row_blocks(orchestrator_with_stubs, tmp_path):
+    ws = _make_workspace(tmp_path, "ACME-24", state=Stage.QA)
+    for _ in range(2):
+        ws.state.current_state = Stage.QA
+        ws.save_state()
+        await _qa_with_gates(orchestrator_with_stubs, ws, [_gate_that_timed_out("tests"), _gate("build", 0)])
+    assert ws.state.current_state == Stage.BLOCKED
+    assert "gate `tests` could not run (timed out)" in ws.state.error
+    assert (ws.state.transient_error, ws.state.transient_count) == (None, 0)  # the operator's Retry starts afresh
+
+
+@pytest.mark.asyncio
+async def test_a_session_out_of_time_then_a_gate_out_of_time_stops_the_ticket(orchestrator_with_stubs, tmp_path):
+    """On a busy host the two alternate: one streak, else neither ever repeats and the ticket loops for hours."""
+    orch = orchestrator_with_stubs
+    ws = _make_workspace(tmp_path, "ACME-27", state=Stage.QA)
+    orch._agent_runtime.execute = AsyncMock(return_value=AgentResult(
+        agent_id="qa-agent", success=False, output="", error="wall_clock_budget_exceeded (14400s)",
+        failure_kind="transient", retry_at=datetime.now(timezone.utc) + timedelta(minutes=30),
+    ))
+    stage_def = MagicMock()
+    stage_def.agent = "qa-agent"
+    stage_def.max_iterations = 2
+    await orch._handle_agent_stage(ws, "qa", stage_def)
+    assert ws.state.current_state == Stage.DEFERRED
+    ws.state.current_state = Stage.QA
+    ws.save_state()
+    await _qa_with_gates(orch, ws, [_gate_that_timed_out("tests")])
+    assert ws.state.current_state == Stage.BLOCKED
+
+
+@pytest.mark.asyncio
+async def test_a_gate_that_could_not_run_for_another_reason_still_blocks(orchestrator_with_stubs, tmp_path):
+    """A command the build tool refuses is the operator's to fix: a retry would refuse it again."""
+    ws = _make_workspace(tmp_path, "ACME-25", state=Stage.QA)
+    await _qa_with_gates(orchestrator_with_stubs, ws, [_gate_that_timed_out("tests"), _gate_that_could_not_run("lint")])
+    assert ws.state.current_state == Stage.BLOCKED
 
 
 @pytest.mark.asyncio
@@ -532,3 +607,16 @@ async def test_stage_tells_the_runtime_whether_its_session_is_resumed(tmp_path, 
     await _run_plan_review(ws, runtime, [], stage_def=stage_def)
 
     assert runtime.execute.call_args.kwargs["resumable"] is resumes
+
+
+@pytest.mark.asyncio
+async def test_gates_that_run_end_a_timeout_streak(orchestrator_with_stubs, tmp_path):
+    """A timeout, then the gates run: a later timeout starts a new streak, not the second of the old one."""
+    ws = _make_workspace(tmp_path, "ACME-26", state=Stage.QA)
+    for gates in ([_gate_that_timed_out("tests")], [_gate("tests", 1)], [_gate_that_timed_out("tests")]):
+        ws.state.current_state = Stage.QA
+        ws.save_state()
+        with patch("orchestrator.pipeline.agent_stage.handle_escalate", AsyncMock()):
+            await _qa_with_gates(orchestrator_with_stubs, ws, gates, routed=gates[0].exit_code == 1)
+    assert ws.state.current_state == Stage.DEFERRED
+    assert ws.state.transient_count == 1

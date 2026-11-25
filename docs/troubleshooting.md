@@ -119,6 +119,8 @@ The Event Log view is a complete record of orchestrator activity. Filter by `age
 | Bot ignores my messages | Allowlist (chat id mismatch — `/status` from a different chat won't work). Daemon log shows `tg_message_received` events from allowed chats only |
 | AAPT2 / Gradle cache corruption | Use the **🧹 Clear cache & retry** button on the FAILED card or in Telegram |
 | All agents fail with quota errors | DEFERRED auto-resume should kick in; if it doesn't, check Anthropic console quota usage |
+| Tickets deferred or failed with `wall_clock_budget_exceeded` or `gate … could not run (timed out)` | The host is slow: other builds on it (a self-hosted CI runner, say) or Spotlight indexing. Gradle commands that take 13 minutes on a quiet host take hours then. They retry after 30 minutes on their own |
+| A session killed `post_result_grace exceeded` while a build ran in its background | Cleave waits an hour (`BACKGROUND_TASK_GRACE_SECONDS`) for a background task after the model's last answer, 10 minutes without one; the stage's events log says how many background tasks ran |
 | Wizard validation fails | Live API check failed before writing config — credentials, scope, or unreachable host. The wizard tells you which |
 | Wizard setup step fails (SETUP_FAILED) | `.claude/settings.json` present? Stale daemon? See [Project-creation problems](#project-creation--daemon-restart-problems) |
 | A code/prompt edit didn't take effect | Restart the daemon — `pkill -f "main.py --config" && ./run.sh`. Watch for stale daemons on macOS |

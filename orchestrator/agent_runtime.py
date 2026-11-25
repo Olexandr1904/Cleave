@@ -28,6 +28,9 @@ except ImportError:
 
 logger = logging.getLogger(__name__)
 
+# A session killed at its wall clock is retried this much later: a host slowed by other builds needs time to clear.
+WALL_CLOCK_RETRY_DELAY = timedelta(minutes=30)
+
 # Conservative defaults. The previous 50-round value let runaway agents chew
 # enormous quota before tripping. Override per-agent via DefaultsConfig.
 DEFAULT_MAX_TOOL_ROUNDS = 25
@@ -599,16 +602,21 @@ class AgentRuntime:
             # detached after wait_for cancels the awaitable. cancel() is
             # async (it polls for exit and escalates to SIGKILL), so await it.
             await self.cancel(ticket_id)
+            retry_at = datetime.now(timezone.utc) + WALL_CLOCK_RETRY_DELAY
             logger.warning(
-                "Agent '%s' wall-clock budget exceeded (%ds), CLI killed",
-                agent_id, budget.wall_clock_seconds,
+                "Agent '%s' wall-clock budget exceeded (%ds), CLI killed; deferred until %s",
+                agent_id, budget.wall_clock_seconds, retry_at.isoformat(timespec="seconds"),
             )
+            # Out of time is no defect of the ticket: on a host slowed by other builds (a QA session ran the unit
+            # tests for hours) a later run may finish. Deferred like a transient CLI error; the stage's repeat
+            # limit for running out of time stops a ticket that runs out every time.
             return AgentResult(
                 agent_id=agent_id,
                 success=False,
                 output="",
                 error=f"wall_clock_budget_exceeded ({budget.wall_clock_seconds}s)",
-                failure_kind="permanent",
+                failure_kind="transient",
+                retry_at=retry_at,
             )
         finally:
             self.unregister_running(ticket_id)

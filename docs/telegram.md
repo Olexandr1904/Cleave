@@ -254,7 +254,7 @@ Cleave sends Telegram notifications in these situations:
 - **AWAITING_APPROVAL gate** (with Approve/Reject buttons)
 - **BLOCKED — agent question** (free-text reply expected)
 - **BLOCKED — verification failure** (e.g. dev-agent ran but never committed)
-- **DEFERRED** — three flavors: real quota exhausted, agent hit max-turns, transient agent failure (with the actual error head)
+- **DEFERRED** — real quota exhausted, agent hit max-turns, transient agent failure (with the actual error head), a session past its wall clock, or a hard quality gate that timed out (`gate `tests` could not run (timed out): …`). The last two retry after 30 minutes, as on a host slowed by other builds, and count as one: running out of time a second time in a row at a stage, either way, fails the ticket (a session) or blocks it (a gate). A gate that could not run for any other reason (a task the build tool does not know, out of memory) blocks at once: its command is yours to fix
 - **PR opened** (informational, with PR link)
 - **PR_REVIEW pending** (only in a repo where reviewer mode is off; with Review Complete + Show N unanswered buttons)
 - **PR review comments** (per-comment Fix / Won't Fix buttons)

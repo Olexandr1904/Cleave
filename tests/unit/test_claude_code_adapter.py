@@ -18,6 +18,7 @@ from integrations.llm.claude_code_adapter import (
     ClaudeCodeAdapter,
     QuotaExhaustedError,
     _drain_stream_json,
+    _handle_stream_event,
     _post_result_watchdog,
     _ProgressState,
 )
@@ -340,6 +341,111 @@ class TestWatchdogIdleStall:
                 timeout=2,
             )
         assert kill_signal.is_set()
+
+    async def test_a_background_task_keeps_the_session_past_the_grace(self):
+        # The model ended its turn waiting for a gradle build it ran in the background. The CLI delivers
+        # the build's end to the model, which goes on; killed 10 minutes after the result, it never did.
+        progress = _ProgressState()
+        progress.last_result_at = time.monotonic() - 10_000
+        progress.last_event_at = time.monotonic() - 10_000
+        progress.background_tasks = 1
+        stop = asyncio.Event()
+        kill_signal = asyncio.Event()
+
+        async def _stopper():
+            await asyncio.sleep(0.1)
+            stop.set()
+
+        with patch(
+            "integrations.llm.claude_code_adapter._WATCHDOG_POLL_SECONDS", 0.01
+        ):
+            await asyncio.gather(
+                _post_result_watchdog(
+                    progress, None, stop, kill_signal,
+                    grace_seconds=1, idle_stall_seconds=999_999, task_grace_seconds=999_999,
+                ),
+                _stopper(),
+            )
+        assert not kill_signal.is_set()
+
+    async def test_a_background_task_that_never_ends_is_killed_after_its_own_grace(self):
+        progress = _ProgressState()
+        progress.last_result_at = time.monotonic() - 10_000
+        progress.last_event_at = time.monotonic() - 10_000
+        progress.background_tasks = 1
+        stop = asyncio.Event()
+        kill_signal = asyncio.Event()
+
+        with patch(
+            "integrations.llm.claude_code_adapter._WATCHDOG_POLL_SECONDS", 0.01
+        ):
+            await asyncio.wait_for(
+                _post_result_watchdog(
+                    progress, None, stop, kill_signal,
+                    grace_seconds=999_999, idle_stall_seconds=999_999, task_grace_seconds=1,
+                ),
+                timeout=2,
+            )
+        assert kill_signal.is_set()
+
+    async def test_a_background_task_ends_near_the_deadline_with_the_cached_result(self):
+        # The wall clock's kill would throw the result away: a graceful kill keeps it.
+        progress = _ProgressState()
+        progress.started_at = time.monotonic() - 1000
+        progress.last_result_at = time.monotonic() - 5
+        progress.last_event_at = time.monotonic() - 5
+        progress.background_tasks = 1
+        stop = asyncio.Event()
+        kill_signal = asyncio.Event()
+
+        with patch(
+            "integrations.llm.claude_code_adapter._WATCHDOG_POLL_SECONDS", 0.01
+        ):
+            await asyncio.wait_for(
+                _post_result_watchdog(
+                    progress, None, stop, kill_signal,
+                    grace_seconds=999_999, idle_stall_seconds=999_999, task_grace_seconds=999_999,
+                    deadline_seconds=1050,
+                ),
+                timeout=2,
+            )
+        assert kill_signal.is_set()
+
+    async def test_a_background_task_far_from_the_deadline_keeps_the_session(self):
+        progress = _ProgressState()
+        progress.last_result_at = time.monotonic() - 5
+        progress.last_event_at = time.monotonic() - 5
+        progress.background_tasks = 1
+        stop = asyncio.Event()
+        kill_signal = asyncio.Event()
+
+        async def _stopper():
+            await asyncio.sleep(0.1)
+            stop.set()
+
+        with patch(
+            "integrations.llm.claude_code_adapter._WATCHDOG_POLL_SECONDS", 0.01
+        ):
+            await asyncio.gather(
+                _post_result_watchdog(
+                    progress, None, stop, kill_signal,
+                    grace_seconds=1, idle_stall_seconds=999_999, task_grace_seconds=999_999,
+                    deadline_seconds=14_400,
+                ),
+                _stopper(),
+            )
+        assert not kill_signal.is_set()
+
+    def test_the_stream_says_how_many_background_tasks_run(self):
+        progress = _ProgressState()
+        assert progress.background_tasks == 0
+        tasks = [{"task_id": "b1", "task_type": "local_bash"}, {"task_id": "b2", "task_type": "local_bash"}]
+        _handle_stream_event({"type": "system", "subtype": "background_tasks_changed", "tasks": tasks}, progress, None)
+        assert progress.background_tasks == 2
+        _handle_stream_event({"type": "system", "subtype": "background_tasks_changed", "tasks": []}, progress, None)
+        assert progress.background_tasks == 0
+        _handle_stream_event({"type": "system", "subtype": "background_tasks_changed"}, progress, None)
+        assert progress.background_tasks == 0
 
     async def test_midrun_stall_raises_instead_of_silent_success(self):
         # A hung run with no `result` event must surface as a RuntimeError,

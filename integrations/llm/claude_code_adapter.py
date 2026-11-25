@@ -583,6 +583,8 @@ class ClaudeCodeAdapter(LLMInterface):
                 progress, progress_log_path, stop_event, kill_signal,
                 grace_seconds=POST_RESULT_IDLE_GRACE_SECONDS,
                 idle_stall_seconds=IDLE_STALL_SECONDS,
+                task_grace_seconds=BACKGROUND_TASK_GRACE_SECONDS,
+                deadline_seconds=timeout,
             )
         )
         stdout_task = asyncio.create_task(
@@ -637,8 +639,8 @@ class ClaudeCodeAdapter(LLMInterface):
                 if graceful_idle:
                     _write_progress(
                         progress_log_path,
-                        f"graceful kill: post-result idle exceeded "
-                        f"{POST_RESULT_IDLE_GRACE_SECONDS}s. "
+                        f"graceful kill: post-result idle (background tasks "
+                        f"{progress.background_tasks}). "
                         f"turns_seen={progress.turns} tool_calls_seen={progress.tool_calls} "
                         f"events={progress.events_seen} "
                         f"last_event={progress.last_event_kind!r} "
@@ -854,6 +856,15 @@ HEARTBEAT_INTERVAL_SECONDS = 30
 # then terminate. Turns a 4 h timeout into a ~10 min graceful exit.
 POST_RESULT_IDLE_GRACE_SECONDS = 600
 
+# After a `result` event while the session still has a background task (a build the model ran in the background
+# and ended its turn waiting for), the grace before that kill. Why: a dev session ended its turn on "the build is
+# still running, I'll continue when it finishes"; the CLI would have handed the build's end to the model, but the
+# 10-minute grace killed it first on a host slowed by other builds. An hour, as long as a quality gate may run.
+BACKGROUND_TASK_GRACE_SECONDS = 3600
+# The wall clock still ends the session, and its kill throws the cached result away: a session waiting on a
+# background task is killed gracefully this long before its deadline instead, as the 10-minute grace would have.
+_DEADLINE_MARGIN_SECONDS = 120
+
 # Before any `result` event, if no event arrives within this many seconds the
 # run is stalled mid-flight and we force-kill it. Why: observed on ACME-13824 —
 # the CLI issued a tool call and hung with no terminal `result`, so the
@@ -888,7 +899,7 @@ class _ProgressState:
         "last_event_kind", "last_tool", "last_text",
         "stdout_tail", "stderr_tail", "final_event",
         "input_tokens_running", "output_tokens_running",
-        "last_rate_limit_info",
+        "last_rate_limit_info", "background_tasks",
     )
 
     def __init__(self) -> None:
@@ -908,6 +919,7 @@ class _ProgressState:
         self.input_tokens_running = 0
         self.output_tokens_running = 0
         self.last_rate_limit_info: dict | None = None
+        self.background_tasks = 0  # the session's running background tasks, as its last background_tasks_changed says
 
     def elapsed(self) -> float:
         return time.monotonic() - self.started_at
@@ -965,12 +977,18 @@ async def _post_result_watchdog(
     kill_signal: asyncio.Event,
     grace_seconds: int = POST_RESULT_IDLE_GRACE_SECONDS,
     idle_stall_seconds: int = IDLE_STALL_SECONDS,
+    task_grace_seconds: int = BACKGROUND_TASK_GRACE_SECONDS,
+    deadline_seconds: float | None = None,
 ) -> None:
     """Set `kill_signal` when the CLI has gone idle, in two cases.
 
     Post-result idle: `result_seen AND since_last_event > grace_seconds` —
     the model finished but the subprocess never exited; we have the cached
-    result so this is a graceful kill.
+    result so this is a graceful kill. While the session has a background
+    task running, `task_grace_seconds` instead: the CLI hands the task's end
+    to the model, which goes on; but no later than `_DEADLINE_MARGIN_SECONDS`
+    before `deadline_seconds` (the session's wall clock), whose kill would
+    throw the cached result away.
 
     Mid-run stall: `NOT result_seen AND since_last_event > idle_stall_seconds`
     — the run hung before producing any result (ACME-13824); the caller treats
@@ -987,10 +1005,14 @@ async def _post_result_watchdog(
             pass
         idle = progress.since_last_activity()
         if progress.last_result_at is not None:
-            if idle >= grace_seconds:
+            grace = task_grace_seconds if progress.background_tasks else grace_seconds
+            near_deadline = (progress.background_tasks > 0 and deadline_seconds is not None
+                             and progress.elapsed() >= deadline_seconds - _DEADLINE_MARGIN_SECONDS)
+            if idle >= grace or near_deadline:
                 _write_progress(
                     log_path,
-                    f"post_result_grace exceeded ({grace_seconds}s); "
+                    f"post_result_grace exceeded ({grace}s, background tasks "
+                    f"{progress.background_tasks}{', near the deadline' if near_deadline else ''}); "
                     f"last_event={progress.last_event_kind!r} "
                     f"events={progress.events_seen} turns={progress.turns}; "
                     f"signalling graceful kill",
@@ -1069,6 +1091,10 @@ def _handle_stream_event(
             )
         elif sub.startswith("hook_"):
             _write_progress(log_path, f"event=system subtype={sub}")
+        elif sub == "background_tasks_changed":
+            tasks = evt.get("tasks")
+            progress.background_tasks = len(tasks) if isinstance(tasks, list) else 0
+            _write_progress(log_path, f"event=system subtype={sub} tasks={progress.background_tasks}")
         else:
             _write_progress(log_path, f"event=system subtype={sub}")
         return

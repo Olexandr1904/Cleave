@@ -38,6 +38,12 @@ logger = logging.getLogger(__name__)
 DEFAULT_QUOTA_RETRY_DELAY = timedelta(hours=1)
 # The same transient error this many times in a row at a stage fails the ticket instead of deferring it again.
 TRANSIENT_REPEAT_LIMIT = 3
+# A quality gate that ran out of time is run again this much later: a host slowed by other builds needs time to clear.
+GATE_TIMEOUT_RETRY_DELAY = timedelta(minutes=30)
+# Running out of time (a session at its wall clock, a gate at its timeout) counts as one error at a stage, whichever
+# of the two it was, and stops the ticket the second time in a row: each costs hours of a session or of the gates.
+OUT_OF_TIME_REPEAT_LIMIT = 2
+_OUT_OF_TIME = re.compile(r"^(?:wall_clock_budget_exceeded\b|gate `[^`]*` could not run \(timed out\))")
 
 
 def _now() -> str:
@@ -176,15 +182,33 @@ def _first_line(error: str | None) -> str:
     return (error or "").strip().partition("\n")[0]
 
 
+def _streak_key(stage_id: str, error: str | None) -> str:
+    """The transient streak an error counts in: its first line at the stage, or "<stage>: out of time" for a session
+    at its wall clock and a gate at its timeout alike (on a busy host they alternate)."""
+    line = _first_line(error)
+    return f"{stage_id}: out of time" if _OUT_OF_TIME.match(line) else f"{stage_id}: {line}"
+
+
 def _transient_repeats(workspace: Workspace, stage_id: str, error: str | None) -> bool:
     """Count a transient error at a stage, saved with the workspace; True when it is the same error (its first
-    line) TRANSIENT_REPEAT_LIMIT times in a row at that stage. A deterministic failure the CLI reports like a
-    transient one ("Session ID … is already in use") is otherwise deferred forever."""
+    line) TRANSIENT_REPEAT_LIMIT times in a row at that stage, or out of time OUT_OF_TIME_REPEAT_LIMIT times. A
+    deterministic failure the CLI reports like a transient one ("Session ID … is already in use") is otherwise
+    deferred forever."""
     state = workspace.state
-    key = f"{stage_id}: {_first_line(error)}"
+    key = _streak_key(stage_id, error)
     count = state.transient_count + 1 if state.transient_error == key else 1
     workspace.update_state(transient_error=key, transient_count=count)
-    return count >= TRANSIENT_REPEAT_LIMIT
+    return count >= _repeat_limit(key, stage_id)
+
+
+def _repeat_limit(key: str, stage_id: str) -> int:
+    return OUT_OF_TIME_REPEAT_LIMIT if key == f"{stage_id}: out of time" else TRANSIENT_REPEAT_LIMIT
+
+
+def _gates_streak(transient_error: str | None, stage_id: str) -> bool:
+    """Whether the stage's transient streak (_transient_repeats) is out of time at a stage that runs the quality
+    gates: the gates may still time out after the agent runs, so only the gates' own run ends it."""
+    return stage_id == "qa" and transient_error == f"{stage_id}: out of time"
 
 
 def parse_agent_outcome(
@@ -351,7 +375,8 @@ async def handle_agent_stage(
         )
         if result.failure_kind == "transient" and _transient_repeats(workspace, stage_id, result.error):
             rollback_iteration(workspace, stage_id)
-            error = f"The same error {TRANSIENT_REPEAT_LIMIT} times in a row: {_first_line(result.error)}"
+            limit = _repeat_limit(_streak_key(stage_id, result.error), stage_id)
+            error = f"The same error {limit} times in a row: {_first_line(result.error)}"
             workspace.transition(Stage.FAILED)
             workspace.update_state(error=error, raw_error=result.error, transient_error=None, transient_count=0)
             await notify_failed_fn(workspace, error)
@@ -372,11 +397,14 @@ async def handle_agent_stage(
             )
             final_error = summary or result.error or ""
             workspace.transition(Stage.FAILED)
-            workspace.update_state(error=final_error, raw_error=result.error)
+            # The operator's Retry starts every streak again.
+            workspace.update_state(error=final_error, raw_error=result.error, transient_error=None, transient_count=0)
             await notify_failed_fn(workspace, final_error)
         return
 
-    if getattr(state, "transient_count", 0):
+    # The agent ran: its own transient streak ends. Out of time at QA ends only when the gates run, below: the
+    # agent runs fine before every gate timeout.
+    if getattr(state, "transient_count", 0) and not _gates_streak(getattr(state, "transient_error", None), stage_id):
         workspace.update_state(transient_error=None, transient_count=0)
     _emit(event_bus, "agent_completed", f"{stage_def.agent} completed for {state.ticket_id}", project_id=state.company_id, ticket_id=state.ticket_id, agent_id=stage_def.agent, data={"stage": stage_id, "duration": result.duration_seconds, "input_tokens": result.input_tokens, "output_tokens": result.output_tokens})
     sha_info = ""
@@ -390,7 +418,7 @@ async def handle_agent_stage(
         agent_snippet = (result.output or "")[:200].replace("\n", " ")
         error_msg = f"{stage_id}: {reason} (agent said: {agent_snippet})"
         workspace.transition(Stage.BLOCKED)
-        workspace.update_state(error=error_msg)
+        workspace.update_state(error=error_msg, transient_error=None, transient_count=0)  # Retry starts afresh
         _log_pipeline(workspace, f"BLOCKED — {stage_id} verification failed: {reason}")
         _emit(
             event_bus,
@@ -487,13 +515,27 @@ async def handle_agent_stage(
         return
 
     # A gate that could not run found no defect either: its command or the
-    # host is what failed, and the operator is the one who can fix that.
+    # host is what failed. Out of time only (a host slowed by other builds:
+    # a tests gate of 13 minutes on a quiet host ran past an hour), the ticket is
+    # retried later, as a transient agent error is, until the stage runs out
+    # of time a second time in a row; anything else is the operator's to fix.
     if outcome == "gate_could_not_run":
-        await _block_unverified("; ".join(
-            f"gate `{gate.name}` could not run ({gate.could_not_run}): `{gate.command}`"
-            for gate in failing_hard_gates(gate_results) if gate.could_not_run
-        ))
+        unrun = [gate for gate in failing_hard_gates(gate_results) if gate.could_not_run]
+        reason = "; ".join(
+            f"gate `{gate.name}` could not run ({gate.could_not_run}): `{gate.command}`" for gate in unrun
+        )
+        if all(gate.could_not_run == "timed out" for gate in unrun) and not _transient_repeats(
+                workspace, stage_id, reason):
+            rollback_iteration(workspace, stage_id)
+            retry_at = datetime.now(timezone.utc) + GATE_TIMEOUT_RETRY_DELAY
+            _log_pipeline(workspace, f"DEFERRED — {reason}; retry at {retry_at.isoformat(timespec='seconds')}")
+            workspace.transition(Stage.DEFERRED, retry_at=retry_at.isoformat())
+            await notify_deferred_fn(workspace, retry_at, reason=reason, quota=False)
+            return
+        await _block_unverified(reason)
         return
+    if _gates_streak(getattr(workspace.state, "transient_error", None), stage_id):  # the gates ran this time
+        workspace.update_state(transient_error=None, transient_count=0)
 
     next_stage = get_next_stage(stage_id, workflow, outcome)
 

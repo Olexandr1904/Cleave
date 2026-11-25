@@ -752,6 +752,30 @@ class TestQuotaFailureClassification:
         assert result.failure_kind == "transient"  # deferred like a quota hit, but not one
         assert result.retry_at is not None
 
+    async def test_cli_past_its_wall_clock_is_deferred_for_a_retry(self, registry, workspace):
+        """A session killed at its wall clock ran out of time, often on a host slowed by other builds: no defect of
+        the ticket, so it is retried later (the stage's repeat limit stops one that always runs out)."""
+        import asyncio
+        from integrations.llm.claude_code_adapter import ClaudeCodeAdapter
+        from orchestrator.agent_runtime import AgentRuntime
+
+        class StubAdapter(ClaudeCodeAdapter):
+            def __init__(self):
+                pass
+
+            async def execute_in_workspace(self, *args, **kwargs):
+                await asyncio.sleep(5)
+
+        runtime = AgentRuntime(registry, StubAdapter(), default_budget=AgentBudget(wall_clock_seconds=0.05))
+        result = await runtime.execute("dev-agent", workspace)
+
+        assert result.success is False
+        assert result.error.startswith("wall_clock_budget_exceeded")
+        assert result.failure_kind == "transient"
+        from datetime import datetime, timedelta, timezone
+        wait = result.retry_at - datetime.now(timezone.utc)
+        assert timedelta(minutes=29) < wait < timedelta(minutes=31)  # a busy host needs time to clear
+
     async def test_cli_stalled_sets_failure_kind_transient_for_retry(
         self, registry, workspace
     ):

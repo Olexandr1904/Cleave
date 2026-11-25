@@ -32,8 +32,9 @@ defaults:
     dev: 2
   max_parallel_tickets: 5
   pr_comment_fetch_delay_minutes: 30
-  # Per-execution agent ceilings. Whichever limit trips first ends the run
-  # and marks it permanent-failed.
+  # Per-execution agent ceilings. Whichever limit trips first ends the run:
+  # the CLI's wall clock defers the ticket 30 minutes (a busy host may let a
+  # later run finish; the second time in a row it fails), the others fail it.
   #   - max_tool_rounds: applies only to the in-process tool loop (API
   #     adapter). The Claude Code CLI subprocess handles its own tool loop
   #     and is opaque to this counter, so this number doesn't bound CLI runs.

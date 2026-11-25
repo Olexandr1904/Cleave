@@ -18,4 +18,5 @@ async def test_poll_cycle_does_not_advance_paused_repo():
     rt.reconcile_disk_workspaces = lambda: None
     rt._active_workspaces = [_ws("a"), _ws("b")]
     await rt.poll_cycle()
+    await rt.wait_for_advances()
     assert [c.args[0].state.repo_id for c in advance.await_args_list] == ["b"]

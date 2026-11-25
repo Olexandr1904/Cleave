@@ -447,12 +447,25 @@ class Orchestrator:
             handed_over=_reviewer_owns(self, workspace),
         )
 
+    async def _notify_deferred(self, ws: Workspace, retry_at: Any, reason: str | None = None, *,
+                               quota: bool = False) -> None:
+        """Tell the ticket's chat it was deferred, keeping the chat's usage-limit window."""
+        from orchestrator.notify import notify_deferred
+        chat_id = self._get_chat_id(ws)
+        window = await notify_deferred(
+            getattr(self, "_notifier", None), chat_id, ws, retry_at, reason, quota=quota,
+            window=self._quota_windows.get(chat_id),
+        )
+        if window is None:
+            self._quota_windows.pop(chat_id, None)
+        else:
+            self._quota_windows[chat_id] = window
+
     async def _handle_agent_stage(
         self, workspace: Workspace, stage_id: str, stage_def: Any,
     ) -> None:
         from orchestrator.escalation import build_blocked_reason
         from orchestrator.notify import (
-            notify_deferred,
             notify_failed,
             notify_verification_blocked,
         )
@@ -461,16 +474,6 @@ class Orchestrator:
         repo_config = self._get_repo_config(workspace)
         event_bus = getattr(self, "_events", None)
         notifier = getattr(self, "_notifier", None)
-
-        async def _deferred(ws, retry_at, reason=None, *, quota=False):
-            chat_id = self._get_chat_id(ws)
-            window = await notify_deferred(
-                notifier, chat_id, ws, retry_at, reason, quota=quota, window=self._quota_windows.get(chat_id),
-            )
-            if window is None:
-                self._quota_windows.pop(chat_id, None)
-            else:
-                self._quota_windows[chat_id] = window
 
         async def _failed(ws, error):
             if notifier is None:
@@ -499,7 +502,7 @@ class Orchestrator:
             on_ticket_done_fn=self._on_ticket_done,
             build_gate_summary_fn=build_gate_summary,
             notify_verification_blocked_fn=_verification_blocked,
-            notify_deferred_fn=_deferred,
+            notify_deferred_fn=self._notify_deferred,
             notify_failed_fn=_failed,
         )
 
@@ -607,6 +610,7 @@ class Orchestrator:
             dry_run=getattr(self, "_dry_run", False),
             event_bus=event_bus,
             action_push_and_open_pr=_push,
+            notify_deferred_fn=self._notify_deferred,
             action_fetch_pr_comments=_fetch,
             action_finalize=_finalize,
             advance_to_stage_fn=lambda ws, sid: advance_to_stage(ws, sid, event_bus=event_bus),

@@ -217,3 +217,19 @@ them, so every PR carried hundreds of lines of reports. The prompt now says the 
 longer tells reviewers the PR contains the reports, and a Rerun's fresh clone gets the exclude too. On a push to an
 open PR, the files the agent's last commit changed (for the PENDING review-comment check) are read before the drop's
 commit goes on top. Reports that earlier merged PRs left on the base branch are not touched.
+
+## A long stage holds up no other ticket; a push the forge failed to take is retried (2026-11-26)
+
+`runtime.py`: the cycle starts each active ticket's stage in a task of its own (`_start_advancing`, by ticket id)
+and does not wait for them; a ticket whose stage still runs is not started again. The cycle used to await every
+stage with `asyncio.gather`, so while one ticket's QA agent ran (up to four hours) a Retry on another ticket, the
+next stage of a ticket whose stage had ended, new tickets from the tracker and deferred tickets due to resume all
+waited for it: three tickets that passed QA at different times pushed in the same second, after the last QA ended.
+A shutdown still lets the running stages end (`wait_for_advances`).
+
+`pipeline/action_stage.py`: a push the forge, or the way to it, failed to take (`remote unpack failed`,
+`index-pack failed`, an HTTP 5xx, a dropped connection, …) defers the ticket 15 minutes without counting the attempt,
+with a Telegram message naming the line; the third time in a row it goes to the operator as any failed push does,
+and a Retry then gets three more tries. GitHub's storage refused three tickets' packs within eleven seconds; each
+stopped BLOCKED, and the same push went through untouched once GitHub was back. A push a hook refused still goes to
+the operator at once.

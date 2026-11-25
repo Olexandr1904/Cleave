@@ -355,6 +355,28 @@ class TestHandleActionStage:
         ws.transition.assert_not_called()
 
     @pytest.mark.asyncio
+    async def test_a_push_the_forge_failed_to_take_is_deferred_with_a_message(self, tmp_path):
+        from orchestrator.orchestrator import Orchestrator
+
+        orch = self._make_orchestrator()
+        orch._notify_deferred = AsyncMock()
+        ws = _fake_workspace()
+        ws.reports_dir = tmp_path
+        ws.state.transient_error, ws.state.transient_count = None, 0
+        push_mock = AsyncMock(return_value=ActionResult(
+            success=False, next_state="", metadata={},
+            error="Git command failed: git push\nerror: remote unpack failed: index-pack failed",
+        ))
+
+        with patch("orchestrator.pipeline.action_stage.stage_verifier") as sv, \
+             patch("orchestrator.orchestrator.action_push_and_open_pr", new=push_mock):
+            sv.capture_stage_start = MagicMock(return_value="abc123")
+            await Orchestrator._handle_action_stage(orch, ws, "push", self._make_stage_def("push_and_open_pr"))
+
+        ws.transition.assert_called_once_with(Stage.DEFERRED, retry_at=ANY)
+        orch._notify_deferred.assert_awaited_once()
+
+    @pytest.mark.asyncio
     async def test_verify_failure_transitions_to_blocked(self):
         from orchestrator.orchestrator import Orchestrator
 

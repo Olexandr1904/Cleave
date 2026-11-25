@@ -69,6 +69,8 @@ class Runtime:
         self._dry_run = dry_run
 
         self._active_workspaces: list[Workspace] = []
+        # The task advancing each ticket, by ticket id, while its stage runs.
+        self._advancing: dict[str, asyncio.Task] = {}
         self._recent_completions: deque[tuple[str, str, float]] = deque(maxlen=20)
         self._shutdown_event = asyncio.Event()
         self._wake_event = asyncio.Event()
@@ -200,8 +202,27 @@ class Runtime:
                 except Exception:
                     pass
 
+    def _start_advancing(self, ws: Workspace) -> None:
+        """Advance `ws` in a task of its own, unless a stage of it is still running."""
+        key = ws.state.ticket_id
+        if key in self._advancing:
+            return
+        task = asyncio.create_task(self._advance_one(ws))
+        self._advancing[key] = task
+
+        def _ended(t: asyncio.Task) -> None:
+            if self._advancing.get(key) is t:
+                del self._advancing[key]
+
+        task.add_done_callback(_ended)
+
+    async def wait_for_advances(self) -> None:
+        """Wait until every stage started so far has ended."""
+        while self._advancing:
+            await asyncio.gather(*self._advancing.values(), return_exceptions=True)
+
     async def poll_cycle(self) -> None:
-        """Single poll + advance cycle."""
+        """Single poll + advance cycle. Starts the stages; does not wait for them."""
         # Pick up any projects added to config-live/ since last cycle (wizard or hand-edit).
         if self._rescan_callback is not None:
             await self._rescan_callback()
@@ -224,8 +245,10 @@ class Runtime:
         if self._ticket_gate is not None:
             active = [ws for ws in active
                       if self._ticket_gate(ws.state.company_id, ws.state.repo_id)]
-        if active:
-            await asyncio.gather(*[self._advance_one(ws) for ws in active])
+        # Each in a task of its own that the cycle does not wait for: one ticket's stage can run for hours, and a
+        # Retry, another ticket's next stage, new tickets and deferred ones waited with it.
+        for ws in active:
+            self._start_advancing(ws)
 
         # 3. Cleanup terminal workspaces from active list and record them for
         # /status to show recent completions even after they leave the list.
@@ -305,4 +328,6 @@ class Runtime:
             except asyncio.TimeoutError:
                 pass
 
+        # As when the cycle awaited them: a shutdown lets the running stages end.
+        await self.wait_for_advances()
         logger.info("Orchestrator shutting down gracefully")

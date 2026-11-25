@@ -2,18 +2,39 @@
 from __future__ import annotations
 
 import logging
+import re
+from datetime import datetime, timedelta, timezone
 from typing import Any, Awaitable, Callable
 
 from integrations.base.notifier import Button, NotifierInterface
 from orchestrator import stage_verifier, tg_format
 from orchestrator.approval_gate import should_approval_gate
 from orchestrator.escalation import handle_escalate, truncate_reason
-from orchestrator.pipeline.agent_stage import _emit, _log_pipeline, rollback_iteration
+from orchestrator.pipeline.agent_stage import _emit, _log_pipeline, _transient_repeats, rollback_iteration
 from orchestrator.tg_i18n import tr
 from orchestrator.workflow_router import WorkflowDefinition, get_next_stage
 from workspace.workspace import Stage, Workspace
 
 logger = logging.getLogger(__name__)
+
+# The forge, or the way to it, failed to take a push: nothing in the branch is at fault, and the same push goes
+# through once the forge is back. GitHub's storage refused three tickets' packs within eleven seconds
+# ("remote unpack failed: index-pack failed"), and each ticket stopped for the operator.
+_FORGE_FAILED = re.compile(
+    r"remote unpack failed|index-pack failed|RPC failed|returned error: 5\d\d|HTTP 5\d\d"
+    r"|Could not resolve host|Connection (?:reset|refused|timed out)|Operation timed out"
+    r"|remote end hung up unexpectedly|early EOF|Internal Server Error|Service Unavailable|Bad Gateway",
+    re.IGNORECASE,
+)
+FORGE_RETRY_DELAY = timedelta(minutes=15)
+
+
+def _forge_failure(error: str | None) -> str:
+    """The line of a failed push that says the forge failed to take it, or "" if none does."""
+    for line in (error or "").splitlines():
+        if _FORGE_FAILED.search(line):
+            return line.strip()
+    return ""
 
 
 async def handle_action_stage(
@@ -35,6 +56,7 @@ async def handle_action_stage(
     build_gate_summary_fn: Callable[[Workspace, str], tuple[str, list[Button]]],
     is_compared: Callable[[Workspace], bool] = lambda ws: False,
     reviewer_owns: bool = False,
+    notify_deferred_fn: Callable[..., Awaitable[None]] | None = None,
 ) -> None:
     """Execute an action stage with capture → execute → verify → transition.
 
@@ -88,6 +110,20 @@ async def handle_action_stage(
             data={"stage": stage_id, "error": result.error},
         )
         if action == "push_and_open_pr":
+            forge_failure = _forge_failure(result.error)
+            if forge_failure and notify_deferred_fn is not None:
+                # One streak whatever the git command line was: a hook that fails for the host's reasons makes the
+                # push go again with --no-verify, and alternating first lines would never reach the limit.
+                if not _transient_repeats(workspace, stage_id, "the forge failed to take the push"):
+                    rollback_iteration(workspace, stage_id)
+                    retry_at = datetime.now(timezone.utc) + FORGE_RETRY_DELAY
+                    reason = f"the forge failed to take the push: {forge_failure}"
+                    _log_pipeline(workspace, f"DEFERRED — {reason}; retry at {retry_at.isoformat(timespec='seconds')}")
+                    workspace.transition(Stage.DEFERRED, retry_at=retry_at.isoformat())
+                    await notify_deferred_fn(workspace, retry_at, reason=reason, quota=False)
+                    return
+                # The same failure again and again: the operator's to look at, and a Retry gets three more tries.
+                workspace.update_state(transient_error=None, transient_count=0)
             # PR creation failures need operator attention — escalate so a
             # Telegram message is sent and the ticket can be recovered.
             workspace.update_state(error=result.error)

@@ -120,6 +120,7 @@ The Event Log view is a complete record of orchestrator activity. Filter by `age
 | AAPT2 / Gradle cache corruption | Use the **🧹 Clear cache & retry** button on the FAILED card or in Telegram |
 | All agents fail with quota errors | DEFERRED auto-resume should kick in; if it doesn't, check Anthropic console quota usage |
 | Tickets deferred or failed with `wall_clock_budget_exceeded` or `gate … could not run (timed out)` | The host is slow: other builds on it (a self-hosted CI runner, say) or Spotlight indexing. Gradle commands that take 13 minutes on a quiet host take hours then. They retry after 30 minutes on their own |
+| A ticket deferred with "the forge failed to take the push: … remote unpack failed …" (or an HTTP 5xx, a dropped connection) | GitHub, or the way to it, failed; nothing in the branch is at fault. The push goes again after 15 minutes on its own; the third failure in a row stops the ticket for you. Check githubstatus.com before pressing Retry |
 | A session killed `post_result_grace exceeded` while a build ran in its background | Cleave waits an hour (`BACKGROUND_TASK_GRACE_SECONDS`) for a background task after the model's last answer, 10 minutes without one; the stage's events log says how many background tasks ran |
 | Wizard validation fails | Live API check failed before writing config — credentials, scope, or unreachable host. The wizard tells you which |
 | Wizard setup step fails (SETUP_FAILED) | `.claude/settings.json` present? Stale daemon? See [Project-creation problems](#project-creation--daemon-restart-problems) |

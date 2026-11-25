@@ -62,32 +62,39 @@ def drop_pipeline_reports(workspace: Workspace, repo_config: RepoConfig) -> list
         return subprocess.run(["git", "-C", source, *args], capture_output=True, text=True, timeout=30,
                               check=True, env=run_env).stdout
 
+    paths: list[str] = []
     try:
         base = _merge_base(source, repo_config.vcs.default_branch)
         if not base:
-            return []
-        paths = [p for p in git("diff", "-z", "--name-only", base, "HEAD", "--", _REPORTS_DIR).split("\0") if p]
-        if not paths:
-            return []
-        head = git("rev-parse", "HEAD").strip()
-        with tempfile.TemporaryDirectory() as tmp:
-            index = str(Path(tmp) / "index")
-            git("read-tree", "HEAD", index=index)
-            git("reset", "-q", base, "--", *paths, index=index)
-            tree = git("write-tree", index=index).strip()
-        commit = git(
-            "-c", f"user.email={repo_config.git.commit_author_email}",
-            "-c", f"user.name={repo_config.git.commit_author_name}",
-            "commit-tree", tree, "-p", head,
-            "-m", f"chore({workspace.state.ticket_id}): keep pipeline reports out of the PR",
-        ).strip()
-        git("update-ref", "HEAD", commit, head)
-        git("reset", "-q", "HEAD", "--", *paths)
+            logger.warning("Found no base for %s: its committed pipeline reports stay in the branch",
+                           workspace.state.ticket_id)
+        else:
+            # --no-renames: a report moved off the base would show as its new path only, and its deletion stay.
+            diff = git("diff", "-z", "--no-renames", "--name-only", base, "HEAD", "--", _REPORTS_DIR)
+            paths = [p for p in diff.split("\0") if p]
+        if paths:
+            head = git("rev-parse", "HEAD").strip()
+            with tempfile.TemporaryDirectory() as tmp:
+                index = str(Path(tmp) / "index")
+                git("read-tree", "HEAD", index=index)
+                # --no-refresh: a fresh index has no stat data, and a refresh would hash every file in the repo.
+                git("reset", "-q", "--no-refresh", base, "--", *paths, index=index)
+                tree = git("write-tree", index=index).strip()
+            commit = git(
+                "-c", f"user.email={repo_config.git.commit_author_email}",
+                "-c", f"user.name={repo_config.git.commit_author_name}",
+                "commit-tree", tree, "-p", head,
+                "-m", f"chore({workspace.state.ticket_id}): keep pipeline reports out of the PR",
+            ).strip()
+            git("update-ref", "HEAD", commit, head)
+        # The clone's own index: a report staged and never committed would go in with the first push's squash.
+        git("reset", "-q", "HEAD", "--", _REPORTS_DIR)
     except (subprocess.CalledProcessError, subprocess.TimeoutExpired, OSError) as e:
         detail = getattr(e, "stderr", "") or e
         logger.warning("Could not take pipeline reports out of %s: %s", workspace.state.ticket_id, detail)
         return []
-    logger.info("Took %d pipeline report(s) out of %s", len(paths), workspace.state.ticket_id)
+    if paths:
+        logger.info("Took %d pipeline report(s) out of %s", len(paths), workspace.state.ticket_id)
     return paths
 
 
@@ -274,6 +281,9 @@ async def action_push_and_open_pr(
 
     # If PR already exists (from a previous cycle), just push new commits (no squash)
     if state.pr_number and state.pr_url:
+        # What the agent's last commit changed, read before drop_pipeline_reports can put its own commit on top.
+        changed_files = git_diff_files(workspace)
+        sha = git_head_sha(workspace)
         if vcs and repo_config:
             try:
                 branch = state.branch
@@ -293,8 +303,6 @@ async def action_push_and_open_pr(
 
         report_path = workspace.reports_dir / "pr-review-resolution.md"
         entries = read_entries(report_path)
-        changed_files = git_diff_files(workspace)
-        sha = git_head_sha(workspace)
 
         for cid, entry in entries.items():
             if entry.get("verified") != "PENDING":

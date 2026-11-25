@@ -56,10 +56,22 @@ instruction) still puts them in the PR.
    `commit-tree`, `update-ref` against the old head), so nothing else staged in the clone goes into it; then those
    paths alone are reset in the clone's own index. Files on disk are not touched. Reports that the base branch
    already holds are left as the base has them. Any git failure logs a warning and the push goes on as before.
+   After the review (2026-11-25): the diff runs with `--no-renames` (a report moved off the base would otherwise
+   leave its deletion in the PR); the temporary-index reset runs with `--no-refresh` (a fresh index has no stat data,
+   and a refresh hashes the whole repo); all of `ai_pipeline/` is reset in the clone's index even when the branch
+   committed nothing there (a report staged and never committed would go in with the first push's squash); a missing
+   base logs a warning.
 3. `action_push_and_open_pr` calls it before a push to an open PR, and on the first push after
-   `ensure_branch_has_commits` and before `squash_feature_commits`, so the squash folds it into the one commit.
+   `ensure_branch_has_commits` and before `squash_feature_commits`, so the squash folds it into the one commit. On
+   the open-PR path the changed files and head sha that the PENDING review-comment check uses are read before the
+   drop, which would otherwise make `HEAD~1` the agent's fix commit and mark every fixed comment FAILED.
 4. `reset_source` writes the exclude as `create` does.
-5. Stale comments and docstrings that say the reports are committed are corrected.
+5. Stale comments and docstrings that say the reports are committed are corrected, and so is the BA plan template,
+   which told reviewers that the PR contains `ai_pipeline/`.
+
+Deferred: a branch whose only change is reports reaches the squash with nothing to commit; the squash rolls back
+and the PR opens empty. With the new prompt the dev agent does not commit reports, and dev verification needs a
+commit.
 
 PRs opened before this change lose their reports on the next push Cleave makes to them.
 

@@ -161,12 +161,6 @@ and its main trade-off vs. alternatives considered.
 ## Files NOT to Touch
 - `path/to/protected/file.py` — reason (arch constraint, out of scope, etc.)
 
-> **Scope note for reviewers (incl. automated):** The file lists above cover
-> **source-code changes only**. This PR also contains `ai_pipeline/{ticket_id}/` —
-> automated planning and report artifacts written by the Cleave pipeline, not part
-> of the change under review. Exclude that directory from any "files changed" count
-> or comparison.
-
 ## Logic Summary
 Step-by-step implementation approach.
 

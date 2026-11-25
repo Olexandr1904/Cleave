@@ -210,8 +210,10 @@ other reason starts every streak again.
 `pipeline/actions/push_and_open_pr.py`: before every push (the first one, after `ensure_branch_has_commits` and
 before the squash, and every push to an open PR) `drop_pipeline_reports` takes the branch's own changes under
 `ai_pipeline/` back out in one commit, `chore(<ticket>): keep pipeline reports out of the PR`. It sets those paths
-back to the merge base with the base branch, on a temporary index so nothing else staged goes in, and leaves the
-files on disk. The exclude of 2026-08-28 kept the reports untracked, but the dev agent's prompt still told it to
-commit them and it force-added them, so every PR carried hundreds of lines of reports. The prompt now says the
-opposite, and a Rerun's fresh clone gets the exclude too. Reports that earlier merged PRs left on the base branch are
-not touched.
+back to the merge base with the base branch, on a temporary index so nothing else staged goes in, leaves the files on
+disk, and unstages any report left staged in the clone so the first push's squash cannot take it in. The exclude of
+2026-08-28 kept the reports untracked, but the dev agent's prompt still told it to commit them and it force-added
+them, so every PR carried hundreds of lines of reports. The prompt now says the opposite, the BA plan template no
+longer tells reviewers the PR contains the reports, and a Rerun's fresh clone gets the exclude too. On a push to an
+open PR, the files the agent's last commit changed (for the PENDING review-comment check) are read before the drop's
+commit goes on top. Reports that earlier merged PRs left on the base branch are not touched.

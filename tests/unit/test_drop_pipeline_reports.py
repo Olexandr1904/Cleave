@@ -27,6 +27,7 @@ from orchestrator.pipeline.actions.push_and_open_pr import (
     drop_pipeline_reports,
     squash_feature_commits,
 )
+from orchestrator.resolution_report import add_entry, read_entries
 
 MESSAGE = "chore(T-1): keep pipeline reports out of the PR"
 
@@ -158,13 +159,28 @@ def test_a_branch_without_reports_gets_no_commit(tmp_path):
     assert _git(repo, "rev-parse", "HEAD").strip() == head_before
 
 
-def test_without_a_base_ref_nothing_changes(tmp_path):
+def test_without_a_base_ref_nothing_changes_and_says_so(tmp_path, caplog):
     repo = _repo(tmp_path)
     _git(repo, "update-ref", "-d", "refs/remotes/origin/main")
     head_before = _git(repo, "rev-parse", "HEAD").strip()
 
-    assert drop_pipeline_reports(_workspace(repo), _config()) == []
+    with caplog.at_level("WARNING"):
+        assert drop_pipeline_reports(_workspace(repo), _config()) == []
+
     assert _git(repo, "rev-parse", "HEAD").strip() == head_before
+    assert "no base" in caplog.text
+
+
+def test_a_report_moved_off_the_base_is_restored_too(tmp_path):
+    """Rename detection would pair the base's report with the moved one and list only the new path."""
+    repo = _repo(tmp_path)
+    _git(repo, "checkout", "origin/main", "--", "ai_pipeline/OLD-1/ba.md")
+    _git(repo, "mv", "ai_pipeline/OLD-1/ba.md", "ai_pipeline/T-1/moved.md")
+    _git(repo, "commit", "-qm", "chore(T-1): move a report")
+
+    drop_pipeline_reports(_workspace(repo), _config())
+
+    assert _branch_files(repo) == ["app.txt"]
 
 
 def test_the_squash_folds_the_drop_into_one_clean_commit(tmp_path):
@@ -214,3 +230,51 @@ async def test_the_first_push_opens_a_pr_of_one_commit_without_reports(tmp_path)
         await action_push_and_open_pr(_ticket(repo, None), MagicMock(), _config(), None, "", None, None)
 
     assert seen == {"files": ["app.txt"], "commits": "1"}
+
+
+@pytest.mark.asyncio
+async def test_a_staged_report_stays_out_of_the_first_push(tmp_path):
+    """An agent that force-added a report and was stopped before its commit: the squash commits the index."""
+    repo = _repo(tmp_path)
+    _write(repo, "ai_pipeline/T-1/qa.md", "qa")
+    _git(repo, "add", "-f", "ai_pipeline/T-1/qa.md")
+    seen: dict[str, object] = {}
+
+    async def create_pr(*args, **kwargs):
+        seen["files"] = _branch_files(repo)
+        return SimpleNamespace(success=True, pr_url="https://example.test/pull/1", pr_number=1, error="")
+
+    with patch("orchestrator.pipeline.actions.push_and_open_pr.create_pr", new=create_pr):
+        await action_push_and_open_pr(_ticket(repo, None), MagicMock(), _config(), None, "", None, None)
+
+    assert seen == {"files": ["app.txt"]}
+    assert (repo / "ai_pipeline/T-1/qa.md").read_text() == "qa"
+
+
+@pytest.mark.asyncio
+async def test_a_fixed_review_comment_is_resolved_with_the_fix_commit(tmp_path):
+    """The check reads `git diff HEAD~1`: the drop's own commit on top must not hide the fix behind it."""
+    repo = _repo(tmp_path)
+    _write(repo, "app.txt", "the change, fixed")
+    _git(repo, "commit", "-qam", "fix(T-1): address review")
+    fix = _git(repo, "rev-parse", "HEAD").strip()[:8]
+    ws = _ticket(repo, 7)
+    report = ws.reports_dir / "pr-review-resolution.md"
+    add_entry(report, "T-1", 7, 101, {"file": "app.txt", "line": "1", "verified": "PENDING"})
+    replies: list[tuple] = []
+
+    class Vcs:
+        async def push(self, *args, **kwargs):
+            pass
+
+        async def reply_to_comment(self, *args):
+            replies.append(args)
+
+        async def resolve_comment(self, *args):
+            pass
+
+    await action_push_and_open_pr(ws, Vcs(), _config(), None, "", None, None)
+
+    entry = read_entries(report)[101]
+    assert (entry["verified"], entry["fixed_in"]) == ("YES", fix)
+    assert replies == [(7, 101, f"Fixed in commit {fix}")]

@@ -11,6 +11,7 @@ from orchestrator.skillflow.chat import SendError, SkillChat
 from orchestrator.skillflow.messages import parked_buttons
 from orchestrator.skillflow.models import SkillRun
 from orchestrator.skillflow.store import SkillStore
+from orchestrator.tg_i18n import model_text, telegram_language
 
 T0 = datetime(2026, 11, 16, 10, 0, tzinfo=timezone.utc)
 TOKEN_TEXT = "Unauthorized: bot0000:not-a-real-token"
@@ -225,3 +226,34 @@ async def test_answer_logs_its_failures_and_never_raises(rig, monkeypatch, caplo
         await rig.chat.answer(rig.run, "-100", 7, "Approved — the session goes on.")
     assert "not anchored: OperationalError" in caplog.text and "RuntimeError" in caplog.text
     assert "locked" not in caplog.text and "not-a-real-token" not in caplog.text
+
+
+class FakeTranslator:
+    """Prefixes each text with the language it was asked for."""
+
+    def __init__(self):
+        self.asked: list[tuple[list[str], str]] = []
+
+    async def translations(self, texts, language):
+        self.asked.append((list(texts), language))
+        return {text: f"[{language}] {text}" for text in texts}
+
+
+async def test_a_long_model_text_is_translated_whole_before_it_is_split(rig):
+    # Split first, a mark would be cut in two and neither part translated.
+    translator = FakeTranslator()
+    chat = SkillChat(rig.notifier, rig.store, now=lambda: T0, sleep=rig.chat._sleep, translator=translator)
+    skill_text = "line of the skill's plan\n" * 400
+    with telegram_language("uk"):
+        await chat.send(rig.run, f"ACME-1 · header\n\n{model_text(skill_text)}\n\nNotes: /x")
+    assert len(rig.notifier.sent) >= 2
+    assert translator.asked == [([skill_text], "uk")]
+    joined = "".join(m.text for m in rig.notifier.sent)
+    assert "[uk] line of the skill's plan" in joined
+    assert not any(ch in m.text for m in rig.notifier.sent for ch in "\ue000\ue001")
+
+
+async def test_without_a_translator_the_marks_are_dropped(rig):
+    with telegram_language("uk"):
+        await rig.chat.send(rig.run, f"head\n\n{model_text('plan')}")
+    assert rig.notifier.sent[0].text == "head\n\nplan"

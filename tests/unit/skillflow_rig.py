@@ -201,7 +201,7 @@ class Rig:
     worktree a real directory the gate commands run in."""
 
     def __init__(self, tmp_path, mode="auto", texts=(), idle_seconds=0.01, gates=None, gate_rounds=2,
-                 language_of=None):
+                 language_of=None, translator=None):
         conn = connect(tmp_path / "reviewer.db")
         self.store, self.switches = SkillStore(conn), Switches(conn)
         self.switches.set("tickets", "running")          # paused on a first boot
@@ -223,7 +223,7 @@ class Rig:
         async def no_sleep(seconds):
             pass
 
-        self.chat = SkillChat(self.notifier, self.store, now=self.clock.now, sleep=no_sleep)
+        self.chat = SkillChat(self.notifier, self.store, now=self.clock.now, sleep=no_sleep, translator=translator)
         self.environ = {"HOME": "/home/octo", "PATH": "/usr/bin:/bin", "JAVA_HOME": "/jdk", "GITHUB_TOKEN": "t"}
         self.runs_dir = tmp_path / "runs"
         self.runner = SkillRunner(

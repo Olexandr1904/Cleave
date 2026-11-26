@@ -12,6 +12,7 @@ from orchestrator.reviewer.messages import MESSAGE_LIMIT, split_message
 from orchestrator.reviewer.service import utcnow
 from orchestrator.skillflow.models import SkillRun
 from orchestrator.skillflow.store import SkillStore
+from orchestrator.tg_translate import Translator, localize
 
 logger = logging.getLogger(__name__)
 
@@ -31,18 +32,26 @@ class SendError(Exception):
 
 class SkillChat:
     def __init__(self, notifier: Any, store: SkillStore, now: Callable[[], datetime] = utcnow,
-                 sleep: Callable[[float], Awaitable[None]] = asyncio.sleep):
+                 sleep: Callable[[float], Awaitable[None]] = asyncio.sleep, translator: Translator | None = None):
         self._notifier = notifier  # send_message(chat_id, text, buttons=, reply_to_message_id=) -> the message id
         self._store = store
         self._now = now
         self._sleep = sleep
+        self._translator = translator  # the skill's text's (None: it goes out as the skill wrote it)
+
+    async def localize(self, text: str) -> str:
+        """`text` with its model-written texts in the current Telegram language (as they are without a translator
+        or when the translation fails), unmarked."""
+        return await localize(text, self._translator)
 
     async def send(self, run: SkillRun, text: str, buttons: list[Button] | None = None, skip: int = 0) -> list[int]:
-        """Send `text` to the run's chat in parts, the buttons on the last, each part anchored to the run before
-        the next goes out; return the message ids of the parts it sent, in order. The first `skip` parts are left
+        """Send `text` to the run's chat in parts, its model-written texts in the current Telegram language, the
+        buttons on the last, each part anchored to the run before the next goes out; return the message ids of the parts it sent, in order. The first `skip` parts are left
         out: an earlier send got them out. A failed send or anchor write raises SendError with the parts sent
         before it: a reply to an unanchored message would reach the intent parser, so a part that could not be
         anchored is deleted first (once; parts already anchored stay)."""
+        # Whole, before the split: a mark is never cut in two.
+        text = await self.localize(text)
         # Telegram rejects a blank text, and the runner would send it again on every cycle.
         parts = [part for part in split_message(text, MESSAGE_LIMIT) if part.strip()]
         ids: list[int] = []

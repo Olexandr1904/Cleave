@@ -10,7 +10,7 @@ from orchestrator.skillflow.messages import (
 )
 from orchestrator.skillflow.models import SkillRun
 from orchestrator.skillflow.status import read_turn_end
-from orchestrator.tg_i18n import telegram_language
+from orchestrator.tg_i18n import fill, marked_texts, telegram_language
 from orchestrator.tg_uk import TEXTS
 
 NOW = "2026-11-16T10:00:00+00:00"
@@ -139,10 +139,22 @@ def catalogue_uk():
     return TEXTS
 
 
-def test_waiting_message_in_ukrainian_keeps_the_skills_text(run, tmp_path, catalogue_uk):
+def test_in_ukrainian_the_skills_text_is_marked_for_translation(run, tmp_path, catalogue_uk):
+    # The skill writes English; the Telegram setting asks for Ukrainian: its text goes out translated when sent.
+    skill_text = "Which screen? Яке поле?"
     with telegram_language("uk"):
-        text = waiting_message(run, "Which screen? Яке поле?", tmp_path)
-    assert "Which screen? Яке поле?" in text and "Reply to answer" not in text
+        built = [waiting_message(run, skill_text, tmp_path), stop_message(run, skill_text, tmp_path),
+                 result_note(run, skill_text, tmp_path), no_change_message(run, skill_text, tmp_path)]
+    for text in built:
+        assert marked_texts(text) == [skill_text]
+    assert "Reply to answer" not in built[0]
+
+
+def test_in_ukrainian_the_cut_line_is_not_part_of_the_marked_text(catalogue_uk):
+    with telegram_language("uk"):
+        text = relay("x " * 10000)
+    assert marked_texts(text) == [("x " * 10000)[:9000]]
+    assert fill(text, {}).endswith(TEXTS[CUT])
 
 def test_cleave_stop_keeps_its_reason(run, catalogue_uk):
     run.reason = "push failed: [rejected] fetch first"

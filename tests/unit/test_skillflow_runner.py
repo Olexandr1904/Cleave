@@ -655,6 +655,47 @@ async def test_runner_messages_follow_the_language(tmp_path):
     assert "Which screen?" in sent.text and "Reply to answer, or tap Approve to say ok." not in sent.text
     assert [b.label for b in sent.buttons] != ["Approve", "Drop"]
 
+class CountingTranslator:
+    """Translates "Plan." into a Ukrainian line that names the call it came from."""
+
+    def __init__(self):
+        self.calls = 0
+
+    async def translations(self, texts, language):
+        self.calls += 1
+        return {text: text.replace("Plan.", f"План {self.calls}.") for text in texts}
+
+
+async def test_the_skills_text_goes_out_translated(tmp_path):
+    rig = Rig(tmp_path, mode="manual", texts=["Plan."], language_of=lambda scope: "uk",
+              translator=CountingTranslator())
+    await rig.go()
+    assert "План 1." in rig.notifier.sent[-1].text and "Plan." not in rig.notifier.sent[-1].text
+
+
+async def test_a_translated_message_that_fails_on_a_later_part_goes_on_with_the_same_translation(tmp_path):
+    # Translated once, before its first part goes out, and kept with the run: the parts a send again skips are the
+    # parts of that same text.
+    translator = CountingTranslator()
+    rig = Rig(tmp_path, mode="manual", texts=["Plan.\n" * 1400], language_of=lambda scope: "uk",
+              translator=translator)
+    failures = []
+
+    def part_two_fails_once():
+        rig.notifier.fail = len(rig.notifier.sent) == 1 and not failures
+        if rig.notifier.fail:
+            failures.append(1)
+
+    rig.notifier.during = part_two_fails_once
+    run = await rig.go()
+    assert (run.state, len(rig.notifier.sent), run.unsent) == ("waiting", 1, 1)
+    await rig.runner.flush_outbox()
+    texts = [m.text for m in rig.notifier.sent]
+    assert translator.calls == 1 and all("План 1." in text for text in texts)
+    assert len(texts) == len(set(texts)) and rig.notifier.sent[-1].buttons
+    assert rig.store.run(run.id).unsent == 0
+
+
 async def test_a_message_recover_queued_goes_out_in_the_runs_language(tmp_path):
     asked = []
     rig = Rig(tmp_path, language_of=lambda scope: asked.append(scope) or "uk")

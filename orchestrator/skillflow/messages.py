@@ -1,6 +1,7 @@
 """The skill flow's Telegram messages: Cleave's lines in the current Telegram language around the skill's own text,
-relayed unchanged, as are the status line, the outcome, the reason and the paths. Each closing line offers only what
-a reply or tap can do in the run's state."""
+which is marked as a model's text and so goes out translated into that language (orchestrator/tg_i18n.py). The
+status line, the outcome, the reason and the paths are relayed unchanged. Each closing line offers only what a reply
+or tap can do in the run's state."""
 from __future__ import annotations
 
 import re
@@ -10,7 +11,7 @@ from pathlib import Path
 from integrations.base.notifier import Button
 from orchestrator.quality_gates import GateResult
 from orchestrator.skillflow.models import SkillRun
-from orchestrator.tg_i18n import N_, tr
+from orchestrator.tg_i18n import N_, model_text, tr
 
 # Characters of the skill's text a message relays: a long report would otherwise take many Telegram parts, and the
 # session's own files are in the notes directory.
@@ -25,9 +26,10 @@ def header(run: SkillRun) -> str:
 
 
 def relay(text: str) -> str:
+    """The skill's text, cut to RELAY_LIMIT, marked to be translated where the message is sent."""
     if len(text) <= RELAY_LIMIT:
-        return text
-    return f"{text[:RELAY_LIMIT]}\n{tr(_CUT)}"
+        return model_text(text)
+    return f"{model_text(text[:RELAY_LIMIT])}\n{tr(_CUT)}"
 
 
 def parked_buttons(run_id: str) -> list[Button]:

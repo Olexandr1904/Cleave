@@ -235,8 +235,16 @@ class SkillRunner(PublishSteps):
             buttons = parked_buttons(run.id) if entry["buttons"] else None
             # The parts of this entry an earlier flush got out before a later part failed: not sent again.
             earlier = entry.get("ids", [])
+            text = entry["text"]
+            if not earlier:
+                # Translated once, before its first part goes out, and kept with the run: a send again sends the
+                # same parts.
+                translated = await self._chat.localize(text)
+                if translated != text:
+                    self._store.keep_translation(run.id, text, translated, self._stamp())
+                    text = translated
             try:
-                ids = [*earlier, *await self._chat.send(run, entry["text"], buttons, skip=len(earlier))]
+                ids = [*earlier, *await self._chat.send(run, text, buttons, skip=len(earlier))]
             except SendError as e:
                 logger.warning("Skill run %s: message not sent: %s", run.id, e)
                 if e.ids:   # on the stored row: the runner saves no run object here

@@ -97,6 +97,19 @@ class SkillStore:
             first["ids"] = [*first.get("ids", []), *ids]
             self._write(run, now)
 
+    def keep_translation(self, run_id: str, text: str, translated: str, now: str) -> None:
+        """Put `translated` in place of the outbox's first entry, on the row as it is now, while that entry is still
+        `text` with no part out: a send again then sends the same parts."""
+        with self._lock:
+            run = self.run(run_id)
+            if run is None or not run.outbox:
+                return
+            first = run.outbox[0]
+            if first.get("text") != text or first.get("ids"):
+                return
+            first["text"] = translated
+            self._write(run, now)
+
     def add_anchor(self, chat_id: str, message_id: int, run_id: str, now: str) -> None:
         with self._lock:
             self._conn.execute(

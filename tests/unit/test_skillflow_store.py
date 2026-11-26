@@ -112,6 +112,21 @@ def test_mark_parts_adds_to_the_first_entrys_parts_on_the_row_as_it_is_now(store
     assert (got.state, got.pending, got.unsent, got.updated_at) == ("queued", "the login screen", 2, LATER)
     store.mark_parts("nope", [1], LATER)                  # a run that is gone: nothing to mark
 
+def test_keep_translation_replaces_the_first_entrys_text_only_while_it_is_that_text_with_no_part_out(store):
+    run = store.add_run("acme/app", "ACME-1", NOW)
+    run.state, run.outbox = "waiting", [{"text": "a", "buttons": True}, {"text": "b", "buttons": False}]
+    store.save(run, NOW)
+    store.claim(run.id, ("waiting",), NOW, "queued", pending="the login screen")   # a reply in between
+    store.keep_translation(run.id, "a", "а", LATER)
+    got = store.run(run.id)
+    assert got.outbox == [{"text": "а", "buttons": True}, {"text": "b", "buttons": False}]
+    assert (got.state, got.pending, got.updated_at) == ("queued", "the login screen", LATER)
+    store.keep_translation(run.id, "a", "x", LATER)       # the first entry is no longer that text
+    store.mark_parts(run.id, [500], LATER)
+    store.keep_translation(run.id, "а", "y", LATER)       # a part of it is out: its parts are counted on it
+    assert store.run(run.id).outbox[0] == {"text": "а", "buttons": True, "ids": [500]}
+    store.keep_translation("nope", "a", "b", LATER)       # a run that is gone: nothing to keep
+
 def _damage(store, run_id, data):
     store._conn.execute(
         "INSERT INTO skill_runs (id, scope, ticket_id, state, retry_at, unsent, created_at, updated_at, data) "

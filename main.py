@@ -977,7 +977,7 @@ def main(argv: list[str] | None = None) -> int:
         skill_conn = connect(reviewer_db_path(global_config.reviewer))
         skill_store = SkillStore(skill_conn)
         comparisons = ComparisonStore(skill_conn)
-        skill_chat = SkillChat(notifier, skill_store)
+        skill_chat = SkillChat(notifier, skill_store, translator=translator)
         skill_runs = skill_dir / "runs"
         skill_runner = SkillRunner(
             skill_repos, skill_store, skill_chat, ClaudeCodeAdapter(),

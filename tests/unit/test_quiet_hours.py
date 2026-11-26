@@ -77,3 +77,15 @@ async def test_storage_default_without_row(db):
 async def test_storage_round_trip(db):
     await set_quiet_hours(db, QuietHours(enabled=False, start="23:00", end="07:30"))
     assert await get_quiet_hours(db) == QuietHours(enabled=False, start="23:00", end="07:30")
+
+
+@pytest.mark.parametrize("stored", [
+    '{"enabled": true, "start": "22:00", "end": "09:00", "days": "all"}',
+    '{"enabled": true, "start": "22:00"}',
+    "not json",
+])
+async def test_storage_a_bad_row_reads_as_the_default(db, stored, caplog):
+    await db.execute("INSERT INTO settings (key, value) VALUES ('quiet_hours', ?)", (stored,))
+    await db.commit()
+    assert await get_quiet_hours(db) == QuietHours()
+    assert "quiet_hours" in caplog.text

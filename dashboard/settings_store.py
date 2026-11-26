@@ -7,10 +7,13 @@ SQLite file as the event store (data/events.db) — see DashboardConfig.db_path.
 from __future__ import annotations
 
 import json
+import logging
 
 import aiosqlite
 
 from integrations.telegram.quiet_hours import QuietHours
+
+logger = logging.getLogger(__name__)
 
 ALLOWED_MODELS: tuple[str, ...] = (
     "claude-fable-5-2",
@@ -78,10 +81,17 @@ async def set_model(db: aiosqlite.Connection, model: str) -> None:
 
 
 async def get_quiet_hours(db: aiosqlite.Connection) -> QuietHours:
-    """The stored quiet hours, the default (22:00–09:00, on) when none were saved. Caller must have run
+    """The stored quiet hours, the default (22:00–09:00, on) when none were saved or the stored value does not read
+    (the daemon must start whatever the row holds; a save in Settings replaces it). Caller must have run
     init_settings first."""
     rows = await db.execute_fetchall("SELECT value FROM settings WHERE key = ?", (_QUIET_HOURS_KEY,))
-    return QuietHours.from_dict(json.loads(rows[0][0])) if rows else QuietHours()
+    if not rows:
+        return QuietHours()
+    try:
+        return QuietHours.from_dict(json.loads(rows[0][0]))
+    except ValueError as e:  # JSONDecodeError too
+        logger.warning("settings.quiet_hours %r does not read (%s): using the default", rows[0][0], e)
+        return QuietHours()
 
 
 async def set_quiet_hours(db: aiosqlite.Connection, quiet: QuietHours) -> None:

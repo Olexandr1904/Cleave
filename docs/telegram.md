@@ -66,6 +66,14 @@ The cost: haiku turns of a few hundred to a few thousand tokens, only for messag
 
 ---
 
+## Quiet hours
+
+From 22:00 to 09:00 (the host's local time) the bot's messages arrive silent: Telegram shows them as usual, without sound or vibration. Nothing is held back or delayed, and there are no exceptions: a reply while you are writing to the bot at night is silent too. Edits of a sent message and its buttons never notify anyway.
+
+Change the window or switch it off in the dashboard (**Settings → Quiet hours**); a save applies to the next message, no restart. The setting is global, not per project. A silent send carries `"silent": true` in its [traffic log](#traffic-log) line.
+
+---
+
 ## Switch commands
 
 Fixed commands pause and resume the ticket pipeline and reviewer mode, show the status and retry a ticket. They are not replies, and they run before the LLM intent parser (allowlisted chats only):
@@ -559,7 +567,7 @@ Every exchange with Telegram is one `INFO` line of the daemon log (`<logging.dir
 
 | Line | What it is |
 |---|---|
-| `TG out send` | A message Cleave sent, as Telegram got it (after translation): its id, the message it replies to, its buttons (label and action) |
+| `TG out send` | A message Cleave sent, as Telegram got it (after translation): its id, the message it replies to, its buttons (label and action), and `"silent": true` when it went out in [quiet hours](#quiet-hours) |
 | `TG out edit`, `TG out delete` | A message Cleave changed or removed |
 | `TG in message`, `TG in edited_message` | A text message: who wrote it, the message it replies to, and `sent`, Telegram's time of it (the line's own time is when Cleave got it; the two differ after a restart). Cleave acts on a message, never on an edit of one |
 | `TG in callback` | A button press: `data` is the button's action, `message_id` the message it is on |

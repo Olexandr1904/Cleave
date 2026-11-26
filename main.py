@@ -1126,11 +1126,15 @@ def main(argv: list[str] | None = None) -> int:
                 _start_background("Comparisons", comparison_keeper.loop(keeper_stop)), keeper_stop,
             )
 
-        # Init runtime settings table (model picker).
+        # Init runtime settings table (model picker, Telegram quiet hours).
         import aiosqlite as _aiosqlite
-        from dashboard.settings_store import init_settings
+        from dashboard.settings_store import get_quiet_hours, init_settings
         async with _aiosqlite.connect(db_path) as _conn:
             await init_settings(_conn)
+            # One object for the bot and the dashboard: a save in Settings applies to the next message.
+            quiet_hours = await get_quiet_hours(_conn)
+        if isinstance(notifier, TelegramAdapter):
+            notifier.quiet_hours = quiet_hours
 
         if not isinstance(notifier, TelegramAdapter) and not args.dry_run:
             # The dashboard posts without Telegram too: a post a restart cut short is marked interrupted before it
@@ -1237,6 +1241,7 @@ def main(argv: list[str] | None = None) -> int:
                 # The layer the replies run their commands through: one Posting for both channels.
                 reviewer_actions=reviewer_actions,
                 reviewer_replies=reviewer_replies,
+                quiet_hours=quiet_hours,
             )
             config = uvicorn.Config(
                 app, host=dash_config.host, port=dash_config.port,

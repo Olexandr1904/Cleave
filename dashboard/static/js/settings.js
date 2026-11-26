@@ -1,4 +1,4 @@
-// settings.js — Settings view (model picker, Telegram language)
+// settings.js — Settings view (model picker, Telegram language, quiet hours)
 
 import { esc } from './helpers.js';
 
@@ -29,9 +29,11 @@ export async function renderSettings() {
           <span id="settings-status" class="settings-pill pill-idle"></span>
         </div>
         <div id="settings-language" class="settings-language"></div>
+        <div id="settings-quiet" class="settings-language"></div>
       </section>
     `;
     renderLanguage(document.getElementById('settings-language'));
+    renderQuietHours(document.getElementById('settings-quiet'));
 
     const select = document.getElementById('settings-model');
     const save = document.getElementById('settings-save');
@@ -128,6 +130,62 @@ async function renderLanguage(el) {
     });
   } catch (e) {
     el.innerHTML = `<div class="state-msg" style="color:#f85149;">Telegram language: ${esc(String(e))}</div>`;
+  }
+}
+
+// The nightly window in which the bot's messages arrive silent. A save stores it and applies to the next message.
+async function renderQuietHours(el) {
+  try {
+    const r = await fetch('/api/settings/quiet-hours');
+    if (!r.ok) throw new Error(`GET failed: ${r.status}`);
+    let baseline = await r.json();
+    el.innerHTML = `
+      <h2 class="settings-section-title">Quiet hours</h2>
+      <p class="settings-help">Inside this window the bot's messages arrive without sound or vibration (Telegram's silent messages); nothing is held back. Host local time; a window that starts later than it ends runs past midnight. Applies to the next message.</p>
+      <div class="settings-row">
+        <label class="settings-label"><input type="checkbox" id="quiet-on"${baseline.enabled ? ' checked' : ''}> On</label>
+        <label class="settings-label" for="quiet-start">From</label>
+        <input type="time" id="quiet-start" class="settings-spinner" value="${esc(baseline.start)}" required>
+        <label class="settings-label" for="quiet-end">To</label>
+        <input type="time" id="quiet-end" class="settings-spinner" value="${esc(baseline.end)}" required>
+        <button id="quiet-save" class="btn-primary" disabled>Save</button>
+        <span id="quiet-status" class="settings-pill pill-idle"></span>
+      </div>
+    `;
+    const on = document.getElementById('quiet-on');
+    const start = document.getElementById('quiet-start');
+    const end = document.getElementById('quiet-end');
+    const save = document.getElementById('quiet-save');
+    const pill = document.getElementById('quiet-status');
+    const current = () => ({ enabled: on.checked, start: start.value, end: end.value });
+    const changed = () => JSON.stringify(current()) !== JSON.stringify(baseline);
+    [on, start, end].forEach(input => input.addEventListener('input', () => {
+      save.disabled = !changed();
+      setPill(pill, '', 'pill-idle');
+    }));
+    save.addEventListener('click', async () => {
+      save.disabled = true;
+      setPill(pill, 'Saving…', 'pill-saving');
+      try {
+        const resp = await fetch('/api/settings/quiet-hours', {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(current()),
+        });
+        if (!resp.ok) {
+          const err = await resp.json().catch(() => ({}));
+          throw new Error(err.error || `HTTP ${resp.status}`);
+        }
+        baseline = await resp.json();
+        setPill(pill, 'Saved ✓', 'pill-saved');
+        setTimeout(() => setPill(pill, '', 'pill-idle'), 1500);
+      } catch (e) {
+        setPill(pill, `Error: ${e.message}`, 'pill-error');
+        save.disabled = !changed();
+      }
+    });
+  } catch (e) {
+    el.innerHTML = `<div class="state-msg" style="color:#f85149;">Quiet hours: ${esc(String(e))}</div>`;
   }
 }
 

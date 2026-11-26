@@ -405,6 +405,7 @@ def create_app(
     ticket_announcer: Any | None = None,
     reviewer_actions: Any | None = None,
     reviewer_replies: Any | None = None,
+    quiet_hours: Any | None = None,
 ) -> Starlette:
     """Create the Starlette dashboard application."""
 
@@ -528,6 +529,26 @@ def create_app(
             return JSONResponse({"error": str(e)}, status_code=400)
         return JSONResponse({"model": model})
 
+    async def get_settings_quiet_hours(request: Request) -> JSONResponse:
+        from dashboard.settings_store import get_quiet_hours
+        async with aiosqlite.connect(store._db_path) as conn:
+            return JSONResponse((await get_quiet_hours(conn)).to_dict())
+
+    async def put_settings_quiet_hours(request: Request) -> JSONResponse:
+        """Store the window and hand it to the running bot (`quiet_hours`, the adapter's object): the next message
+        follows it."""
+        from dashboard.settings_store import set_quiet_hours
+        from integrations.telegram.quiet_hours import QuietHours
+        try:
+            quiet = QuietHours.from_dict(await request.json())
+        except ValueError as e:  # invalid JSON too
+            return JSONResponse({"error": str(e)}, status_code=400)
+        async with aiosqlite.connect(store._db_path) as conn:
+            await set_quiet_hours(conn, quiet)
+        if quiet_hours is not None:
+            quiet_hours.update(quiet)
+        return JSONResponse(quiet.to_dict())
+
     async def index(request: Request) -> HTMLResponse:
         html_path = Path(__file__).parent / "static" / "index.html"
         return HTMLResponse(html_path.read_text(encoding="utf-8"))
@@ -544,6 +565,8 @@ def create_app(
         Route("/api/workspaces/{ticket_id}/report/{filename:path}", get_workspace_report),
         Route("/api/settings/model", get_settings_model, methods=["GET"]),
         Route("/api/settings/model", put_settings_model, methods=["PUT"]),
+        Route("/api/settings/quiet-hours", get_settings_quiet_hours, methods=["GET"]),
+        Route("/api/settings/quiet-hours", put_settings_quiet_hours, methods=["PUT"]),
     ]
 
     # Action routes (only if orchestrator is available)

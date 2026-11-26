@@ -642,3 +642,26 @@ def test_address_settings_load():
 
 def test_findings_job_defaults():
     assert ReviewerGlobalConfig().jobs["findings"] == ReviewerJobConfig("opus", "xhigh", 5400)
+
+
+# --- Large PRs: the sharded section ---
+
+def test_sharded_defaults():
+    assert ProcessPartConfig().sharded_section == "" and ProcessPartConfig().sharded_min_files == 40
+
+def test_sharded_settings_load():
+    data = _with(("process.sharded_section", "Unattended sharded run"))
+    data["reviewer"]["process"]["sharded_min_files"] = 60
+    process = _parse_reviewer_section(data, _vcs(), "r.yaml").process
+    assert (process.sharded_section, process.sharded_min_files) == ("Unattended sharded run", 60)
+
+def test_sharded_section_must_be_a_string():
+    with pytest.raises(ConfigError) as e:
+        _parse_reviewer_section(_with(("process.sharded_section", ["Run"])), _vcs(), "r.yaml")
+    assert e.value.field == "reviewer.process.sharded_section"
+
+@pytest.mark.parametrize("value", [0, 40.5, True, "40"])
+def test_sharded_min_files_must_be_a_count(value):
+    with pytest.raises(ConfigError) as e:
+        _parse_reviewer_section(_with(("process.sharded_min_files", value)), _vcs(), "r.yaml")
+    assert e.value.field == "reviewer.process.sharded_min_files"

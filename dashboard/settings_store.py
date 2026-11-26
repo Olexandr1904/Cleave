@@ -1,12 +1,16 @@
 """Runtime settings store backed by the dashboard's SQLite database.
 
-Single source of truth for the active Claude model. Lives in the same
+Single source of truth for the active Claude model and the Telegram quiet hours. Lives in the same
 SQLite file as the event store (data/events.db) — see DashboardConfig.db_path.
 """
 
 from __future__ import annotations
 
+import json
+
 import aiosqlite
+
+from integrations.telegram.quiet_hours import QuietHours
 
 ALLOWED_MODELS: tuple[str, ...] = (
     "claude-fable-5-2",
@@ -24,6 +28,7 @@ _SUCCESSORS = {
 }
 
 _MODEL_KEY = "model"
+_QUIET_HOURS_KEY = "quiet_hours"
 
 
 async def init_settings(db: aiosqlite.Connection) -> None:
@@ -68,5 +73,24 @@ async def set_model(db: aiosqlite.Connection, model: str) -> None:
         ON CONFLICT(key) DO UPDATE SET value = excluded.value
         """,
         (_MODEL_KEY, model),
+    )
+    await db.commit()
+
+
+async def get_quiet_hours(db: aiosqlite.Connection) -> QuietHours:
+    """The stored quiet hours, the default (22:00–09:00, on) when none were saved. Caller must have run
+    init_settings first."""
+    rows = await db.execute_fetchall("SELECT value FROM settings WHERE key = ?", (_QUIET_HOURS_KEY,))
+    return QuietHours.from_dict(json.loads(rows[0][0])) if rows else QuietHours()
+
+
+async def set_quiet_hours(db: aiosqlite.Connection, quiet: QuietHours) -> None:
+    """Persist the quiet hours."""
+    await db.execute(
+        """
+        INSERT INTO settings (key, value) VALUES (?, ?)
+        ON CONFLICT(key) DO UPDATE SET value = excluded.value
+        """,
+        (_QUIET_HOURS_KEY, json.dumps(quiet.to_dict())),
     )
     await db.commit()

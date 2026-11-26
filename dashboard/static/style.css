@@ -1091,6 +1091,10 @@
 .settings-language { margin-top: 32px; }
 .settings-language .settings-row + .settings-row { margin-top: 8px; }
 .settings-label-wide { min-width: 200px; }
+.settings-quiet { margin-top: 32px; }
+.settings-quiet .settings-row { flex-wrap: wrap; }
+/* The time fields: as wide as a time, and the browser's clock icon drawn for the dark background. */
+.settings-time { min-width: 0; color-scheme: dark; }
 .pill-idle    { background: transparent; color: transparent; }
 .pill-saving  { background: #1f6feb33; color: #58a6ff; }
 .pill-saved   { background: #2ea04333; color: #3fb950; }

@@ -346,7 +346,7 @@ Read endpoints (`GET`):
 - `/api/workspaces` — every workspace from disk (`<project>/<repo>/tickets/<id>/` and `<project>/<repo>/setup/`), with state.json + report/meta listings. `disk_bytes` is the size a background thread last measured (a request remeasures one older than 5 minutes for a later load), `null` before the first measurement after a restart
 - `/api/workspaces/{ticket_id}/report/{filename}?folder=reports|meta|logs` — fetch one file
 - `/api/settings/model` — global default model (also `PUT` to change)
-- `/api/settings/quiet-hours` — `{"enabled": true, "start": "22:00", "end": "09:00"}`; `PUT` the same shape stores it and applies it to the next message → 200 with the saved value, 400 `{"error"}` for a time not `HH:MM`, equal times, a non-boolean `enabled` or a missing key
+- `/api/settings/quiet-hours` — `{"enabled": true, "start": "22:00", "end": "09:00"}`; `PUT` the same shape stores it and applies it to the next message → 200 with the saved value, 400 `{"error"}` for a body that is not JSON, a time not `HH:MM`, equal times, a non-boolean `enabled`, or a key missing or extra
 - `/api/settings/telegram-language` — `{"options": ["en", "uk"], "global": "<lang>", "projects": [{"id", "name", "language", "effective"}]}` (`language` is the project's own setting, `""` when it follows the global one); `PUT` with `{"project_id": "<id>" | null, "language": "en" | "uk"}` writes it (null: `global.yaml`) → 200 `{"language", "effective"}`, 400 for another language, 404 for a project not loaded, 409 when the YAML's `telegram:` section cannot be edited line by line, 403 `cross-site request refused` under the same rule as the reviews routes
 - `/api/daemon/status` — current mode + uptime
 

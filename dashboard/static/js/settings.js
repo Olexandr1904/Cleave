@@ -29,7 +29,7 @@ export async function renderSettings() {
           <span id="settings-status" class="settings-pill pill-idle"></span>
         </div>
         <div id="settings-language" class="settings-language"></div>
-        <div id="settings-quiet" class="settings-language"></div>
+        <div id="settings-quiet" class="settings-quiet"></div>
       </section>
     `;
     renderLanguage(document.getElementById('settings-language'));
@@ -145,9 +145,9 @@ async function renderQuietHours(el) {
       <div class="settings-row">
         <label class="settings-label"><input type="checkbox" id="quiet-on"${baseline.enabled ? ' checked' : ''}> On</label>
         <label class="settings-label" for="quiet-start">From</label>
-        <input type="time" id="quiet-start" class="settings-spinner" value="${esc(baseline.start)}" required>
+        <input type="time" id="quiet-start" class="settings-spinner settings-time" value="${esc(baseline.start)}" required>
         <label class="settings-label" for="quiet-end">To</label>
-        <input type="time" id="quiet-end" class="settings-spinner" value="${esc(baseline.end)}" required>
+        <input type="time" id="quiet-end" class="settings-spinner settings-time" value="${esc(baseline.end)}" required>
         <button id="quiet-save" class="btn-primary" disabled>Save</button>
         <span id="quiet-status" class="settings-pill pill-idle"></span>
       </div>

@@ -439,6 +439,10 @@ class ProcessPartConfig:
     address_doc: str = ""
     # A fix touching a path matching one of these is never pushed.
     address_protected: list[str] = field(default_factory=lambda: [".github/**"])
+    # The document's section a review of a PR of sharded_min_files or more files follows in place of the steps
+    # after prepare_section; "" = every PR takes those steps.
+    sharded_section: str = ""
+    sharded_min_files: int = 40
 
 
 @dataclass

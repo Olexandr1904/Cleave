@@ -17,6 +17,10 @@ _MAX_PAGES = 100
 _STATUS = re.compile(r"→ (\d{3})")
 _MERGE_METHODS = (("merge", "allow_merge_commit"), ("squash", "allow_squash_merge"), ("rebase", "allow_rebase_merge"))
 _MAX_CANDIDATES = 10
+# The review comments of earlier PRs on a PR's files: the last commits of each file, and of the PRs they came from
+# only the newest, so a PR of hundreds of files stays within a few hundred reads.
+_PRIOR_COMMITS_PER_PATH = 3
+_PRIOR_MAX_PRS = 10
 # The PR's author, GitHub's suggestions and who is asked already; and the reviews of the author's newest PRs.
 _CANDIDATES_QUERY = """
 query($owner: String!, $name: String!, $number: Int!, $q: String!) {
@@ -197,6 +201,34 @@ class GitHubForgeReader:
                           for r in reviews if r.get("body")),
             conversation=tuple({"login": _login(c), "body": c["body"]} for c in conversation),
         )
+
+    async def pr_files(self, number: int) -> list[tuple[str, str]]:
+        """Each changed file of the PR as (path, GitHub's status: added, modified, removed, renamed…)."""
+        files = await self._all_pages(f"{self._adapter._repo_path}/pulls/{number}/files")
+        return [(f["filename"], f["status"]) for f in files]
+
+    async def prior_review_comments(self, number: int, paths: list[str]) -> list[dict]:
+        """The inline review comments that earlier PRs got on these paths, newest PR first: the PRs the last commits
+        of each path came from, but this one. Each {"pr", "title", "login", "path", "line", "body"}; line is where
+        an outdated comment was made."""
+        repo = self._adapter._repo_path
+        titles: dict[int, str] = {}
+        seen: set[str] = set()
+        for path in paths:
+            commits = await self._get(f"{repo}/commits", params={"path": path, "per_page": _PRIOR_COMMITS_PER_PATH})
+            for sha in (c["sha"] for c in commits if c["sha"] not in seen):
+                seen.add(sha)
+                for pr in await self._get(f"{repo}/commits/{sha}/pulls"):
+                    if pr["number"] != number:
+                        titles.setdefault(pr["number"], pr["title"])
+        wanted = set(paths)
+        found = []
+        for pr_number in sorted(titles, reverse=True)[:_PRIOR_MAX_PRS]:
+            for c in await self._all_pages(f"{repo}/pulls/{pr_number}/comments"):
+                if c["path"] in wanted:
+                    found.append({"pr": pr_number, "title": titles[pr_number], "login": _login(c), "path": c["path"],
+                                  "line": c.get("line") or c.get("original_line"), "body": c["body"]})
+        return found
 
     async def reviews(self, number: int) -> list[ForgeReview]:
         # Uncached: posting compares the reviews before and after a post.

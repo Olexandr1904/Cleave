@@ -512,7 +512,8 @@ class JobRunner:
                 except FixError as e:
                     await self._fail(job, str(e))
                     return
-            outcome, changed_config = await self._session(ctx, job, paths, prepared.clone, run)
+            outcome, changed_config = await self._session(ctx, job, paths, prepared.clone, run,
+                                                          prepared.pr.changed_files)
             await self._settle_outcome(ctx, job, paths, run, prepared, outcome, changed_config, started)
         finally:  # the job clone and its worktree, whatever happened: the job's copy keeps what is kept
             # The run as stored now: _fail and the chat may have written its error and notes since.
@@ -588,7 +589,7 @@ class JobRunner:
         return True
 
     async def _session(
-        self, ctx: RepoContext, job: Job, paths: JobPaths, clone: ReviewClone, run: JobRun,
+        self, ctx: RepoContext, job: Job, paths: JobPaths, clone: ReviewClone, run: JobRun, changed_files: int,
     ) -> tuple[SessionOutcome, bool]:
         """The session's outcome, in the job clone, and whether it changed the job clone's .git/config,
         .git/info/attributes or .git/commondir, or for an address or a findings job the worktree's .git pointer.
@@ -598,7 +599,9 @@ class JobRunner:
         config."""
         process = ctx.cfg.process
         if job.kind == "review":
-            prompt = review_prompt(process.doc, process.prepare_section, job.number, paths)
+            large = bool(process.sharded_section) and changed_files >= process.sharded_min_files
+            prompt = review_prompt(process.doc, process.prepare_section, job.number, paths,
+                                   sharded_section=process.sharded_section if large else "")
         else:
             me = self._store.repo_state(ctx.scope).me
             if job.kind == "address":

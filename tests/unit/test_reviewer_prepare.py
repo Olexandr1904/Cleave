@@ -11,7 +11,7 @@ from orchestrator.reviewer.clone import CloneError, ReviewClone
 from orchestrator.reviewer.commands import CommandResult, base_env
 from orchestrator.reviewer.db import connect
 from orchestrator.reviewer.forge_github import ForgeError
-from orchestrator.reviewer.models import Job, JobRun, PRComments, PRFull
+from orchestrator.reviewer.models import Check, Job, JobRun, MergeState, PRComments, PRFull
 from orchestrator.reviewer.prepare import (
     JobPaths, PrepareError, existing_comments_md, job_paths, meta_env, prepare, section_hash, section_text,
     ticket_json,
@@ -73,13 +73,27 @@ def pr_full(head, state="open"):
 
 class FakeForge:
     def __init__(self, pr):
-        self.pr, self.error = pr, None
+        self.pr, self.error, self.extra_error, self.prior_paths = pr, None, None, None
     async def pr_full(self, number):
         if self.error:
             raise self.error
         return self.pr
     async def comments(self, number):
         return COMMENTS
+    async def merge_state(self, number):
+        if self.extra_error:
+            raise self.extra_error
+        return MergeState("BLOCKED", "develop", "feature", self.pr.head_sha, False, "",
+                          (Check("build", "pending", "in progress"), Check("detekt", "passed", "success")))
+    async def pr_files(self, number):
+        return [("app/A.kt", "modified"), ("app/B.kt", "removed"), ("app/New.kt", "added"), ("app/C.kt", "renamed")]
+    async def prior_review_comments(self, number, paths):
+        if self.extra_error:
+            raise self.extra_error
+        self.prior_paths = paths
+        return [{"pr": 1653, "title": "Week page", "login": "octo", "path": "app/A.kt", "line": 5,
+                 "body": "Size the root"},
+                {"pr": 1600, "title": "Old", "login": "ghost", "path": "app/B.kt", "line": None, "body": "Old\nnote"}]
 
 class FakeReadiness:
     repo = "acme-org/acme-app"
@@ -209,6 +223,36 @@ async def test_prepare_writes_artifacts(world, origin):
     assert world.paths.replies_plan.parent.is_dir() and not world.paths.replies_plan.exists()
     assert (prepared.pr, prepared.drift, prepared.clone.path) == (world.forge.pr, False, world.root / "clone")
     assert git("rev-parse", "HEAD", cwd=prepared.clone.path) == origin.base
+
+async def test_prepare_writes_the_head_checks_and_the_comments_of_earlier_prs(world):
+    await world.prepare()
+    run = world.paths.run_dir
+    assert json.loads((run / "checks.json").read_text()) == {"checks": [
+        {"name": "build", "state": "pending", "word": "in progress"},
+        {"name": "detekt", "state": "passed", "word": "success"},
+    ]}
+    assert (run / "prior_comments.md").read_text().splitlines() == [
+        "## PR #1653: Week page",
+        "- octo `app/A.kt:5`: Size the root",
+        "",
+        "## PR #1600: Old",
+        "- ghost `app/B.kt`: Old note",
+    ]
+    assert world.forge.prior_paths == ["app/A.kt", "app/B.kt", "app/C.kt"]   # files with a history: not added ones
+
+async def test_github_failing_on_checks_or_earlier_comments_does_not_stop_the_review(world):
+    world.forge.extra_error = ForgeError("GitHub 503", unavailable=True)
+    await world.prepare()
+    run = world.paths.run_dir
+    assert json.loads((run / "checks.json").read_text()) == {"error": "GitHub 503"}
+    assert (run / "prior_comments.md").read_text() == "(unavailable: GitHub 503)\n"
+
+async def test_only_a_review_reads_the_checks_and_the_comments_of_earlier_prs(world):
+    world.job = dataclasses.replace(world.job, kind="recheck")
+    await world.prepare()
+    run = world.paths.run_dir
+    assert not (run / "checks.json").exists() and not (run / "prior_comments.md").exists()
+    assert world.forge.prior_paths is None
 
 async def test_prepare_step_failure_is_redacted(world):
     world.ctx.cfg.process.prepare_steps = [["sh", "-c", f"echo 'fatal: bad token {TOKEN}' >&2; exit 1"]]

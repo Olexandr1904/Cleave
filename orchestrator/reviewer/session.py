@@ -183,17 +183,24 @@ def settings_json(secret_paths: list[Path], clone_dir: Path, paths: JobPaths, ki
     }
 
 
-def review_prompt(doc: str, prepare_section: str, number: int, paths: JobPaths) -> str:
+def review_prompt(doc: str, prepare_section: str, number: int, paths: JobPaths, sharded_section: str = "") -> str:
+    """sharded_section: the document's section for a PR too large for one context, followed in place of the steps
+    after Prepare; "" = the steps after Prepare."""
+    where = (f'This PR is large: follow the section "{sharded_section}" of {doc} instead of the steps after '
+             f'"{prepare_section}".' if sharded_section else "Start with the first step after that section.")
     return (
         f"{_PREAMBLE}\n"
         f"Follow the review process in {doc} (in the current directory, the repo's base branch) for PR #{number}.\n"
         f'Its section "{prepare_section}" is already done. Its artifacts are in {paths.run_dir}: meta.env (HEAD, '
-        "BASE, FILES, CHANGED, MB, WT), pr_body.md, existing_comments.md, threads.json, ticket.json, and whatever "
-        f"the repo's own preparation steps wrote. The PR head is checked out at {paths.worktree}; the local branch "
-        f"pr-review/{number} points at it. Start with the first step after that section.\n"
+        "BASE, FILES, CHANGED, MB, WT), pr_body.md, existing_comments.md, threads.json, ticket.json, "
+        "prior_comments.md, checks.json, and whatever the repo's own preparation steps wrote. The PR head is "
+        f"checked out at {paths.worktree}; the local branch pr-review/{number} points at it. {where}\n"
         "\n"
         f"Run the remaining steps exactly as written, then stop once {paths.report} is written. Do not show, ask or "
         "post anything.\n"
+        "Open the report's ## Summary with one line that starts `Process:` and names the path you followed, and "
+        "everything in it that did not run as the document writes it: a step skipped, an agent or phase that "
+        "failed, files left unreviewed, a path other than the one the document gives for this PR's size.\n"
         "When the process runs the code-review skill with a PR number, give it the local branch "
         f"pr-review/{number} instead of the number, with the same level and flags: this session has no forge "
         "access.\n"

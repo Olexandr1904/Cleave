@@ -160,6 +160,36 @@ async def ticket_json(tracker, key: str) -> dict:
     }
 
 
+def _github_failure(e: Exception) -> str:
+    # A ForgeError's text is a status, never GitHub's own text; any other error is named by its class only.
+    return str(e) if isinstance(e, ForgeError) else type(e).__name__
+
+
+async def checks_json(forge, number: int) -> dict:
+    """The head's CI checks for checks.json, or {"error": ...}: the review runs without them."""
+    try:
+        state = await forge.merge_state(number)
+    except Exception as e:
+        return {"error": _github_failure(e)}
+    return {"checks": [{"name": c.name, "state": c.state, "word": c.word} for c in state.checks or ()]}
+
+
+async def prior_comments_md(forge, number: int) -> str:
+    """prior_comments.md: the review comments earlier PRs got on this PR's files that already existed, grouped by
+    PR, newest first; "(none)", or "(unavailable: ...)" when GitHub failed, which never stops the review."""
+    try:
+        paths = [path for path, status in await forge.pr_files(number) if status != "added"]
+        comments = await forge.prior_review_comments(number, paths)
+    except Exception as e:
+        return f"(unavailable: {_github_failure(e)})\n"
+    blocks: dict[int, list[str]] = {}
+    for c in comments:
+        where = c["path"] if c["line"] is None else f'{c["path"]}:{c["line"]}'
+        blocks.setdefault(c["pr"], [f'## PR #{c["pr"]}: {_one_line(c["title"])}']).append(
+            f'- {c["login"]} `{where}`: {_one_line(c["body"])}')
+    return "\n\n".join("\n".join(lines) for lines in blocks.values()) + "\n" if blocks else "(none)\n"
+
+
 def _write_json(path: Path, data: dict | list) -> None:
     path.write_text(json.dumps(data, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
 
@@ -258,17 +288,18 @@ async def _prepare(
         except (ForgeError, CloneError, ReadinessError) as e:
             raise _prepare_error(e, drift) from None
     try:
-        return await _prepare_job_clone(ctx, clone, pr, paths, tracker, drift, threads, findings=findings)
+        return await _prepare_job_clone(ctx, clone, pr, paths, tracker, drift, threads, findings=findings,
+                                        review=job.kind == "review")
     except (ForgeError, CloneError, ReadinessError) as e:
         raise _prepare_error(e, drift) from None
 
 
 async def _prepare_job_clone(
     ctx: RepoContext, clone: ReviewClone, pr: PRFull, paths: JobPaths, tracker, drift: bool, threads: dict,
-    *, findings: list[dict] | None = None,
+    *, findings: list[dict] | None = None, review: bool = False,
 ) -> Prepared:
     """The rest of Prepare, in the job clone, the review clone's lock not held. `findings`: a findings job's
-    findings.json."""
+    findings.json. `review`: a review job, the only one that reads the head's checks and earlier PRs' comments."""
     process, n, head = ctx.cfg.process, pr.number, pr.head_sha
     await clone.detach_at_base()
     # Again on the job clone's checkout: the base branch may since have put a symlink on the way.
@@ -292,6 +323,9 @@ async def _prepare_job_clone(
         meta_env(head, pr.base, pr.changed_files, changed, merge_base, paths.worktree), encoding="utf-8")
     (run / "pr_body.md").write_text(f"{pr.title}\n\n{pr.body}\n", encoding="utf-8")
     (run / "existing_comments.md").write_text(existing_comments_md(await ctx.forge.comments(n)), encoding="utf-8")
+    if review:
+        _write_json(run / "checks.json", await checks_json(ctx.forge, n))
+        (run / "prior_comments.md").write_text(await prior_comments_md(ctx.forge, n), encoding="utf-8")
     _write_json(run / "threads.json", threads)
     if findings is not None:
         _write_json(run / "findings.json", findings)

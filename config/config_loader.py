@@ -754,9 +754,13 @@ def _parse_reviewer_section(
     for part_name, name, value in required:
         if not value:
             raise fail(f"reviewer.{part_name}.{name} is required", f"reviewer.{part_name}.{name}")
-    for name in ("doc", "run_dir", "replies_plan", "worktree_dir", "address_doc"):
+    for name in ("doc", "run_dir", "replies_plan", "worktree_dir", "address_doc", "sharded_section"):
         if not isinstance(getattr(process, name), str):
             raise fail(f"reviewer.process.{name} must be a string", f"reviewer.process.{name}")
+    count = process.sharded_min_files
+    if not isinstance(count, int) or isinstance(count, bool) or count < 1:
+        raise fail("reviewer.process.sharded_min_files must be an integer of at least 1",
+                   "reviewer.process.sharded_min_files")
 
     def check_command(value: Any, field_name: str) -> list[str]:
         if not isinstance(value, list) or not all(isinstance(x, str) for x in value):

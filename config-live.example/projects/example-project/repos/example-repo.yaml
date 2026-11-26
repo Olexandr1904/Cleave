@@ -102,6 +102,11 @@ reviewer:
     helper_scripts: ["tools/review/*.py"]            # python3 targets the model may run
     # Threads on your own PRs: Cleave drafts the replies and a fix with this author-side document ("" = turn lines).
     # address_doc: ".github/pr_comments/400-pr-review-workflow.mdc"
+    # A PR of sharded_min_files or more files follows this section of the document in place of the steps after
+    # prepare_section ("" = every PR takes those steps). A review also gets checks.json (the head's CI checks) and
+    # prior_comments.md (the review comments earlier PRs got on its files) in run_dir.
+    # sharded_section: "Unattended sharded run"
+    # sharded_min_files: 40
   poster:
     kind: command
     review_command: ["python3", "tools/review/post.py", "{pr}", "--repo", "{repo}", "--report", "{report}",

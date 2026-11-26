@@ -114,11 +114,12 @@ class Rig:
     """A runner on a real store and switches, a fixed clock, a fake clone, chat and event bus; prepare and
     run_session patched on the runner module (the fake session writes what `write` writes)."""
     def __init__(self, tmp_path, monkeypatch, repos=("app",), idle_seconds=0.01, chat=True, clone=FakeClone,
-                 ledgers_dir=None, max_parallel=6, min_free_bytes=0):
+                 ledgers_dir=None, max_parallel=6, min_free_bytes=0, cfg=CFG):
         conn = connect(tmp_path / "rv" / "reviewer.db")
         self.store, self.switches = ReviewerStore(conn), Switches(conn)
         self.t, self.tmp, self.forge = T0, tmp_path, FakeForge()
-        self.contexts = [RepoContext("acme", r, CFG, clone(tmp_path / f"clone-{r}"), None, self.forge)
+        self.pr = PR
+        self.contexts = [RepoContext("acme", r, cfg, clone(tmp_path / f"clone-{r}"), None, self.forge)
                          for r in repos]
         self.clone = self.contexts[0].clone
         self.store.replace_board(SCOPE, {1712: board_row()})
@@ -152,7 +153,7 @@ class Rig:
         if job.kind in ("address", "findings"):   # the PR's worktree, as add_worktree leaves it
             paths.worktree.mkdir(parents=True, exist_ok=True)
             (paths.worktree / ".git").write_text(f"gitdir: {job_clone_dir}/.git/worktrees/PR_1712\n")
-        return Prepared(PR, self.drift, job_clone)
+        return Prepared(self.pr, self.drift, job_clone)
     async def _locked_part(self):
         await asyncio.sleep(0)  # a real prepare yields: a runner that loops on a job must not starve the clock
     async def _session(self, llm, **kw):
@@ -199,6 +200,17 @@ async def test_review_job_done_and_message_sent(tmp_path, monkeypatch):
         "review", rig.root(job) / "clone", JOBS["review"], ENV)
     assert (kw["helper_scripts"], kw["secret_paths"]) == (["tools/review/*.py"], [tmp_path / ".env"])
     assert not rig.root(job).exists() and rig.clone.removed == []   # the job's directory went with its worktree
+
+SHARDED = dataclasses.replace(CFG, process=dataclasses.replace(
+    CFG.process, sharded_section="Unattended sharded run", sharded_min_files=40))
+
+@pytest.mark.parametrize(("files", "section"), [(40, "Unattended sharded run"), (39, "")])
+async def test_a_pr_of_sharded_min_files_or_more_follows_the_sharded_section(tmp_path, monkeypatch, files, section):
+    rig = Rig(tmp_path, monkeypatch, cfg=SHARDED)
+    rig.pr = dataclasses.replace(PR, changed_files=files)
+    job = rig.add_job()
+    await rig.runner.run_job(job)
+    assert rig.session_kw["prompt"] == review_prompt(DOC, "Prepare", 1712, rig.paths, sharded_section=section)
 
 async def test_head_moved_during_run_supersedes(tmp_path, monkeypatch):
     rig = Rig(tmp_path, monkeypatch)

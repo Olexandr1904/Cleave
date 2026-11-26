@@ -515,3 +515,43 @@ async def test_empty_commit_moves_nothing_when_the_branch_is_not_at_the_head():
     with pytest.raises(ForgeError, match="^branch moved$") as e:
         await reader().empty_commit("b", "a" * 40, "Re-run CI")
     assert not e.value.unavailable and patch.call_count == 0
+
+
+@respx.mock
+async def test_pr_files_all_pages_with_their_status():
+    route = respx.get(f"{BASE}/pulls/1712/files")
+    route.side_effect = [httpx.Response(200, json=[{"filename": f"f{i}.kt", "status": "modified"} for i in range(100)]),
+                         httpx.Response(200, json=[{"filename": "new.kt", "status": "added"}])]
+    files = await reader().pr_files(1712)
+    assert len(files) == 101 and files[0] == ("f0.kt", "modified") and files[-1] == ("new.kt", "added")
+
+
+@respx.mock
+async def test_prior_review_comments_come_from_the_prs_that_last_touched_the_files():
+    respx.get(f"{BASE}/commits", params={"path": "app/A.kt"}).respond(200, json=[{"sha": "s1"}, {"sha": "s2"}])
+    respx.get(f"{BASE}/commits", params={"path": "app/B.kt"}).respond(200, json=[{"sha": "s1"}])
+    respx.get(f"{BASE}/commits/s1/pulls").respond(200, json=[{"number": 1653, "title": "Week page"}])
+    respx.get(f"{BASE}/commits/s2/pulls").respond(200, json=[{"number": 1712, "title": "This PR"},
+                                                             {"number": 1600, "title": "Old"}])
+    respx.get(f"{BASE}/pulls/1653/comments").respond(200, json=[
+        {"user": {"login": "octo"}, "path": "app/A.kt", "line": 5, "original_line": 5, "body": "Size the root"},
+        {"user": {"login": "octo"}, "path": "app/Other.kt", "line": 1, "body": "Not a file of this PR"}])
+    respx.get(f"{BASE}/pulls/1600/comments").respond(200, json=[
+        {"user": None, "path": "app/B.kt", "line": None, "original_line": 9, "body": "Old\nnote"}])
+    got = await reader().prior_review_comments(1712, ["app/A.kt", "app/B.kt"])
+    assert got == [
+        {"pr": 1653, "title": "Week page", "login": "octo", "path": "app/A.kt", "line": 5, "body": "Size the root"},
+        {"pr": 1600, "title": "Old", "login": "ghost", "path": "app/B.kt", "line": 9, "body": "Old\nnote"},
+    ]
+
+
+@respx.mock
+async def test_prior_review_comments_read_only_the_newest_prs(monkeypatch):
+    monkeypatch.setattr("orchestrator.reviewer.forge_github._PRIOR_MAX_PRS", 1)
+    respx.get(f"{BASE}/commits", params={"path": "app/A.kt"}).respond(200, json=[{"sha": "s1"}])
+    respx.get(f"{BASE}/commits/s1/pulls").respond(200, json=[{"number": 1600, "title": "Old"},
+                                                             {"number": 1653, "title": "New"}])
+    newest = respx.get(f"{BASE}/pulls/1653/comments").respond(200, json=[])
+    oldest = respx.get(f"{BASE}/pulls/1600/comments").respond(200, json=[])
+    assert await reader().prior_review_comments(1712, ["app/A.kt"]) == []
+    assert (newest.called, oldest.called) == (True, False)

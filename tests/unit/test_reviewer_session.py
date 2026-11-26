@@ -325,6 +325,19 @@ def test_review_prompt_text(paths):
     assert "http" not in prompt and "://" not in prompt
 
 
+
+def test_review_prompt_sends_a_large_pr_to_the_sharded_section(paths):
+    prompt = review_prompt(DOC, "Prepare", 1712, paths, sharded_section="Unattended sharded run")
+    assert f'This PR is large: follow the section "Unattended sharded run" of {DOC}' in prompt
+    assert 'Its section "Prepare" is already done.' in prompt
+    assert "Start with the first step after that section" not in prompt
+
+
+def test_review_prompt_asks_the_summary_to_name_the_process_it_followed(paths):
+    for prompt in (review_prompt(DOC, "Prepare", 1712, paths),
+                   review_prompt(DOC, "Prepare", 1712, paths, sharded_section="Unattended sharded run")):
+        assert "Open the report's ## Summary with one line that starts `Process:`" in prompt
+
 RECHECK_PROMPT = (
     "You are running unattended inside Cleave. Nobody will answer questions: never stop to ask. This session "
     "already runs Opus at the effort the process asks for: skip any model or effort check.\n"

@@ -6,6 +6,7 @@ import asyncio
 import json
 import logging
 from collections.abc import Awaitable
+from datetime import datetime, time
 from typing import Any
 
 from telegram import Bot, InlineKeyboardButton, InlineKeyboardMarkup, Update
@@ -14,9 +15,15 @@ from telegram.ext import Application, CallbackQueryHandler, MessageHandler, Type
 from telegram.request import HTTPXRequest
 
 from integrations.base.notifier import Button, NotifierInterface
+from integrations.telegram.quiet_hours import QuietHours
 from orchestrator.tg_translate import Translator, localize
 
 logger = logging.getLogger(__name__)
+
+
+def _local_time() -> time:
+    """The host's local time of day, which quiet hours are set in."""
+    return datetime.now().time()
 
 
 def _traffic(direction: str, kind: str, /, **fields: Any) -> None:
@@ -48,6 +55,8 @@ class TelegramAdapter(NotifierInterface):
         self._events = event_bus
         # Translates the model-written text a message marks into the current Telegram language (None: kept as is).
         self._translator: Translator | None = None
+        # The window in which sends go out silent; main.py replaces it with the stored one, the dashboard updates it.
+        self.quiet_hours = QuietHours()
 
     def set_translator(self, translator: Translator | None) -> None:
         """Register the translator of the model-written text messages mark (orchestrator/tg_translate.py)."""
@@ -71,7 +80,7 @@ class TelegramAdapter(NotifierInterface):
         contain characters such as _, *, and backticks without triggering
         Telegram's Markdown parser and returning 400 Bad Request. Model-written
         text the message marks is translated into the current Telegram language
-        first (orchestrator/tg_i18n.py), and the marks removed.
+        first (orchestrator/tg_i18n.py), and the marks removed. Inside quiet hours it goes out silent.
         """
         message = await localize(message, self._translator)
         kwargs: dict[str, Any] = {
@@ -82,10 +91,13 @@ class TelegramAdapter(NotifierInterface):
             kwargs["reply_markup"] = self._markup(buttons)
         if reply_to_message_id:
             kwargs["reply_to_message_id"] = reply_to_message_id
+        silent = self.quiet_hours.active(_local_time())
+        if silent:
+            kwargs["disable_notification"] = True
 
         msg = await self._call(
             "send", self._bot.send_message(**kwargs), chat_id=chat_id, reply_to=reply_to_message_id,
-            buttons={b.label: b.action for b in buttons} if buttons else None, text=message,
+            buttons={b.label: b.action for b in buttons} if buttons else None, silent=silent or None, text=message,
         )
         if self._events:
             self._events.emit("tg_message_sent", f"Sent message to chat {chat_id}: {message[:80]}", data={"chat_id": chat_id, "text_preview": message[:200]})

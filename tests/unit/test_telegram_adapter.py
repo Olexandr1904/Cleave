@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, time, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -13,7 +13,15 @@ from telegram.error import BadRequest
 from telegram.ext import Application, ExtBot, Updater
 
 from integrations.base.notifier import Button
+from integrations.telegram.quiet_hours import QuietHours
 from integrations.telegram.telegram_adapter import TelegramAdapter
+
+
+@pytest.fixture(autouse=True)
+def _noon():
+    """Sends happen at noon, outside the default quiet hours, unless a test says otherwise."""
+    with patch("integrations.telegram.telegram_adapter._local_time", return_value=time(12, 0)) as clock:
+        yield clock
 
 
 class TestCommandHandlerIntegration:
@@ -314,6 +322,63 @@ class TestOutgoingTrafficLog:
             await _adapter(AsyncMock()).delete_message("123", 7)
 
         assert _traffic(caplog) == [("out", "delete", {"chat_id": "123", "message_id": 7})]
+
+
+class TestQuietHours:
+    async def test_send_in_quiet_hours_is_silent(self, _noon):
+        _noon.return_value = time(23, 30)
+        bot = AsyncMock()
+        bot.send_message = AsyncMock(return_value=MagicMock(message_id=5))
+
+        await _adapter(bot).send_message(
+            "123", "Gate summary", buttons=[Button(label="Approve", action="approve:ACME-1")], reply_to_message_id=42,
+        )
+
+        kwargs = bot.send_message.call_args.kwargs
+        assert kwargs["disable_notification"] is True
+        assert kwargs["reply_to_message_id"] == 42 and kwargs["reply_markup"] is not None
+
+    async def test_send_outside_quiet_hours_notifies(self):
+        bot = AsyncMock()
+        bot.send_message = AsyncMock(return_value=MagicMock(message_id=5))
+
+        await _adapter(bot).send_message("123", "Gate summary")
+
+        assert "disable_notification" not in bot.send_message.call_args.kwargs
+
+    async def test_send_with_quiet_hours_off_notifies(self, _noon):
+        _noon.return_value = time(23, 30)
+        bot = AsyncMock()
+        bot.send_message = AsyncMock(return_value=MagicMock(message_id=5))
+        adapter = _adapter(bot)
+        adapter.quiet_hours = QuietHours(enabled=False)
+
+        await adapter.send_message("123", "Gate summary")
+
+        assert "disable_notification" not in bot.send_message.call_args.kwargs
+
+    async def test_a_changed_window_applies_to_the_next_send(self, _noon):
+        _noon.return_value = time(12, 30)
+        bot = AsyncMock()
+        bot.send_message = AsyncMock(return_value=MagicMock(message_id=5))
+        adapter = _adapter(bot)
+
+        adapter.quiet_hours.update(QuietHours(enabled=True, start="12:00", end="13:00"))
+        await adapter.send_message("123", "Gate summary")
+
+        assert bot.send_message.call_args.kwargs["disable_notification"] is True
+
+    async def test_silent_send_is_logged(self, caplog, _noon):
+        _noon.return_value = time(23, 30)
+        bot = AsyncMock()
+        bot.send_message = AsyncMock(return_value=MagicMock(message_id=5))
+
+        with caplog.at_level(logging.INFO, logger=_LOGGER):
+            await _adapter(bot).send_message("123", "Plain text")
+
+        assert _traffic(caplog) == [("out", "send", {
+            "chat_id": "123", "message_id": 5, "silent": True, "text": "Plain text",
+        })]
 
 
 class TestIncomingTrafficLog:
